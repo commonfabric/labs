@@ -18,6 +18,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
+  newLoopbackServer,
   type Options,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -130,8 +131,6 @@ Deno.test("Fabric target validates a discovered checkout", async () => {
     await storageManager.close();
   }
 });
-
-const EMULATED_AUDIENCE = "did:key:z6Mk-agent-connector-isolation-test";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -842,14 +841,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
 });
 
 Deno.test("Fabric target releases graph storage after every session", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const identity = await Identity.fromPassphrase(
     "agent graph storage release test",
   );
@@ -1072,14 +1064,7 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
 });
 
 Deno.test("shared-space agent discovery and commands are owner-isolated", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("shared agent graph owner");
   const otherOwner = await Identity.fromPassphrase(
     "shared agent graph other owner",
@@ -1229,14 +1214,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
 });
 
 Deno.test("stable graph checks remote children before adoption", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("stable graph remote owner");
   const otherOwner = await Identity.fromPassphrase(
     "stable graph remote squatter",

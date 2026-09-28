@@ -10,7 +10,7 @@ import {
 import {
   type ClientCommit,
   compatibleMemoryProtocolFlags,
-  decodeMemoryBoundary,
+  decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -650,7 +650,7 @@ export class Client {
     let message: unknown;
     try {
       const decodeStart = performance.now();
-      message = decodeMemoryBoundary(payload);
+      message = decodeTrustedMemoryBoundary(payload);
       logger.time(decodeStart, "receive", "decodeBoundary");
       logIncomingFrame(message, memoryMessageFrameBytes(payload));
       // A frame whose raw text lacks every reserved reference prefix cannot

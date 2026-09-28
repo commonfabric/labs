@@ -322,6 +322,13 @@ list once along its path: walking it again decides nothing new, so it adds no
 match to an `anyOf` or `oneOf`, no constraint to an `allOf`, and no narrower
 follow cap.
 
+The follow-cap walk identifies a branch list together with its owning document.
+Resolving an external reference carries only the local definitions reached by
+the keywords beside the reference, including their transitive dependencies.
+When those keywords reach no local name, resolution keeps the target document's
+identity even if the ref site's document holds unrelated definitions. Unresolved
+local names are still isolated from the target's definitions.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior

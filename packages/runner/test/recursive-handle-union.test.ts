@@ -25,6 +25,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { isCell } from "../src/cell.ts";
+import { externalizeSchema } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -150,6 +151,37 @@ describe("recursive handle union", () => {
         const expected = projectRead(unrolled.key("node").get());
         expect(expected).toEqual({ handle: ["node"], raw: null });
         expect(projectRead(recursive.key("node").get())).toEqual(expected);
+      });
+
+      it("narrows a child of the recursive handle as the unrolled union does", () => {
+        const recursive = rootWithNullNode("recursive", recursiveSchema);
+        const unrolled = rootWithNullNode("unrolled", unrolledSchema);
+        const expected = unrolled.key("node", "foo").getAsNormalizedFullLink();
+        const actual = recursive.key("node", "foo").getAsNormalizedFullLink();
+
+        expect(actual.path).toEqual(["node", "foo"]);
+        expect(actual.schema).toEqual(expected.schema);
+        expect(actual.schema).toBeUndefined();
+      });
+
+      it("narrows a union of a local definition and a stored recursive handle", () => {
+        const stored = externalizeSchema(nodeSchema);
+        const root = runtime.getCell(space, "mixed-recursion", undefined, tx)
+          .asSchema({
+            type: "object",
+            properties: {
+              node: { anyOf: [{ $ref: "#/$defs/Local" }, stored] },
+            },
+            $defs: {
+              Local: {
+                type: "object",
+                properties: { v: { type: "number" } },
+              },
+            },
+          });
+
+        expect(root.key("node", "v").getAsNormalizedFullLink().schema)
+          .toEqual({ type: "number" });
       });
 
       it("reads the object holding the position as the unrolled union does", () => {

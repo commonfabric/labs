@@ -773,7 +773,7 @@ interface Contributions {
   /** What the lanes in them measured about themselves. */
   lanes: LaneObservation[];
 
-  /** The slowest passing runs of each identity, by key and then by day. */
+  /** The passing runs of each identity, by key and then by day. */
   samples: Map<string, Map<string, DaySamples>>;
 
   /**
@@ -819,9 +819,10 @@ function rememberSurface(
  * Merges what one batch contributed into what a fold holds, giving what
  * reading that batch's objects into the fold directly would have given.
  * The duration samples are the part of that which has to be shown rather
- * than assumed: a day's sample keeps only its slowest runs, and
- * `mergeSamples` keeps of two parts what one accumulation of the whole
- * would have kept, so a day read in parts costs what the day costs.
+ * than assumed: a day's sample counts its runs by bucket, and
+ * `mergeSamples` adds the counts of two parts, which is what one
+ * accumulation of the whole would have counted, so a day read in parts
+ * costs what the day costs.
  */
 function absorb(into: Contributions, batch: Contributions): void {
   for (const [key, surface] of batch.surfaces) {

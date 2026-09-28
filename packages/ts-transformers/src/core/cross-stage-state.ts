@@ -153,6 +153,12 @@ export class CrossStageState {
    */
   readonly #reportedDiagnosticKeys = new Set<string>();
 
+  /** The declared value each print stands for (`recordDeclaredValue()`). */
+  readonly #declaredValues = new WeakMap<
+    ts.Node,
+    NonNullable<SchemaHint["narrowedFrom"]>
+  >();
+
   /**
    * First of the four marker-family WeakSets — with
    * `syntheticComputeCallbackRegistry`, `syntheticComputeOwnedNodeRegistry`,
@@ -240,11 +246,56 @@ export class CrossStageState {
   //
 
   recordSchemaHint(node: ts.Node, hint: SchemaHint): void {
-    this.schemaHints.set(node, hint);
+    this.#addSchemaHint(node, hint);
     const original = ts.getOriginalNode(node);
     if (original !== node) {
-      this.schemaHints.set(original, hint);
+      this.#addSchemaHint(original, hint);
     }
+  }
+
+  /**
+   * Records that `node` was built from part of the value `narrowedFrom`
+   * describes. A node built from part of a node that itself narrows a value
+   * narrows that value. Unlike `recordSchemaHint()`, it leaves `node`'s
+   * original alone: that node spells the whole value, which needs no hint to
+   * keep its labels.
+   */
+  recordNarrowedFrom(
+    node: ts.TypeNode,
+    narrowedFrom: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    const whole = narrowedFrom.typeNode;
+    this.#addSchemaHint(node, {
+      narrowedFrom: (whole && this.narrowedFrom(whole)) ?? narrowedFrom,
+    });
+  }
+
+  /**
+   * Records that `node`, a print of a value's type, stands for the value
+   * `declared` spells. A print spells none of what only a declaration does,
+   * such as a `typeof` binding in a label, so a node built from part of the
+   * print narrows the declared value (`carryNarrowing()` in
+   * `transformers/type-shrinking.ts`). The print itself is read by its type.
+   */
+  recordDeclaredValue(
+    node: ts.TypeNode,
+    declared: NonNullable<SchemaHint["narrowedFrom"]>,
+  ): void {
+    this.#declaredValues.set(node, declared);
+  }
+
+  /** The value `node` was recorded as standing for (`recordDeclaredValue()`). */
+  declaredValue(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.#declaredValues.get(node);
+  }
+
+  /** The value `node` was recorded as narrowing (`recordNarrowedFrom()`). */
+  narrowedFrom(
+    node: ts.Node,
+  ): NonNullable<SchemaHint["narrowedFrom"]> | undefined {
+    return this.schemaHints.get(node)?.narrowedFrom;
   }
 
   lookupSchemaHint(node: ts.Node): SchemaHint | undefined {
@@ -387,5 +438,13 @@ export class CrossStageState {
     if (set.has(node)) return true;
     const original = ts.getOriginalNode(node);
     return original !== node && set.has(original);
+  }
+
+  //
+  // shared helper: a node's hints, each kind recorded apart from the others
+  //
+
+  #addSchemaHint(node: ts.Node, hint: SchemaHint): void {
+    this.schemaHints.set(node, { ...this.schemaHints.get(node), ...hint });
   }
 }

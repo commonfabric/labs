@@ -19,8 +19,10 @@ import {
 } from "./ci-lane.ts";
 import { measuredSetDirectory } from "./test-selection/coverage.ts";
 import {
+  FULL_LANE_BOUND_SECONDS,
   FULL_LANES_MAX,
   FULL_RUN_LABEL,
+  LANE_BOUND_SECONDS,
   LANES,
 } from "./test-selection/policy.ts";
 
@@ -317,6 +319,22 @@ Deno.test("every work step is bounded before its job is", async () => {
       );
     }
   }
+});
+
+Deno.test("a lane's step is bounded above what a lane is packed to finish inside", async () => {
+  // A lane packs its work against a budget derived from the bound of the
+  // run it is part of, and the bound on the step that runs it only stops a
+  // lane that hangs. At or below either run's bound, it would stop a lane
+  // that was running to plan, with its later batches unrun.
+  const job = (await parsedWorkflow("deno.yml")).jobs.tests;
+  const minutes = namedStep(job, "🧪 Run the lane")["timeout-minutes"];
+  assert(typeof minutes === "number", "the lane step has no timeout-minutes");
+  const packed = Math.max(LANE_BOUND_SECONDS, FULL_LANE_BOUND_SECONDS);
+  assert(
+    minutes * 60 > packed,
+    `the lane step is bounded at ${minutes} minutes, and a lane is packed ` +
+      `to finish inside ${packed} seconds`,
+  );
 });
 
 Deno.test("Pull Request Comments follows the CI workflow by name", async () => {

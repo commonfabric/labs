@@ -7,6 +7,7 @@ import {
   isFabricPlainObject,
   valueEqual,
 } from "@commonfabric/data-model";
+import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -52,6 +53,7 @@ import {
   type HelloMessage,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   type MemoryProtocolFlags,
   type OpCursor,
   type Operation,
@@ -1145,7 +1147,9 @@ class Connection {
     this.#send(this.#server.receivePresence(message, this));
   }
 
-  async #receiveOrdered(parsed: ClientMessage | null): Promise<void> {
+  async #receiveOrdered(
+    parsed: ClientMessage | OversizedClientMessage | null,
+  ): Promise<void> {
     if (this.#closed) {
       return;
     }
@@ -1157,6 +1161,18 @@ class Connection {
         error: toError(
           "InvalidMessageError",
           "Unable to parse memory message",
+        ),
+      });
+      return;
+    }
+    if (parsed.type === "oversized") {
+      this.#send({
+        type: "response",
+        requestId: parsed.requestId,
+        error: toError(
+          "MessageTooLargeError",
+          "Memory message stands for more than " +
+            `${MAX_UNTRUSTED_MESSAGE_SLOTS} array slots and record members`,
         ),
       });
       return;
@@ -1561,7 +1577,7 @@ class Connection {
 }
 
 const isPresenceClientMessage = (
-  message: ClientMessage,
+  message: ClientMessage | OversizedClientMessage,
 ): message is
   | PresenceJoinRequest
   | PresencePublishRequest
@@ -8309,13 +8325,34 @@ function isSqliteNamedParamEntries(
     );
 }
 
+/**
+ * A client message refused for standing for more than
+ * `MAX_UNTRUSTED_MESSAGE_SLOTS` slots, with the id of the request it carried
+ * so that the refusal can be answered on that request.
+ */
+export type OversizedClientMessage = {
+  type: "oversized";
+  requestId: string;
+};
+
+/**
+ * Decodes and validates one message from a client. Returns `null` for a
+ * message that is malformed, or that is refused for its size without carrying
+ * a request id to answer it on.
+ */
 export const parseClientMessage = (
   payload: string,
-): ClientMessage | null => {
+): ClientMessage | OversizedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
-  } catch {
+  } catch (error) {
+    if (error instanceof SlotLimitError) {
+      const requestId = error.rootScalar("requestId");
+      if (typeof requestId === "string") {
+        return { type: "oversized", requestId };
+      }
+    }
     return null;
   }
 

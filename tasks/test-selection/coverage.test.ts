@@ -313,6 +313,42 @@ describe("coverage", () => {
         });
       });
 
+      it("charges its largest entry no less than that entry's own time", () => {
+        // The suite runs its units side by side, and a lane holding one
+        // entry still takes that entry's whole time, twice over where it
+        // runs twice, however the entries are spread. Each run is a pass
+        // of its own, which starts the suite and opens the unit again.
+        const repeated = {
+          ...entry("bakery", "packages/bakery/glaze.test.ts", 100),
+          repeats: 2,
+        };
+        expect(
+          measuredCost(
+            fittedAs({ overhead: 10, correction: 0.4, unitOverhead: 1 }),
+            [repeated],
+          ),
+        ).toEqual({
+          overhead: 10,
+          spread: 211,
+          units: [{ overhead: 1, entries: 1 }],
+          largest: 222,
+        });
+      });
+
+      it("spreads no less than the longest unit takes", () => {
+        // Corrected, the two entries of the one unit come to 36 seconds.
+        // They run one after the other, so the unit takes 90.
+        expect(
+          measuredCost(
+            fittedAs({ overhead: 0, correction: 0.4, unitOverhead: 0 }),
+            [
+              entry("bakery", "packages/bakery/glaze.test.ts", 40),
+              entry("bakery", "packages/bakery/glaze.test.ts", 50),
+            ],
+          )?.spread,
+        ).toBe(90);
+      });
+
       it("charges an entry once for every time it runs", () => {
         const repeated = {
           ...entry("bakery", "packages/bakery/glaze.test.ts", 3),

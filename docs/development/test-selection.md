@@ -245,9 +245,11 @@ it also holds the authored-pattern reports under
 `lcov/pattern-runtime/<suite>`.
 `test-records-tests-<lane>-a<attempt>` holds its test records.
 
-The lane step is bounded at 30 minutes and its job at 40, the workflow's
-ordinary bounds. Those only stop a lane that hangs. The budget a lane packs
-against is derived from `LANE_BOUND_SECONDS` for a pull request and
+The lane step is bounded at 60 minutes and its job at 70, by the lane job's own
+pair of timeout anchors, above the full run's thirty-minute lane bound. Those
+only stop a lane that hangs, and a pull request's lanes, which are instances of
+the same job definition, wait as long before one is stopped. The budget a lane
+packs against is derived from `LANE_BOUND_SECONDS` for a pull request and
 `FULL_LANE_BOUND_SECONDS` for the full run. Neither is a bound a lane is stopped
 at. A lane whose mandatory work passes its budget runs long rather than being
 stopped with its later batches unrun, and its job log says how far its plan was
@@ -455,8 +457,8 @@ rather than a setting to fix.
 | `LANE_PROLOGUE_SECONDS` | 40 | seconds | chosen | Up when checkout, setup, and cache restore take longer than this and eat into the safety margin; down when they take less. Nothing measures it. |
 | `LANE_SAFETY_SECONDS` | 30 | seconds | chosen | Up when lanes overrun their bound on slow runners; down when they finish early every time and the headroom is buying nothing. |
 | `LANE_BUDGET_SECONDS` | 230 | seconds | derived | Nothing edits this. It is the bound less the prologue and the safety margin, so a budget that does not fit inside its own bound cannot be written down. |
-| `FULL_LANE_BOUND_SECONDS` | 600 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
-| `FULL_LANE_BUDGET_SECONDS` | 530 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
+| `FULL_LANE_BOUND_SECONDS` | 1800 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
+| `FULL_LANE_BUDGET_SECONDS` | 1730 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
 | `FULL_LANES_MAX` | 30 | lanes | chosen | Up when the organization's runner limit rises; down when a push's full run crowds out the pull requests behind it. A full run needing more lanes than this takes this many, and a lane may then run past its budget. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
@@ -481,7 +483,7 @@ rather than a setting to fix.
 | `FILL_DENSITY_SHARE` | 0.25 | share of the run's budget | chosen | Up when more of the cheap tail should run; down when the tail is displacing tests with a record. |
 | `FILL_EXPLORATION_SHARE` | 0.15 | share of the run's budget | chosen | Up when the unselected corpus is going stale; down when lanes spend the share on tests that never find anything. |
 | `MIN_CORRECTION_SPAN_SECONDS` | 23 | seconds | derived | A tenth of a lane's budget, measured as the widest gap between the time two batches' own tests took. Nothing edits it: it moves only when the lane's budget does. |
-| `MIN_CORRECTION_SAMPLES` | 3 | batches | chosen | Up when a slope is being fitted from too little and swinging about; down when a suite's real slope takes too long to be believed. |
+| `MIN_CORRECTION_SAMPLES` | 3 | batches | chosen | Up when a slope is being fitted from too little and swinging about; down when a suite's real slope takes too long to be believed. It is also how many of the batches a suite's fit is still reading must carry a figure before the batches lacking it are left out. |
 | `FLAKE_EXCLUSION_RATE` | 0.005 | share of runs | chosen | Up when fewer tests should be held back from pull requests; down when flakes are still blocking people. |
 | `FLAKE_MIN_EXECUTIONS` | 2 | runs of one item | chosen | What an item that has ever disagreed runs. Down to one when the cheapest evidence of intermittency is not worth a second execution; nowhere useful above two, since the line through the anchor covers everything flakier. |
 | `FLAKE_ANCHOR_RATE` | 0.01 | share of runs | chosen | With `FLAKE_ANCHOR_EXECUTIONS`, the point the count's line passes through. Down to make the count climb faster with the rate; up to make it climb slower. |
@@ -529,6 +531,12 @@ ones it could no longer reach. An aggregate written before those files
 were carried holds none, and each identity rejoins the manifest as its
 records name a file again.
 
+An identity's cost window holds, for each day, how many of its passing
+executions fell in each duration bucket, and its cost is the ninetieth
+percentile of every day of the window taken together.
+[The spec](../specs/test-selection.md#how-far-back-each-input-looks) says
+why it is read that way.
+
 A day of an identity's cost window carries the set of cost rules that
 sealed it, as `COST_RULE`. A day carrying no such stamp was sealed
 before the stamps began, which is every day an aggregate written before
@@ -540,12 +548,14 @@ there is, which for a test that has not passed since the change is until
 the day ages out of the window, and is dropped the moment the rules in
 force seal a day for that test.
 
-Changing which executions reach a day's sample, or what the sample
-holds, means changing `COST_RULE` in the same change. The cost window
-then refills over its own length, charging fewer days' figures while it
-does; carrying the old days instead would have figures the new rules
-would never produce deciding what a pull request runs for that same
-stretch.
+Changing which executions reach a day's sample means changing
+`COST_RULE` in the same change. The cost window then refills over its
+own length, charging fewer days' figures while it does; carrying the old
+days instead would have figures the new rules would never produce
+deciding what a pull request runs for that same stretch. Changing how a
+day's sample is stored does not change `COST_RULE`: the days already
+stored are read forward into the new form, at or above what they held,
+and keep the stamp of the rules that sealed them.
 
 A change to what a manifest or an aggregate holds needs no cold start.
 The area both are written under is named rather than numbered and does
@@ -940,13 +950,21 @@ Left out of everything scored, they are not discarded. The publisher
 keeps them in its rolling aggregate over `COST_WINDOW_DAYS`, the same
 window it measures a test's cost over, and fits `setupCost`,
 `suiteOverhead`, `correction` and `unitOverhead` from them for the next
-manifest. A lane writes one record per capability it opens and three per
-batch — what the batch spent, what its own tests took between them, and
-how many units it opened — and it is the second and third that make a fit
-possible. Neither can be recovered from the records the batch produced: a
-reader of a report cannot tell which of its records came from which
-batch, and a unit whose tests all recorded nothing leaves no trace of
-having been opened.
+manifest. A lane writes one record per capability it opens and five per
+batch — what the batch spent, what its own tests took between them, how
+many times its passes opened a unit, what the longest unit of each pass
+took added together, and how many passes it made — and it is the second
+and third that make a fit possible. Neither can be recovered from the
+records the batch produced: a reader of a report cannot tell which of its
+records came from which batch, and a unit whose tests all recorded
+nothing leaves no trace of having been opened. The fourth bounds what the
+batch spent on its tests from below, for a suite that runs its units side
+by side, and the fifth is how many times the batch paid for starting the
+suite's command, since a batch that repeats a unit runs in one pass per
+run; [the cost model](../plans/pull-request-test-selection.md#the-cost-model)
+says how. A stored batch carries the figures its lane wrote and no others,
+and the fit prefers the batches that carry each figure over those that
+lack it, which the same section also covers.
 
 What its tests took, rather than what the packer expected them to take.
 The two differ by however wrong the manifest's costs are, and a unit
@@ -1019,16 +1037,18 @@ setup(s), and 3 of those suite(s) have a cost with coverage on
 ```
 
 The two halves are counted apart because they come from different
-records. A lane writes one per capability it opens and a pair per batch,
-and a lane killed part way through a batch leaves the pair unmatched, so
-a model can hold a capability setup and no suite at all.
+records. A lane writes one per capability it opens and several per batch,
+and a lane killed part way through a batch leaves those unmatched, so a
+model can hold a capability setup and no suite at all.
 
 A batch run with coverage on is fitted apart from what the suite's batches cost
 without coverage, because instrumenting a run costs it time and how much is a
 property of the suite. The manifest carries the two fits in two maps of its
 calibration: `suites` for batches run without coverage, and `suitesWithCoverage`
-for batches run with it. The line counts each suite once whether it has one fit
-or two, and the last figure is how many have a coverage-on fit.
+for batches run with it. A stored batch that does not say whether coverage was
+on is read into either fit only where fewer than `MIN_CORRECTION_SAMPLES` of the
+suite's batches say they ran that way. The line counts each suite once whether
+it has one fit or two, and the last figure is how many have a coverage-on fit.
 
 The two fixed charges, a suite's `suiteOverhead` and a capability's
 `setupCost`, are each the ninetieth percentile of what lanes have seen in
@@ -1056,8 +1076,8 @@ run a suite that way yet, the run charges the other fit. Charging a run without
 coverage the coverage-on fit errs high. Charging a run with coverage the fit
 without it is short by whatever instrumenting costs. Either is nearer than
 charging nothing. A lane runs first the batches of a suite whose charge was not
-fitted the way this run runs it. A lane is stopped part way through only by the
-30-minute step timeout or by a cancellation, and one that is has then measured
+fitted the way this run runs it. A lane is stopped part way through only by its
+step timeout or by a cancellation, and one that is has then measured
 what the model most needs.
 
 A suite's own figures are what a lane is charged for holding the suite
@@ -1182,7 +1202,9 @@ has to fit is the run rather than one lane. A set spread over several lanes pays
 its suites' overheads and its capabilities' setup in each of them. It also pays
 each unit's overhead in every lane holding part of that unit, and a unit is
 split over no more lanes than it holds entries, so that overhead is paid at most
-once per entry. Each entry's own cost is multiplied by how many times it runs.
+once per entry. Each unit's selected entries are charged once for each time the
+unit runs, and the passes and unit openings a repeated entry adds are charged
+their overheads once, in the lane holding that entry.
 The units a set's suite declares unavailable are not run, so they are not
 charged. The line charges a set or a member all of that over the fewest lanes
 that hold it. All of one entry's runs go in one lane, so no number of lanes

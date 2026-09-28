@@ -27,7 +27,9 @@
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "entities": "npm:entities@^8.0.0",
     "marked": "npm:marked@^18.0.6",
+    "@binclusive/tree-sitter-kotlin-wasm": "npm:@binclusive/tree-sitter-kotlin-wasm@0.1.0",
     "@binclusive/tree-sitter-swift-wasm": "npm:@binclusive/tree-sitter-swift-wasm@0.1.0",
+    "@tree-sitter-grammars/tree-sitter-toml": "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0",
     "tree-sitter-python": "npm:tree-sitter-python@0.25.0",
     "typescript": "npm:typescript@6.0.3",
     "web-tree-sitter": "npm:web-tree-sitter@0.26.12"

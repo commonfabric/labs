@@ -10,8 +10,9 @@
  *
  * - {@link startServingMemoryServer} is reached in-process only, by
  *   `EmulatedStorageManager.connectTo(served.server, ...)`. Its session opens
- *   are authorized the way `newLoopbackServer()`'s are, by the principal the
- *   envelope names.
+ *   are authorized by `authorizeLoopbackSessionOpen()`: the serving runtimes'
+ *   signed opens are verified, as toolshed's are, and a client's unsigned
+ *   open is trusted as the principal it names.
  * - {@link listenServingMemoryServer} also listens on a localhost websocket,
  *   at `url`, for runtimes built with the `remoteClient` preset — in this
  *   realm, in a Deno Worker, or in a subprocess. Its session opens are

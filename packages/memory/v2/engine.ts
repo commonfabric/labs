@@ -60,9 +60,9 @@ import {
   type ClientCommit,
   type CommitClass,
   commitPreconditionValueHash,
-  decodeMemoryBoundary,
   decodeStoredDocumentPayload,
   decodeStoredPatchListPayload,
+  decodeTrustedMemoryBoundary,
   DEFAULT_BRANCH,
   type DeleteOperation,
   type DerivedWriteAnnotation,
@@ -2316,7 +2316,7 @@ export const queryOperationField = (
       ? field.baseline_hash
       : operationBaselineHash(currentMaterialized),
     materialized: active
-      ? decodeMemoryBoundary(field.materialized)
+      ? decodeTrustedMemoryBoundary(field.materialized)
       : currentMaterialized,
     ...(active
       ? {
@@ -2405,12 +2405,12 @@ export const pruneOperationFieldHistory = (
         "operation history after checkpoint is not contiguous",
       );
     }
-    let replayed = decodeMemoryBoundary(checkpoint.materialized);
+    let replayed = decodeTrustedMemoryBoundary(checkpoint.materialized);
     const codec = txEngine.operationCodecs.require(field.codec);
     for (const row of replayRows) {
       const result = codec.integrate({
         materialized: replayed,
-        submitted: decodeMemoryBoundary(row.payload),
+        submitted: decodeTrustedMemoryBoundary(row.payload),
         intervening: [],
       });
       if (
@@ -3811,7 +3811,7 @@ ORDER BY seq, op_index
   const paths: Array<readonly string[]> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
-      const patches = decodeMemoryBoundary(row.data) as PatchOp[];
+      const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
       for (const patch of patches) {
         paths.push(parsePointer(patch.path));
       }
@@ -4332,7 +4332,7 @@ const decodedIntegratedOperations = (
     opId: row.op_id,
     cursor: { epoch, version: row.version },
     submissionId: row.submission_id,
-    payload: decodeMemoryBoundary(row.payload),
+    payload: decodeTrustedMemoryBoundary(row.payload),
   }));
 
 const MAX_OPERATION_PAYLOAD_BYTES = 1_000_000;
@@ -4399,7 +4399,9 @@ const storedOperationResolution = (
   row: OperationSubmissionRow,
   duplicate: boolean,
 ): ApplyOpResolution => {
-  const payloads = decodeMemoryBoundary<FabricValue[]>(row.integrated_payload);
+  const payloads = decodeTrustedMemoryBoundary<FabricValue[]>(
+    row.integrated_payload,
+  );
   return {
     operationIndex,
     address,
@@ -4580,10 +4582,12 @@ const applyOperation = (
       ...params,
       epoch,
       after_version: baseVersion,
-    }).map((row) => decodeMemoryBoundary(row.payload));
+    }).map((row) => decodeTrustedMemoryBoundary(row.payload));
     if (
       operationBaselineHash(currentMaterialized) !==
-        operationBaselineHash(decodeMemoryBoundary(activeField.materialized))
+        operationBaselineHash(
+          decodeTrustedMemoryBoundary(activeField.materialized),
+        )
     ) {
       throw new ProtocolError(
         "operation field materialization diverged from the entity value",
@@ -4905,7 +4909,7 @@ const assertOperationFieldsPreserved = (
         `ordinary write removes active operation field: ${path.join(".")}`,
       );
     }
-    const materialized = decodeMemoryBoundary(field.materialized);
+    const materialized = decodeTrustedMemoryBoundary(field.materialized);
     if (
       operationBaselineHash(nextValue) !== operationBaselineHash(materialized)
     ) {
@@ -4991,7 +4995,7 @@ const applyCommitTransaction = (
         ? [opIndex]
         : []
     );
-    const storedResolution = decodeMemoryBoundary(existing.resolution) as
+    const storedResolution = decodeTrustedMemoryBoundary(existing.resolution) as
       & FabricValue
       & { operationResolutions?: ApplyOpResolution[] };
     return {
@@ -5847,7 +5851,7 @@ const applyCommitTransaction = (
         if (row === undefined || (row.branch || DEFAULT_BRANCH) !== branch) {
           return { known: false };
         }
-        const layer = decodeMemoryBoundary(row.original) as ClientCommit;
+        const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -8066,10 +8070,10 @@ const cacheDocumentForRevision = (
 };
 
 const decodeStoredDocument = (data: string | null): EntityDocument =>
-  decodeStoredDocumentPayload(decodeMemoryBoundary, data);
+  decodeStoredDocumentPayload(decodeTrustedMemoryBoundary, data);
 
 const decodeStoredPatchList = (data: string | null): PatchOp[] =>
-  decodeStoredPatchListPayload(decodeMemoryBoundary, data);
+  decodeStoredPatchListPayload(decodeTrustedMemoryBoundary, data);
 
 const sameStoredOriginal = (
   stored: string,

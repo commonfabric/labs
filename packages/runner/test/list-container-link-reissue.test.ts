@@ -54,7 +54,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 import { resolveLink } from "../src/link-resolution.ts";
@@ -103,15 +103,7 @@ class SharedServerStorageManager extends StorageManager {
   }
 }
 
-const makeServer = () =>
-  new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+const makeServer = () => newSharedServer();
 
 /** How one reconcile of the coordinator under test went. */
 type ReconcileRecord = {

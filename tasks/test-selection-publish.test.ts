@@ -1904,8 +1904,10 @@ describe("publish() reporting what no lane can hold", () => {
   it("names it with the cost the bound was judged against", async () => {
     const slow = (commit: string, at: string) => {
       const body = object(commit, "pass", at);
-      // One execution taking longer than a lane's whole hard bound.
-      return body.replace('"durationMs":40', '"durationMs":400000');
+      // One execution taking longer than a lane's whole hard bound, and
+      // falling on the bound of a duration bucket so that the cost it
+      // reads is exactly its own.
+      return body.replace('"durationMs":40', '"durationMs":524288');
     };
     const { store } = fakeStore({
       [CI(DAY, "1")]: slow("c1", "2026-08-20T01:00:00.000Z"),
@@ -1931,7 +1933,7 @@ describe("publish() reporting what no lane can hold", () => {
     const line = said.find((said) => said.includes("unschedulable"));
     expect(line).toBeDefined();
     expect(line).toContain("space > writes");
-    expect(line).toContain("6m40s");
+    expect(line).toContain("8m44s");
   });
 
   it("names the costliest few and counts the rest", async () => {
@@ -1952,10 +1954,11 @@ describe("publish() reporting what no lane can hold", () => {
           `space > writes ${test}`,
         );
         // The last of them is the slowest, so the order the lines come
-        // in is visible in what they say.
+        // in is visible in what they say. They are spaced wider than a
+        // duration bucket, so that no two of them read as one cost.
         objects[CI(DAY, commit)] = body.replace(
           '"durationMs":40',
-          `"durationMs":${400000 + test * 1000}`,
+          `"durationMs":${400000 + test * 25000}`,
         );
       }
     }

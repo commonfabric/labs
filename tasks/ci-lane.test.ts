@@ -1608,6 +1608,44 @@ describe("running a lane's work", () => {
     expect(printed).not.toContain("nothing has measured");
   });
 
+  it("counts a test in its batch's own time once for each run of its unit", () => {
+    // The unit runs twice because one of its tests asks for two runs, and
+    // every test in it runs each time: 1.5 and 2.5 seconds, twice over.
+    const [repeated, once] = manifestOf([
+      { test: { k: "unit", s: "bakery", n: "glaze > sets" }, cost: 1.5 },
+      { test: { k: "unit", s: "bakery", n: "glaze > cracks" }, cost: 2.5 },
+    ]).entries;
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [{
+          suite: runnable(["true"], "workspace-unit"),
+          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+        }],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        {
+          manifest: manifestOf([]),
+          selections: [
+            { entry: repeated!, reason: "value", repeats: 2 },
+            { entry: once!, reason: "value", repeats: 1 },
+          ],
+          projectedSeconds: 96,
+        },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n")).toContain("│ 8s ");
+  });
+
   /**
    * What `describePlan` prints for a lane holding these selections
    * against a suite whose correction is `correction`, projected at 96
@@ -1683,15 +1721,45 @@ describe("running a lane's work", () => {
     );
   });
 
-  it("reads a stand-in's seconds through its suite's correction", () => {
+  it("reads stand-ins' seconds through their suite's correction", () => {
     // A suite whose batches run their files in parallel has a correction
-    // below one, and the packer charged the stand-in at that. Reading
-    // its bare cost instead would report 80 seconds of a 96-second
-    // projection that holds 20.
+    // below one, and the packer charged the five stand-ins at that.
+    // Reading their bare cost instead would report 200 seconds of a
+    // 96-second projection that holds 50.
+    expect(projectionLine(
+      ["proof", "knead", "shape", "rise", "bake"].map((unit) => ({
+        entry: unmeasured(unit, [40]),
+        reason: "unknown" as const,
+        repeats: 1,
+      })),
+      0.25,
+    )).toBe(
+      "Projected: 1m36s of 3m50s, 50s of it charged to 5 units " +
+        "nothing has measured",
+    );
+  });
+
+  it("charges a stand-in only what it adds past the measured tests beside it", () => {
+    // The measured unit takes 100 seconds on its own, which is more than
+    // the suite's loads come to, so the stand-in beside it runs within
+    // that time and the lane is charged nothing more for it.
+    expect(projectionLine([
+      { entry: measured("glaze", 100), reason: "value", repeats: 1 },
+      { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 1 },
+    ], 0.25)).toBe(
+      "Projected: 1m36s of 3m50s, 0s of it charged to 1 unit " +
+        "nothing has measured",
+    );
+  });
+
+  it("reads a lone stand-in's seconds as no less than its own time", () => {
+    // The correction shares a batch's tests out among its units, and a
+    // batch holding one unit, run twice, takes that unit's whole time
+    // twice over.
     expect(projectionLine([
       { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 2 },
     ], 0.25)).toBe(
-      "Projected: 1m36s of 3m50s, 20s of it charged to 1 unit " +
+      "Projected: 1m36s of 3m50s, 1m20s of it charged to 1 unit " +
         "nothing has measured",
     );
   });
@@ -2691,6 +2759,83 @@ describe("what a lane records about itself", () => {
       expect(spooled).toContain(
         '"n":"ci-lane ran batch workspace-unit"},"outcome":"pass"' +
           ',"durationMs":2000',
+      );
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes the longest unit of each pass, the units its passes opened, and the passes it made", async () => {
+    // A pass finishes no sooner than its longest unit, and the passes
+    // follow one another. `slow` takes three seconds and runs once, and
+    // `quick` takes one and runs three times, so the passes' longest
+    // units come to five seconds: not the three either unit takes over
+    // its own runs, and not the six every record comes to. The first pass
+    // opens both units and the other two open `quick`.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-longest-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const took: Record<string, number> = { slow: 3000, quick: 1000 };
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "pattern-unit",
+            units: ["slow", "quick"],
+            recordSurfaces: [{ kind: "pattern", scope: "patterns" }],
+            locate: (record) => ({ level: "unit", unit: record.test.n }),
+            command: (units, context) => {
+              const records = units.map(({ unit }) =>
+                JSON.stringify({
+                  line: "record",
+                  test: { k: "pattern", s: "patterns", n: unit },
+                  outcome: "pass",
+                  durationMs: took[unit],
+                })
+              ).join("\n");
+              return Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${JSON.stringify(records + "\n")},
+                  )`,
+                ],
+                cwd: context.root,
+              }]);
+            },
+          }),
+          units: [{ unit: "slow", skip: [] }, { unit: "quick", skip: [] }],
+          runs: new Map([["slow", 1], ["quick", 3]]),
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const spooled = written.join("");
+      expect(spooled).toContain(
+        '"n":"ci-lane longest batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":5000',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane units batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":4',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane passes batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":3',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane ran batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":6000',
       );
     } finally {
       await Deno.remove(workDir, { recursive: true });

@@ -519,6 +519,34 @@ The `signature` of a `session.open` authorization is a `FabricBytes`, and
 a `transact` commit carries links inside the documents it writes. The
 requirement is on the container, not on what the container holds.
 
+#### Slots in a message
+
+A server bounds the work one client message can cost it by the number of
+slots the message stands for, as well as by its size. A slot is an array
+element or a record member written in the message, and a run of holes adds
+one slot for each hole past the first that it stands for. The count is what
+bounds the work of a small message that stands for a great deal: a run of
+holes is written as a count, so a few bytes can stand for billions of slots,
+and a compressed envelope can expand a small frame into millions of elements.
+The size of the text itself, including one long string, is bounded separately
+by the 256 MiB limit on an expanded envelope.
+
+A message standing for more than 1,000,000 slots is refused before it is
+parsed: its elements and members are counted by scanning its text, and its
+holes before any of the parsed message is walked. When the message's root
+record names a string `requestId`, the refusal is a `response` on that
+request, with error name `MessageTooLargeError`, so the request fails rather
+than waiting forever. Otherwise the refusal is the one any unreadable message
+gets: a `response` with `requestId: "invalid"` and error name
+`InvalidMessageError`.
+
+The limit applies to every message a client sends. A `session.open` declaring
+holdings costs three slots or more per holding, so a replica declaring more
+than about 330,000 holdings in one space cannot resume. The limit does not
+apply to what a server reads from its own storage, or to what a client reads
+from a server, since a stored document may stand for more slots than one
+message may.
+
 ### 4.2.2 Server → Client: Response and Session Effect
 
 The server sends:

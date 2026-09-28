@@ -28,6 +28,17 @@ export default pattern(() => {
 });
 `;
 
+/** The counter, with the count held per user rather than per space. */
+const USER_COUNTER_SOURCE = `
+import { Default, handler, pattern, PerUser, Writable } from "commonfabric";
+const bump = handler<Record<string, never>, { count: Writable<number> }>(
+  (_event, { count }) => count.set(count.get() + 1),
+);
+export default pattern<{ count?: PerUser<Writable<number | Default<0>>> }>(
+  ({ count }) => ({ count, bump: bump({ count: count! }) }),
+);
+`;
+
 /**
  * Starts the counter from `writer`, fires one bump, and waits until `reader`
  * reads the count the serving loop committed. Under ON the firing client
@@ -90,6 +101,59 @@ describe("serving-memory-server", () => {
       } finally {
         await serving.host.close();
         // Each runtime's dispose closes its own storage manager.
+        for (const runtime of runtimes) await runtime.dispose();
+      }
+    });
+
+    it("serves an event whose handler reads a user-scoped document a client wrote", async () => {
+      await using serving = await startServingMemoryServer({
+        apiUrl: new URL(import.meta.url),
+      });
+      const runtimes = [0, 1].map(() =>
+        new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: EmulatedStorageManager.connectTo(serving.server, {
+            as: alice,
+          }),
+          experimental: { serverExecution: true },
+        })
+      );
+      const [writer, reader] = runtimes;
+      const space = alice.did() as MemorySpace;
+      const cancels: Array<() => void> = [];
+      try {
+        const pattern = await writer.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{ name: "/main.tsx", contents: USER_COUNTER_SOURCE }],
+        }, { space });
+        const result = writer.getCell<Counter>(
+          space,
+          "user-counter",
+          pattern.resultSchema,
+        );
+        const start = writer.edit();
+        writer.run(start, pattern, {}, result);
+        expect((await start.commit()).error).toBeUndefined();
+        cancels.push(result.sink(() => {}));
+        const seed = writer.edit();
+        result.withTx(seed).key("count").set(5);
+        expect((await seed.commit()).error).toBeUndefined();
+        await waitForCellValue<Counter>(writer, result, (v) => v?.count === 5);
+        result.key("bump").send({});
+
+        const read = reader.getCellFromLink<Counter>(
+          result.getAsNormalizedFullLink(),
+        );
+        cancels.push(read.sink(() => {}));
+        const value = await waitForCellValue<Counter>(
+          reader,
+          read,
+          (v) => v !== undefined && v.count !== 5,
+        );
+        expect(value.count).toBe(6);
+      } finally {
+        for (const cancel of cancels) cancel();
+        await serving.host.close();
         for (const runtime of runtimes) await runtime.dispose();
       }
     });

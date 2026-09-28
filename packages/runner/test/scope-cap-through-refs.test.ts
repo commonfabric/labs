@@ -9,6 +9,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
+import {
+  cloneSchemaMutable,
+  internSchema,
+} from "@commonfabric/data-model-schema";
+
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { externalizeSchema } from "../src/link-utils.ts";
 
@@ -157,6 +162,102 @@ describe("scope-cap-through-refs", () => {
   });
 
   describe("getAsCellFollowScopeCap()", () => {
+    for (const keyword of ["anyOf", "oneOf"] as const) {
+      for (const scope of [undefined, "user"] as const) {
+        it(`returns \`${scope ?? "undefined"}\` for a stored recursive \`${keyword}\` with root metadata`, () => {
+          const schema: JSONSchemaObj = {
+            $ref: "#/$defs/Recursive",
+            $defs: {
+              Recursive: {
+                [keyword]: [
+                  { type: "null" },
+                  {
+                    $ref: "#/$defs/Recursive",
+                    description: "recursive node",
+                    asCell: [scope ? { kind: "cell", scope } : "cell"],
+                  },
+                ],
+              },
+            },
+          };
+          const stored = externalizeSchema(schema) as JSONSchemaObj;
+          expect(stored.$ref).toMatch(/^cid:/);
+          const withMetadata = { ...stored, description: "root description" };
+          for (
+            const form of [
+              withMetadata,
+              { ...withMetadata, $defs: {} },
+              {
+                ...withMetadata,
+                $defs: { Unused: { type: "string" } },
+              } satisfies JSONSchemaObj,
+              internSchema(cloneSchemaMutable(withMetadata)),
+              cloneSchemaMutable(stored),
+            ]
+          ) {
+            expect(ContextualFlowControl.getAsCellFollowScopeCap(form))
+              .toBe(scope);
+          }
+          expect(Object.isFrozen(withMetadata)).toBe(false);
+        });
+      }
+    }
+
+    it("returns a later branch's cap after a stored recursive branch", () => {
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/R",
+        $defs: {
+          R: {
+            anyOf: [
+              { $ref: "#/$defs/R", asCell: ["cell"] },
+              { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+            ],
+          },
+        },
+      };
+      const stored = externalizeSchema(schema) as JSONSchemaObj;
+      expect(stored.$ref).toMatch(/^cid:/);
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap({
+        ...stored,
+        description: "root description",
+      })).toBe("user");
+    });
+
+    it("returns `undefined` while retaining the local definitions reached by ref-site metadata", () => {
+      const stored = externalizeSchema({
+        $ref: "#/$defs/R",
+        $defs: {
+          R: {
+            anyOf: [
+              { type: "null" },
+              { $ref: "#/$defs/R", asCell: ["cell"] },
+            ],
+          },
+        },
+      }) as JSONSchemaObj;
+      const schema: JSONSchemaObj = {
+        ...stored,
+        properties: { label: { $ref: "#/$defs/Label" } },
+        $defs: {
+          Label: { $ref: "#/$defs/Text" },
+          Text: { type: "string" },
+          Unused: { type: "number" },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBeUndefined();
+      const resolved = ContextualFlowControl.resolveSchemaRefs(
+        schema,
+      ) as JSONSchemaObj;
+      expect(Object.keys(resolved.$defs!)).toHaveLength(2);
+      expect(ContextualFlowControl.resolveSchemaRefs(
+        resolved.properties!.label as JSONSchemaObj,
+        resolved,
+      )).toMatchObject({ type: "string" });
+    });
+
     it("returns the entry scope declared by the definition a handle names", () => {
       const schema: JSONSchemaObj = {
         $ref: "#/$defs/Draft",

@@ -82,7 +82,7 @@ function standInCost(values: readonly number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
   const mean = sorted.reduce((total, one) => total + one, 0) / sorted.length;
-  const p90 = percentile90(sorted, sorted.length);
+  const p90 = percentile90(sorted);
   return Math.max(mean, p90);
 }
 
