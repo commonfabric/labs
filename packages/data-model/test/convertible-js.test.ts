@@ -46,9 +46,13 @@ import {
 import {
   CODEC,
   CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  type LiveEnvironment,
   ProblematicValue,
+  REALM_CODEC,
   UnknownValue,
 } from "@/codec-common";
+import { BigIntCodec } from "@/codec-json/BigIntCodec.ts";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
@@ -64,8 +68,12 @@ import {
 } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricEpochDay,
   FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
   FabricRegExp,
+  FabricUnavailable,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
@@ -527,6 +535,96 @@ describe("convertible-js", () => {
         expect(Object.isFrozen(state)).toBe(false);
       });
     });
+  });
+
+  describe("codec `decode()` fallbacks honor `mutable`", () => {
+    // Each codec here decodes a state it cannot build a value from to a
+    // `ProblematicValue`, which follows `mutable` like any value a decode
+    // builds.
+
+    const env = new DummyLiveEnvironment();
+
+    /** One codec, and a state it falls back on. */
+    interface FallbackCase {
+      /** Which codec, as a test name. */
+      name: string;
+
+      /** The codec. */
+      codec: {
+        decode(
+          typeTag: string,
+          state: never,
+          env: LiveEnvironment,
+          mutable?: boolean,
+        ): unknown;
+      };
+
+      /** A state the codec falls back on. */
+      state: unknown;
+    }
+
+    const badRegExp = { flavor: "es2025", source: "(", flags: "" };
+    const badUnavailable = { reason: "error" };
+    const cases: FallbackCase[] = [
+      { name: "`BigInt@1`", codec: new BigIntCodec(), state: "" },
+      {
+        name: "`FabricBytes` JSON",
+        codec: FabricBytes[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricEpochDay` JSON",
+        codec: FabricEpochDay[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricEpochNsec` JSON",
+        codec: FabricEpochNsec[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricHash` JSON",
+        codec: FabricHash[JSON_CODEC],
+        state: { tag: "fid1", hash: "!" },
+      },
+      {
+        name: "`FabricKeyPair` JSON",
+        codec: FabricKeyPair[JSON_CODEC],
+        state: { algorithm: "Ed25519", publicKey: "!", privateKey: "!" },
+      },
+      {
+        name: "`FabricRegExp` JSON",
+        codec: FabricRegExp[JSON_CODEC],
+        state: badRegExp,
+      },
+      {
+        name: "`FabricRegExp` realm",
+        codec: FabricRegExp[REALM_CODEC],
+        state: badRegExp,
+      },
+      {
+        name: "`FabricUnavailable` JSON",
+        codec: FabricUnavailable[JSON_CODEC],
+        state: badUnavailable,
+      },
+      {
+        name: "`FabricUnavailable` realm",
+        codec: FabricUnavailable[REALM_CODEC],
+        state: badUnavailable,
+      },
+    ];
+
+    for (const { name, codec, state } of cases) {
+      it(`${name} returns a frozen \`ProblematicValue\` by default, mutable when \`mutable\` is \`true\``, () => {
+        const frozen = codec.decode("Some@1", state as never, env);
+        const mutable = codec.decode("Some@1", state as never, env, true);
+
+        expect(frozen).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(frozen)).toBe(true);
+        expect(mutable).toBeInstanceOf(ProblematicValue);
+        expect(Object.isFrozen(mutable)).toBe(false);
+      });
+    }
   });
 
   describe("cycle behavior via `[DEEP_FREEZE]`", () => {

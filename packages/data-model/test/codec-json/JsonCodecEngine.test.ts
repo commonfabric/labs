@@ -198,6 +198,118 @@ describe("JsonCodecEngine", () => {
     });
   });
 
+  describe("`mutable` constructor option", () => {
+    /** A lenient engine over the default registry that decodes mutable. */
+    const mutableEngine = new JsonCodecEngine({
+      registry: createDefaultJsonRegistry(),
+      lenient: true,
+      mutable: true,
+    });
+
+    /** Decodes one codec-value tree through `mutableEngine`. */
+    function decodeMutable(
+      data: JsonCodecValue,
+      malformed = false,
+    ): FabricValue {
+      return mutableEngine.decode(
+        JsonCodecEngine.wrapEncodedValueForTesting(
+          JSON.stringify(data),
+          malformed,
+        ),
+        new TestLiveEnvironment(),
+      );
+    }
+
+    it("is `false` by default, and `true` when given", () => {
+      expect(newDefaultJsonCodecEngine().mutable).toBe(false);
+      expect(mutableEngine.mutable).toBe(true);
+    });
+
+    it("leaves decoded arrays and objects mutable at every level", () => {
+      const result = decodeMutable(
+        { a: [1, { b: 2 }] } as JsonCodecValue,
+      ) as { a: [number, { b: number }] };
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result.a)).toBe(false);
+      expect(Object.isFrozen(result.a[1])).toBe(false);
+    });
+
+    it("leaves an `/object`-unwrapped object mutable", () => {
+      const result = decodeMutable(
+        { "/object": { "/myKey": { v: 1 } } } as JsonCodecValue,
+      ) as Record<string, object>;
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result["/myKey"])).toBe(false);
+    });
+
+    it("leaves a `/quote` result mutable at every level", () => {
+      const result = decodeMutable(
+        { "/quote": { "/Nope@1": [1, { c: 3 }] } } as JsonCodecValue,
+      ) as { "/Nope@1": [number, object] };
+
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result["/Nope@1"])).toBe(false);
+      expect(Object.isFrozen(result["/Nope@1"][1])).toBe(false);
+    });
+
+    it("leaves an instance, and the containers it holds, mutable", () => {
+      const encoded = newDefaultJsonCodecEngine().encode(
+        FabricError.fromNativeError(new Error("boom", { cause: { x: 1 } })),
+      );
+      const result = mutableEngine.decode(encoded, new TestLiveEnvironment());
+
+      expect(result).toBeInstanceOf(FabricError);
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen((result as FabricError).cause)).toBe(false);
+    });
+
+    it("leaves an `UnknownValue`, and its state, mutable", () => {
+      const result = decodeMutable(
+        { "/Nope@1": { a: [1] } } as JsonCodecValue,
+      ) as UnknownValue;
+
+      expect(result).toBeInstanceOf(UnknownValue);
+      expect(Object.isFrozen(result)).toBe(false);
+      expect(Object.isFrozen(result.state)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` the engine reports mutable", () => {
+      const result = decodeMutable({ "/": { a: 1 } } as JsonCodecValue, true);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` for a refused serialized form mutable", () => {
+      const result = mutableEngine.decode(
+        "not this format",
+        new TestLiveEnvironment(),
+      );
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("leaves a `ProblematicValue` a codec returns mutable", () => {
+      const result = decodeMutable({ "/Bytes@1": "!!!" } as JsonCodecValue);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect(Object.isFrozen(result)).toBe(false);
+    });
+
+    it("returns a `FabricPrimitive` frozen, as it always is", () => {
+      const encoded = newDefaultJsonCodecEngine().encode(
+        new FabricBytes(new Uint8Array([1, 2, 3])),
+      );
+      const result = mutableEngine.decode(encoded, new TestLiveEnvironment());
+
+      expect(result).toBeInstanceOf(FabricBytes);
+      expect(Object.isFrozen(result)).toBe(true);
+    });
+  });
+
   describe("terminal vs. nonterminal codecs", () => {
     // The two kinds differ in exactly one respect: whether the walker
     // processes the state a codec produces. Every codec this package registers
