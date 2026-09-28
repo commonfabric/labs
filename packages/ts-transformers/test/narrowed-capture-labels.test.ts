@@ -179,32 +179,52 @@ export default pattern<{ rows: (Confidential<Secret, ["row"]> | undefined)[] }>(
     });
   });
 
-  it("reads a policy its declaration names by `typeof` through an optional chain", async () => {
-    const output = await transformFiles({
-      "/rules.ts":
-        `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+  describe("a policy its declaration names by `typeof`", () => {
+    /** The capture schema of `secret`, declared as `declaration`, read by `?.`. */
+    const policyCapture = async (declaration: string) => {
+      const output = await transformFiles({
+        "/rules.ts":
+          `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
 export const neverRelease = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: { integrity: ["never"] },
   post: { dropClause: true },
 });
 export const rules = exchangeRules([neverRelease]);`,
-      "/test.tsx": `${IMPORTS}
+        "/test.tsx": `${IMPORTS}
 import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
-export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> }>(
+export default pattern<{ ${declaration} }>(
   ({ secret }) => ({ out: computed(() => secret?.a ?? "") }),
 );`,
-    }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-    const [capture] = callSchemas(parseModule(output["/test.tsx"]!), "lift");
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const [capture] = callSchemas(parseModule(output["/test.tsx"]!), "lift");
+      return (capture!.properties as Schema).secret;
+    };
 
-    expect((capture!.properties as Schema).secret).toMatchObject({
+    const POLICY_LABEL = {
       ifc: {
         confidentiality: [{
           policyRefKind: "module",
           __ctPolicyIdentityOf: { file: "/rules.ts", path: ["rules"] },
         }],
       },
+    };
+
+    it("reads the policy through an optional chain", async () => {
+      expect(
+        await policyCapture(
+          "secret: Confidential<Secret, [PolicyOf<typeof rules>]>",
+        ),
+      ).toMatchObject(POLICY_LABEL);
+    });
+
+    it("reads the policy of an optional property", async () => {
+      expect(
+        await policyCapture(
+          "secret?: Confidential<Secret, [PolicyOf<typeof rules>]>",
+        ),
+      ).toMatchObject(POLICY_LABEL);
     });
   });
 

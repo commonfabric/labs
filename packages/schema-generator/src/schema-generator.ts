@@ -1639,7 +1639,12 @@ export class SchemaGenerator {
       ? type.types.filter((member) => (member.flags & nullish) === 0)
       : [type];
     if (values.length === 1 && values[0] !== type) {
-      return this.#labelsOf(values[0]!, memberNode(values[0]!), context);
+      // A declaration that writes no union is an optional property's, whose
+      // `?` adds the `undefined`: it spells the value alone.
+      const valueNode = written && !ts.isUnionTypeNode(written)
+        ? typeNode
+        : memberNode(values[0]!);
+      return this.#labelsOf(values[0]!, valueNode, context);
     }
     const whole = this.formatChildType(type, context, typeNode);
     const labels = declaredIfcLabels(whole, context.definitions);

@@ -27,7 +27,7 @@ type StoredEntry = {
 };
 
 /**
- * A pattern over `secret`, declared as `declaration`, returning `out`, beside
+ * A pattern over `secret`, declared by `declaration`, returning `out`, beside
  * a module declaring the exchange rules `rules`.
  */
 const program = (declaration: string, out: string): RuntimeProgram => ({
@@ -41,7 +41,7 @@ const program = (declaration: string, out: string): RuntimeProgram => ({
       "interface Secret { a: string; b: string }",
       "interface Other { a: string; c: number }",
       "type Either = Confidential<Secret, ['x']> | Confidential<Other, ['y']>;",
-      `export default pattern<{ secret: ${declaration} }>(({ secret }) => ({`,
+      `export default pattern<{ ${declaration} }>(({ secret }) => ({`,
       `  out: computed(() => ${out}),`,
       "}));",
     ].join("\n"),
@@ -117,7 +117,7 @@ describe("cfc-narrowed-capture-floor", () => {
   it("labels the result of a lift reading a labeled value by a property chain", async () => {
     expect(
       await declaredLabelsOfOut(
-        'Confidential<Secret, readonly ["topsecret"]>',
+        'secret: Confidential<Secret, readonly ["topsecret"]>',
         "secret.a",
       ),
     ).toEqual([{ confidentiality: ["topsecret"] }]);
@@ -126,7 +126,7 @@ describe("cfc-narrowed-capture-floor", () => {
   it("labels the result of a lift reading a labeled value by an optional chain", async () => {
     expect(
       await declaredLabelsOfOut(
-        'Confidential<Secret, readonly ["topsecret"]> | undefined',
+        'secret: Confidential<Secret, readonly ["topsecret"]> | undefined',
         'secret?.a ?? ""',
       ),
     ).toEqual([{ confidentiality: ["topsecret"] }]);
@@ -134,7 +134,7 @@ describe("cfc-narrowed-capture-floor", () => {
 
   it("labels the result of a lift reading a labeled union with every member's confidentiality", async () => {
     const [label] = await declaredLabelsOfOut(
-      'Confidential<Either, ["outer"]>',
+      'secret: Confidential<Either, ["outer"]>',
       "secret.a",
     );
 
@@ -145,7 +145,7 @@ describe("cfc-narrowed-capture-floor", () => {
 
   it("labels the result of a lift reading a union under an empty label with each member's confidentiality", async () => {
     const [label] = await declaredLabelsOfOut(
-      "Confidential<Either, []>",
+      "secret: Confidential<Either, []>",
       "secret.a",
     );
 
@@ -157,7 +157,18 @@ describe("cfc-narrowed-capture-floor", () => {
   it("labels the result of a lift reading a value by an optional chain with its declared policy", async () => {
     expect(
       await declaredLabelsOfOut(
-        "Confidential<Secret, [PolicyOf<typeof rules>]>",
+        "secret: Confidential<Secret, [PolicyOf<typeof rules>]>",
+        'secret?.a ?? ""',
+      ),
+    ).toMatchObject([{
+      confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
+    }]);
+  });
+
+  it("labels the result of a lift reading an optional property with its declared policy", async () => {
+    expect(
+      await declaredLabelsOfOut(
+        "secret?: Confidential<Secret, [PolicyOf<typeof rules>]>",
         'secret?.a ?? ""',
       ),
     ).toMatchObject([{
@@ -166,6 +177,8 @@ describe("cfc-narrowed-capture-floor", () => {
   });
 
   it("labels nothing for a lift reading an unlabeled value", async () => {
-    expect(await declaredLabelsOfOut("Secret", "secret.a")).toEqual([]);
+    expect(await declaredLabelsOfOut("secret: Secret", "secret.a")).toEqual(
+      [],
+    );
   });
 });
