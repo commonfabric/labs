@@ -3134,6 +3134,48 @@ const isPureLinkStructure = (value: unknown): boolean => {
 };
 
 /**
+ * The whole-value roots recorded in `target` by the identity the
+ * transaction's flow join names: a root another identity wrote in the same
+ * transaction is not this writer's to claim.
+ */
+const writersRecordedRoots = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+) => {
+  const key = targetKey(target);
+  const { writeIdentity } = tx.getCfcState();
+  return tx.getCfcState().assertedValueRoots.filter(({ address, identity }) =>
+    targetKey(address) === key && !writeIdentity.multiple &&
+    identity !== undefined && deepEqual(identity, writeIdentity.identity)
+  );
+};
+
+/**
+ * The references the runtime stored in `target` for the writer the flow join
+ * names (`CfcAssertedValueRoot.reference`), by the path of the slot holding
+ * each.
+ */
+const recordedReferences = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): Map<string, CfcAddress> => {
+  const references = new Map<string, CfcAddress>();
+  for (const { address, reference } of writersRecordedRoots(tx, target)) {
+    if (reference === undefined) continue;
+    references.set(pathKey(canonicalizeLogicalPath(address.path)), reference);
+  }
+  return references;
+};
+
+/**
  * Whether every primitive cell link in `value`, `value` included, is a
  * reference the runtime recorded at its path: the one `references` maps that
  * path to, spelled as a plain reference to that document's root. `path` is
@@ -3227,7 +3269,6 @@ const assertedValueRootPaths = (
   const key = targetKey(target);
   const roots: (readonly string[])[] = [];
   const seen = new Set<string>();
-  const { writeIdentity } = tx.getCfcState();
   let observed:
     | { path: readonly string[]; recursive: boolean }[]
     | undefined;
@@ -3257,22 +3298,8 @@ const assertedValueRootPaths = (
       isPrefix(root, path) || (recursive && isPrefix(path, root))
     );
   };
-  const recorded = tx.getCfcState().assertedValueRoots.filter((
-    { address, identity },
-  ) =>
-    targetKey(address) === key &&
-    // The stamp names the join's identity, so a root another identity wrote
-    // in the same transaction is not this writer's to claim.
-    !writeIdentity.multiple && identity !== undefined &&
-    deepEqual(identity, writeIdentity.identity)
-  );
-  // The references the runtime stored for this writer in the document, by
-  // path (`CfcAssertedValueRoot.reference`).
-  const references = new Map<string, CfcAddress>();
-  for (const { address, reference } of recorded) {
-    if (reference === undefined) continue;
-    references.set(pathKey(canonicalizeLogicalPath(address.path)), reference);
-  }
+  const recorded = writersRecordedRoots(tx, target);
+  const references = recordedReferences(tx, target);
   for (const { address } of recorded) {
     const root = canonicalizeLogicalPath(address.path);
     const rootKey = pathKey(root);
@@ -3624,19 +3651,75 @@ const isReplacedMembershipEntry = (
 };
 
 /**
+ * Whether a stamp names the reference `target` names: whether its
+ * `LinkReference` names the document `target` is in, at a path at or above
+ * `target`'s.
+ */
+const stampNamesReference = (
+  entry: LabelMapEntry,
+  target: CfcAddress,
+): boolean =>
+  (entry.label.integrity ?? []).some((atom) => {
+    if (
+      !isObjectNotArray(atom) ||
+      (atom as { type?: unknown }).type !== CFC_ATOM_TYPE.LinkReference
+    ) return false;
+    const source = (atom as {
+      source?: { space?: unknown; id?: unknown; path?: unknown };
+    }).source;
+    return source !== undefined && source.space === target.space &&
+      source.id === target.id && Array.isArray(source.path) &&
+      isPrefix(
+        canonicalizeLogicalPath(source.path as string[]),
+        canonicalizeLogicalPath(target.path),
+      );
+  });
+
+/**
+ * Whether a stamp at exactly `slot` names its writer but describes a
+ * reference other than `target`, the one the slot holds, or none. A slot a writer
+ * stored a reference at is stamped with that reference named beside the
+ * writer (`assertedValueRootPaths`), so the stamp describes one pointer. An
+ * append lands at the list's live tail, while the label envelope its
+ * transaction wrote describes the list it read, so under concurrent appends a
+ * slot's stamp can sit beside another writer's reference.
+ */
+const slotStampDescribesAnother = (
+  metadata: CfcMetadata,
+  slot: readonly string[],
+  target: CfcAddress,
+): boolean => {
+  const key = pathKey(slot);
+  // Every entry a value read of the slot takes as witness evidence counts,
+  // an untagged one written before entries carried an origin or an
+  // observation class included: a stamp that names a writer at the slot but
+  // no reference, or another one, cannot vouch for the pointer there.
+  return metadata.labelMap.entries.some((entry) =>
+    isWitnessEvidence(entry) &&
+    (entry.observes === undefined || entry.observes === "value") &&
+    pathKey(canonicalizeLogicalPath(entry.path)) === key &&
+    (entry.label.integrity ?? []).some(isTransformedByAtom) &&
+    !stampNamesReference(entry, target)
+  );
+};
+
+/**
  * The input witnesses a followed reference holds at its slot: the retained
- * atoms of the value stamps that resolve there. Which reference sits at a
- * slot decides which document a reader reads, so a reader that follows one to
+ * atoms of the value stamps that resolve there, and none when a stamp at the
+ * slot describes another reference. Which reference sits at a slot decides
+ * which document a reader reads, so a reader that follows one to
  * confidential content consumed the choice as an input, whatever the slot's
- * own label says. A reference link writes put in place carries no value stamp
- * of its own, so it retains nothing unless its writer's stamp covers the slot
- * (`assertedValueRootPaths`).
+ * own label says. A reference link writes put in place carries no
+ * value stamp of its own, so it retains nothing unless its writer's stamp
+ * covers the slot (`assertedValueRootPaths`).
  */
 const followedReferenceWitnesses = (
   metadata: CfcMetadata | undefined,
   slot: readonly string[],
+  target: CfcAddress,
 ): CfcAtom[] => {
   if (metadata === undefined) return [];
+  if (slotStampDescribesAnother(metadata, slot, target)) return [];
   const evidence = consumedEntriesForRead(metadata, slot, {
     nonRecursive: true,
     consumes: "value",
@@ -3867,12 +3950,43 @@ const deriveFlowJoinImpl = (
                 : undefined,
             ),
         );
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was, so a list other code truncated would otherwise keep
+        // every surviving member's witness. Its value stamps are a location
+        // of the read. A record's key named `length` is read the same way,
+        // which can only withhold a witness.
+        document.witnesses.set(
+          `${labelKey}#length`,
+          document.metadata === undefined ||
+            observation.nonRecursive !== true ||
+            observation.shape === "followRef" || identity === undefined ||
+            inputWitnesses?.length === 0
+            ? undefined
+            : (() => {
+              const lengthPath = [...logicalPath, "length"];
+              const lengthEntries = consumedEntriesForRead(
+                document.metadata!,
+                lengthPath,
+                { nonRecursive: true, consumes: "value", ...exclusion },
+                indexFor("value"),
+              ).filter((entry) =>
+                pathKey(canonicalizeLogicalPath(entry.path)) ===
+                  pathKey(lengthPath)
+              );
+              return lengthEntries.length === 0
+                ? undefined
+                : observationInputWitnesses(lengthEntries, lengthPath, true);
+            })(),
+        );
       }
       // Every observation counts toward the input witnesses, `followRef`
       // included: which reference sits at a slot is information the
       // transformation consumed, and a pointer the endorsed writer did not
       // write must not pass as its input.
       noteInputWitnesses(document.witnesses.get(labelKey));
+      noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its
@@ -4023,6 +4137,30 @@ const deriveFlowJoinImpl = (
         location.path,
       );
     }
+    const metadataOf = (location: ObservedLocation) => {
+      const key = docKey(location);
+      return metadataByDoc.has(key)
+        ? metadataByDoc.get(key)!.metadata
+        : storedMetadataFor(
+          tx,
+          location.space,
+          location.id,
+          location.scope,
+          "application/json",
+        );
+    };
+    // A slot whose stamp describes another reference than the one it holds
+    // witnesses nothing, whether its reference is followed or only observed.
+    for (const { slot, target } of references) {
+      const metadata = metadataOf(slot);
+      if (
+        metadata !== undefined &&
+        slotStampDescribesAnother(metadata, slot.path, target)
+      ) {
+        noteInputWitnesses([]);
+        break;
+      }
+    }
     const readsConfidentially = (target: CfcAddress): boolean =>
       (confidentialReads.get(docKey(target)) ?? []).some((read) =>
         isPrefix(target.path, read.path) ||
@@ -4058,18 +4196,11 @@ const deriveFlowJoinImpl = (
         }
       }
     }
-    for (const { slot } of followed) {
-      const key = docKey(slot);
-      const metadata = metadataByDoc.has(key)
-        ? metadataByDoc.get(key)!.metadata
-        : storedMetadataFor(
-          tx,
-          slot.space,
-          slot.id,
-          slot.scope,
-          "application/json",
-        );
-      noteInputWitnesses(followedReferenceWitnesses(metadata, slot.path));
+    for (const { slot, target } of followed) {
+      const metadata = metadataOf(slot);
+      noteInputWitnesses(
+        followedReferenceWitnesses(metadata, slot.path, target),
+      );
       if (inputWitnesses?.length === 0) break;
     }
   }
@@ -10550,6 +10681,12 @@ export function* prepareBoundaryCommitSteps(
       // write as pure link structure; its whole value is not, so it stamps
       // here all the same, and the membership stamps beneath it give way.
       const derivedStampKeys = new Set(derivedStampPaths.map(pathKey));
+      // A root that is itself a slot holding a reference anchoring stored
+      // names that reference beside its writer, so the stamp describes one
+      // pointer (`slotStampDescribesAnother`).
+      const rootReferences = assertedRoots.length === 0
+        ? new Map<string, CfcAddress>()
+        : recordedReferences(tx, { space, id, scope });
       for (const root of assertedRoots) {
         if (derivedStampKeys.has(pathKey(root))) continue;
         derivedStampKeys.add(pathKey(root));
@@ -10582,15 +10719,26 @@ export function* prepareBoundaryCommitSteps(
         // reader consuming both as covering entries sees today's label or
         // a wider one — additively safe, no dial (C0 §9).
         if (flowHasLabels) {
+          const reference = rootReferences.get(pathKey(path));
+          const integrity = reference === undefined ? flowIntegrity : [
+            ...flowIntegrity,
+            {
+              type: CFC_ATOM_TYPE.LinkReference,
+              source: {
+                space: reference.space,
+                id: reference.id,
+                path: canonicalizeLogicalPath(reference.path),
+              },
+              target: { space, id, path: [...path] },
+            },
+          ];
           persistedLabelEntries.push(markFlowStampEntry({
             path,
             label: {
               ...(flowConfidentiality.length > 0
                 ? { confidentiality: [...flowConfidentiality] }
                 : {}),
-              ...(flowIntegrity.length > 0
-                ? { integrity: [...flowIntegrity] }
-                : {}),
+              ...(integrity.length > 0 ? { integrity: [...integrity] } : {}),
             },
             origin: "derived",
             observes: "value",

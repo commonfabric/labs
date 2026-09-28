@@ -18,7 +18,7 @@ export class DummyLiveEnvironment extends BaseLiveEnvironment {
   }
 }
 
-export const dummyEnv = new DummyLiveEnvironment(true);
+export const dummyEnv = new DummyLiveEnvironment();
 
 /**
  * Recursion-callback helper for exercising the `[DEEP_FREEZE]` protocol member

@@ -15,7 +15,6 @@ import {
 } from "@/codec-interface/interface.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { toReportableState } from "./toReportableState.ts";
 import { toReportableTag } from "./toReportableTag.ts";
 
@@ -198,7 +197,8 @@ export class ProblematicValue extends BaseFabricInstance {
       decode(
         _typeTag: string,
         state: ProblematicValueState,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const result = new ProblematicValue(
           state.tag,
@@ -206,9 +206,7 @@ export class ProblematicValue extends BaseFabricInstance {
           state.error,
         );
 
-        // Honor `shouldDeepFreeze`: produce the type's correct deep-frozen
-        // form via its `[DEEP_FREEZE]` member (recursing through `deepFreeze`).
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );

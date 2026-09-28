@@ -10,6 +10,7 @@ import {
   encodeMemoryBoundary,
   type Operation,
   type PatchOp,
+  type PendingRead,
   toDocumentPath,
 } from "../../v2.ts";
 import {
@@ -42,6 +43,22 @@ const malformedPaths: [shape: string, path: DocumentPath][] = [
     0,
   ] as unknown as DocumentPath],
   ["is not an array", "value" as unknown as DocumentPath],
+];
+
+/**
+ * Kinds of value the engine refuses as a position in the log, each with a value
+ * of that kind.
+ */
+const malformedSeqs: [kind: string, seq: unknown][] = [
+  ["`NaN`", NaN],
+  ["`Infinity`", Infinity],
+  ["negative", -1],
+  ["`-0`", -0],
+  ["not an integer", 0.5],
+  ["past `Number.MAX_SAFE_INTEGER`", Number.MAX_SAFE_INTEGER + 1],
+  ["`null`", null],
+  ["a string", "abc"],
+  ["a `bigint`", 1n],
 ];
 
 describe("engine-conflicts", () => {
@@ -299,6 +316,20 @@ describe("engine-conflicts", () => {
     }
   }
 
+  it("applies a commit whose confirmed read names `Number.MAX_SAFE_INTEGER`, past the head", () => {
+    const read = { id: ids[0], path: toDocumentPath(["value"]) };
+    expect(commitReads([{ ...read, seq: Number.MAX_SAFE_INTEGER }]).seq)
+      .toBe(2);
+  });
+
+  for (const [kind, seq] of [...malformedSeqs, ["`undefined`", undefined]]) {
+    it(`throws \`ProtocolError\` for a read whose \`seq\` is ${kind} after a stale read`, () => {
+      const stale = { id: ids[0], path: toDocumentPath(["value"]), seq: 0 };
+      expect(() => commitReads([stale, { ...stale, seq: seq as number }]))
+        .toThrow(ProtocolError);
+    });
+  }
+
   it("throws `ProtocolError` for a pending read whose path holds a segment that is not a string", () => {
     const sessionId = "session:malformed-pending";
     applyCommit(engine, {
@@ -397,6 +428,67 @@ describe("engine-conflicts", () => {
         nonRecursive: true,
       }])
     ).not.toThrow();
+  });
+
+  describe("a pending read's `basisSeq` and `localSeq`", () => {
+    // Each read names this session's first commit as its one layer, unless
+    // the case overrides `localSeq`. A case run behind a stale confirmed read
+    // shows the pending read is refused before any read's staleness is
+    // decided, since the stale read alone reports a conflict.
+
+    /**
+     * Commits a pending read of `ids[0]` with `fields` over its defaults,
+     * beside `confirmed`.
+     */
+    const commitPendingRead = (
+      fields: Partial<PendingRead>,
+      confirmed: ConfirmedRead[] = [],
+    ) =>
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: 2,
+          reads: {
+            confirmed,
+            pending: [{
+              id: ids[0],
+              path: toDocumentPath(["value"]),
+              localSeq: 1,
+              ...fields,
+            }],
+          },
+          operations: [{ op: "set", id: "of:output", value: { value: 1 } }],
+        },
+      });
+
+    const stale = { id: ids[1], path: toDocumentPath(["value"]), seq: 0 };
+
+    it("applies a commit whose pending read has a `basisSeq` of `0`", () => {
+      expect(commitPendingRead({ basisSeq: 0 }).seq).toBe(2);
+    });
+
+    it("throws `ProtocolError` for a pending read whose `basisSeq` is `-0`", () => {
+      expect(() => commitPendingRead({ basisSeq: -0 })).toThrow(ProtocolError);
+    });
+
+    it("throws `ProtocolError` for a pending read whose `basisSeq` is `NaN` behind a stale confirmed read", () => {
+      expect(() => commitPendingRead({ basisSeq: NaN }, [stale]))
+        .toThrow(ProtocolError);
+    });
+
+    it("throws `ProtocolError` for a pending read whose `localSeq` is `-0`", () => {
+      expect(() => commitPendingRead({ localSeq: -0 })).toThrow(ProtocolError);
+    });
+
+    it("throws `ProtocolError` for a pending read whose `localSeq` holds `-0` after a layer that resolves", () => {
+      expect(() => commitPendingRead({ localSeq: [1, -0] }))
+        .toThrow(ProtocolError);
+    });
+
+    it("throws `ProtocolError` for a pending read whose `localSeq` is `-0` behind a stale confirmed read", () => {
+      expect(() => commitPendingRead({ localSeq: -0 }, [stale]))
+        .toThrow(ProtocolError);
+    });
   });
 
   describe("reads sharing a conflict scan", () => {

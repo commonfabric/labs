@@ -1,24 +1,29 @@
 /**
- * Mutate-in-place write primitives for `v2-transaction.ts`: shallow-thaw the
- * spine, create missing intermediates, mutate the leaf in place.
+ * Plan-then-apply write primitives for `v2-transaction.ts`. A write is first
+ * planned, which decides whether it is refused and reports what it finds,
+ * reading the root and changing nothing; the plan then carries it out,
+ * shallow-thawing the spine, creating missing intermediates, and mutating the
+ * leaf in place.
  *
- * The hot path is `applyMutablePathWrite()`. Sibling helpers
- * (`isContainerValue`, `getValueTypeName`, `applyArrayLengthWrite`) are
- * exposed for callers that need to do their own pre-flight inspection
- * (e.g. v2-transaction's `inspectPath` no-op short-circuits) without
- * pulling in the whole write helper.
+ * The plan decides from a trace of the path (`tracePath()`), the same facts
+ * `cloneForMutation()` decides its own errors from, and carrying a plan out
+ * has no error in its type. So a refusal cannot follow a mutation, and a
+ * refused write leaves a root the caller mutates in place exactly as it was.
  */
 
 import {
   cloneForMutation,
-  CloneForMutationError,
+  cloneIfNecessary,
+  debugStr,
   type FabricValue,
   isFabricPlainContainer,
+  missingContainerIsArray,
+  type PathTrace,
   toDebugKindString,
+  tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isPlainContainer } from "@commonfabric/utils/types";
 import type {
   IInvalidArrayLengthError,
   IMemoryAddress,
@@ -27,14 +32,36 @@ import type {
 } from "../interface.ts";
 import { TypeMismatchError } from "./attestation.ts";
 import { InvalidArrayLengthError } from "../transaction-errors.ts";
-import { createPathContainer } from "../v2-path.ts";
 
+/** What carrying out a planned write did. */
 export type MutableWriteResult = {
+  /**
+   * The root after the write: the one planned against, changed in place where
+   * it was already mutable, or its replacement.
+   */
   root: FabricValue | undefined;
-  previousValue: FabricValue | undefined;
+
+  /** Whether the write changed anything. */
   changed: boolean;
+
+  /**
+   * Where the write first changes the document: the address path, or, for a
+   * write that creates missing containers, the path of the deepest container
+   * already there -- the empty path where the write creates the root.
+   */
+  activityPath: readonly string[];
+
+  /**
+   * An isolated copy of the value at `activityPath` as it was before the
+   * write, taken before anything changed.
+   */
+  previousActivityValue: FabricValue | undefined;
+
+  /** Whether a value was at `activityPath` before the write. */
+  previousActivityPresent: boolean;
 };
 
+/** Options for `planMutablePathWrite()`. */
 export type MutablePathWriteOptions = {
   /**
    * When true, the write removes the slot at the address path — deleting an
@@ -46,18 +73,123 @@ export type MutablePathWriteOptions = {
   delete?: boolean;
 };
 
+/** An error a write is refused with. */
+export type MutablePathWriteError =
+  | ITypeMismatchError
+  | IInvalidArrayLengthError;
+
+/**
+ * A write `planMutablePathWrite()` admitted: what the write finds before it
+ * changes anything, and the means to carry it out.
+ */
+export interface PlannedPathWrite {
+  /**
+   * Whether the slot at the address path is there before the write. For the
+   * empty path, whether the root is defined.
+   */
+  readonly present: boolean;
+
+  /** The value at the address path before the write, where `present`. */
+  readonly previousValue: FabricValue | undefined;
+
+  /**
+   * Carries the write out, storing an isolated copy of the value planned, on
+   * the root it was planned against. That root is changed in place where it
+   * is already mutable. A delete with nothing to remove returns it unchanged.
+   *
+   * A plan is carried out at most once, and only while the root is as it was
+   * planned against: any change to it, another plan's `apply()` included,
+   * leaves every plan taken before it stale, so a caller plans each write
+   * against the root as it stands. A second `apply()` throws before anything
+   * changes. A stale plan is not otherwise detected; one that finds its parent
+   * an array where it planned a key other than an index throws rather than
+   * writing that key, though not before the spine is thawed.
+   *
+   * No refusal can come from here. Otherwise it throws only where
+   * `cloneIfNecessary()` refuses the value it isolates -- the value planned,
+   * or the one it reports as `previousActivityValue` -- which is one outside
+   * the `FabricValue` contract, and before anything is changed.
+   */
+  apply(): MutableWriteResult;
+}
+
+/**
+ * Decides whether a write at `address.path` within `root` is refused, and
+ * reports what the write finds, reading `root` and changing nothing. A write
+ * it admits is carried out by the plan's `apply()`, which stores `value`.
+ *
+ * A write of a value is refused with a `TypeMismatchError` naming the path
+ * through the offending key where a key lands in a container that cannot hold
+ * it -- an array takes an index or `length` and no other key, whether it is
+ * already there or is one the write would create -- or where the path goes on
+ * past a value that is not an array or a plain object. A `length` written onto
+ * an array already there is refused with an `InvalidArrayLengthError` where no
+ * array can have it (`isOutOfRangeArrayLength()`). A delete is never refused:
+ * a slot the path does not reach has nothing in it to remove. A delete of an
+ * array's `length` empties the array, whatever value the call carries.
+ *
+ * Those refusals are exact for a `root` that honors the `FabricValue`
+ * contract. Past it the answer is best-effort: an array carrying a key other
+ * than an index, which no stored value can, may admit a write beneath that
+ * key.
+ *
+ * Writing `undefined` stores `undefined` (present-but-undefined is a real
+ * state, distinct from absent) and creates missing containers like any other
+ * value. A container the write creates beneath the root is shaped by the key
+ * that goes on to address it, as `missingContainerIsArray()` decides; a root
+ * it creates, as `createdRootIsArray()` does.
+ */
+export const planMutablePathWrite = (
+  root: FabricValue | undefined,
+  address: IMemoryAddress,
+  value: FabricValue | undefined,
+  options?: MutablePathWriteOptions,
+): Result<PlannedPathWrite, MutablePathWriteError> => {
+  const isDelete = options?.delete === true;
+  const path = address.path;
+  if (path.length === 0) {
+    return { ok: new Plan(root, address, value, isDelete, undefined) };
+  }
+
+  let trace: PathTrace | undefined;
+  if (root === undefined) {
+    trace = undefined;
+  } else if (isContainerValue(root)) {
+    trace = tracePath(root, path);
+  } else if (isDelete) {
+    return { ok: new Plan(root, address, value, isDelete, undefined) };
+  } else {
+    return {
+      error: TypeMismatchError(
+        { ...address, path: path.slice(0, 1) },
+        getValueTypeName(root),
+        "write",
+      ),
+    };
+  }
+
+  if (!isDelete) {
+    const refusal = refusalOf(trace, address, value);
+    if (refusal !== undefined) {
+      return { error: refusal };
+    }
+  }
+  return { ok: new Plan(root, address, value, isDelete, trace) };
+};
+
 /**
  * Indicates whether a value is one a path key addresses -- an array or a plain
  * object. A `FabricInstance` is refused: it is a container, but it holds its
  * state privately, so reading `value[key]` off one finds an inherited member or
  * nothing, and writing one leaves an own property the instance never reports.
  */
-export const isContainerValue = (
+const isContainerValue = (
   value: FabricValue | undefined,
 ): value is Record<string, FabricValue> | FabricValue[] =>
   isFabricPlainContainer(value);
 
-export const getValueTypeName = (value: FabricValue | undefined): string => {
+/** Names the kind of a root a write cannot descend into, for its error. */
+const getValueTypeName = (value: FabricValue | undefined): string => {
   if (value === null) {
     return "null";
   }
@@ -68,236 +200,70 @@ export const getValueTypeName = (value: FabricValue | undefined): string => {
 };
 
 /**
- * Applies a write at `address.path` within `currentRoot`, returning the
- * (possibly new) root, the previous value at the path, and whether
- * anything changed.
- *
- * Delegates spine descent + thaw + missing-intermediate creation to
- * `cloneForMutation` (with `createMissing: true`), which exposes the
- * parent container at `address.path.slice(0, -1)` as a mutable handle.
- * The function then performs the leaf write -- a property set on an
- * object, an element set on an array, or the legacy length-write
- * coercion when the parent is an array and the leaf key is `"length"`.
- * Subtrees off the spine are preserved by identity, so a subsequent
- * re-freeze short-circuits on everything except the freshly thawed
- * spine.
- *
- * A length write that would grow an array to `2 ** 32` or more is
- * refused with an `InvalidArrayLengthError`. That is decided before
- * `cloneForMutation()` runs, so the refusal leaves `currentRoot` as it
- * was, spine identities included.
- *
- * Writing `undefined` stores `undefined` (present-but-undefined is a
- * real state, distinct from absent) and materializes missing
- * intermediates like any other value. Removal is requested explicitly
- * via `options.delete`, which deletes the leaf slot (object key removal
- * or array hole) and never materializes intermediates for a slot that
- * wasn't there. A delete of an array's `"length"` empties the array: it
- * goes through the legacy length coercion as `undefined` (→ NaN → 0),
- * whatever value the call carries.
- *
- * `force: false` is passed to `cloneForMutation` because the root, by
- * this point, is either (a) freshly allocated by us (in the
- * `undefined`-root branch) and thus owned outright, or (b) the caller's
- * value which by contract is treated as caller-owned within the
- * transaction.
+ * Indicates whether the root a write creates is an array, given `firstKey`,
+ * the key that goes on to address it: where that key is an index. Unlike a
+ * container created beneath the root (`missingContainerIsArray()`), the root
+ * is not an array for `-`, which is a plain key of a fresh root, as it is of
+ * any record already there.
  */
-export const applyMutablePathWrite = (
-  currentRoot: FabricValue | undefined,
-  address: IMemoryAddress,
-  value: FabricValue | undefined,
-  options?: MutablePathWriteOptions,
-): Result<
-  MutableWriteResult,
-  ITypeMismatchError | IInvalidArrayLengthError
-> => {
-  const isDelete = options?.delete === true;
-  if (address.path.length === 0) {
-    const nextRoot = isDelete ? undefined : value;
-    return {
-      ok: {
-        root: nextRoot,
-        previousValue: currentRoot,
-        changed: !valueEqual(currentRoot, nextRoot),
-      },
-    };
-  }
-
-  if (currentRoot === undefined) {
-    if (isDelete) {
-      // Delete-of-nonexistent stays a no-op: don't materialize intermediates
-      // just to remove a slot that wasn't there. A non-delete write — even of
-      // `undefined` — materializes the path below.
-      return {
-        ok: {
-          root: currentRoot,
-          previousValue: undefined,
-          changed: false,
-        },
-      };
-    }
-    currentRoot = createPathContainer(address.path[0]!);
-  } else if (!isContainerValue(currentRoot)) {
-    return {
-      error: TypeMismatchError(
-        { ...address, path: address.path.slice(0, 1) },
-        getValueTypeName(currentRoot),
-        "write",
-      ),
-    };
-  }
-
-  const leafKey = address.path[address.path.length - 1]!;
-  const parentPath = address.path.slice(0, -1);
-
-  // `cloneForMutation()` below thaws the spine of a root the caller owns in
-  // place, replacing each frozen container on it with a mutable copy, so the
-  // length refusal is decided first, reading `currentRoot` alone. The lookup
-  // reaches every array that call would, and possibly one it would not (see
-  // `existingValueAt()`), so it refuses at least every length that throws.
-  if (
-    leafKey === "length" && !isDelete && typeof value === "number" &&
-    isOutOfRangeArrayLength(value) &&
-    Array.isArray(existingValueAt(currentRoot, parentPath))
-  ) {
-    return { error: InvalidArrayLengthError(address, value) };
-  }
-
-  // Thaw the spine and create missing intermediates, all in one call.
-  // The resulting `parent` is the mutable container at `parentPath` --
-  // the slot whose `[leafKey]` we're about to write.
-  let newRoot: FabricValue;
-  let parent: Record<string, FabricValue> | FabricValue[];
-  try {
-    const result = cloneForMutation(currentRoot, parentPath, {
-      createMissing: true,
-      nextKeyAfterPath: leafKey,
-      force: false,
-    });
-    newRoot = result.value;
-    if (!isFabricPlainContainer(result.pathValue)) {
-      // `cloneForMutation()` hands back any container arm at the end of its
-      // path, and `leafKey` addresses none of them but the plain ones. The
-      // offending value is at `parentPath`, whose last key is the one before
-      // the leaf.
-      return {
-        error: TypeMismatchError(
-          { ...address, path: parentPath },
-          toDebugKindString(result.pathValue),
-          "write",
-        ),
-      };
-    }
-    parent = result.pathValue as
-      | Record<string, FabricValue>
-      | FabricValue[];
-  } catch (e) {
-    if (e instanceof CloneForMutationError) {
-      // The descent surfaced a type mismatch (or a non-container value
-      // along the path); convert to the v2-transaction-shaped error.
-      // `e.pathIndex` is the index within `parentPath`, which is the
-      // same as the index within `address.path` (since `parentPath` is
-      // a prefix). The slice end is `e.pathIndex + 1` to include the
-      // offending key, matching `read`/`write`'s error-path semantics.
-      return {
-        error: TypeMismatchError(
-          { ...address, path: address.path.slice(0, e.pathIndex + 1) },
-          e.valueKind,
-          "write",
-        ),
-      };
-    }
-    throw e;
-  }
-
-  // Leaf write at `parent[leafKey]`.
-  if (Array.isArray(parent)) {
-    if (leafKey === "length") {
-      return applyArrayLengthWrite(
-        newRoot,
-        parent,
-        isDelete ? undefined : value,
-      );
-    }
-    if (!isArrayIndexPropertyName(leafKey)) {
-      return {
-        error: TypeMismatchError(
-          { ...address, path: address.path },
-          "array",
-          "write",
-        ),
-      };
-    }
-    const slot = Number(leafKey);
-    const previousValue = parent[slot];
-    if (isDelete) {
-      if (!(slot in parent)) {
-        return { ok: { root: newRoot, previousValue, changed: false } };
-      }
-      delete parent[slot];
-      return { ok: { root: newRoot, previousValue, changed: true } };
-    }
-    // Presence-aware no-op detection: a hole and a stored `undefined` are
-    // different states, so equal values only short-circuit when the slot
-    // actually exists.
-    if (slot in parent && valueEqual(previousValue, value)) {
-      return { ok: { root: newRoot, previousValue, changed: false } };
-    }
-    parent[slot] = value;
-    return { ok: { root: newRoot, previousValue, changed: true } };
-  }
-
-  // Object branch. Mirrors the array branch's presence-aware no-op detection
-  // above, but presence on an object is an OWN-property question:
-  // `Object.hasOwn`, not `in`. With `in`, a key named after an
-  // `Object.prototype` member — `toString`, `valueOf`, `hasOwnProperty` — read
-  // as present on every record, `previousValue` came back as the inherited
-  // FUNCTION, and `valueEqual` then threw "Cannot compare a function value".
-  // Writing a property with one of those perfectly legal names failed outright.
-  // (`__proto__`/`constructor` are refused upstream by #5264; these are not,
-  // and are ordinary data keys.)
-  const obj = parent as Record<string, FabricValue>;
-  const hasOwnLeaf = Object.hasOwn(obj, leafKey);
-  // Absent means absent: without the guard this is the prototype's member.
-  const previousValue = hasOwnLeaf ? obj[leafKey] : undefined;
-  if (isDelete) {
-    if (!hasOwnLeaf) {
-      return { ok: { root: newRoot, previousValue, changed: false } };
-    }
-    delete obj[leafKey];
-    return { ok: { root: newRoot, previousValue, changed: true } };
-  }
-  if (hasOwnLeaf && valueEqual(previousValue, value)) {
-    return { ok: { root: newRoot, previousValue, changed: false } };
-  }
-  obj[leafKey] = value;
-  return { ok: { root: newRoot, previousValue, changed: true } };
-};
+const createdRootIsArray = (firstKey: string): boolean =>
+  isArrayIndexPropertyName(firstKey);
 
 /**
- * Helper for `applyMutablePathWrite()`, which returns the value already at
- * `path` within `root`, creating nothing. It descends through an own property
- * of a plain container (per `isPlainContainer()`) whatever the key, an
- * array's included, and returns `undefined` where that stops short.
- *
- * `cloneForMutation()` descends by the same rule, but through the mutable
- * copy it makes of each frozen container, and that copy holds a subset of the
- * original's own properties: an array's indices, an object's enumerable keys.
- * So every existing value that call reaches, this reaches too, while through a
- * frozen container this can also reach one held under a key the copy drops.
+ * Helper for `planMutablePathWrite()`, which returns the error a write of
+ * `value` along `trace` is refused with, or `undefined` where it is admitted.
+ * `trace` is `undefined` where the write creates the root.
  */
-const existingValueAt = (
-  root: FabricValue,
-  path: readonly string[],
-): unknown => {
-  let current: unknown = root;
-  for (const key of path) {
-    if (!isPlainContainer(current) || !Object.hasOwn(current, key)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
+const refusalOf = (
+  trace: PathTrace | undefined,
+  address: IMemoryAddress,
+  value: FabricValue | undefined,
+): MutablePathWriteError | undefined => {
+  const path = address.path;
+  const containers = trace?.containers ?? [];
+  if (trace?.end === "complete") {
+    // Every key names a slot its container holds, which in an array that
+    // honors the `FabricValue` contract is an index or `length`; a `length`
+    // short of the leaf leads to a number, and would have ended the trace.
+    // So only the leaf's length can be refused.
+    const leaf = path.length - 1;
+    return path[leaf] === "length" && Array.isArray(containers[leaf]) &&
+        typeof value === "number" && isOutOfRangeArrayLength(value)
+      ? InvalidArrayLengthError(address, value)
+      : undefined;
   }
-  return current;
+  // `containers[index]` holds `path[index]` below this index; from it on,
+  // each key lands in a container the write creates.
+  const firstCreated = trace?.end === "missing"
+    ? trace.at + 1
+    : containers.length;
+  for (let index = 0; index < path.length; index++) {
+    const key = path[index]!;
+    const inArray = index < firstCreated
+      ? Array.isArray(containers[index])
+      : trace === undefined && index === 0
+      ? createdRootIsArray(key)
+      : missingContainerIsArray(key);
+    if (inArray && key !== "length" && !isArrayIndexPropertyName(key)) {
+      return TypeMismatchError(
+        { ...address, path: path.slice(0, index + 1) },
+        "array",
+        "write",
+      );
+    }
+    if (trace?.end === "blocked" && index === trace.at - 1) {
+      // `path[index]` leads to a value no key addresses, and the path goes on.
+      return TypeMismatchError(
+        { ...address, path: path.slice(0, trace.at) },
+        toDebugKindString(trace.value),
+        "write",
+      );
+    }
+  }
+  // The leaf's length bound is checked above: a leaf `length` in an array
+  // already there leaves the trace complete, and a created container is
+  // never an array for `length`.
+  return undefined;
 };
 
 /**
@@ -310,24 +276,192 @@ const isOutOfRangeArrayLength = (value: number): boolean =>
   Number.isFinite(value) && value >= 2 ** 32;
 
 /**
+ * The plan `planMutablePathWrite()` returns, which reads what it reports off
+ * the trace of the path it was planned along.
+ */
+class Plan implements PlannedPathWrite {
+  readonly #root: FabricValue | undefined;
+  readonly #address: IMemoryAddress;
+  readonly #value: FabricValue | undefined;
+  readonly #isDelete: boolean;
+  // `undefined` for the empty path, a missing root, and a delete beneath a
+  // root that is not a container.
+  readonly #trace: PathTrace | undefined;
+  #applied = false;
+
+  /**
+   * Constructs an instance which writes `value`, or deletes, at
+   * `address.path` within `root`, as `trace` found that path.
+   */
+  constructor(
+    root: FabricValue | undefined,
+    address: IMemoryAddress,
+    value: FabricValue | undefined,
+    isDelete: boolean,
+    trace: PathTrace | undefined,
+  ) {
+    this.#root = root;
+    this.#address = address;
+    this.#value = value;
+    this.#isDelete = isDelete;
+    this.#trace = trace;
+  }
+
+  /** @inheritDoc */
+  get present(): boolean {
+    return this.#address.path.length === 0
+      ? this.#root !== undefined
+      : this.#trace?.end === "complete";
+  }
+
+  /** @inheritDoc */
+  get previousValue(): FabricValue | undefined {
+    if (this.#address.path.length === 0) return this.#root;
+    return this.#trace?.end === "complete" ? this.#trace.value : undefined;
+  }
+
+  /** @inheritDoc */
+  apply(): MutableWriteResult {
+    if (this.#applied) {
+      throw new Error("A planned write is carried out at most once");
+    }
+    this.#applied = true;
+    const value = this.#isDelete || this.#value === undefined
+      ? undefined
+      : cloneIfNecessary(this.#value);
+    // Read before the write below, which changes the root -- and with it the
+    // container the write first changes -- in place where it is mutable.
+    const { path } = this.#address;
+    const trace = this.#trace;
+    let activityPath = path;
+    let previousActivityValue = this.previousValue;
+    let previousActivityPresent = this.present;
+    if (!this.#isDelete && path.length > 0) {
+      if (this.#root === undefined) {
+        // The write creates the root, so that is where it first shows.
+        activityPath = [];
+        previousActivityValue = undefined;
+        previousActivityPresent = false;
+      } else if (trace?.end === "missing" && trace.at < path.length - 1) {
+        // A missing slot short of the leaf: the write first shows in the
+        // deepest container already there, which it creates the slot in.
+        activityPath = path.slice(0, trace.at);
+        previousActivityValue = trace.containers[trace.at];
+        previousActivityPresent = true;
+      }
+    }
+    // Isolated now, while it is still the value from before the write.
+    const previousActivityCopy = cloneIfNecessary(previousActivityValue) as
+      | FabricValue
+      | undefined;
+    const { root, changed } = this.#write(value);
+    return {
+      root,
+      changed,
+      activityPath,
+      previousActivityValue: previousActivityCopy,
+      previousActivityPresent,
+    };
+  }
+
+  /**
+   * Helper for `apply()`, which writes `value` -- already isolated, and
+   * `undefined` for a delete -- and returns the root it leaves.
+   */
+  #write(
+    value: FabricValue | undefined,
+  ): { root: FabricValue | undefined; changed: boolean } {
+    const path = this.#address.path;
+    if (path.length === 0) {
+      return { root: value, changed: !valueEqual(this.#root, value) };
+    }
+    if (this.#isDelete && !this.present) {
+      return { root: this.#root, changed: false };
+    }
+
+    const leafKey = path[path.length - 1]!;
+    // A write the plan admitted never reaches a root that is defined but not
+    // a container, so a root still missing here is one to create.
+    const root = this.#root === undefined
+      ? (createdRootIsArray(path[0]!) ? [] : {})
+      : this.#root;
+    // `cloneForMutation()` decides its errors from the same trace the plan
+    // refused by, over the same unchanged root, so it throws on nothing the
+    // plan admitted, and what it returns at the parent path is an array or a
+    // plain object.
+    const { value: newRoot, pathValue } = cloneForMutation(
+      root,
+      path.slice(0, -1),
+      { createMissing: true, nextKeyAfterPath: leafKey, force: false },
+    );
+    const parent = pathValue as Record<string, FabricValue> | FabricValue[];
+
+    // Leaf write at `parent[leafKey]`. A delete reaches here only for a slot
+    // that is there.
+    if (Array.isArray(parent)) {
+      if (leafKey === "length") {
+        return applyArrayLengthWrite(newRoot, parent, value);
+      }
+      if (!isArrayIndexPropertyName(leafKey)) {
+        // Planned against a root that has changed since: the parent it
+        // planned for is an array now. Going on would write `parent[NaN]`.
+        throw new Error(
+          debugStr`A stale plan reached an array with the key $quote${leafKey}`,
+        );
+      }
+      const slot = Number(leafKey);
+      if (this.#isDelete) {
+        delete parent[slot];
+        return { root: newRoot, changed: true };
+      }
+      // Presence-aware no-op detection: a hole and a stored `undefined` are
+      // different states, so equal values only short-circuit when the slot
+      // actually exists.
+      if (slot in parent && valueEqual(parent[slot], value)) {
+        return { root: newRoot, changed: false };
+      }
+      parent[slot] = value;
+      return { root: newRoot, changed: true };
+    }
+
+    // Object branch. Mirrors the array branch's presence-aware no-op
+    // detection above, but presence on an object is an own-property question,
+    // `Object.hasOwn()` rather than `in`: with `in`, a key named after an
+    // `Object.prototype` member -- `toString`, `valueOf`, `hasOwnProperty` --
+    // reads as present on every record, and the value read is the inherited
+    // function, which `valueEqual()` throws on.
+    const obj = parent as Record<string, FabricValue>;
+    if (this.#isDelete) {
+      delete obj[leafKey];
+      return { root: newRoot, changed: true };
+    }
+    if (Object.hasOwn(obj, leafKey) && valueEqual(obj[leafKey], value)) {
+      return { root: newRoot, changed: false };
+    }
+    obj[leafKey] = value;
+    return { root: newRoot, changed: true };
+  }
+}
+
+/**
  * Helper for the legacy array-length-write semantics, called when
- * `applyMutablePathWrite` reaches a leaf key of `"length"` against an
+ * `PlannedPathWrite.apply()` reaches a leaf key of `"length"` against an
  * array parent. Replicates `Array.prototype.slice(0, nextLength)`'s
  * coercion rules for truncation (NaN → 0, +Infinity → unchanged,
  * −Infinity → 0, negative → count from end, fractional → floor). Grow
  * with holes uses the JS native semantic of `arr.length = nextLength`
  * (with `Math.floor` to keep length an integer). A length that assignment
  * would throw on is one `isOutOfRangeArrayLength()` returns `true` for, and
- * `applyMutablePathWrite()` refuses it before calling this.
+ * `planMutablePathWrite()` refuses it before this is reached.
  */
 const applyArrayLengthWrite = (
   newRoot: FabricValue,
   parent: FabricValue[],
   value: FabricValue | undefined,
-): Result<MutableWriteResult, ITypeMismatchError> => {
+): { root: FabricValue; changed: boolean } => {
   const previousValue = parent.length;
   if (valueEqual(previousValue, value)) {
-    return { ok: { root: newRoot, previousValue, changed: false } };
+    return { root: newRoot, changed: false };
   }
   // Funnel non-numbers (and `undefined`, which arises from
   // `tx.write(path/length, undefined)`) through the existing NaN
@@ -359,11 +493,5 @@ const applyArrayLengthWrite = (
   // unchanged even when `value !== previousValue`; report the change
   // status against the post-mutation length rather than asserting
   // `true` unconditionally.
-  return {
-    ok: {
-      root: newRoot,
-      previousValue,
-      changed: parent.length !== previousValue,
-    },
-  };
+  return { root: newRoot, changed: parent.length !== previousValue };
 };

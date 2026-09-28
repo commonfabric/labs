@@ -49,10 +49,9 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
    * Decodes a codec-value tree back into `FabricValue`s. See Section 4.5 of
    * the formal spec.
    *
-   * Frozen-ness contract: values returned via the codec dispatch arm are
-   * guaranteed deep-frozen at this boundary, so callers do not each have to
-   * freeze. The unknown-tag fallback (`UnknownValue`) is a separate arm and is
-   * intentionally NOT covered by this contract.
+   * Frozen-ness contract: every value this returns is deep-frozen, whichever
+   * arm produced it, the unknown-tag arm's `UnknownValue` included, so callers
+   * do not each have to freeze.
    */
   override decodeValue(
     data: JsonCodecValue,

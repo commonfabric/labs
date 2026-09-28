@@ -755,7 +755,9 @@ export type PreparedDigestInput = {
 /**
  * A destination the runtime wrote a whole value to (`CfcTxState.assertedValueRoots`),
  * with the implementation identity that made the write. `reference` names
- * the document root a pointer the runtime stored at this path refers to.
+ * the document root a pointer the runtime stored at this path refers to: the
+ * box the custody seal links a room to, or the entity document anchoring split
+ * an array element into.
  */
 export type CfcAssertedValueRoot = {
   readonly address: CfcAddress;
@@ -1003,9 +1005,12 @@ export type CfcTxState = {
   // the identity the flow join names.
   //
   // A root recorded with a `reference` holds a pointer the runtime itself
-  // chose for the writer, as the custody seal does when it links a room to
-  // its box: that one pointer, at that one path, is part of the value the
-  // writer supplied.
+  // chose for the writer: the custody seal's link from a room to its box, or
+  // the reference anchoring stores at an array slot after splitting the plain
+  // object the writer put there into an entity document of its own
+  // (`anchorValueAsEntity` in `data-updating.ts`; both halves are recorded,
+  // the entity's root and the slot with the entity as its `reference`). That
+  // one pointer, at that one path, is part of the value the writer supplied.
   assertedValueRoots: CfcAssertedValueRoot[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so

@@ -3429,8 +3429,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // still open and still writable, so a caller that swallows the error and
       // commits anyway lands the prefix. Callers must treat a throw from
       // `writeValuesOrThrow` as poisoning the transaction (abort it, or let the
-      // throw propagate past the commit, which is what every caller does
-      // today). See `writeValuesOrThrow` partial-batch coverage in
+      // throw propagate past the commit). See `writeValuesOrThrow`
+      // partial-batch coverage in
       // `packages/runner/test/memory-v2-acl-mutation.test.ts`.
       // The value reaches the chokepoint's meta-seam and reserved-sibling
       // arms, both of which read the envelope of a document-root write. A

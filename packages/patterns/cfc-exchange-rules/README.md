@@ -36,16 +36,17 @@ leaves open.
 
 `witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
 the tally only when every confidential location the tally read was written by
-the module's `commit` step. Public inputs do not constrain the witness, so it
-does not prove that every value the tally read came from `commit`. A relay
-between the two, a vote planted beside the committed ones, and a vote list
-written by other code are refused, though the tally's own identity would release
-each of them. The guard pins one level, so it trusts every input `commit` read,
-directly or through any copy: if other code mirrors the committed votes into
-another document and `commit` appended to the mirror, a vote planted there would
-be released. Pinning `commit`'s own inputs to `submit` would release nothing
-here: the briefs are objects in a list, which the runtime stores as references,
-and a reference retains no witness.
+the module's `commit` step, and every one `commit` read was written by its
+`submit` step. Public inputs do not constrain the witness, so it does not prove
+that every value the tally read came from `commit`. A relay between the two, a
+vote planted beside the committed ones, a vote list written by other code, and a
+brief other code added before `commit` ran are refused, though the tally's own
+identity would release each of them. The briefs are objects in a list, which the
+runtime stores behind references, and a reference `submit` stored carries its
+stamp as the object does. `submit` is attributed only when its transaction reads
+something labeled: storing a pushed brief reads the document holding the list,
+which here holds the committed input's default. Without that default its first
+write carries no stamp, and the second level releases nothing.
 `docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
 and what it does not.
 

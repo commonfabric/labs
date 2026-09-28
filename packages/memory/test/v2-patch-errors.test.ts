@@ -119,6 +119,28 @@ describe("patch", () => {
         { op: "add", path: "/a/4294967295", value: 1 },
       ])).toBe("array index out of bounds: 4294967295");
     });
+
+    it("throws given a key other than an index below an array", () => {
+      for (const key of ["x", "length"]) {
+        expect(inapplicable({ a: [1] }, [
+          { op: "add", path: `/a/${key}/c`, value: 1 },
+        ])).toBe(`invalid array index: ${key}`);
+      }
+    });
+
+    it("throws given an index above the largest addressable one below an array", () => {
+      expect(inapplicable({ a: [1] }, [
+        { op: "add", path: "/a/4294967296/c", value: 1 },
+      ])).toBe("array index out of bounds: 4294967296");
+    });
+
+    it("throws given an index or `-` below a key holding a number", () => {
+      for (const key of ["0", "-"]) {
+        expect(inapplicable({ a: 5 }, [
+          { op: "add", path: `/a/${key}/c`, value: 1 },
+        ])).toBe(`path is not traversable at /a/${key}/c`);
+      }
+    });
   });
 
   describe("remove", () => {

@@ -3,6 +3,7 @@ import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
+  isFabricPlainContainer,
   taggedHashStringOf,
   valueEqual,
 } from "@commonfabric/data-model";
@@ -5931,10 +5932,18 @@ const applyCommitTransaction = (
     }
     return true;
   };
-  // Every read's path is checked before any read's staleness is, so that a
-  // malformed path is refused as such whatever else the commit carries.
-  for (const read of commit.reads.confirmed) requireReadPath(read);
-  for (const read of commit.reads.pending) requireReadPath(read);
+  // Every read is checked before any read's staleness is, so that a malformed
+  // read is refused as such whatever the commit's other reads hold: its path,
+  // and a confirmed read's seq or a pending read's layers and basis.
+  for (const read of commit.reads.confirmed) {
+    requireReadPath(read);
+    requireConfirmedReadSeq(read);
+  }
+  for (const read of commit.reads.pending) {
+    requireReadPath(read);
+    pendingReadLayers(read);
+    requirePendingReadBasisSeq(engine, read);
+  }
   let resolvedPendingReads: Array<{ localSeq: number; seq: number }>;
   const conflictScans: ConflictScans = new Map();
   try {
@@ -6699,51 +6708,80 @@ const requireReadPath = (
 };
 
 /**
- * Validated `basisSeq` of a pending read — the CT-1910 true-basis shape — or
- * `undefined` for the legacy shape. In the SERVER's space-log seq space (an
- * accepted-commit `seq`, NOT the session's localSeq space); see
+ * Returns whether `seq` has the shape of a position in the space's commit log:
+ * a safe integer of zero or more. It does not check that the log has reached
+ * that position. Negative zero is not one: it compares equal to `0`, but the
+ * SQLite binding throws on it rather than binding it as `0`.
+ */
+const isLogSeq = (seq: unknown): boolean =>
+  Number.isSafeInteger(seq) && ((seq as number) > 0 || Object.is(seq, 0));
+
+/**
+ * Helper for `applyCommitTransaction()`, which throws `ProtocolError` unless
+ * the `seq` of confirmed read `read` has the shape of a position in the log,
+ * as `isLogSeq()` decides. The conflict check holds the read stale by the
+ * revisions it finds after that `seq`, and a value of any other kind decides
+ * that by accident: `NaN` or a missing `seq` finds no revision, so the read is
+ * never stale, and `-0` throws from the SQLite binding.
+ */
+const requireConfirmedReadSeq = (
+  read: { id: string; seq: number },
+): void => {
+  if (!isLogSeq(read.seq)) {
+    throw new ProtocolError(
+      debugStr`confirmed read of $quote${read.id} names a malformed seq: $quote${read.seq}`,
+    );
+  }
+};
+
+/**
+ * Helper for `applyCommitTransaction()`, which throws `ProtocolError` unless a
+ * pending read's `basisSeq` — the CT-1910 true-basis shape, absent in the
+ * legacy one — has the shape of a position in the log, as `isLogSeq()`
+ * decides, and is not past its head. It is in the SERVER's space-log seq
+ * space (an accepted-commit `seq`, NOT the session's localSeq space); see
  * {@link PendingRead.basisSeq}. A basis ahead of the log claims knowledge
  * the server never produced. (A basis AT head is legal and yields an empty
  * scan — the same client-trusted claim a confirmed read at head makes.)
  */
-const pendingReadBasisSeq = (
+const requirePendingReadBasisSeq = (
   engine: Engine,
   read: { id: string; basisSeq?: number },
-): number | undefined => {
+): void => {
   const { basisSeq } = read;
   if (basisSeq === undefined) {
-    return undefined;
+    return;
   }
-  if (!Number.isInteger(basisSeq) || basisSeq < 0) {
+  if (!isLogSeq(basisSeq)) {
     throw new ProtocolError(
-      `pending read on ${read.id} names a malformed basisSeq: ${basisSeq}`,
+      debugStr`pending read on $quote${read.id} names a malformed basisSeq: $quote${basisSeq}`,
     );
   }
   if (basisSeq > serverSeq(engine)) {
     throw new ProtocolError(
-      `pending read on ${read.id} claims a basisSeq ahead of the log: ${basisSeq}`,
+      debugStr`pending read on $quote${read.id} claims a basisSeq ahead of the log: $quote${basisSeq}`,
     );
   }
-  return basisSeq;
 };
 
-// Shared normalization/validation for a pending read's dependency set: a
-// non-empty array (or scalar) of integer localSeqs. Malformed shapes are a
-// protocol violation regardless of which validator (ordinary commit or
-// scheduler observation) encounters them.
+/**
+ * Returns the layers a pending read's `localSeq` names, as an array, and throws
+ * `ProtocolError` unless it names at least one and each is an integer other
+ * than `-0`, which the SQLite binding throws on.
+ */
 const pendingReadLayers = (
   read: { id: string; localSeq: number | number[] },
 ): number[] => {
   const layers = Array.isArray(read.localSeq) ? read.localSeq : [read.localSeq];
   if (layers.length === 0) {
     throw new ProtocolError(
-      `pending read on ${read.id} names no localSeq`,
+      debugStr`pending read on $quote${read.id} names no localSeq`,
     );
   }
   for (const layer of layers) {
-    if (!Number.isInteger(layer)) {
+    if (!Number.isInteger(layer) || Object.is(layer, -0)) {
       throw new ProtocolError(
-        `pending read on ${read.id} names a non-integer localSeq`,
+        debugStr`pending read on $quote${read.id} names a malformed localSeq: $quote${layer}`,
       );
     }
   }
@@ -6804,10 +6842,10 @@ const resolvePendingReads = (
     // basisSeq) keeps the max-dependency basis, so the over-advance
     // deviation persists for it alone
     // (docs/specs/memory-v2/09-invariants.md, INV-1).
-    // The declared basis is validated whether or not the scan runs: an
-    // identity commit's reads are exempt from staleness, not from the
-    // protocol.
-    const trueBasis = pendingReadBasisSeq(engine, read);
+    // `applyCommitTransaction()` has validated the declared basis, whether
+    // or not this scan runs: an identity commit's reads are exempt from
+    // staleness, not from the protocol.
+    const trueBasis = read.basisSeq;
     if (!options.checkStaleness) continue;
     const conflictSeq = trueBasis !== undefined
       ? findConflictSeq(
@@ -7008,11 +7046,10 @@ const findConflictSeq = (
   }
 
   // Kept patches decide a read by comparing `seq`s here, which agrees with the
-  // statements' `seq > :after_seq` for a finite numeric basis and not for
-  // every value a read can carry, so a read at any other basis is decided on
-  // its own.
-  const shared = Number.isFinite(afterSeq) ? document : undefined;
-  const kept = shared?.patches;
+  // statements' `seq > :after_seq` because every basis is a safe integer: a
+  // seq the engine assigned, or one a read names, which
+  // `applyCommitTransaction()` refuses in any other form.
+  const kept = document?.patches;
   if (kept !== undefined && kept.basis <= afterSeq) {
     const seq = newestPatchConflict(kept.indexes, readPath, nonRecursive);
     return seq !== null && seq > afterSeq ? seq : null;
@@ -7040,8 +7077,8 @@ const findConflictSeq = (
       }
     }
   }
-  if (shared !== undefined) {
-    shared.patches = { basis: afterSeq, indexes };
+  if (document !== undefined) {
+    document.patches = { basis: afterSeq, indexes };
   }
   return null;
 };
@@ -7503,7 +7540,16 @@ const reconstructPatchedDocument = (
   // A cached revision is an immutable prefix of this exact branch, scope,
   // and operation range. Replaying its suffix preserves frozen subtrees
   // instead of decoding and rebuilding the prefix at every commit.
+  //
+  // `encodedBytes` is what the document cache weighs the result by: the
+  // result itself, as it would be stored. No row the reconstruction read
+  // bounds it — additive patches accumulate past any one of them — and a
+  // replay-cost sum overstates it several times over (a Topics piece replayed
+  // from a base and five near-whole patches decodes ~300 KB to retain ~55).
+  // It starts as the exact weight of wherever the replay begins, and each
+  // patch adds what it grew the document by.
   let document: EntityDocument | undefined;
+  let encodedBytes = 0;
   let replayFrom = 0;
   for (let index = patches.length - 1; index >= 0; index--) {
     const patch = patches[index];
@@ -7522,15 +7568,27 @@ const reconstructPatchedDocument = (
     if (cached?.document !== undefined && cached.document !== null) {
       engine.documentCacheStats.resumes++;
       document = cached.document;
+      encodedBytes = cached.weight;
       replayFrom = index + 1;
       break;
     }
   }
   if (document === undefined) {
     if (snapshotRow && snapshotRow.seq === baseSeq) {
-      document = decodeStoredDocument(snapshotRow.value);
+      // A snapshot is written from the revision its seq ended at, which the
+      // commit writing it had just read, so that revision is usually cached.
+      // The row is that revision encoded, so its length weighs the document
+      // exactly whichever of the two it comes from.
+      const snapshotted = cachedSnapshottedRevision(
+        engine,
+        { id, scopeKey, branch },
+        snapshotRow.seq,
+      );
+      if (snapshotted !== undefined) engine.documentCacheStats.resumes++;
+      document = snapshotted ?? decodeStoredDocument(snapshotRow.value);
+      encodedBytes = storedByteLength(snapshotRow.value);
     } else if (baseRow?.op === "set") {
-      document = cachedDocumentForRevision(
+      const cachedBase = cachedDocumentForRevision(
         engine,
         documentCacheKey(
           branch,
@@ -7541,31 +7599,259 @@ const reconstructPatchedDocument = (
           baseRow.op,
           baseRow.data?.length ?? -1,
         ),
-      )?.document ?? decodeStoredDocument(baseRow.data);
+      );
+      document = cachedBase?.document ?? decodeStoredDocument(baseRow.data);
+      encodedBytes = cachedBase?.weight ?? storedByteLength(baseRow.data);
     } else {
       document = emptyEntityDocument();
+      encodedBytes = encodedByteLength(document);
     }
   }
 
+  // `encodedBytes` stays the weight of `document` for as long as each patch
+  // can be weighed by what it changed; after one that cannot, only the result
+  // is weighed, by encoding it whole.
+  let carried = true;
   for (const patch of patches.slice(replayFrom)) {
     engine.documentCacheStats.patchReplays++;
+    const previous = document;
     document = applyPatchToDocument(
       document,
       decodeStoredPatchList(patch.data),
     );
+    const growth = carried ? replayedGrowth(previous, document) : undefined;
+    if (growth === undefined) {
+      carried = false;
+    } else {
+      encodedBytes += growth;
+    }
   }
 
-  // What the document cache weighs the result by: the result itself, as it
-  // would be stored. No row the reconstruction read bounds it — additive
-  // patches accumulate past any one of them — and a replay-cost sum
-  // overstates it several times over (a Topics piece replayed from a base
-  // and five near-whole patches decodes ~300 KB to retain ~55). Encoding
-  // the result is exact and costs a fraction of the replay it follows.
   return {
     document,
-    encodedBytes: storedByteLength(encodeMemoryBoundary(document)),
+    encodedBytes: carried ? encodedBytes : encodedByteLength(document),
   };
 };
+
+/**
+ * Helper for {@link reconstructPatchedDocument}, which returns how many more
+ * UTF-8 bytes `document` takes than `previous` when each is encoded as
+ * stored, where `document` is `previous` with one stored patch applied — or
+ * `undefined` when the patch cannot be weighed by what it changed, and the
+ * result is to be weighed whole.
+ *
+ * It cannot be once weighing the pieces would encode more of them than
+ * {@link MAX_GROWTH_ENCODES}, and it cannot be when the codec refuses a
+ * piece: a revision the replay only passes through can hold a key the
+ * runtime reserves, which a later patch removes. Nothing but the result is
+ * ever stored, and the codec's answer about the result is the one that
+ * counts.
+ */
+const replayedGrowth = (
+  previous: EntityDocument,
+  document: EntityDocument,
+): number | undefined => {
+  try {
+    return encodedGrowth(previous, document, {
+      remaining: MAX_GROWTH_ENCODES,
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Helper for {@link reconstructPatchedDocument}, which returns the cached
+ * document a snapshot at `seq` holds — the last revision the branch itself
+ * wrote at that seq — or `undefined` when the cache does not hold it, or the
+ * branch wrote nothing at that seq.
+ */
+const cachedSnapshottedRevision = (
+  engine: Engine,
+  { id, scopeKey, branch }: {
+    id: EntityId;
+    scopeKey: string;
+    branch: BranchName;
+  },
+  seq: number,
+): EntityDocument | undefined => {
+  const row = engine.statements.selectAtSeqLocal.get({
+    branch,
+    id,
+    scope_key: scopeKey,
+    seq,
+  }) as ReadRow | undefined;
+  const cached = row?.seq === seq
+    ? cachedDocumentForRevision(
+      engine,
+      documentCacheKey(
+        branch,
+        id,
+        scopeKey,
+        row.seq,
+        row.op_index,
+        row.op,
+        row.data?.length ?? -1,
+      ),
+    )
+    : undefined;
+  return cached?.document ?? undefined;
+};
+
+/** Encoded UTF-8 bytes of `value` encoded as stored. */
+const encodedByteLength = (value: FabricValue): number =>
+  storedByteLength(encodeMemoryBoundary(value));
+
+/**
+ * How many values {@link encodedGrowth} encodes for one patch before the
+ * revision is weighed by encoding it whole instead. A patch that rewrites a
+ * list element by element reaches it, and past it the pieces cost more than
+ * the whole.
+ */
+const MAX_GROWTH_ENCODES = 64;
+
+/** What is left of {@link MAX_GROWTH_ENCODES} for the patch being weighed. */
+type GrowthBudget = { remaining: number };
+
+/**
+ * Helper for {@link replayedGrowth}, which returns how many more UTF-8 bytes
+ * `after` takes than `before` when each is encoded as stored. Throws once
+ * `budget` is spent, or when the codec refuses a piece.
+ *
+ * The two share every subtree the patch did not reach, which the walk passes
+ * over by identity, encoding only what differs. The result is exact, because
+ * the walk descends only where the encoding composes — a record none of whose
+ * keys starts with `/`, and an array with no hole — and encodes each side of
+ * any other pair whole. It keeps no guard against a cycle, which no stored
+ * document holds.
+ */
+const encodedGrowth = (
+  before: FabricValue,
+  after: FabricValue,
+  budget: GrowthBudget,
+): number => {
+  if (Object.is(before, after)) return 0;
+
+  // A member of such a record encodes as it does on its own, and members are
+  // joined by one comma each.
+  const beforeKeys = composingRecordKeys(before);
+  const afterKeys = beforeKeys && composingRecordKeys(after);
+  if (beforeKeys !== undefined && afterKeys !== undefined) {
+    const beforeRecord = before as Record<string, FabricValue>;
+    const afterRecord = after as Record<string, FabricValue>;
+    let growth = separatorBytes(afterKeys.length) -
+      separatorBytes(beforeKeys.length);
+    for (const key of afterKeys) {
+      growth += Object.hasOwn(beforeRecord, key)
+        ? encodedGrowth(beforeRecord[key], afterRecord[key], budget)
+        : memberBytes(key, afterRecord[key], budget);
+    }
+    for (const key of beforeKeys) {
+      if (!Object.hasOwn(afterRecord, key)) {
+        growth -= memberBytes(key, beforeRecord[key], budget);
+      }
+    }
+    return growth;
+  }
+
+  // An array is first trimmed of the elements it shares with its counterpart
+  // at either end, so an insertion or a removal near the front of a long list
+  // weighs what went in or out rather than every element it moved.
+  if (isHolelessArray(before) && isHolelessArray(after)) {
+    const shorter = Math.min(before.length, after.length);
+    let start = 0;
+    while (start < shorter && Object.is(before[start], after[start])) start++;
+    let beforeEnd = before.length;
+    let afterEnd = after.length;
+    while (
+      beforeEnd > start && afterEnd > start &&
+      Object.is(before[beforeEnd - 1], after[afterEnd - 1])
+    ) {
+      beforeEnd--;
+      afterEnd--;
+    }
+    let growth = separatorBytes(after.length) - separatorBytes(before.length);
+    if (beforeEnd === afterEnd) {
+      for (let index = start; index < beforeEnd; index++) {
+        growth += encodedGrowth(before[index], after[index], budget);
+      }
+      return growth;
+    }
+    for (let index = start; index < beforeEnd; index++) {
+      growth -= elementBytes(before[index], budget);
+    }
+    for (let index = start; index < afterEnd; index++) {
+      growth += elementBytes(after[index], budget);
+    }
+    return growth;
+  }
+
+  return budgetedByteLength(after, budget) -
+    budgetedByteLength(before, budget);
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the keys of `value` if it is
+ * a plain record none of whose keys starts with `/`, or `undefined` if it is
+ * anything else.
+ */
+const composingRecordKeys = (value: FabricValue): string[] | undefined => {
+  if (!isFabricPlainContainer(value) || Array.isArray(value)) return undefined;
+  const keys = Object.keys(value);
+  return keys.some((key) => key.startsWith("/")) ? undefined : keys;
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns whether `value` is an array
+ * with no hole.
+ */
+const isHolelessArray = (value: FabricValue): value is FabricValue[] => {
+  if (!Array.isArray(value)) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (!(index in value)) return false;
+  }
+  return true;
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes of the commas
+ * between `count` members.
+ */
+const separatorBytes = (count: number): number => count > 1 ? count - 1 : 0;
+
+/**
+ * Helper for {@link encodedGrowth}, which returns what {@link
+ * encodedByteLength} does, charging one encode to `budget`. Throws when
+ * `budget` is already spent.
+ */
+const budgetedByteLength = (
+  value: FabricValue,
+  budget: GrowthBudget,
+): number => {
+  if (budget.remaining <= 0) {
+    throw new Error("weighing by pieces spent its budget");
+  }
+  budget.remaining--;
+  return encodedByteLength(value);
+};
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes one record member
+ * adds to the record's encoding: its key, the colon, and its value.
+ */
+const memberBytes = (
+  key: string,
+  value: FabricValue,
+  budget: GrowthBudget,
+): number =>
+  budgetedByteLength({ [key]: value }, budget) - encodedByteLength({});
+
+/**
+ * Helper for {@link encodedGrowth}, which returns the bytes one array element
+ * adds to the array's encoding.
+ */
+const elementBytes = (value: FabricValue, budget: GrowthBudget): number =>
+  budgetedByteLength([value], budget) - encodedByteLength([]);
 
 /**
  * Helper for {@link readStateForScopeKey}, which finds the row holding

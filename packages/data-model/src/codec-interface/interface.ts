@@ -174,11 +174,20 @@ export interface FabricCodec<PlusType, Encoded> {
    * only when that container is frozen and stays frozen in that value. Anything
    * else it keeps, it copies. A mutable value may keep frozen state this way,
    * so long as nothing that makes it mutable depends on changing that state.
+   *
+   * `mutable` decides the frozenness of the value built, and of nothing else:
+   * when `false`, the default, the result is frozen, and when `true`, it is
+   * left mutable. Either way a decode freezes only what it builds itself,
+   * never a value it keeps from `state`; freezing what `state` holds belongs to
+   * whatever built it. A codec whose values are immutable whatever their
+   * construction, such as a `FabricPrimitive`'s, has nothing to decide and may
+   * leave `mutable` undeclared.
    */
   decode(
     typeTag: string,
     state: Encoded,
     env: LiveEnvironment,
+    mutable?: boolean,
   ): FabricValuePlus<PlusType>;
 
   /**
@@ -342,21 +351,4 @@ export interface LiveEnvironment {
   getCell(
     ref: { id: string; path: string[]; space: string },
   ): FabricInstance;
-
-  /**
-   * Signals whether a decode call should produce a deep-frozen result: `true`
-   * means the decoded value should be deep-frozen, `false` means a mutable
-   * result is acceptable. Same contract as `frozen` passed to
-   * `cloneIfNecessary()` (see `value-clone.ts`): `shouldDeepFreeze === true`
-   * corresponds to `cloneIfNecessary(value, { frozen: true })`.
-   *
-   * Required (not optional): every live environment declares it, and gets it
-   * for free by extending `BaseLiveEnvironment`, which centralizes the getter;
-   * the `cloneIfNecessary`-style `true` default lives there.
-   *
-   * Enforcement: a decode deep-freezes its result, and a codec that builds a
-   * value cheaper when it may stay thawed reads this to decide, producing a
-   * deep-frozen result when it is `true`.
-   */
-  get shouldDeepFreeze(): boolean;
 }

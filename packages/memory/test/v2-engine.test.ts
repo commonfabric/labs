@@ -2999,7 +2999,7 @@ Deno.test("memory v2 engine: array pending reads scan at the highest layer and r
           },
         }),
       ProtocolError,
-      "non-integer localSeq",
+      "malformed localSeq",
     );
 
     // Control: based at the LOWER layer alone (scalar 2), the foreign seq-3
