@@ -173,17 +173,19 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
         typeTag: string,
         state: FabricHashState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const { tag, hash } = state;
 
         try {
           return new FabricHash(fromBase64url(hash), tag, true);
         } catch (e) {
-          return new ProblematicValue(
+          const problem = new ProblematicValue(
             typeTag,
             state,
             `Hash: ${e instanceof Error ? e.message : String(e)}`,
           );
+          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),

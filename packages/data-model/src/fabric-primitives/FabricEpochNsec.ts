@@ -93,15 +93,17 @@ export class FabricEpochNsec extends BaseFabricPrimitive
         typeTag: string,
         state: string,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         try {
           return new FabricEpochNsec(bigintFromUnpaddedBase64url(state));
         } catch {
-          return new ProblematicValue(
+          const problem = new ProblematicValue(
             typeTag,
             state,
             `EpochNsec: invalid base64: ${state}`,
           );
+          return mutable ? problem : Object.freeze(problem);
         }
       }
     })(),
