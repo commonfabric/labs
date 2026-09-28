@@ -1,371 +1,244 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
-import {
-  buildCoverageNotGatedComment,
-  buildCoverageResolvedComment,
-  COVERAGE_SUGGESTION_MARKER,
-} from "./ci-check-lib.ts";
+import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
+import { gateComment } from "./coverage-gate.ts";
 import { postCoverageComment } from "./post-coverage-comment.ts";
 
-interface RecordedRequest {
+/** The head commit the run that wrote a payload tested. */
+const TESTED = "a".repeat(40);
+
+/** A request the poster made that changes the pull request. */
+interface Write {
   method: string;
   url: string;
   body: string;
 }
 
+/** What one run of the poster did and said. */
+interface Run {
+  writes: Write[];
+  logged: string[];
+  errors: string[];
+  warnings: string[];
+}
+
 /**
- * Run postCoverageComment with a payload file and a fetch mock that returns the
- * given existing comments for the GET and records any POST/PATCH.
+ * Runs the poster against a payload file holding `contents`, with GitHub
+ * answering the comment listing with `existing` (or with `listingStatus`
+ * where that is not 200) and recording every write into `writes`, which a
+ * caller passes to read them from a run that throws.
  */
-async function runWithPayload(
-  payload: unknown,
-  existingCommentBodies: string[],
-  options: { getStatus?: number } = {},
-): Promise<RecordedRequest[]> {
+async function run(
+  contents: string | undefined,
+  existing: readonly string[] = [],
+  listingStatus = 200,
+  head = TESTED,
+  tested: string | null = TESTED,
+  writes: Write[] = [],
+): Promise<Run> {
   const dir = await Deno.makeTempDir({ prefix: "coverage-comment-test-" });
   const file = path.join(dir, "coverage-comment.json");
-  await Deno.writeTextFile(file, JSON.stringify(payload));
+  if (contents !== undefined) await Deno.writeTextFile(file, contents);
 
-  const requests: RecordedRequest[] = [];
-  const originalFetch = globalThis.fetch;
-  Deno.env.set("COVERAGE_COMMENT_FILE", file);
-
-  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input.toString();
+  const result: Run = { writes, logged: [], errors: [], warnings: [] };
+  const originals = {
+    fetch: globalThis.fetch,
+    log: console.log,
+    error: console.error,
+    warn: console.warn,
+  };
+  const text = (args: unknown[]) => args.map(String).join(" ");
+  console.log = (...args) => result.logged.push(text(args));
+  console.error = (...args) => result.errors.push(text(args));
+  console.warn = (...args) => result.warnings.push(text(args));
+  globalThis.fetch = (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? "GET";
-
-    if (method === "POST" || method === "PATCH") {
-      const parsed = JSON.parse(String(init?.body));
-      requests.push({ method, url, body: parsed.body });
+    if (method !== "GET") {
+      result.writes.push({
+        method,
+        url,
+        body: JSON.parse(String(init?.body)).body,
+      });
+      return Promise.resolve(new Response('{"id":1}', { status: 200 }));
+    }
+    if (/\/pulls\/\d+$/.test(url)) {
       return Promise.resolve(
-        new Response(JSON.stringify({ id: 1 }), {
-          status: method === "POST" ? 201 : 200,
-        }),
+        new Response(JSON.stringify({ head: { sha: head } }), { status: 200 }),
       );
     }
-
-    // GET comments. A non-200 status (404 is non-retryable) makes the lookup
-    // throw, exercising the best-effort error path.
-    const getStatus = options.getStatus ?? 200;
-    if (getStatus !== 200) {
-      return Promise.resolve(
-        new Response("not found", { status: getStatus }),
-      );
+    // A 404 is not retried, so a lookup answered with one fails at once.
+    if (listingStatus !== 200) {
+      return Promise.resolve(new Response("nope", { status: listingStatus }));
     }
-    // One page, fewer than per_page so pagination stops.
-    const comments = existingCommentBodies.map((body, index) => ({
-      id: index + 1,
-      body,
-    }));
+    const comments = existing.map((body, index) => ({ id: index + 1, body }));
     return Promise.resolve(
       new Response(JSON.stringify(comments), { status: 200 }),
     );
-  }) as typeof fetch;
-
+  };
+  Deno.env.set("COVERAGE_COMMENT_FILE", file);
+  if (tested === null) Deno.env.delete("HEAD_SHA");
+  else Deno.env.set("HEAD_SHA", tested);
   try {
     await postCoverageComment();
   } finally {
-    globalThis.fetch = originalFetch;
+    globalThis.fetch = originals.fetch;
+    console.log = originals.log;
+    console.error = originals.error;
+    console.warn = originals.warn;
     Deno.env.delete("COVERAGE_COMMENT_FILE");
+    Deno.env.delete("HEAD_SHA");
     await Deno.remove(dir, { recursive: true });
   }
-
-  return requests;
+  return result;
 }
 
-Deno.test("postCoverageComment posts when no marked comment exists", async () => {
-  const body = `${COVERAGE_SUGGESTION_MARKER}\nCover these lines.`;
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "regressed", body },
-    ["a normal review comment"],
-  );
+const COMMENTS_URL =
+  "https://api.github.com/repos/commonfabric/labs/issues/4211/comments";
+const FIRST_COMMENT_URL =
+  "https://api.github.com/repos/commonfabric/labs/issues/comments/1";
 
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "POST");
-  assertEquals(
-    requests[0].url,
-    "https://api.github.com/repos/commonfabric/labs/issues/4211/comments",
-  );
-  assertEquals(requests[0].body, body);
-});
+const regressed = gateComment(4211, false, ["| packages/bakery | rose |"]);
+const resolved = gateComment(4211, true, ["| packages/bakery | no rise |"]);
 
-Deno.test("postCoverageComment updates the existing comment in place", async () => {
-  const body = `${COVERAGE_SUGGESTION_MARKER}\nCover these.`;
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "regressed", body },
-    [`${COVERAGE_SUGGESTION_MARKER}\nan earlier run said this`],
-  );
-
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "PATCH");
-  assertEquals(
-    requests[0].url,
-    "https://api.github.com/repos/commonfabric/labs/issues/comments/1",
-  );
-  assertEquals(requests[0].body, body);
-});
-
-Deno.test("postCoverageComment posts an ungated notice when no marked comment exists", async () => {
-  // A run that went ungated is reported on a pull request that never had a
-  // coverage comment, because saying nothing is what a run that found nothing
-  // does.
-  const body = buildCoverageNotGatedComment({
-    groups: [{ group: "tasks", reason: "no-baseline" }],
+describe("postCoverageComment()", () => {
+  it("posts the comment when no marked comment exists", async () => {
+    const { writes } = await run(JSON.stringify(regressed), [
+      "a review comment",
+    ]);
+    expect(writes).toEqual([
+      { method: "POST", url: COMMENTS_URL, body: regressed.body },
+    ]);
   });
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "ungated", body },
-    ["a normal review comment"],
-  );
 
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "POST");
-  assertStringIncludes(
-    requests[0].body,
-    "Test coverage was NOT gated on this run",
-  );
-});
-
-Deno.test("postCoverageComment rewrites an earlier comment with an ungated notice", async () => {
-  const body = buildCoverageNotGatedComment({
-    groups: [{ group: "tasks", reason: "listing-not-current" }],
+  it("refuses a payload naming a pull request the run did not test", async () => {
+    // The payload comes from the pull request's own code, and this posts
+    // with a write token, so a payload naming another pull request's
+    // number, or an issue's, posts nothing there.
+    const { writes, errors } = await run(
+      JSON.stringify(regressed),
+      [],
+      200,
+      "b".repeat(40),
+    );
+    expect(writes).toEqual([]);
+    expect(errors.join("\n")).toContain("nothing is posted");
   });
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "ungated", body },
-    [buildCoverageResolvedComment(3, [])],
-  );
 
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "PATCH");
-  assertEquals(requests[0].body, body);
-});
-
-Deno.test("postCoverageComment resolves an ungated notice once a later run is gated", async () => {
-  const existing = buildCoverageNotGatedComment({
-    groups: [{ group: "tasks", reason: "no-baseline" }],
+  it("throws, posting nothing, when it is not told which commit the run tested", async () => {
+    const writes: Write[] = [];
+    await expect(
+      run(JSON.stringify(regressed), [], 200, TESTED, null, writes),
+    ).rejects.toThrow("`HEAD_SHA` is required");
+    expect(writes).toEqual([]);
   });
-  const requests = await runWithPayload(
-    {
-      prNumber: 4211,
-      state: "resolved",
-      improvedLines: 0,
-      groups: [{ group: "tasks", baseline: 8, current: 8 }],
-    },
-    [existing],
-  );
 
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "PATCH");
-  // The summary is true of a pull request that never regressed.
-  assertStringIncludes(
-    requests[0].body,
-    "Code coverage debt is within the ratchet.",
-  );
-  assertEquals(requests[0].body.includes("NOT gated"), false);
-});
-
-Deno.test("postCoverageComment leaves an up-to-date comment untouched", async () => {
-  const body = `${COVERAGE_SUGGESTION_MARKER}\nidentical.`;
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "regressed", body },
-    [body],
-  );
-
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment resolves an existing comment when coverage is acceptable", async () => {
-  const existing = [
-    COVERAGE_SUGGESTION_MARKER,
-    "<details open>",
-    "<summary><h3>🕵🏻‍♀️ Test coverage regressed by 3 lines</h3></summary>",
-    "",
-    "table goes here",
-    "",
-    "### Prompt for an AI coding agent",
-    "",
-    "</details>",
-  ].join("\n");
-
-  const requests = await runWithPayload(
-    {
-      prNumber: 4211,
-      state: "resolved",
-      improvedLines: 5,
-      groups: [{ group: "packages/runner", baseline: 15, current: 12 }],
-    },
-    [existing],
-  );
-
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "PATCH");
-  assertEquals(
-    requests[0].url,
-    "https://api.github.com/repos/commonfabric/labs/issues/comments/1",
-  );
-  assertStringIncludes(requests[0].body, "<details>");
-  assertStringIncludes(
-    requests[0].body,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt reduced by 5 lines!</strong></summary>",
-  );
-  // The stale regression body is replaced by a per-group coverage summary.
-  assertStringIncludes(
-    requests[0].body,
-    "| `packages/runner` | 15 | 12 | 3 lines fewer |",
-  );
-  assertEquals(
-    requests[0].body.includes("Prompt for an AI coding agent"),
-    false,
-  );
-});
-
-Deno.test("postCoverageComment reports an overridden metric rather than improved coverage", async () => {
-  const existing =
-    `${COVERAGE_SUGGESTION_MARKER}\n<details open>\nregression\n</details>`;
-
-  const requests = await runWithPayload(
-    {
-      prNumber: 4211,
-      state: "resolved",
-      improvedLines: 0,
-      groups: [{ group: "packages/runner", baseline: 12, current: 15 }],
-      overridden: true,
-    },
-    [existing],
-  );
-
-  assertEquals(requests.length, 1);
-  assertStringIncludes(
-    requests[0].body,
-    "<summary><strong>🕵🏻‍♀️ Code coverage debt accepted with an override.</strong></summary>",
-  );
-  assertEquals(
-    requests[0].body.includes("Code coverage debt reduced by"),
-    false,
-  );
-});
-
-Deno.test("postCoverageComment keeps the file attribution when it overwrites a regression", async () => {
-  // The regression body it replaces is the only place the files were named, so
-  // the payload carries them through rather than letting the rewrite lose them.
-  const existing =
-    `${COVERAGE_SUGGESTION_MARKER}\n<details open>\nregression\n</details>`;
-
-  const requests = await runWithPayload(
-    {
-      prNumber: 4211,
-      state: "resolved",
-      improvedLines: 0,
-      groups: [{ group: "tasks", baseline: 1846, current: 1857 }],
-      overridden: true,
-      files: [
-        { relativePath: "tasks/one.ts", group: "tasks", uncoveredCount: 11 },
-      ],
-    },
-    [existing],
-  );
-
-  assertEquals(requests.length, 1);
-  assertStringIncludes(requests[0].body, "### Files with new uncovered lines");
-  assertStringIncludes(requests[0].body, "- `tasks/one.ts` — 11 lines");
-});
-
-Deno.test("postCoverageComment does nothing to resolve when no comment exists", async () => {
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "resolved", improvedLines: 5 },
-    ["a normal review comment"],
-  );
-
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment leaves an already-resolved comment untouched", async () => {
-  const groups = [{ group: "tasks", baseline: 8, current: 8 }];
-  // A comment already carrying exactly what this run would write is left alone.
-  const existing = buildCoverageResolvedComment(0, groups);
-
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "resolved", improvedLines: 0, groups },
-    [existing],
-  );
-
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment treats a legacy body-only payload as a regression", async () => {
-  const body = `${COVERAGE_SUGGESTION_MARKER}\nlegacy comment.`;
-  const requests = await runWithPayload({ prNumber: 4211, body }, []);
-
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].method, "POST");
-  assertEquals(requests[0].body, body);
-});
-
-Deno.test("postCoverageComment skips a regression payload with an empty body", async () => {
-  const requests = await runWithPayload(
-    { prNumber: 4211, state: "regressed", body: "" },
-    [],
-  );
-
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment swallows a comment-lookup failure", async () => {
-  const requests = await runWithPayload(
-    {
-      prNumber: 4211,
-      state: "regressed",
-      body: `${COVERAGE_SUGGESTION_MARKER}\nbody.`,
-    },
-    [],
-    { getStatus: 404 },
-  );
-
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment skips an invalid payload without posting", async () => {
-  const requests = await runWithPayload({ prNumber: "not-a-number" }, []);
-  assertEquals(requests.length, 0);
-});
-
-Deno.test("postCoverageComment reports an absent payload file", async () => {
-  const directory = await Deno.makeTempDir({
-    prefix: "coverage-comment-absent-test-",
+  it("throws on an empty `HEAD_SHA` even with no payload to post", async () => {
+    await expect(run(undefined, [], 200, TESTED, "")).rejects.toThrow(
+      "`HEAD_SHA` is required",
+    );
   });
-  const file = path.join(directory, "missing.json");
-  const messages: string[] = [];
-  const originalLog = console.log;
-  Deno.env.set("COVERAGE_COMMENT_FILE", file);
-  console.log = (...args) => messages.push(args.map(String).join(" "));
-  try {
-    await postCoverageComment();
-  } finally {
-    console.log = originalLog;
-    Deno.env.delete("COVERAGE_COMMENT_FILE");
-    await Deno.remove(directory, { recursive: true });
-  }
 
-  assertEquals(messages, [`No ${file} present; nothing to post.`]);
-});
-
-Deno.test("postCoverageComment reports malformed JSON", async () => {
-  const directory = await Deno.makeTempDir({
-    prefix: "coverage-comment-malformed-test-",
+  it("updates the marked comment in place", async () => {
+    const { writes } = await run(JSON.stringify(regressed), [
+      "a review comment",
+      `${COVERAGE_SUGGESTION_MARKER}\nwhat an earlier run found`,
+    ]);
+    expect(writes).toEqual([{
+      method: "PATCH",
+      url: "https://api.github.com/repos/commonfabric/labs/issues/comments/2",
+      body: regressed.body,
+    }]);
   });
-  const file = path.join(directory, "coverage-comment.json");
-  await Deno.writeTextFile(file, "{not json");
-  const messages: string[] = [];
-  const originalError = console.error;
-  Deno.env.set("COVERAGE_COMMENT_FILE", file);
-  console.error = (...args) => messages.push(args.map(String).join(" "));
-  try {
-    await postCoverageComment();
-  } finally {
-    console.error = originalError;
-    Deno.env.delete("COVERAGE_COMMENT_FILE");
-    await Deno.remove(directory, { recursive: true });
-  }
 
-  assertEquals(messages.length, 1);
-  assertStringIncludes(messages[0], `Could not parse ${file}:`);
+  it("leaves a marked comment that already says the same untouched", async () => {
+    const { writes, logged } = await run(JSON.stringify(regressed), [
+      regressed.body,
+    ]);
+    expect(writes).toEqual([]);
+    expect(logged).toEqual([
+      "Coverage comment on PR #4211 already up to date.",
+    ]);
+  });
+
+  it("replaces the marked comment's body with a resolved one", async () => {
+    const { writes } = await run(JSON.stringify(resolved), [regressed.body]);
+    expect(writes).toEqual([
+      { method: "PATCH", url: FIRST_COMMENT_URL, body: resolved.body },
+    ]);
+    expect(writes[0].body).toContain("<details>");
+    expect(writes[0].body).toContain("coverage gate in the <strong>Status");
+  });
+
+  it("posts nothing for a resolved gate when no marked comment exists", async () => {
+    const { writes, logged } = await run(JSON.stringify(resolved), [
+      "a review comment",
+    ]);
+    expect(writes).toEqual([]);
+    expect(logged).toEqual([
+      "No coverage comment on PR #4211; nothing to resolve.",
+    ]);
+  });
+
+  it("leaves an already-resolved comment untouched", async () => {
+    const { writes } = await run(JSON.stringify(resolved), [resolved.body]);
+    expect(writes).toEqual([]);
+  });
+
+  it("logs a failed comment lookup rather than throwing", async () => {
+    const { writes, warnings } = await run(JSON.stringify(regressed), [], 404);
+    expect(writes).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      "could not post or update coverage comment on PR #4211",
+    );
+  });
+
+  it("reports an absent payload file", async () => {
+    const { writes, logged } = await run(undefined);
+    expect(writes).toEqual([]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatch(/^No .*coverage-comment\.json present/);
+  });
+
+  it("reports a payload that is not JSON", async () => {
+    const { writes, errors } = await run("{not json");
+    expect(writes).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^Could not parse .*coverage-comment\.json: /);
+  });
+
+  describe("payloads it skips", () => {
+    // Each differs from a payload the poster does post, which the last case
+    // pins, so a case passes only where that difference turned it away.
+
+    const cases: [string, unknown][] = [
+      ["a payload that is not an object", "regressed"],
+      ["a payload with no body", { prNumber: 4211, state: "regressed" }],
+      ["a pull request that is not a number", { ...regressed, prNumber: "1" }],
+      ["a pull request that is not a positive whole number", {
+        ...regressed,
+        prNumber: 0,
+      }],
+      ["a state it does not know", { ...regressed, state: "ungated" }],
+      ["a body that does not open with the marker", {
+        ...regressed,
+        body: "Cover these lines.",
+      }],
+    ];
+    for (const [what, payload] of cases) {
+      it(`skips ${what}`, async () => {
+        const { writes, errors } = await run(JSON.stringify(payload));
+        expect(writes).toEqual([]);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatch(/^Invalid coverage comment payload in /);
+      });
+    }
+
+    it("posts the payload those cases each differ from", async () => {
+      const { writes } = await run(JSON.stringify(regressed));
+      expect(writes).toHaveLength(1);
+    });
+  });
 });

@@ -40,14 +40,9 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   activeCapture,
   NAME_SEPARATOR,
-  registerFrameworkModule,
-  registeringFile,
   type RegistrationCapture,
+  runningFile,
 } from "./registration.ts";
-
-// A test registered through this module is the caller's, not this
-// module's, so the file attribution walks past these frames.
-registerFrameworkModule(import.meta.url);
 
 /**
  * The describe chain enclosing whatever is being registered right now.
@@ -222,9 +217,9 @@ export function wrapDescribe(through: AnyFunction): AnyFunction {
  * Wraps one `it` entry point so that a listed leaf is registered as
  * ignored, and so that the leaf's own file reaches the name map. The
  * leaf's identity is the chain enclosing it and its own name joined,
- * which is what the store speaks in, and the file is read from the
- * registration stack the same way the preload reads it — the two
- * together, because the same test name occurs in more than one file.
+ * which is what the store speaks in, and the file is the test file the
+ * process runs, as the preload takes it — the two together, because the
+ * same test name occurs in more than one file.
  *
  * The body reaches the real function unchanged, so the runner names the
  * leaf from the same function `nameOf` read it from.
@@ -247,7 +242,7 @@ export function wrapIt(
     const name = nameOf(args);
     if (name === undefined) return through(...args);
     const identity = [...enclosing(args), name].join(NAME_SEPARATOR);
-    const file = registeringFile(new Error().stack ?? "");
+    const file = runningFile();
     if (file !== undefined) capture.names.set(identity, file);
     return capture.skipped(file, identity) ? ignore(...args) : through(...args);
   };

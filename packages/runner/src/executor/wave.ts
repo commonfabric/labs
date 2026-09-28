@@ -56,6 +56,7 @@ import type {
   TransactionSealDestination,
   Unit,
   URI,
+  WaveWithdrawalCause,
 } from "../storage/interface.ts";
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -352,6 +353,30 @@ export function waveRunContextOf(
   return undefined;
 }
 
+/**
+ * A delegated carriage (protocol.md §2b): the acting identity a write crossing
+ * into another space is made for, and the grant it is admitted under.
+ */
+export type DelegatedCarriage = {
+  acting: { user: string; session?: string };
+  capabilityRef: string;
+};
+
+/**
+ * The delegated carriage a run lends a bookkeeping write it triggers after it
+ * is over: the run's settled acting identity and grant, or none for a run that
+ * acted as nobody.
+ */
+export function delegatedCarriageOf(
+  context: WaveRunContext | undefined,
+): DelegatedCarriage | undefined {
+  const acting = context?.acting;
+  const capabilityRef = context?.capabilityRef;
+  return acting !== undefined && capabilityRef !== undefined
+    ? { acting, capabilityRef }
+    : undefined;
+}
+
 // The DURABLE-acceptance settlement of a tx sealed into a wave: the seal
 // resolves the tx's commit() (acceptance into the wave), but the writes
 // become durable only at the wave commit — and a conflict there can
@@ -364,6 +389,9 @@ type WaveSettlement = Result<
   StorageTransactionRejected & {
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
+
+    /** Why the wave withdrew this transaction's contribution. */
+    waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
 
@@ -1679,10 +1707,16 @@ export class WaveAccumulator
     }
   }
 
+  /** Whether the lease tenure this wave sealed under has ended. */
+  get #tenureEnded(): boolean {
+    return this.#lease !== undefined &&
+      !this.#lease.isCurrentTenure(this.#sealedTenure);
+  }
+
   #withdraw(
     contribution: WaveContribution,
     message: string,
-    cause?: "contribution-dropped" | "wave-abandoned",
+    cause?: WaveWithdrawalCause,
   ): void {
     contribution.emptySettlement?.resolve({
       error: {
@@ -1762,25 +1796,7 @@ export class WaveAccumulator
     // consumer; inputs unchanged), so a loop that continued after the
     // abort would advance W over derivations that never re-ran
     // (space-server.ts's lease-lost-abort park).
-    if (
-      this.#lease !== undefined &&
-      !this.#lease.isCurrentTenure(this.#sealedTenure)
-    ) {
-      for (const contribution of this.#contributions) {
-        this.#withdraw(
-          contribution,
-          "lease lost mid-wave; the in-flight wave aborts " +
-            "(serving-loop.md §2)",
-        );
-        outcome.dispositions[contribution.index] =
-          contribution.context.kind === "event-handler"
-            ? { kind: "requeued" }
-            : { kind: "dropped" };
-      }
-      this.#reportRequeuedEvents(outcome, () => true);
-      outcome.aborted = "lease-lost";
-      return outcome;
-    }
+    if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
     if (this.#contributions.length === 0) {
       return outcome;
@@ -2265,10 +2281,7 @@ export class WaveAccumulator
       // check): the entry check plus the engine's live-lease row cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
+      if (this.#tenureEnded) {
         this.#abortAfterForeignFailure(outcome);
         outcome.aborted = "lease-lost";
         return outcome;
@@ -2335,25 +2348,7 @@ export class WaveAccumulator
 
       // Tenure re-check before every home attempt (see the foreign-loop
       // note): the resolve loop may have awaited the sink several times.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
-        for (const contribution of this.#contributions) {
-          this.#withdraw(
-            contribution,
-            "lease lost mid-wave; the in-flight wave aborts " +
-              "(serving-loop.md §2)",
-          );
-          outcome.dispositions[contribution.index] =
-            contribution.context.kind === "event-handler"
-              ? { kind: "requeued" }
-              : { kind: "dropped" };
-        }
-        this.#reportRequeuedEvents(outcome, () => true);
-        outcome.aborted = "lease-lost";
-        return outcome;
-      }
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
       const result = await sink.commitWave(batch);
       if (!result.error) {
         this.#settleVerdicts(
@@ -2369,6 +2364,11 @@ export class WaveAccumulator
         outcome.seq = result.ok.seq;
         return outcome;
       }
+      // The memory server refuses a derived commit whose holder no longer
+      // holds the live lease, and the sink's owner ends the tenure when it
+      // sees such a refusal (serving-loop.md §2). A refusal under an ended
+      // tenure is a lease loss, with no conflict to resolve.
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -3090,15 +3090,14 @@ export class WaveAccumulator
     actingSession?: string;
     capabilityRef: string;
   } | undefined {
-    return context.acting !== undefined && context.capabilityRef !== undefined
-      ? {
-        actingPrincipal: context.acting.user,
-        ...(context.acting.session !== undefined
-          ? { actingSession: context.acting.session }
-          : {}),
-        capabilityRef: context.capabilityRef,
-      }
-      : undefined;
+    const carriage = delegatedCarriageOf(context);
+    return carriage === undefined ? undefined : {
+      actingPrincipal: carriage.acting.user,
+      ...(carriage.acting.session !== undefined
+        ? { actingSession: carriage.acting.session }
+        : {}),
+      capabilityRef: carriage.capabilityRef,
+    };
   }
 
   /** The foreign-batch grouping key — (space, acting identity, grant).
@@ -3358,6 +3357,27 @@ export class WaveAccumulator
         contribution.resolveVerdict({ committed: { seq } });
       }
     }
+  }
+
+  /**
+   * Withdraws every contribution because the lease tenure ended before the
+   * home commit landed (serving-loop.md §2's stop-committing MUST).
+   */
+  #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    for (const contribution of this.#contributions) {
+      this.#withdraw(
+        contribution,
+        "lease lost mid-wave; the in-flight wave aborts " +
+          "(serving-loop.md §2)",
+      );
+      outcome.dispositions[contribution.index] =
+        contribution.context.kind === "event-handler"
+          ? { kind: "requeued" }
+          : { kind: "dropped" };
+    }
+    this.#reportRequeuedEvents(outcome, () => true);
+    outcome.aborted = "lease-lost";
+    return outcome;
   }
 
   #abortAfterForeignFailure(outcome: WaveCommitOutcome): void {

@@ -447,6 +447,51 @@ describe("StorageManager.registerSpaceHost", () => {
       .toThrow(`Invalid host for space ${spaceLearned}`);
   });
 
+  describe("registerSpaceHostDetailed()", () => {
+    it("returns an acceptance for a first hint and for its confirmation", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-b.test/"),
+      ).toEqual({ accepted: true });
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-seed.test"),
+      ).toEqual({ accepted: true });
+    });
+
+    it("returns `known-different-host` with the seeded host for a seeded space", async () => {
+      const manager = await makeManager();
+      expect(
+        manager.registerSpaceHostDetailed(spaceSeeded, "http://host-evil.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-seed.test/",
+      });
+    });
+
+    it("returns `known-different-host` with the accepted host for a later hint", async () => {
+      const manager = await makeManager();
+      expect(manager.registerSpaceHost(spaceLearned, "http://host-b.test"))
+        .toBe(true);
+      expect(
+        manager.registerSpaceHostDetailed(spaceLearned, "http://host-c.test"),
+      ).toEqual({
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: "http://host-b.test/",
+      });
+    });
+
+    it("throws on a malformed host, naming the space", async () => {
+      const manager = await makeManager();
+      expect(() => manager.registerSpaceHostDetailed(spaceLearned, "not a url"))
+        .toThrow(`Invalid host for space ${spaceLearned}`);
+    });
+  });
+
   it("rejects an unusable first hint without fixing the route", async () => {
     const manager = await makeManager();
     for (

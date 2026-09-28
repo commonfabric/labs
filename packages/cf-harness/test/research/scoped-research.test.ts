@@ -42,6 +42,10 @@ import {
   MAX_RESEARCH_TOTAL_READ_CHARS,
 } from "../../src/research/runner.ts";
 import { validateStructuredResultValue } from "../../src/structured-result.ts";
+import {
+  BILLS_ANSWER_MISSING_BRACE,
+  POMODORO_ANSWER_MISSING_BRACE,
+} from "../fixtures/research-malformed-answers.ts";
 
 const final = (value: object): HarnessModelTurnResult => ({
   assistant: { role: "assistant", content: JSON.stringify(value) },
@@ -128,6 +132,104 @@ const record = (id: string): HarnessResearchRunSummary => ({
 });
 
 describe("scoped research", () => {
+  describe("a final answer that is not JSON", () => {
+    // The bills answer is incomplete, so admission follows the re-ask; the
+    // pomodoro answer is complete and cites a read this test call never
+    // made, so the existing citation repair takes the turn after it.
+    for (
+      const [name, answer, citationRepair] of [
+        ["bills", BILLS_ANSWER_MISSING_BRACE, false],
+        ["pomodoro", POMODORO_ANSWER_MISSING_BRACE, true],
+      ] as const
+    ) {
+      it(`admits the ${name} answer the model returns whole on one tools-withheld re-ask`, async () => {
+        const trial = run([
+          () => ({ assistant: { role: "assistant", content: answer } }),
+          (request) => {
+            expect(request.tools).toEqual([]);
+            const ask = request.transcript.at(-1)?.content ?? "";
+            expect(ask).toContain("JSON repair turn");
+            expect(ask).toContain("The parser reported:");
+            expect(ask).not.toContain(answer.slice(0, 40));
+            return { assistant: { role: "assistant", content: answer + "}" } };
+          },
+          ...(citationRepair
+            ? [(request: HarnessModelTurnRequest) => {
+              expect(request.transcript.at(-1)?.content).toContain(
+                "Citation repair turn",
+              );
+              return {
+                assistant: {
+                  role: "assistant" as const,
+                  content: answer + "}",
+                },
+              };
+            }]
+            : []),
+        ]);
+        const reply = await trial.result;
+        expect(trial.requests).toHaveLength(citationRepair ? 3 : 2);
+        expect(reply.kit.summary).toBe(JSON.parse(answer + "}").summary);
+      });
+    }
+
+    it("fails as before when the re-ask is not JSON either", async () => {
+      const trial = run([
+        () => ({
+          assistant: {
+            role: "assistant",
+            content: POMODORO_ANSWER_MISSING_BRACE,
+          },
+        }),
+        () => ({
+          assistant: {
+            role: "assistant",
+            content: POMODORO_ANSWER_MISSING_BRACE,
+          },
+        }),
+      ]);
+      let failure: unknown;
+      try {
+        await trial.result;
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(HarnessResearchError);
+      expect((failure as Error).message).toBe(
+        "research result was not valid JSON",
+      );
+      expect(trial.requests).toHaveLength(2);
+    });
+
+    it("fails without a re-ask when the budget has no turn left for one", async () => {
+      const turns = Array.from(
+        { length: MAX_RESEARCH_MODEL_TURNS },
+        (_, index) => () =>
+          index < MAX_RESEARCH_MODEL_TURNS - 1
+            ? calls(["search_docs", { query: `lead ${index}` }])
+            : {
+              assistant: {
+                role: "assistant" as const,
+                content: POMODORO_ANSWER_MISSING_BRACE,
+              },
+            },
+      );
+      const trial = run(turns, {
+        corpus: corpus("# Guide\nA passage to search."),
+      });
+      let failure: unknown;
+      try {
+        await trial.result;
+      } catch (error) {
+        failure = error;
+      }
+      expect((failure as Error | undefined)?.message).toBe(
+        "research result was not valid JSON",
+      );
+      expect(trial.requests).toHaveLength(MAX_RESEARCH_MODEL_TURNS);
+    });
+  });
+
   for (const purpose of ["orient", "answer"] as const) {
     it(`gives ${purpose} research the composition template and not the authoring rules`, async () => {
       const trial = run([(request) => {

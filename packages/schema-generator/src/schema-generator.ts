@@ -13,7 +13,10 @@ import type {
 } from "./interface.ts";
 import { attachUiContract, getUiContractHint } from "./ui-contract.ts";
 import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
-import { ObjectFormatter } from "./formatters/object-formatter.ts";
+import {
+  getWrapperSchemaFromCallable,
+  ObjectFormatter,
+} from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
   CommonFabricFormatter,
@@ -27,11 +30,15 @@ import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
-import { unwrapTypeParentheses } from "./typescript/type-node.ts";
+import {
+  readAuthoredTypeNode,
+  unwrapTypeParentheses,
+} from "./typescript/type-node.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
   getPropertyNameText,
+  isFunctionLike,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
@@ -40,7 +47,13 @@ import { unionFoldedFrom } from "./schema-origins.ts";
 import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
-import { stateReferencedIfcLabels } from "./ifc-labels.ts";
+import {
+  declaredIfcLabels,
+  holdsIfcLabels,
+  joinMemberIfcLabels,
+  stateReferencedIfcLabels,
+  withIfcLabels,
+} from "./ifc-labels.ts";
 
 /**
  * The default library's generic aliases the node-based analyzer applies
@@ -954,8 +967,10 @@ function readsWrittenMembers(
  * Main schema generator that uses a chain of formatters
  */
 export class SchemaGenerator {
+  #commonFabricFormatter = new CommonFabricFormatter(this);
+
   #formatters: TypeFormatter[] = [
-    new CommonFabricFormatter(this),
+    this.#commonFabricFormatter,
     new NativeTypeFormatter(),
     new UnionFormatter(this),
     new IntersectionFormatter(this),
@@ -1224,6 +1239,17 @@ export class SchemaGenerator {
       : baseContext;
     const readType = readInPlace ?? type;
 
+    // Read for its labels alone, a type no CFC wrapper holds is a payload, and
+    // is not formatted. A union or an intersection is formatted from its
+    // members, which can attach their labels to it: an expanded `Default`
+    // holds its value as a member.
+    if (
+      context.labelsOnly && !readType.isUnionOrIntersection() &&
+      !this.#commonFabricFormatter.supportsType(readType, childContext)
+    ) {
+      return {};
+    }
+
     // Auto-detect: Should we use node-based or type-based analysis?
     const useNodeBased = !readInPlace &&
       (this.#shouldUseNodeBasedAnalysis(
@@ -1405,6 +1431,10 @@ export class SchemaGenerator {
         context.emittedRefs.add(namedKey);
         return { "$ref": `#/$defs/${namedKey}` };
       }
+      // Read for its labels alone, a value's recursion adds none to its top,
+      // and naming it would name the type for every schema this generator
+      // writes afterwards.
+      if (context.labelsOnly) return {};
       const syntheticKey = this.#ensureSyntheticName(type, context);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
@@ -1537,8 +1567,101 @@ export class SchemaGenerator {
     schema: MutableJSONSchema,
     context: GenerationContext,
   ): MutableJSONSchema {
+    // A value keeps its labels however little of it is read, and a schema
+    // that reaches them already, through its own reference, keeps them as is.
+    const labels = this.#narrowedFromLabels(context);
+    const held = labels && declaredIfcLabels(schema, context.definitions);
+    const labeled = labels && !(held && holdsIfcLabels(held, labels))
+      ? withIfcLabels(schema, labels)
+      : schema;
     const hint = getUiContractHint(context);
-    return hint ? attachUiContract(schema, hint) : schema;
+    return hint ? attachUiContract(labeled, hint) : labeled;
+  }
+
+  /**
+   * The CFC labels of the value the node at this position narrows, where a
+   * hint names one (`SchemaHint.narrowedFrom`). A value keeps its labels
+   * however little of it is read, and they are the labels its own type
+   * attaches where it is formatted, read by that same formatting with its
+   * payload left out (`GenerationContext.labelsOnly`).
+   */
+  #narrowedFromLabels(
+    context: GenerationContext,
+  ): Record<string, unknown> | undefined {
+    const node = context.typeNode ?? context.hintsNode;
+    if (!node || !context.schemaHints || context.labelsOnly) return undefined;
+    const narrowedFrom = context.schemaHints.get(node)?.narrowedFrom ??
+      context.schemaHints.get(unwrapTypeParentheses(node))?.narrowedFrom;
+    if (!narrowedFrom) return undefined;
+    // The value is read apart from this position, into definitions of its
+    // own, and what reading it only for its labels leaves unread is no
+    // problem to report.
+    const {
+      typeNode: _,
+      hintsNode: __,
+      arrayItemsOverride: ___,
+      boundTypeParameters: ____,
+      uninterpretedTypeNodes: _____,
+      ...rest
+    } = context;
+    return this.#labelsOf(narrowedFrom.type, narrowedFrom.typeNode, {
+      ...rest,
+      onDiagnostic: () => {},
+      labelsOnly: true,
+      definitions: {},
+      emittedRefs: new Set(),
+      definitionStack: new Set(),
+      inProgressNames: new Set(),
+    });
+  }
+
+  /**
+   * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
+   * spelled by `typeNode` where given, attaches at its top in `context`. A
+   * value that may be missing, `T | undefined` or `T | null`, has the labels
+   * of `T`, which formatting attaches to that member. A node narrowed from
+   * any other union stands for any of its members, so it has the labels
+   * formatting attaches to the union joined with those of its members
+   * (`joinMemberIfcLabels()`). A member is spelled by the member of the union
+   * `typeNode` writes, read through parentheses and aliases
+   * (`readAuthoredTypeNode()`), whose type it is.
+   */
+  #labelsOf(
+    type: ts.Type,
+    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
+  ): Record<string, unknown> | undefined {
+    const checker = context.typeChecker;
+    const written = typeNode && readAuthoredTypeNode(typeNode, checker);
+    const memberNode = (member: ts.Type) =>
+      written && ts.isUnionTypeNode(written)
+        ? written.types.find((node) =>
+          checker.getTypeFromTypeNode(node) === member
+        )
+        : undefined;
+    const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Null |
+      ts.TypeFlags.Void;
+    const values = type.isUnion()
+      ? type.types.filter((member) => (member.flags & nullish) === 0)
+      : [type];
+    if (values.length === 1 && values[0] !== type) {
+      // An optional property's declaration spells the value alone, since its
+      // `?` adds the `undefined`.
+      const valueNode = typeNode &&
+          checker.getTypeFromTypeNode(typeNode) === values[0]
+        ? typeNode
+        : memberNode(values[0]!);
+      return this.#labelsOf(values[0]!, valueNode, context);
+    }
+    const whole = this.formatChildType(type, context, typeNode);
+    const labels = declaredIfcLabels(whole, context.definitions);
+    if (values.length < 2) return labels;
+    return joinMemberIfcLabels(
+      labels ?? {},
+      values.map((member) =>
+        this.#labelsOf(member, memberNode(member), context) ?? {}
+      ),
+    );
   }
 
   /**
@@ -1733,6 +1856,25 @@ export class SchemaGenerator {
             // that only the resolved type retains. A wrapper with that type
             // must know this node's members were not fully interpreted.
             context.uninterpretedTypeNodes?.push(typeNode);
+            continue;
+          }
+
+          // A print reads as the property would in the object type it was
+          // printed from, where a callable is left out unless it makes a
+          // stream, cell or database.
+          const printedType = context.printedFrom?.(member.type);
+          if (printedType && isFunctionLike(printedType)) {
+            const wrapperSchema = getWrapperSchemaFromCallable(
+              printedType,
+              checker,
+            );
+            if (wrapperSchema) {
+              const uiContract = getUiContractHint(context, member.type);
+              properties[propName] = uiContract
+                ? attachUiContract(wrapperSchema, uiContract)
+                : wrapperSchema;
+              if (!member.questionToken) required.push(propName);
+            }
             continue;
           }
 

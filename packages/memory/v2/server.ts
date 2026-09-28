@@ -7,6 +7,7 @@ import {
   isFabricPlainObject,
   valueEqual,
 } from "@commonfabric/data-model";
+import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -52,6 +53,7 @@ import {
   type HelloMessage,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   type MemoryProtocolFlags,
   type OpCursor,
   type Operation,
@@ -60,6 +62,12 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  type PresenceJoinRequest,
+  type PresenceJoinResult,
+  type PresenceLeaveRequest,
+  type PresencePublishRequest,
+  type PresenceRemoveMessage,
+  type PresenceUpsertMessage,
   resolveScopeKey,
   type ResponseMessage,
   type ScopeKey,
@@ -124,6 +132,12 @@ import {
   createDefaultOperationCodecRegistry,
   type OperationCodecRegistry,
 } from "./operation-codec.ts";
+import {
+  isPresenceRoom,
+  parsePresenceFacets,
+  PresenceError,
+  PresenceRooms,
+} from "./presence.ts";
 import {
   cloneTrackedGraphState,
   createQueryEvaluationCache,
@@ -248,23 +262,37 @@ const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
+/**
+ * The duration, in milliseconds, past which an operation is recorded for
+ * `/api/health/stats`: `CF_SLOW_QUERY_THRESHOLD_MS` as `readEnv` returns it
+ * when that is a non-negative number, and `100` otherwise, including when the
+ * variable is unset or `readEnv` throws because the process may not read it.
+ * The reader is a parameter so that every one of those cases can be exercised
+ * directly, whatever permissions the calling process has.
+ */
+export const slowQueryThresholdMs = (
+  readEnv: (name: string) => string | undefined,
+): number => {
+  let raw: string | undefined;
+  try {
+    raw = readEnv("CF_SLOW_QUERY_THRESHOLD_MS");
+  } catch {
+    return 100;
+  }
+  const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 100;
+};
+
 // Operations slower than this are recorded for `/api/health/stats`. The
 // default suits a deployment, where the interesting operations are the ones
 // well past it; a local investigation of a fast machine sets
 // `CF_SLOW_QUERY_THRESHOLD_MS` lower — to `0` to record every one — so the
 // buffer carries the per-operation root, read and upsert counts for
-// operations the default would leave invisible.
-const SLOW_QUERY_THRESHOLD_MS = (() => {
-  try {
-    const raw = typeof Deno !== "undefined"
-      ? Deno.env.get("CF_SLOW_QUERY_THRESHOLD_MS")
-      : undefined;
-    const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 100;
-  } catch {
-    return 100;
-  }
-})();
+// operations the default would leave invisible. Outside Deno the reader throws
+// a `ReferenceError`, which reads as the default.
+const SLOW_QUERY_THRESHOLD_MS = slowQueryThresholdMs((name) =>
+  Deno.env.get(name)
+);
 const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 // ~5 board-scale corpora (a full board evaluation retains ~6k entities).
 // Entity count is the byte proxy: what an entry holds alive is its cloned
@@ -751,11 +779,27 @@ export type DemandedInstanceRow = {
   id: string;
   scope: CellScope;
   scopeKey: ScopeKey;
-  identity?: { principal?: string; sessionId?: string };
+  identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
    * load's input, unchanged in scope — design §2.8 flag 4). */
   root: boolean;
+};
+
+/**
+ * One client session's share of a space's demand set: its
+ * `DemandedInstanceRow`s, keyed by instance key (`toDirtyKey(id, scopeKey)`).
+ * The server replaces the object whenever the session's demand may have
+ * changed and hands back the same object while it has not, so a consumer that
+ * kept the object it last read can tell an unchanged session by identity
+ * alone. Neither the object nor its rows may be mutated.
+ */
+export type SessionDemand = {
+  /** The session the rows belong to. */
+  readonly sessionId: string;
+
+  /** The session's rows, keyed by instance key. */
+  readonly rows: ReadonlyMap<string, Readonly<DemandedInstanceRow>>;
 };
 
 const addOperationWatchTrackedIds = (
@@ -908,6 +952,9 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    // A membership is admitted by the session it joined through, so losing
+    // the session ends it.
+    this.#server.endPresenceForSession(space, sessionId, this.id);
     this.#send({
       type: "session/revoked",
       space,
@@ -980,7 +1027,24 @@ class Connection {
     }
   }
 
+  /** Pushes one presence message to this connection's peer. */
+  sendPresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
+    if (this.#closed) return;
+    this.#send(message);
+  }
+
   async receive(payload: string): Promise<void> {
+    const parsed = parseClientMessage(payload);
+    // A presence message is handled as it is handed over, not behind the
+    // frames already queued here: it carries no seq and settles nothing.
+    // Whether it can overtake a frame ahead of it on the socket is the
+    // host's business — one that hands frames over one at a time keeps it
+    // behind them (04-protocol.md §4.13.4). Everything else keeps the
+    // connection's order.
+    if (parsed !== null && isPresenceClientMessage(parsed)) {
+      this.#receivePresence(parsed);
+      return;
+    }
     this.#pendingReceives += 1;
     // A connection handles its frames one at a time, so a frame's cost has
     // two halves that are fixed at opposite ends of the stack: how long it
@@ -996,7 +1060,7 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(payload);
+          await this.#receiveOrdered(parsed);
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
@@ -1060,12 +1124,36 @@ class Connection {
     return false;
   }
 
-  async #receiveOrdered(payload: string): Promise<void> {
+  #receivePresence(
+    message:
+      | PresenceJoinRequest
+      | PresencePublishRequest
+      | PresenceLeaveRequest,
+  ): void {
+    if (this.#closed) return;
+    if (!this.#ready) {
+      this.#send({
+        type: "response",
+        requestId: message.requestId,
+        error: toError("ProtocolError", "memory hello is required first"),
+      });
+      return;
+    }
+    if (
+      !this.#requireSession(message.requestId, message.space, message.sessionId)
+    ) {
+      return;
+    }
+    this.#send(this.#server.receivePresence(message, this));
+  }
+
+  async #receiveOrdered(
+    parsed: ClientMessage | OversizedClientMessage | null,
+  ): Promise<void> {
     if (this.#closed) {
       return;
     }
 
-    const parsed = parseClientMessage(payload);
     if (parsed === null) {
       this.#send({
         type: "response",
@@ -1073,6 +1161,18 @@ class Connection {
         error: toError(
           "InvalidMessageError",
           "Unable to parse memory message",
+        ),
+      });
+      return;
+    }
+    if (parsed.type === "oversized") {
+      this.#send({
+        type: "response",
+        requestId: parsed.requestId,
+        error: toError(
+          "MessageTooLargeError",
+          "Memory message stands for more than " +
+            `${MAX_UNTRUSTED_MESSAGE_SLOTS} array slots and record members`,
         ),
       });
       return;
@@ -1468,12 +1568,22 @@ class Connection {
       return;
     }
     this.#closed = true;
+    this.#server.endPresenceForConnection(this.id);
     for (const { space, sessionId } of this.#sessions.values()) {
       this.#server.detachSession(space, sessionId, this.id);
     }
     this.#server.disconnect(this);
   }
 }
+
+const isPresenceClientMessage = (
+  message: ClientMessage | OversizedClientMessage,
+): message is
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest =>
+  message.type === "presence.join" || message.type === "presence.publish" ||
+  message.type === "presence.leave";
 
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
@@ -1594,6 +1704,20 @@ export class Server {
     removes: SessionCacheEntry[];
   }>();
 
+  /**
+   * Each session's share of its space's demand set, built on first read and
+   * kept until `#touchDemand()` drops it. Every write to an input of
+   * `#buildSessionDemand()` — the session's watches, views, delivered
+   * entities, graph misses, and tracked set — touches the session, so an entry
+   * present here is the one a fresh build would produce. Keyed by the
+   * registry's object, which a reopen replaces, so a reopened session is built
+   * afresh.
+   */
+  #sessionDemand = new WeakMap<SessionState, SessionDemand>();
+
+  /** How many times `#buildSessionDemand()` has run, for a test to read. */
+  #sessionDemandBuilds = 0;
+
   #store?: URL;
   #inboxStore?: Promise<InboxStore>;
   #operationCodecs: OperationCodecRegistry;
@@ -1625,6 +1749,9 @@ export class Server {
   #ensuredSchemas = new Map<string, true>();
 
   #ensuredSchemasMax = 4096;
+
+  /** The presence rooms this server relays; in memory only. */
+  #presence = new PresenceRooms();
 
   constructor(
     readonly options: {
@@ -1767,8 +1894,11 @@ export class Server {
 
   /**
    * The engine opener a test may supply, the timer-driven refresh pass
-   * and the per-space publication lock, which a test drives directly, and
-   * the registry's live sessions of one space, which a test inspects.
+   * and the per-space publication lock, which a test drives directly, the
+   * registry's live sessions of one space, which a test inspects, the
+   * demand-set build count and an uncached build, which a test compares the
+   * kept demand set against, and the demand-set drop a write makes, which a
+   * test applies through a session object of its choosing.
    */
   get accessForTestingOnly(): {
     engineOpener: EngineOpener | undefined;
@@ -1778,6 +1908,9 @@ export class Server {
       run: () => Promise<T>,
     ): Promise<T>;
     sessionsForSpace(space: string): SessionState[];
+    readonly sessionDemandBuilds: number;
+    buildSessionDemand(session: SessionState): SessionDemand;
+    touchDemand(session: SessionState): void;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -1792,6 +1925,11 @@ export class Server {
       withSpacePublicationLock: (space, run) =>
         this.#withSpacePublicationLock(space, run),
       sessionsForSpace: (space) => this.#sessions.sessionsForSpace(space),
+      get sessionDemandBuilds() {
+        return outerThis.#sessionDemandBuilds;
+      },
+      buildSessionDemand: (session) => this.#buildSessionDemand(session),
+      touchDemand: (session) => this.#touchDemand(session),
     };
   }
 
@@ -2326,6 +2464,92 @@ export class Server {
     ownerConnectionId: string,
   ): void {
     this.#sessions.detach(space, sessionId, ownerConnectionId);
+  }
+
+  /**
+   * Handles one presence request on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send. A refused request gets a `PresenceError`; a session
+   * the connection no longer owns gets a `SessionRevokedError`.
+   */
+  receivePresence(
+    message:
+      | PresenceJoinRequest
+      | PresencePublishRequest
+      | PresenceLeaveRequest,
+    connection: Connection,
+  ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, room } = message;
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return respondTypedError(
+        requestId,
+        toError("SessionRevokedError", "Session is not attached"),
+      );
+    }
+    if (!isPresenceRoom(room)) {
+      return respondTypedError(
+        requestId,
+        toError("PresenceError", "Presence room id is invalid"),
+      );
+    }
+    try {
+      switch (message.type) {
+        case "presence.join":
+          return {
+            type: "response",
+            requestId,
+            ok: this.#presence.join({
+              space,
+              room,
+              connectionId: connection.id,
+              sessionId,
+              principal: this.#sessions.get(space, sessionId)?.principal,
+              send: (push) => connection.sendPresence(push),
+            }),
+          };
+        case "presence.publish":
+          this.#presence.publish({
+            space,
+            room,
+            connectionId: connection.id,
+            sessionId,
+            revision: message.revision,
+            name: message.name,
+            facets: message.facets,
+          });
+          return { type: "response", requestId, ok: {} };
+        case "presence.leave":
+          this.#presence.leave(space, room, connection.id, sessionId);
+          return { type: "response", requestId, ok: {} };
+      }
+    } catch (error) {
+      if (error instanceof PresenceError) {
+        return respondTypedError(
+          requestId,
+          toError(error.name, error.message),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Ends every presence membership the connection holds. */
+  endPresenceForConnection(connectionId: string): void {
+    this.#presence.leaveConnection(connectionId);
+  }
+
+  /** Ends every presence membership the connection joined through the session. */
+  endPresenceForSession(
+    space: string,
+    sessionId: string,
+    connectionId: string,
+  ): void {
+    this.#presence.leaveSession(space, sessionId, connectionId);
+  }
+
+  /** How many connections are in a presence room; `0` when nobody is. */
+  presenceMemberCount(space: string, room: string): number {
+    return this.#presence.memberCount(space, room);
   }
 
   /**
@@ -3423,6 +3647,7 @@ export class Server {
           resumed.trackedIds = trackedIdsFromEntries(
             resumed.entities.values(),
           );
+          this.#touchDemand(resumed);
           // The catch-up below evaluates only when something is dirty or
           // owed; a replaced diff base is neither, so the full evaluation
           // that diffs against it is forced explicitly.
@@ -5048,6 +5273,7 @@ export class Server {
         session.trackedIds.add(key);
       }
       this.#addMissedToTrackedIds(session.trackedIds, demandGraphs.values());
+      this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
       if (message.views !== undefined || views.length > 0) {
         this.#attachViewPlans(session, sync);
@@ -5452,6 +5678,7 @@ export class Server {
           session.graphs.values(),
         );
       }
+      this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
       this.#notifyDemandChanged(message.space, "watch", session.principal);
       recordSlowQueryDuration(
@@ -5674,6 +5901,103 @@ export class Server {
     return ids;
   }
 
+  /**
+   * Helper for `demandForSpace()`, which builds `session`'s share of the
+   * demand set from its current state: the tracked keys its graph watches
+   * reach, and its watch roots whether reached or not.
+   */
+  #buildSessionDemand(session: SessionState): SessionDemand {
+    const rows = new Map<string, DemandedInstanceRow>();
+    const identity = {
+      ...(session.principal === undefined
+        ? {}
+        : { principal: session.principal }),
+      sessionId: session.id,
+    };
+    // The session's watch ROOT keys (instance-keyed like trackedIds).
+    const rootKeys = new Set<string>();
+    for (const watch of [...session.watches, ...viewWatches(session.views)]) {
+      if (watch.kind === "operation") continue;
+      for (const root of watch.query.roots) {
+        const scope = root.scope ?? "space";
+        if (scope === "space") {
+          rootKeys.add(toDirtyKey(root.id, "space"));
+          continue;
+        }
+        try {
+          rootKeys.add(
+            toDirtyKey(
+              root.id,
+              resolveScopeKey(scope, {
+                principal: session.principal,
+                sessionId: session.id,
+              }),
+            ),
+          );
+        } catch {
+          // unresolvable scope: not demand for that instance
+        }
+      }
+    }
+    // Operation watches share session dirtiness tracking so their updates
+    // wake the push loop, but they are not graph execution demand. Rebuild
+    // the graph-only provenance from delivered entries plus traversal misses
+    // before producing demand rows.
+    const graphTrackedIds = trackedIdsFromEntries(
+      (session.views.length === 0
+        ? session.entities
+        : session.viewDemandEntities).values(),
+    );
+    this.#addMissedToTrackedIds(
+      graphTrackedIds,
+      (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
+        .values(),
+    );
+    const emit = (dirtyKey: string, root: boolean) => {
+      const existing = rows.get(dirtyKey);
+      if (existing !== undefined) {
+        if (root) existing.root = true;
+        return;
+      }
+      let parsed: { id: string; scopeKey: ScopeKey; scope: CellScope };
+      try {
+        parsed = fromDirtyKey(dirtyKey);
+      } catch {
+        return;
+      }
+      rows.set(dirtyKey, {
+        id: parsed.id,
+        scope: parsed.scope,
+        scopeKey: parsed.scopeKey,
+        identity,
+        root,
+      });
+    };
+    for (const dirtyKey of session.trackedIds) {
+      if (graphTrackedIds.has(dirtyKey)) {
+        emit(dirtyKey, rootKeys.has(dirtyKey));
+      }
+    }
+    for (const dirtyKey of rootKeys) emit(dirtyKey, true);
+    return { sessionId: session.id, rows };
+  }
+
+  /**
+   * Drops `session`'s kept share of the demand set, so the next
+   * `demandForSpace()` builds it again. Called at every write to an input of
+   * `#buildSessionDemand()`, and harmless at a write that turns out to change
+   * nothing: the next read pays for one rebuild and returns equal rows.
+   */
+  #touchDemand(session: SessionState): void {
+    this.#sessionDemand.delete(session);
+    // A reopen registers a new object that shares this one's watch list,
+    // entity map, tracked set, and graphs, so a write made through an object
+    // the registry has since replaced — by a pass that read it before the
+    // reopen — changes the replacement's demand as well.
+    const current = this.#sessions.peek(session.space, session.id);
+    if (current !== undefined) this.#sessionDemand.delete(current);
+  }
+
   /** Roll back the delivery state a computed-but-undelivered sync frame
    * advanced: forget the frame's docs from the session cache (so the next
    * evaluation cannot elide them as already-snapshotted), re-stage its
@@ -5697,6 +6021,8 @@ export class Server {
     }
     const sync = undelivered.effect;
     if (sync.viewPlans !== undefined) session.forceFullResync = true;
+    // Both arms below rewrite the delivered entities and the tracked set.
+    this.#touchDemand(session);
     const identity = this.#sessionScopeIdentity(session);
     const ids: string[] = [];
     // The frame's OWN delivery record carries the exact instance-keyed
@@ -6037,6 +6363,7 @@ export class Server {
             };
             session.entities = new Map();
             session.trackedIds = new Set();
+            this.#touchDemand(session);
             session.lastSyncedSeq = Math.max(session.lastSyncedSeq, serverSeq);
             return await finishCatchUp(sync);
           }
@@ -6140,6 +6467,11 @@ export class Server {
                   if (refreshed === null) {
                     continue;
                   }
+                  // The refresh edits the graph's misses in place, and they
+                  // are an input to the session's demand.
+                  if (refreshed.changedMisses.size > 0) {
+                    this.#touchDemand(session);
+                  }
                   for (const key of refreshed.changedMisses) {
                     const { id, scopeKey } = fromDocKey(key as QueryDocKey);
                     changedInterests.add(toDirtyKey(id, scopeKey));
@@ -6241,13 +6573,22 @@ export class Server {
               const commitEntities = () => {
                 const trackedStartedAt = performance.now();
                 try {
+                  // A new delivered entity adds a key to the session's
+                  // demand; a changed snapshot of a held one does not.
+                  let enteredEntity = false;
                   for (const [key, entry] of updates) {
+                    if (!session.entities.has(key)) enteredEntity = true;
                     session.entities.set(key, entry);
                   }
                   let changed = this.#reconcileTrackedInterests(
                     session,
                     changedInterests,
                   );
+                  if (
+                    enteredEntity || changed || session.views.length > 0
+                  ) {
+                    this.#touchDemand(session);
+                  }
                   if (session.views.length > 0) {
                     session.viewDemandEntities = this.#entriesFromGraphs(
                       session.viewDemandGraphs.values(),
@@ -6466,6 +6807,7 @@ export class Server {
             session.graphs = graphs;
             session.entities = entities;
             session.trackedIds = evaluatedTrackedIds;
+            this.#touchDemand(session);
             session.lastSyncedSeq = serverSeq;
             if (changed) {
               this.#notifyDemandChanged(
@@ -6502,6 +6844,9 @@ export class Server {
           // A re-arm consumed by a throwing pass re-stages: the next
           // pass runs the full evaluation the lapse still owes.
           if (rearmedLeaseHolder) session.leaseHolderReadsLapsed = true;
+          // A refresh that threw may have edited a graph's misses in place
+          // before it could report them.
+          this.#touchDemand(session);
           throw error;
         } finally {
           span.end();
@@ -6654,8 +6999,8 @@ export class Server {
 
   /**
    * @deprecated (W1 review NIT-3) Production-DEAD since (d′): the
-   * SpaceServer's demand pass reads `demandedInstancesForSpace` (the
-   * tracked-ids closure), never this. Retained only as a witness in a few
+   * SpaceServer's demand pass reads `demandForSpace` (the tracked-ids
+   * closure, per session), never this. Retained only as a witness in a few
    * tests (`executor-serving-loop`, `instance-keyed-replica`, `fan-out`);
    * migrate those to `demandedInstancesForSpace` and remove this, or keep
    * it explicitly as the roots-only projection. No production caller.
@@ -6777,6 +7122,20 @@ export class Server {
   }
 
   /**
+   * The read ceiling `sessionId` declared at its last open
+   * (`SessionDescriptor.readCeiling`), or `undefined` for a session that
+   * declared none or is not live. What the SpaceServer stamps onto every
+   * run it serves AS that session, so the runs of a bounded client read
+   * under the client's ceiling.
+   */
+  sessionReadCeiling(
+    space: string,
+    sessionId: string,
+  ): SessionReadCeiling | undefined {
+    return this.#sessions.get(space, sessionId)?.readCeiling;
+  }
+
+  /**
    * (d′) — the space's DEMAND SET (design §2.1's definition;
    * the successor of `watchedRootsForSpace`): the union over the space's
    * CLIENT sessions of each graph watch's schema-narrowed, instance-keyed
@@ -6791,26 +7150,41 @@ export class Server {
    * keyed one for it). Roots are UNIONED in from the watch specs so a
    * root the tracker has not (yet) keyed still carries what
    * `watchedRootsForSpace` carried — parity with today's structure load.
+   *
+   * The flat form of `demandForSpace()`, holding the same rows in session
+   * order as copies a caller may keep. It costs a pass over every row, where
+   * `demandForSpace()` costs one step per session whose demand is unchanged.
    */
-  /**
-   * The read ceiling `sessionId` declared at its last open
-   * (`SessionDescriptor.readCeiling`), or `undefined` for a session that
-   * declared none or is not live. What the SpaceServer stamps onto every
-   * run it serves AS that session, so the runs of a bounded client read
-   * under the client's ceiling.
-   */
-  sessionReadCeiling(
-    space: string,
-    sessionId: string,
-  ): SessionReadCeiling | undefined {
-    return this.#sessions.get(space, sessionId)?.readCeiling;
-  }
-
   demandedInstancesForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
   ): DemandedInstanceRow[] {
-    const rows = new Map<string, DemandedInstanceRow>();
+    return this.demandForSpace(space, options).flatMap((session) =>
+      [...session.rows.values()].map((row) => ({
+        ...row,
+        ...(row.identity === undefined
+          ? {}
+          : { identity: { ...row.identity } }),
+      }))
+    );
+  }
+
+  /**
+   * The space's demand set, as `demandedInstancesForSpace()` defines it,
+   * split into one `SessionDemand` per client session in registry order.
+   *
+   * A session's share is built once and handed back unchanged, as the same
+   * object, until something that decides it is written: its watches or views,
+   * the entities delivered to it, its graphs' misses, or its tracked set. So
+   * a read with no such write since the last one does no per-row work at all,
+   * and a consumer compares what it holds against what it reads by identity to
+   * find the sessions whose rows may differ.
+   */
+  demandForSpace(
+    space: string,
+    options: { excludePrincipal?: string } = {},
+  ): SessionDemand[] {
+    const demand: SessionDemand[] = [];
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
         options.excludePrincipal !== undefined &&
@@ -6818,79 +7192,15 @@ export class Server {
       ) {
         continue;
       }
-      const identity = {
-        ...(session.principal === undefined
-          ? {}
-          : { principal: session.principal }),
-        sessionId: session.id,
-      };
-      // The session's watch ROOT keys (instance-keyed like trackedIds).
-      const rootKeys = new Set<string>();
-      for (const watch of [...session.watches, ...viewWatches(session.views)]) {
-        if (watch.kind === "operation") continue;
-        for (const root of watch.query.roots) {
-          const scope = root.scope ?? "space";
-          if (scope === "space") {
-            rootKeys.add(toDirtyKey(root.id, "space"));
-            continue;
-          }
-          try {
-            rootKeys.add(
-              toDirtyKey(
-                root.id,
-                resolveScopeKey(scope, {
-                  principal: session.principal,
-                  sessionId: session.id,
-                }),
-              ),
-            );
-          } catch {
-            // unresolvable scope: not demand for that instance
-          }
-        }
+      let share = this.#sessionDemand.get(session);
+      if (share === undefined) {
+        share = this.#buildSessionDemand(session);
+        this.#sessionDemand.set(session, share);
+        this.#sessionDemandBuilds += 1;
       }
-      // Operation watches share session dirtiness tracking so their updates
-      // wake the push loop, but they are not graph execution demand. Rebuild
-      // the graph-only provenance from delivered entries plus traversal misses
-      // before producing demand rows.
-      const graphTrackedIds = trackedIdsFromEntries(
-        (session.views.length === 0
-          ? session.entities
-          : session.viewDemandEntities).values(),
-      );
-      this.#addMissedToTrackedIds(
-        graphTrackedIds,
-        (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
-          .values(),
-      );
-      const emit = (dirtyKey: string, root: boolean) => {
-        const rowKey = `${dirtyKey}\0${session.id}`;
-        if (rows.has(rowKey)) {
-          if (root) rows.get(rowKey)!.root = true;
-          return;
-        }
-        let parsed: { id: string; scopeKey: ScopeKey; scope: CellScope };
-        try {
-          parsed = fromDirtyKey(dirtyKey);
-        } catch {
-          return;
-        }
-        rows.set(rowKey, {
-          id: parsed.id,
-          scope: parsed.scope,
-          scopeKey: parsed.scopeKey,
-          identity,
-          root,
-        });
-      };
-      for (const dirtyKey of session.trackedIds) {
-        if (graphTrackedIds.has(dirtyKey)) {
-          emit(dirtyKey, rootKeys.has(dirtyKey));
-        }
-      }
-      for (const dirtyKey of rootKeys) emit(dirtyKey, true);
+      demand.push(share);
     }
-    return [...rows.values()];
+    return demand;
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -8015,13 +8325,34 @@ function isSqliteNamedParamEntries(
     );
 }
 
+/**
+ * A client message refused for standing for more than
+ * `MAX_UNTRUSTED_MESSAGE_SLOTS` slots, with the id of the request it carried
+ * so that the refusal can be answered on that request.
+ */
+export type OversizedClientMessage = {
+  type: "oversized";
+  requestId: string;
+};
+
+/**
+ * Decodes and validates one message from a client. Returns `null` for a
+ * message that is malformed, or that is refused for its size without carrying
+ * a request id to answer it on.
+ */
 export const parseClientMessage = (
   payload: string,
-): ClientMessage | null => {
+): ClientMessage | OversizedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
-  } catch {
+  } catch (error) {
+    if (error instanceof SlotLimitError) {
+      const requestId = error.rootScalar("requestId");
+      if (typeof requestId === "string") {
+        return { type: "oversized", requestId };
+      }
+    }
     return null;
   }
 
@@ -8332,6 +8663,48 @@ export const parseClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       seenSeq: parsed.seenSeq,
+    };
+  }
+
+  if (
+    (parsed.type === "presence.join" || parsed.type === "presence.leave") &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    typeof parsed.room === "string"
+  ) {
+    return {
+      type: parsed.type,
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      room: parsed.room,
+    };
+  }
+
+  // The name and the facets are held to the relay's bounds by the handler,
+  // which reports a failed bound as the request's own error; the parser
+  // settles only that the record positions hold plain objects.
+  if (
+    parsed.type === "presence.publish" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    typeof parsed.room === "string" &&
+    typeof parsed.revision === "number" &&
+    typeof parsed.name === "string"
+  ) {
+    const facets = parsePresenceFacets(parsed.facets);
+    if (facets === null) return null;
+    return {
+      type: "presence.publish",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      room: parsed.room,
+      revision: parsed.revision,
+      name: parsed.name,
+      facets,
     };
   }
 

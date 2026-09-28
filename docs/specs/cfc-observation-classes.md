@@ -154,11 +154,36 @@ confidentiality-channel rule. The persisted `observes:"shape"` entry does not
 carry J's integrity: integrity composes by meet, never join, so growing an
 existence entry's integrity across writers would *union* certification claims
 — an over-claim. The `value` entry keeps the full J (confidentiality +
-integrity, replace-on-overwrite); this matches the existing `structure`
-stamps, which have always been confidentiality-only. Consequence: a
+integrity, replace-on-overwrite); the frozen `structure` existence entry is
+confidentiality-only for the same reason. Consequence: a
 `nonRecursive` (shape) read of a split-labeled path taints with the existence
 confidentiality but no longer inherits content certification into the
 hereditary meet — an intended under-claim (SC-9's fail-safe direction).
+
+**Derivation provenance on membership stamps.** The `structure` membership
+stamps — the container's `observes:"enumerate"` entry and its `*`-child class
+templates — are re-minted from the current join rather than frozen, so they
+carry J's `TransformedBy` atom (and no other integrity). Without it a read of
+the container node resolves confidentiality with no derivation evidence at all,
+and an exchange rule guarded on `TransformedBy` cannot release an object a
+single function computed. The atom is present only when the flow stage minted
+it, which it does only when every non-privileged write of the transaction was
+authored under one identity. Membership stamps survive a slot write that adds or
+replaces a child, so attribution on any carried `derived` or `structure` entry
+meets across the writers of its path: a transaction writing at, above, or below
+the entry's path (for a `*` template, its container's) leaves on it only the
+`TransformedBy` atoms its own join carries. A later writer under another
+identity, or under none, therefore leaves the entry naming no function — also
+when that transaction read nothing and carries no labels of its own, since a
+write below a stamp carrying `TransformedBy` admits its document to the persist
+step whatever the join. The meet covers `TransformedBy` only: a hereditary
+integrity atom on an ancestor's `derived` entry still survives another writer
+adding a child. The declared structure-container route (filter/flatMap result
+containers) re-mints its stamps from each reconcile's join without writing the
+container, so there the atom names the builtin that reconciled, not every writer
+of every slot. The hereditary atoms stay off these stamps: they would feed the
+next transaction's hereditary meet through container reads, which is a change to
+certification propagation rather than to attribution.
 
 **C3 note (2026-07-03, superseded 2026-07-06): grow shipped, then the
 discipline was settled with the spec as freeze-at-creation.** C3's interim

@@ -20,6 +20,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { waitForLlmMessages } from "./support/llm-result.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-llm-derived-stamp");
 
@@ -75,7 +76,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
     try {
       // Model-output push: builtin identity, item schema carries the stamp.
       const modelTx = runtime.edit();
-      modelTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(modelTx, {
         kind: "builtin",
         builtinId: "llm-dialog",
       });
@@ -139,7 +140,7 @@ describe("CFC LlmDerived stamping mechanism", () => {
     });
     try {
       const modelTx = runtime.edit();
-      modelTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(modelTx, {
         kind: "builtin",
         builtinId: "llm-dialog",
       });

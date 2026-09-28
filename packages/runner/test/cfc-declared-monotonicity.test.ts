@@ -14,7 +14,10 @@ import {
 } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  TransactionWrapper,
+} from "../src/storage/extended-storage-transaction.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-declared-mono");
@@ -565,7 +568,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       const runtime = makeRuntime({ storageManager });
       try {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "verified",
           moduleIdentity: "mod:example",
         });
@@ -584,7 +587,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       const runtime = makeRuntime({ storageManager });
       try {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-declassification-event-writer",
         });
@@ -613,7 +616,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       const runtime = makeRuntime({ storageManager });
       try {
         const tx = runtime.edit();
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-declassification-event-writer",
         });
@@ -650,7 +653,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
         );
         expect(() => wrapper.setCfcDeclaredWideningExemption(EXEMPTION()))
           .toThrow(/builtin/);
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-declassification-event-writer",
         });
@@ -677,7 +680,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           tx,
         );
         cell.set({ out: "v1" });
-        tx.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(tx, {
           kind: "builtin",
           builtinId: "cfc-declassification-event-writer",
         });
@@ -1425,7 +1428,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       path: string[] = ["out"],
     ) =>
     (tx: ReturnType<Runtime["edit"]>, docId: string) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "cfc-declassification-event-writer",
       });
@@ -1437,7 +1440,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
       });
       // The event writer's identity must not leak into the ordinary write
       // attribution of the rest of this test transaction.
-      tx.setCfcImplementationIdentity(undefined);
+      setCfcImplementationIdentity(tx, undefined);
     };
 
     it("a privileged marker exempts exactly its (doc, path, clauseDigest) triple", async () => {
@@ -1486,7 +1489,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
           label: { ...entry.label, confidentiality: [CLAUSE_A, CLAUSE_B] },
         }),
         beforeSecondCommit: (tx) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: "cfc-declassification-event-writer",
           });
@@ -1496,7 +1499,7 @@ describe("CFC declared-component monotonicity (WP5, §8.12.1/§8.12.8)", () => {
             path: ["out"],
             clauseDigest: cfcCanonicalClauseDigest(CLAUSE_B),
           });
-          tx.setCfcImplementationIdentity(undefined);
+          setCfcImplementationIdentity(tx, undefined);
         },
       });
       expect(

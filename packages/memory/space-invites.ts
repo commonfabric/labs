@@ -8,15 +8,41 @@ import {
 import { isLoopbackHostname } from "@commonfabric/utils/loopback";
 import type { Capability } from "./acl.ts";
 
+/**
+ * The admission capabilities an invitation can grant, weakest first.
+ *
+ * OWNER was added after version one shipped with READ and WRITE. The link
+ * format and the redemption request did not change, because neither carries
+ * the access: it is fixed in the issuer's signed create request and stored in
+ * the service's invitation row. A service that predates OWNER refuses an
+ * OWNER create with `invalid-request` and never holds an OWNER row, so no
+ * version pairing turns an OWNER request into a lesser grant. Clients read
+ * `SPACE_INVITE_CAPABILITY.access` from `/api/space-invites` to learn whether
+ * a service issues OWNER invitations; a response without the field predates
+ * them.
+ */
+export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
+
 /** Host limits for version one of the invitation protocol. */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
   maxUses: 1000,
   maxTtlSeconds: 30 * 24 * 60 * 60,
+  access: INVITE_ACCESS,
 } as const;
 
-/** The admission capability an invitation can grant. */
-export type InviteAccess = "READ" | "WRITE";
+/**
+ * The admission capability an invitation can grant. An invitation grants at
+ * most its issuer's own access; since only an explicit OWNER may issue one,
+ * that bound admits every value here, and redemption also requires the issuer
+ * to still be an explicit OWNER.
+ */
+export type InviteAccess = typeof INVITE_ACCESS[number];
+
+/** Whether a value is an access an invitation can grant. */
+export function isInviteAccess(value: unknown): value is InviteAccess {
+  return (INVITE_ACCESS as readonly unknown[]).includes(value);
+}
 
 /** Issuance parameters, signed by a current explicit space owner. */
 export interface CreateInvite {

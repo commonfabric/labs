@@ -109,6 +109,16 @@ describe("narrowing", () => {
         expect(isFabricContainerValue(42n)).toBe(false);
       });
     });
+
+    describe("given a record the value type does not admit", () => {
+      it("returns `false` for a null-prototype object", () => {
+        // A `FabricPlainObject` is `Object.prototype`-rooted, so an object
+        // holding the same properties with no prototype is not one.
+
+        const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+        expect(isFabricContainerValue(obj)).toBe(false);
+      });
+    });
   });
 
   describe("isFabricPlainContainer()", () => {
@@ -116,11 +126,6 @@ describe("narrowing", () => {
       it("returns `true` for a plain object", () => {
         expect(isFabricPlainContainer({})).toBe(true);
         expect(isFabricPlainContainer({ a: 1, b: "two" })).toBe(true);
-      });
-
-      it("returns `true` for a null-prototype object", () => {
-        const obj = Object.create(null) as Record<string, never>;
-        expect(isFabricPlainContainer(obj)).toBe(true);
       });
 
       it("returns `true` for an array", () => {
@@ -158,6 +163,16 @@ describe("narrowing", () => {
         expect(isFabricPlainContainer("a")).toBe(false);
         expect(isFabricPlainContainer(true)).toBe(false);
         expect(isFabricPlainContainer(42n)).toBe(false);
+      });
+    });
+
+    describe("given a record the value type does not admit", () => {
+      it("returns `false` for a null-prototype object", () => {
+        // A `FabricPlainObject` is `Object.prototype`-rooted, so an object
+        // holding the same properties with no prototype is not one.
+
+        const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+        expect(isFabricPlainContainer(obj)).toBe(false);
       });
     });
   });
@@ -248,11 +263,6 @@ describe("narrowing", () => {
         expect(isFabricPlainObject({})).toBe(true);
         expect(isFabricPlainObject({ a: 1, b: "two" })).toBe(true);
       });
-
-      it("returns `true` for a null-prototype object", () => {
-        const obj = Object.create(null) as Record<string, never>;
-        expect(isFabricPlainObject(obj)).toBe(true);
-      });
     });
 
     describe("given a non-record `FabricValue`", () => {
@@ -293,6 +303,16 @@ describe("narrowing", () => {
           .toBe(false);
         expect(isFabricPlainObject(/regex/ as unknown as FabricValue))
           .toBe(false);
+      });
+    });
+
+    describe("given a record the value type does not admit", () => {
+      it("returns `false` for a null-prototype object", () => {
+        // A `FabricPlainObject` is `Object.prototype`-rooted, so an object
+        // holding the same properties with no prototype is not one.
+
+        const obj = Object.assign(Object.create(null), { a: 1 }) as FabricValue;
+        expect(isFabricPlainObject(obj)).toBe(false);
       });
     });
   });

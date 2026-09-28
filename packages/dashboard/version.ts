@@ -38,3 +38,6 @@ export function dashboardVersion(
   if (deployedCommit !== undefined) return validCommit(deployedCommit);
   return processStartVersion(now());
 }
+
+/** The version this process serves, fixed when it starts. */
+export const SERVING_VERSION = dashboardVersion();

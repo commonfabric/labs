@@ -61,14 +61,9 @@ interface Runner {
  */
 const RUNNERS: readonly Runner[] = [
   {
-    command: "run-sharded-test-files.ts",
+    command: "run-test-batches.ts",
     kind: "forwards",
-    implementation: "tasks/run-sharded-test-files.ts",
-  },
-  {
-    command: "test/runner.ts",
-    kind: "shuffles",
-    implementation: "packages/dashboard/test/runner.ts",
+    implementation: "tasks/run-test-batches.ts",
   },
   {
     command: "deno-web-test/cli.ts",

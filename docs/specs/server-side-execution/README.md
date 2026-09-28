@@ -166,8 +166,7 @@ Corollaries already ruled:
   scheduler-v2 durable IDs (#4288), which is also what makes handler
   processing idempotent across restarts: an event whose consequence commit
   landed is not re-run.
-- Toolshed routes its own pattern needs through the executor;
-  `background-piece-service` stays sunset (D12).
+- Toolshed routes its own pattern needs through the executor (D12).
 
 ## 3. Architecture
 

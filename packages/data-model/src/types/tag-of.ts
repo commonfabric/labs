@@ -132,7 +132,9 @@ function tagOfUnknownElseNull<PlusType = never>(
 
   if (Array.isArray(value)) {
     return VALUE_TAGS.Array;
-  } else if (isPlainObject(value)) {
+  } else if (isPlainObject(value, false)) {
+    // A record is `Object.prototype`-rooted; a null-prototype object cannot
+    // possibly be one, so it falls through to the `isPlusType()` question.
     return VALUE_TAGS.Object;
   } else if (value instanceof FabricPrimitive) {
     // Note: If `value` turns out to be an invalid `FabricPrimitive`, this will

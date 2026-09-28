@@ -786,11 +786,18 @@ provenance-relevant flow flagged under § Security.
 A runtime is no longer bound to one memory host. `spaceHostMap` seeds known
 routes when storage is constructed. `registerSpaceHost` can register the first
 later hint even when an unseeded space already opened provisionally through the
-default host. These routes contain only an HTTP or HTTPS origin. The home-space
-site table hydrates durable hints into a new runtime. A foreign-host connection
-is an ordinary authenticated memory session. These mechanisms remain interim.
-This design depends only on the property that a space's cells are readable
-wherever the space lives, not on the current map or site-table shape.
+default host. `registerSpaceHostDetailed` applies the same rules and returns the
+reason for a refusal: `known-different-host`, with the host a seed or an
+accepted hint already fixed; `default-route-in-use`, when the space issued a
+stateful operation through the default host: that route stays fixed for the
+session, and the refusal says nothing against the offered host;
+`no-remote-resolution`, from storage that resolves no per-space host; and
+`unspecified`, from storage that gives a verdict alone. A host that is not valid
+throws from both methods. These routes contain only an HTTP or HTTPS origin. The
+home-space site table hydrates durable hints into a new runtime. A foreign-host
+connection is an ordinary authenticated memory session. These mechanisms remain
+interim. This design depends only on the property that a space's cells are
+readable wherever the space lives, not on the current map or site-table shape.
 
 Once a route is in effect, a `cf://host/space/ref` reference resolves exactly
 like a local one. Slug chase, piece metadata, and `pattern:<identity>` source

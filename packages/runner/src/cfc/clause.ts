@@ -2,10 +2,9 @@ import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { parseDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { hashStringOf } from "@commonfabric/data-model";
 import { atomEntails } from "./atom-pattern.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
-import { uniqueCfcAtoms } from "./observation.ts";
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
 /**
  * CNF confidentiality clauses (spec §3.1.8 / §4.2.1; Epic A of
@@ -38,12 +37,6 @@ export const isOrClause = (value: unknown): value is CfcOrClause =>
 export const clauseAlternatives = (
   clause: CfcConfClause,
 ): readonly CfcAtom[] => isOrClause(clause) ? clause.anyOf : [clause];
-
-const compareByCanonicalHash = (left: CfcAtom, right: CfcAtom): number => {
-  const leftHash = hashStringOf(left);
-  const rightHash = hashStringOf(right);
-  return leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0;
-};
 
 /**
  * Canonical form of a clause:

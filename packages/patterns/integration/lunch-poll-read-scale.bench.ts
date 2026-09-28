@@ -1,8 +1,8 @@
 /**
  * A rendered lunch-poll vote update across declared vote-list sizes.
  * Setup and an instrumented diagnostic vote are outside the timed interval;
- * timed votes run with read accounting disabled. This is the client-execution
- * arm and requires a matching local toolshed and shell.
+ * timed votes run with read accounting disabled. `EXPERIMENTAL_SERVER_EXECUTION`
+ * selects the arm, which requires a local toolshed and shell running it too.
  */
 
 import { debugStr } from "@commonfabric/data-model";
@@ -24,6 +24,7 @@ import {
   settleView,
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
+import { readDeclaredTopicsBrowserPosture } from "./topics-browser-posture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
 const SIZES = [74, 296, 1184];
@@ -73,39 +74,40 @@ type DiagnosticGlobal = typeof globalThis & {
   lunchReadSample?: ReadSample;
 };
 
-/** Verifies that the server, served shell, and seeding process execute locally. */
+/**
+ * Verifies that the server, served shell, and seeding process all run the arm
+ * `EXPERIMENTAL_SERVER_EXECUTION` names, which must be set explicitly. The
+ * served shell's arm is read from the bundle `FRONTEND_URL` serves, so a shell
+ * served apart from the toolshed is checked rather than taken on the
+ * toolshed's word.
+ */
 async function verifyPosture(): Promise<void> {
-  const [metaResponse, statsResponse] = await Promise.all([
-    fetch(new URL("api/meta", env.API_URL)),
+  const arm = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
+  if (arm !== "true" && arm !== "false") {
+    throw new Error(
+      "Read-scale benchmark requires EXPERIMENTAL_SERVER_EXECUTION to be `true` or `false`",
+    );
+  }
+  const serving = arm === "true";
+  const [posture, statsResponse] = await Promise.all([
+    readDeclaredTopicsBrowserPosture(
+      env.API_URL,
+      env.FRONTEND_URL,
+      "The read-scale benchmark",
+    ),
     fetch(new URL("api/health/stats", env.API_URL)),
   ]);
-  if (!metaResponse.ok || !statsResponse.ok) {
+  if (!statsResponse.ok) {
     throw new Error("Posture probe failed");
   }
-  const meta = await metaResponse.json();
   const stats = await statsResponse.json();
-  if (
-    Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") !== "false" ||
-    meta.experimental?.serverExecution !== false || stats.servingLoop != null
-  ) {
-    throw new Error("Read-scale benchmark requires explicit client execution");
+  if (posture.served !== serving || (stats.servingLoop != null) !== serving) {
+    throw new Error(`Toolshed does not run serverExecution=${arm}`);
   }
-  if (meta.shellServerExecutionDefine !== "false") {
-    const response = await fetch(new URL("scripts/index.js", env.FRONTEND_URL));
-    const source = await response.text();
-    if (
-      !response.ok ||
-      !source.includes(
-        'var EXPERIMENTAL_SERVER_EXECUTION_DEFINE = true ? "false" : void 0;',
-      )
-    ) {
-      throw new Error(
-        "Cannot verify that the served shell selects client execution",
-      );
-    }
-  }
+  // The posture reader refuses a shell whose arm differs from the toolshed's,
+  // so the shell now runs the same arm.
   note(
-    "[lunch-read-scale] verified toolshed, shell, and seed client: serverExecution=false",
+    `[lunch-read-scale] verified toolshed, shell (from ${posture.clientFrom}), and seed client: serverExecution=${arm}`,
   );
 }
 

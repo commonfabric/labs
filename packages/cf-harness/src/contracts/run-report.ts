@@ -137,6 +137,9 @@ export interface HarnessRunReport {
   /** Requested effort; provider clients reject routes that cannot apply it. */
   reasoningEffort?: string;
 
+  /** Effort requested for the `research` tool's own model calls. */
+  researchReasoningEffort?: string;
+
   promptCacheMode?: "implicit" | "explicit";
   cacheAffinity?: "run" | "custom";
   modelProvider?: HarnessModelProviderId;
@@ -225,6 +228,7 @@ export interface CreateHarnessRunReportOptions {
   };
   model: string;
   reasoningEffort?: string;
+  researchReasoningEffort?: string;
   promptCacheMode?: "implicit" | "explicit";
   cacheAffinity?: "run" | "custom";
   modelTurns: number;
@@ -360,6 +364,9 @@ export const createHarnessRunReport = (
     model: options.model,
     ...(options.reasoningEffort !== undefined
       ? { reasoningEffort: options.reasoningEffort }
+      : {}),
+    ...(options.researchReasoningEffort !== undefined
+      ? { researchReasoningEffort: options.researchReasoningEffort }
       : {}),
     ...(options.promptCacheMode !== undefined
       ? { promptCacheMode: options.promptCacheMode }

@@ -48,6 +48,8 @@ export * from "./components/cf-copy-button/index.ts";
 export * from "./components/cf-draggable/index.ts";
 export * from "./components/cf-drop-zone/index.ts";
 export * from "./components/cf-empty-state/index.ts";
+export * from "./components/cf-hover-card/index.ts";
+export * from "./components/cf-hover-reveal/index.ts";
 export * from "./components/cf-fab/index.ts";
 export * from "./components/cf-field/index.ts";
 export * from "./components/cf-file-download/index.ts";
@@ -79,6 +81,7 @@ export * from "./components/cf-resizable-panel/index.ts";
 export * from "./components/cf-resizable-panel-group/index.ts";
 export * from "./components/cf-screen/index.ts";
 export * from "./components/cf-share-snapshot/index.ts";
+export * from "./components/cf-custody-seal/index.ts";
 export * from "./components/cf-toolbar/index.ts";
 export * from "./components/cf-kbd/index.ts";
 export * from "./components/cf-theme/index.ts";
@@ -107,7 +110,6 @@ export * from "./components/cf-toggle/index.ts";
 export * from "./components/cf-toggle-group/index.ts";
 export * from "./components/cf-toast/index.ts";
 export * from "./components/cf-tool-call/index.ts";
-export * from "./components/cf-updater/index.ts";
 export * from "./components/cf-vgroup/index.ts";
 export * from "./components/cf-voice-input/index.ts";
 export * from "./components/cf-vscroll/index.ts";
@@ -131,6 +133,9 @@ export * from "./components/cf-cell-link/index.ts";
 // Retired (#5132), kept as an inert passthrough because durable pattern source
 // still emits it. See core/retired-element.ts.
 export * from "./components/cf-cell-context/index.ts";
+// Retired with the background piece service, kept as an inert passthrough
+// because durable pattern source may still emit it.
+export * from "./components/cf-updater/index.ts";
 export * from "./components/cf-space-link/index.ts";
 export * from "./components/cf-drag-source/index.ts";
 export * from "./components/cf-drop-zone/index.ts";

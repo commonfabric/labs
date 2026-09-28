@@ -6,7 +6,7 @@ import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
 
 const IMPORTS =
-  `import { computed, pattern, Writable, type Default, type PerUser } from "commonfabric";
+  `import { computed, pattern, Writable, type Default, type PerSession, type PerUser } from "commonfabric";
 interface Box<T> { value: T; extra: string; }
 interface Person { name: string; age: number; }
 `;
@@ -69,6 +69,31 @@ export default pattern<Input>(({ roster }) => ({
       });
     });
 
+    it("keeps the empty default of an array declared on a nested property", async () => {
+      const capture = await captureOf(`
+interface Roster { people: Person[] | Default<[]>; }
+interface Input { roster: Roster; }
+export default pattern<Input>(({ roster }) => ({
+  s: computed(() => roster.people.map((p) => p.name)),
+}));`);
+
+      expect(capture.roster).toEqual({
+        type: "object",
+        properties: {
+          people: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            },
+            default: [],
+          },
+        },
+        required: ["people"],
+      });
+    });
+
     it("keeps the default of a generic array binding", async () => {
       const capture = await captureOf(readingElementsOf(
         `interface Input<T> { c: T[] | ${BOX_DEFAULT}; }`,
@@ -79,6 +104,28 @@ export default pattern<Input>(({ roster }) => ({
         type: "array",
         items: VALUE_ONLY,
         default: [{ value: 1, extra: "x" }],
+      });
+    });
+
+    it("shrinks an array declared through an alias to the element fields read", async () => {
+      const output = await transformSource(
+        `import { lift } from "commonfabric";
+type Item = { name: string; extra: string };
+type Items = Item[];
+export const names = lift((input: { items: Items }) =>
+  input.items.map((item) => item.name)
+);`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const [input] = callSchemas(parseModule(output), "lift");
+
+      expect((input!.properties as Schema).items).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
       });
     });
 
@@ -118,6 +165,20 @@ export default pattern<Input>(({ roster }) => ({
       });
     });
 
+    it("keeps the scope and empty default of a generic array binding", async () => {
+      const capture = await captureOf(readingElementsOf(
+        `interface Input<T> { c: PerUser<T[] | Default<[]>>; }`,
+        "Box<number>",
+      ));
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: VALUE_ONLY,
+        default: [],
+        scope: "user",
+      });
+    });
+
     it("keeps the scope and default of a generic array binding", async () => {
       const capture = await captureOf(readingElementsOf(
         `interface Input<T> { c: PerUser<T[] | ${BOX_DEFAULT}>; }`,
@@ -131,25 +192,115 @@ export default pattern<Input>(({ roster }) => ({
         scope: "user",
       });
     });
+
+    const ARRAY = "PerUser<Box<number>[]>";
+    for (
+      const [form, declaration, wrapper] of [
+        ["an alias of", `type Rec = ${ARRAY};`, ARRAY],
+        [
+          "an alias of an alias of",
+          `type Inner = ${ARRAY};\ntype Rec = Inner;`,
+          ARRAY,
+        ],
+        [
+          "a generic alias of",
+          "type Scoped<T> = PerUser<T[]>;\ntype Rec = Scoped<Box<number>>;",
+          ARRAY,
+        ],
+      ]
+    ) {
+      it(`gives an array typed by ${form} ${wrapper} the schema of the wrapper written in place`, async () => {
+        const aliased = await captureOf(readingElementsOf(
+          `${declaration}\ninterface Input { c: Rec; }`,
+        ));
+        const direct = await captureOf(readingElementsOf(
+          `interface Input { c: ${wrapper}; }`,
+        ));
+
+        expect(direct.c).toMatchObject({ scope: "user" });
+        expect(aliased.c).toEqual(direct.c);
+      });
+    }
+
+    it("keeps the scope and the type of a boolean typed by an alias of a scope wrapper", async () => {
+      // The checker holds `boolean` as `false | true`, so the brand a wrapper
+      // leaves on it is distributed over two literals. The pair is read back
+      // as the type the author wrote, rather than shrunk literal by literal.
+      const capture = await captureOf(`
+type Flag = PerSession<boolean>;
+interface Row { flag: Flag; value: number; extra: string; }
+interface Input { c: Row[]; }
+export default pattern<Input>(({ c }) => ({
+  s: computed(() => c.map((x) => x.flag)),
+}));`);
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { flag: { type: "boolean", scope: "session" } },
+          required: ["flag"],
+        },
+      });
+    });
+
+    it("gives an array typed by an alias of a scope wrapper around a union one alternative per member", async () => {
+      // The brand a wrapper leaves on a union is distributed over its members,
+      // so each member is shrunk on its own. The wrapper written in place
+      // names the union itself, and shrinks it to a single array whose element
+      // type is the union of the members' element types.
+      const capture = await captureOf(readingElementsOf(
+        `type Rec = PerUser<Box<number>[] | Box<string>[]>;
+interface Input { c: Rec; }`,
+      ));
+
+      expect(capture.c).toEqual({
+        anyOf: [
+          { type: "array", items: VALUE_ONLY },
+          {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+          },
+        ],
+        scope: "user",
+      });
+    });
   });
 
   describe("a capture of a scoped cell", () => {
-    it("keeps the readonly narrowing and unread elements of a cell read for its length", async () => {
+    it("keeps the readonly narrowing, unread elements, and scope of a cell read for its length", async () => {
+      // Only the scope wrapper names the scope, so the narrowed and shrunk
+      // cell is put back inside it.
       const capture = await captureOf(`
 interface Input { c: PerUser<Writable<Box<number>[]>>; }
 export default pattern<Input>(({ c }) => ({
   count: computed(() => c.get().length),
 }));`);
-      const { items, asCell } = capture.c as {
-        items: unknown;
-        asCell: (string | { kind: string })[];
-      };
 
-      expect(items).toEqual({ type: "unknown" });
-      expect(
-        asCell.map((entry) => typeof entry === "string" ? entry : entry.kind),
-      )
-        .toEqual(["readonly"]);
+      expect(capture.c).toEqual({
+        type: "array",
+        items: { type: "unknown" },
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps the identity narrowing and scope of a cell whose elements are compared", async () => {
+      const capture = await captureOf(`import { equals } from "commonfabric";
+export default pattern<{ c: PerUser<Writable<Person[]>>; self: Person }>(
+  ({ c, self }) => ({
+    found: computed(() => c.get().some((p) => equals(p, self))),
+  }),
+);`);
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: { type: "unknown", asCell: ["comparable"] },
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
     });
   });
 
@@ -237,10 +388,7 @@ export default pattern<Input>(({ note, content }) => ({
 }));`);
 
       expect(capture.content).toEqual({
-        anyOf: [
-          { anyOf: [{ type: "string" }, { type: "undefined" }] },
-          { type: "undefined" },
-        ],
+        type: ["string", "undefined"],
         asCell: ["readonly"],
       });
       expect(capture.note).toEqual({

@@ -279,6 +279,296 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  it("lowers a canonical alias a conditional user alias resolves to from its own arguments", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Pick2<A, B> = A extends string ? Confidential<B, readonly ["x"]> : never;
+      interface SchemaRoot {
+        direct: Confidential<{ v: string }, readonly ["x"]>;
+        picked: Pick2<"s", { v: string }>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.picked).toEqual(schema.properties?.direct);
+  });
+
+  it("reads the writer a conditional alias passes to `WriteAuthorizedBy` as its branch writes it", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Guarded<X, B> = X extends string ? WriteAuthorizedBy<X, B> : never;
+      type Swapped<B, X> = X extends string ? WriteAuthorizedBy<X, B> : never;
+      type Crossed<A, B> = B extends unknown ? WriteAuthorizedBy<string, A> : never;
+      function save() {}
+      function other() {}
+      interface SchemaRoot {
+        direct: WriteAuthorizedBy<string, typeof save>;
+        guarded: Guarded<string, typeof save>;
+        swapped: Swapped<typeof save, string>;
+        crossed: Crossed<typeof save, typeof other>;
+        directNarrowed: WriteAuthorizedBy<"a", typeof save>;
+        distributed: Guarded<"a" | 1, typeof save>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    expect(schema.properties?.direct).toEqual({
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+        },
+      },
+    });
+    for (const alias of ["guarded", "swapped", "crossed"]) {
+      expect(schema.properties?.[alias]).toEqual(schema.properties?.direct);
+    }
+    // The checked `X` reaches the policy one member at a time, so its payload
+    // is `"a"`, as the checker distributes it, not the `"a" | 1` written.
+    expect(schema.properties?.distributed).toEqual(
+      schema.properties?.directNarrowed,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("reports a writer binding it cannot read as an error", async () => {
+    // `Checked<B>` distributes over `B`, so the binding the policy receives is
+    // read from its type, with no node to read a writer from. Which branch of
+    // `Either` the checker took is not written anywhere a node could say.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+      type Either<X, B, C> = X extends string
+        ? WriteAuthorizedBy<X, B>
+        : WriteAuthorizedBy<X, C>;
+      function save() {}
+      function other() {}
+      interface SchemaRoot {
+        checked: Checked<typeof save>;
+        either: Either<number, typeof save, typeof other>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    expect(schema.properties?.checked).toEqual({ type: "string" });
+    expect(schema.properties?.either).toEqual({ type: "number" });
+    expect(
+      diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]),
+    ).toEqual([
+      ["error", "cfc-write-authorized-by:unread"],
+      ["error", "cfc-write-authorized-by:unread"],
+    ]);
+    expect(diagnostics[0]!.message).toContain("`WriteAuthorizedBy`");
+  });
+
+  it("reports nothing for a policy read from a type alone, which has no reference to spell a binding in", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Checked<B> = B extends unknown ? WriteAuthorizedBy<string, B> : never;
+      function save() {}
+      type SchemaRoot = Checked<typeof save>;
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    const schema = new SchemaGenerator().generateSchema(
+      type,
+      checker,
+      undefined,
+      {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
+
+    expect(schema).toEqual({ type: "string" });
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("lowers a policy whose reduced type lost its name from the reference that names it", async () => {
+    // `null & carrier` is nothing, so the checker reduces each policy below to
+    // its other members, `none` to `never`, with no alias name left.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      function save() {}
+      interface SchemaRoot {
+        single: Confidential<string | null, readonly ["a"]>;
+        several: Confidential<string | number | null, readonly ["a"]>;
+        none: Confidential<null, readonly ["a"]>;
+        nothing: Confidential<never, readonly ["a"]>;
+        impossible: Confidential<string & number, readonly ["a"]>;
+        writer: WriteAuthorizedBy<string | null, typeof save>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    const ifc = { confidentiality: ["a"] };
+    expect(schema.properties?.single).toEqual({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      ifc,
+    });
+    expect(schema.properties?.several).toEqual({
+      type: ["null", "number", "string"],
+      ifc,
+    });
+    expect(schema.properties?.none).toEqual({ type: "null", ifc });
+    // A payload that is itself `never` is the type the checker gave, not a
+    // member the reduction dropped, so the policy accepts nothing, as written.
+    expect(schema.properties?.nothing).toBe(false);
+    expect(schema.properties?.impossible).toBe(false);
+    expect(schema.properties?.writer).toEqual({
+      anyOf: [{ type: "string" }, { type: "null" }],
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+        },
+      },
+    });
+  });
+
+  it("reads a policy's carriers in full, or not at all, when no reference names it", async () => {
+    // Read from a type alone, a policy whose alias name is gone has only its
+    // carriers, which hold its metadata as types. A writer binding is a
+    // `typeof` no type spells, and an `ownerPrincipal` without its
+    // `writeAuthorizedBy` would claim what the author never wrote alone, so
+    // such carriers are not read at all. `NonNullable<…>` intersects with
+    // `{}`, which drops the name as a reduction does.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
+      function save() {}
+      type Labelled = Cfc<Confidential<string[], readonly ["a"]>, { ownerPrincipal: CurrentPrincipal }>;
+      type Owned = Cfc<WriteAuthorizedBy<string[], typeof save>, { ownerPrincipal: CurrentPrincipal }>;
+      interface SchemaRoot {
+        labelled: NonNullable<Labelled | null>;
+        owned: NonNullable<Owned | null>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    const payload = { type: "array", items: { type: "string" } };
+    expect(schema.properties?.labelled).toEqual({
+      ...payload,
+      ifc: {
+        confidentiality: ["a"],
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+      },
+    });
+    expect(schema.properties?.owned).toEqual(payload);
+  });
+
+  it("formats a projection reached through a user alias over the root its reference carries", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type ProjectionPath<T, From extends string, Path extends readonly unknown[]> = Cfc<T, { projection: { from: From; path: Path } }>;
+      type ProjectionOf<Root, PathTuple extends readonly unknown[]> = ProjectionPath<Root, "/", PathTuple>;
+      type Ref<Root, Path extends readonly unknown[]> = {
+        readonly __ct_ref_root__?: Root;
+        readonly __ct_ref_path__?: Path;
+      };
+      type Projection<SourceRef> = SourceRef extends Ref<
+        infer Root,
+        infer Path extends readonly unknown[]
+      > ? ProjectionOf<Root, Path> : never;
+      type MyProjection<R> = Projection<R>;
+      type TitleOf<T> = Projection<Ref<T, readonly ["title"]>>;
+      declare const ref: Ref<{ title: string }, readonly ["nested", "path"]>;
+
+      interface SchemaRoot {
+        direct: Projection<Ref<{ title: string }, readonly ["nested", "path"]>>;
+        aliased: MyProjection<Ref<{ title: string }, readonly ["nested", "path"]>>;
+        directFromValue: Projection<typeof ref>;
+        aliasedFromValue: MyProjection<typeof ref>;
+        directWithoutRoot: Projection<{ title: string }>;
+        aliasedWithoutRoot: MyProjection<{ title: string }>;
+        directBuilt: Projection<Ref<{ title: string }, readonly ["title"]>>;
+        aliasedBuilt: TitleOf<{ title: string }>;
+        directUnion: Projection<Ref<{ title: string }, readonly ["title"]> | undefined>;
+        aliasedUnion: MyProjection<Ref<{ title: string }, readonly ["title"]> | undefined>;
+        directNullable: Projection<Ref<{ title: string } | null, readonly []>>;
+        aliasedNullable: MyProjection<Ref<{ title: string } | null, readonly []>>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.aliased).toEqual(schema.properties?.direct);
+    expect(schema.properties?.aliasedFromValue).toEqual(
+      schema.properties?.directFromValue,
+    );
+    expect(schema.properties?.aliasedWithoutRoot).toEqual(
+      schema.properties?.directWithoutRoot,
+    );
+    expect(schema.properties?.directWithoutRoot).toBe(false);
+    for (const form of ["Built", "Union", "Nullable"]) {
+      expect(schema.properties?.[`aliased${form}`]).toEqual(
+        schema.properties?.[`direct${form}`],
+      );
+    }
+    expect(schema.properties?.aliasedBuilt).toEqual(
+      schema.properties?.aliasedUnion,
+    );
+
+    expect(schema.properties?.directFromValue).toEqual(
+      schema.properties?.direct,
+    );
+    expect(schema.properties?.direct).toEqual({
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      ifc: { projection: { from: "/", path: "/nested/path" } },
+    });
+    expect(schema.properties?.directBuilt).toEqual({
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      ifc: { projection: { from: "/", path: "/title" } },
+    });
+  });
+
   it("expands nested aliases before lowering canonical Cfc metadata", async () => {
     const code = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -795,6 +1085,25 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  it("lowers a parenthesized label", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      interface SchemaRoot { t: Confidential<string, (readonly ["x"])> }
+    `,
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.t).toEqual({
+      type: "string",
+      ifc: { confidentiality: ["x"] },
+    });
+  });
+
   describe("a canonical alias written as another's payload", () => {
     // A canonical alias reached by its own name reads its payload from the
     // reference's own argument node. Read from its type alone, the payload
@@ -1052,6 +1361,68 @@ describe("Schema: CFC authoring aliases", () => {
       expect(schema.ifc).toEqual({ confidentiality: [{ label: "ordinary" }] });
     });
 
+    it("reads a union label element as its authored spelling does", async () => {
+      const { schema } = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly ["a" | "b"]> }
+      `);
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + `
+        interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+      `,
+        "SchemaRoot",
+      );
+      const authored = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      expect(schema.ifc).toEqual((authored.properties?.t as any)?.ifc);
+      expect(schema.ifc).toEqual({ confidentiality: [undefined] });
+    });
+
+    it("reads an `AnyOf` brand whose member is required", async () => {
+      const { schema } = await generate(
+        `
+        type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__: X };
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [AnyOf<readonly ["x", "y"]>]> }
+      `,
+        BASE_ALIASES,
+      );
+      expect(schema.ifc).toEqual({
+        confidentiality: [{ anyOf: ["x", "y"] }],
+      });
+    });
+
+    it("reads a label element that is not a literal as its authored spelling does", async () => {
+      const { schema } = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly [string]> }
+      `);
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + `
+        interface SchemaRoot { t: Confidential<string, readonly [string]> }
+      `,
+        "SchemaRoot",
+      );
+      const authored = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      expect(schema.ifc).toEqual(
+        (authored.properties?.t as any)?.ifc,
+      );
+    });
+
+    it("keeps the type of a parenthesized alias payload", async () => {
+      const { schema } = await generate(`
+        type Outer<T> = Confidential<(Sec<T>), readonly ["b"]>;
+        interface Holder { value: Outer<string> }
+      `);
+      expect(schema).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["a", "b"] },
+      });
+    });
+
     it("lowers a label holding a parameter", async () => {
       const { schema } = await generate(`
         type Tagged<X> = Confidential<string, readonly [X]>;
@@ -1136,6 +1507,233 @@ describe("Schema: CFC authoring aliases", () => {
       `);
       expect(passed.schema.ifc).toEqual({ confidentiality: [] });
       expect(defaulted.schema.ifc).toEqual({ confidentiality: [] });
+    });
+  });
+
+  describe("a label the lowering cannot read", () => {
+    // A label list the lowering reads only in part lowers as no label, or with
+    // a `null` atom; the generator reports it instead of saying nothing.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
+    `;
+
+    const unreadLabels = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      const unread = diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-label:unread"
+      );
+      // A warning: compilation goes on, with the label as far as it was read.
+      expect(unread.map((diagnostic) => diagnostic.severity)).toEqual(
+        unread.map(() => "warning"),
+      );
+      return unread.map((diagnostic) => diagnostic.message);
+    };
+
+    it("reports a union element, naming the label as written", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain(
+        'A label of `Confidential` could not be read: `readonly ["a" | "b"]`',
+      );
+    });
+
+    it("reports a union alternative of an `AnyOf` clause", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Confidential<string, readonly [AnyOf<readonly ["a" | "b"]>]>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+    });
+
+    it("reports a label argument that is not a tuple", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot { t: Confidential<string, string[]> }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("`string[]`");
+    });
+
+    it("reports a label list inside a \`Cfc\` payload", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Cfc<string, { confidentiality: readonly ["a" | "b"] }>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("A label of `Cfc` could not be read");
+    });
+
+    it("reports a label read from a type alone, naming its type", async () => {
+      const { checker, sourceFile } = await createTestProgram(
+        ALIASES + `
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly ["a" | "b"]> }
+      `,
+      );
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const value = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(value, sourceFile),
+        checker,
+        undefined,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      expect(
+        diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]),
+      ).toEqual([["warning", "cfc-label:unread"]]);
+      expect(diagnostics[0]!.message).toContain('"a" | "b"');
+    });
+
+    it("reports an object atom holding a field it cannot read", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Confidential<string, readonly [{ kind: "k"; subject: "a" | "b" }]>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+    });
+
+    it("reports a UI contract's event integrity inside a \`Cfc\` payload", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          t: Cfc<string, {
+            uiContract: {
+              helper: "UiAction";
+              action: "save";
+              trustedPattern: "trusted";
+              requiredEventIntegrity: readonly ["a" | "b"];
+            };
+          }>;
+        }
+      `);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("A label of `Cfc` could not be read");
+    });
+
+    it("names a label substituted into an alias with its literals as written", async () => {
+      // Substitution builds the label's outer node, which holds the parsed
+      // literals of the alias and of the argument, here from two files.
+      const { type, checker } = await getTypeFromFiles(
+        {
+          "/labels.ts": ALIASES.replaceAll("type ", "export type ") + `
+            export type Wrapped<L> = Confidential<string, readonly ["fixed", L]>;
+          `,
+          "/main.ts": `
+            import type { Wrapped } from "./labels.ts";
+            interface SchemaRoot { t: Wrapped<"a" | "b"> }
+          `,
+        },
+        "/main.ts",
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      expect(diagnostics.map((diagnostic) => diagnostic.severity)).toEqual([
+        "warning",
+      ]);
+      expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+        expect.stringContaining('`readonly ["fixed", "a" | "b"]`'),
+      ]);
+    });
+
+    it("names a substituted label holding template literals as written", async () => {
+      const messages = await unreadLabels(`
+        type Wrapped<L> = Confidential<string, readonly ["fixed", L]>;
+        interface SchemaRoot {
+          plain: Wrapped<\`a\` | \`b\`>;
+          spliced: Wrapped<\`prefix-\${"a" | "b"}\`>;
+        }
+      `);
+      expect(messages).toEqual([
+        expect.stringContaining('readonly ["fixed", \`a\` | \`b\`]'),
+        expect.stringContaining('readonly ["fixed", \`prefix-\${"a" | "b"}\`]'),
+      ]);
+    });
+
+    it("reports a trusted pattern it cannot read, standing for the event integrity", async () => {
+      // With no \`requiredEventIntegrity\` of its own, the contract requires
+      // its trusted pattern, whose name here is no literal.
+      const messages = await unreadLabels(`
+        type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+        type TrustedActionUiContract<
+          T,
+          Action extends string,
+          Pattern extends string,
+        > = Cfc<T, {
+          uiContract: {
+            helper: "UiAction";
+            action: Action;
+            trustedPattern: Pattern;
+            requiredEventIntegrity: [Pattern];
+          };
+        }>;
+        type TrustedActionWrite<
+          T,
+          Binding,
+          Action extends string,
+          Pattern extends string,
+        > = Cfc<WriteAuthorizedBy<T, Binding>, {
+          uiContract: {
+            helper: "UiAction";
+            action: Action;
+            trustedPattern: Pattern;
+            requiredEventIntegrity: [Pattern];
+          };
+        }>;
+        function save() {}
+        interface SchemaRoot {
+          contract: TrustedActionUiContract<string, "save", string>;
+          write: TrustedActionWrite<string, typeof save, "save", string>;
+          readable: TrustedActionUiContract<string, "save", "trusted">;
+        }
+      `);
+      expect(messages).toEqual([
+        expect.stringContaining("A label of `TrustedActionUiContract`"),
+        expect.stringContaining("A label of `TrustedActionWrite`"),
+      ]);
+    });
+
+    it("reports nothing for labels of every readable kind", async () => {
+      const messages = await unreadLabels(`
+        interface SchemaRoot {
+          strings: Confidential<string, readonly ["a", "b"]>;
+          objects: Confidential<string, readonly [{ kind: "k"; subject: "s" }]>;
+          clause: Confidential<string, readonly [AnyOf<readonly ["x", "y"]>]>;
+          empty: Confidential<string, readonly []>;
+          carrier: Cfc<string, { confidentiality: readonly ["c"] }>;
+          contract: Cfc<string, {
+            uiContract: {
+              helper: "UiAction";
+              action: "save";
+              trustedPattern: "trusted";
+              requiredEventIntegrity: readonly ["trusted"];
+            };
+          }>;
+        }
+      `);
+      expect(messages).toEqual([]);
     });
   });
 });

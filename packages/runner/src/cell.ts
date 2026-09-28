@@ -110,9 +110,10 @@ import {
 } from "./cfc/label-view-state.ts";
 import {
   cfcLabelViewForCell,
+  cfcLabelViewForResolvedCell,
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
-import { setLinkCfcLabelView } from "./cfc/link-label-view.ts";
+import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -125,6 +126,7 @@ import {
   propagateRendererTrustedEvent,
 } from "./cfc/ui-contract.ts";
 import { createRef } from "./create-ref.ts";
+import { runtimeWritePolicyAuthorization } from "./cfc/types.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import {
   dataUriFromValueWithResolvedLinks,
@@ -2357,7 +2359,7 @@ export class CellImpl<T extends FabricValue>
       // The anchor id source makes sure each object in an array gets its own
       // doc, its id drawn from the frame this cell was made in
       // (`frameAnchorIds()`).
-      diffAndUpdate(
+      const changed = diffAndUpdate(
         this.runtime,
         this.tx,
         writeLink,
@@ -2366,6 +2368,23 @@ export class CellImpl<T extends FabricValue>
         undefined,
         frameAnchorIds(this.#frame),
       );
+
+      // The value at `writeLink` is now the one supplied here, whatever the
+      // diff found already in place, so flow labels may stamp it as a whole
+      // write (`CfcTxState.assertedValueRoots`). Recorded only once the diff
+      // has written: a set that threw part way, or wrote nothing, asserted
+      // nothing.
+      if (changed) {
+        this.tx.recordCfcAssertedValueRoot(
+          {
+            space: writeLink.space,
+            id: writeLink.id,
+            scope: writeLink.scope,
+            path: [...writeLink.path],
+          },
+          runtimeWritePolicyAuthorization,
+        );
+      }
 
       // A whole-value set reshapes what a mergeable op intent (an earlier push /
       // addUnique / increment / removeByValue in this transaction) refers to,
@@ -2640,6 +2659,9 @@ export class CellImpl<T extends FabricValue>
           "help: use in handlers only, ensure cell is typed as array",
       );
     }
+    for (const candidate of value) {
+      refuseElementReadBack("addUnique", candidate);
+    }
     if (!this.#synced) this.sync();
 
     // The read half of this read-modify-write is a content read: labeled
@@ -2725,9 +2747,8 @@ export class CellImpl<T extends FabricValue>
       if (containsCycle(candidate)) {
         return false;
       }
-      // Link-carrying candidates (query-result proxies, raw sigil links)
-      // compare as themselves -- the write boundary passes them through
-      // unconverted, and the strict conversion would reject their
+      // A raw sigil link compares as itself -- the write boundary passes it
+      // through unconverted, and the strict conversion would reject its
       // non-string-keyed internals.
       const comparable = isCellLink(candidate)
         ? candidate
@@ -2821,6 +2842,7 @@ export class CellImpl<T extends FabricValue>
           "help: use in handlers only, ensure cell is typed as array",
       );
     }
+    refuseElementReadBack("removeByValue", ref);
     if (!this.#synced) this.sync();
 
     // The read half of this read-modify-write is a content read: labeled
@@ -4265,11 +4287,18 @@ function subscribeToReferencedDocs<T>(
       }
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
       // so the cfc-metadata read joins this sink's reactive dependency set: a
-      // later label-only write re-fires the sink. `cfcLabelViewForCell` is a
-      // pure store read (no sync); `internalVerifierRead` keeps it reactive but
-      // out of CFC taint. Raw here — the worker redacts before it leaves.
+      // later label-only write re-fires the sink. `cfcLabelViewForResolvedCell`
+      // is a pure store read that also follows a link the path crosses part
+      // way through, since the label vouching for a bound value is stored on
+      // the document that holds it. It kicks no cross-space sync: the value
+      // read above resolved the same link and kicked those targets already,
+      // and the sink re-fires when they arrive. `internalVerifierRead` keeps
+      // it reactive but out of CFC taint. Raw here — the worker redacts before
+      // it leaves.
       const cfcLabel = options.includeCfcLabel
-        ? cfcLabelViewForCell(createCell(runtime, link, tx))
+        ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
+          kickCrossSpaceTargets: false,
+        })
         : undefined;
       sink.cleanup = callback(newValue, cfcLabel);
 
@@ -4472,6 +4501,33 @@ function maybeConvertArrayPathToDataURILink(
     id: dataUriFromValueWithResolvedLinks(candidate.value, baseLink),
     path: candidate.remainingPath,
   };
+}
+
+/**
+ * Throws when `value` was read back through a cell's `get()`: a query-result
+ * view of an element rather than the element's cell.
+ *
+ * `addUnique()` and `removeByValue()` match their argument against the array's
+ * stored elements, by link for a cell and by content for anything else. An
+ * object element is stored as a link to a document of its own, which a value
+ * read back through `get()` is not, so matching one by content can never find
+ * it: a removal would remove nothing and an add would add a duplicate.
+ *
+ * A cell's Reactive proxy (`getAsReactiveProxy()`) carries the same `toCell`
+ * back-pointer a view does, but it is the cell itself and matches by link, so
+ * only a value that is not a cell is refused.
+ *
+ * @throws For a query-result view, naming the cell forms to pass instead.
+ */
+function refuseElementReadBack(method: string, value: unknown): void {
+  if (!isCell(value) && isCellResultForDereferencing(value)) {
+    throw new Error(
+      `\`Cell.${method}()\` takes an element's cell or a plain value, not a ` +
+        "value read back through `get()`\n" +
+        "help: pass the element's cell, `list.key(index)` or " +
+        "`list.elementById(key)`",
+    );
+  }
 }
 
 /**
@@ -4680,12 +4736,15 @@ type CellLinkOptions = {
  * it when asked.
  */
 function linkToCell(cell: Cell<any>, options: CellLinkOptions): SigilLink {
-  const link = cell.getAsLink(options);
+  let link = cell.getAsLink(options);
 
   if (options.includeCfcLabelView) {
     const cfcLabelView = getCarriedCfcLabelView(cell);
     if (cfcLabelView) {
-      setLinkCfcLabelView(link, redactCaveatSourcesForDisplay(cfcLabelView));
+      link = withLinkCfcLabelView(
+        link,
+        redactCaveatSourcesForDisplay(cfcLabelView),
+      );
     }
   }
 

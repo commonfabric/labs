@@ -1,19 +1,20 @@
 /**
  * What a test process learns about its own tests at registration time: the
- * file each `Deno.test` was registered from, and whether this invocation
- * was asked not to run it.
+ * test file each `Deno.test` belongs to, and whether this invocation was
+ * asked not to run it.
  *
  * Both come from wrapping `Deno.test` in a `--preload` module, which runs
  * before every test module and so needs nothing from the test files
- * themselves. The file is read out of the registration stack and written
- * into the run's spool beside the record fragments, where ingestion joins
- * it onto the identities a JUnit report names. The skip list is a file the
- * environment points at, holding the identities this invocation is not to
- * run; a listed test is registered as ignored rather than dropped, so it
- * appears in the report as skipped instead of vanishing.
+ * themselves. The file is the one the process was started on, whichever
+ * module made the call, and it is written into the run's spool beside the
+ * record fragments, where ingestion joins it onto the identities a JUnit
+ * report names. The skip list is a file the environment points at,
+ * holding the identities this invocation is not to run; a listed test is
+ * registered as ignored rather than dropped, so it appears in the report
+ * as skipped instead of vanishing.
  */
 
-import { dirname, join, relative, resolve } from "@std/path";
+import { dirname, fromFileUrl, join, relative, resolve } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type Environment,
@@ -31,9 +32,6 @@ export const NAME_MAP_SUFFIX = ".json";
 /** Variable naming the file holding this invocation's skip list. */
 export const SKIP_LIST_VARIABLE = "CF_TEST_SKIP_LIST";
 
-/** The tail of the bdd re-export's path, wherever the tree is checked out. */
-const BDD_MODULE_SUFFIX = "src/records/bdd.ts";
-
 /**
  * The tails of the paths of modules that register a test on another
  * file's behalf. Deno names a JUnit case's class after the module that
@@ -47,15 +45,10 @@ const BDD_MODULE_SUFFIX = "src/records/bdd.ts";
  * production backstop carried. Ingestion rejects a classname ending in
  * one of these rather than reading it as a test file, and the preload's
  * name map supplies the file instead.
- *
- * Every module named here calls `registerFrameworkModule`, so that the
- * map names the file that asked for the test rather than the module
- * that registered it. The two lists cover one thing from two sides, and
- * a module missing from either loses a file its own way.
  */
 export const MACHINERY_MODULE_SUFFIXES: readonly string[] = [
   "src/records/registration.ts",
-  BDD_MODULE_SUFFIX,
+  "src/records/bdd.ts",
   "src/fixture-runner.ts",
   "test/clock-preload.ts",
   "test/support/silent-backstop-guard.ts",
@@ -134,65 +127,6 @@ export function runDirectory(): string | undefined {
 export type SkipList = Record<string, string[]>;
 
 /**
- * Whether a stack frame's module is part of the test machinery rather
- * than the file under test. The registration wrapper and the bdd
- * re-exports both sit between a test file and `Deno.test`, so their
- * frames are passed over on the way out to the caller.
- */
-const frameworkModules = new Set<string>([import.meta.url]);
-
-/**
- * Declares a module as part of the test machinery, so that a test
- * registered through it is attributed to the file that called it. The bdd
- * re-export module registers itself.
- */
-export function registerFrameworkModule(url: string): void {
-  frameworkModules.add(url);
-}
-
-function isFrameworkModule(url: string): boolean {
-  if (frameworkModules.has(url)) return true;
-  return url.includes("/@std/testing/") || url.includes("/@std/testing@");
-}
-
-const FRAME_URL = /(file:\/\/\/[^\s)]+?):\d+:\d+\)?$/;
-
-/**
- * The module that registered a test, given the stack captured inside the
- * wrapper. Frames belonging to the test machinery are passed over, and
- * the first `file:` frame beyond them is the caller. Returns undefined
- * when the stack names no such frame, which is what a run under a
- * hardened error taming produces.
- */
-export function registeringModule(stack: string): string | undefined {
-  for (const line of stack.split("\n")) {
-    const match = line.trim().match(FRAME_URL);
-    if (match === null) continue;
-    const url = match[1]!;
-    if (isFrameworkModule(url)) continue;
-    return url;
-  }
-  return undefined;
-}
-
-/**
- * The repository-relative path of a `file:` URL, given the repository
- * root. A module outside the root keeps its whole path, which is what a
- * vendored or cached module produces and what the reader then declines to
- * join onto.
- */
-export function relativeToRoot(url: string, root: string): string {
-  let path: string;
-  try {
-    path = decodeURIComponent(new URL(url).pathname);
-  } catch {
-    return url;
-  }
-  const prefix = root.endsWith("/") ? root : `${root}/`;
-  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
-}
-
-/**
  * The repository root enclosing a file, found by climbing to the
  * directory holding `.git`. Undefined outside any repository, and
  * undefined when the climb is not permitted to read the filesystem.
@@ -201,27 +135,45 @@ export function repositoryRootOf(path: string): string | undefined {
   return repositoryRoot(dirname(resolve(path)));
 }
 
-/** The repository root of this process's tree, resolved once. */
-let treeRoot: string | undefined;
-let treeRootResolved = false;
+/**
+ * The repository-relative path of the file a `file:` URL names. Undefined
+ * for a URL naming no file, for a file inside no repository, and where
+ * finding the repository is not permitted to read the filesystem.
+ */
+export function repositoryPathOf(url: string): string | undefined {
+  let path: string;
+  try {
+    path = fromFileUrl(url);
+  } catch {
+    return undefined;
+  }
+  const root = repositoryRootOf(path);
+  return root === undefined
+    ? undefined
+    : relative(root, path).replaceAll("\\", "/");
+}
+
+/** The test file this process runs, resolved once. */
+let runFile: string | undefined;
+let runFileResolved = false;
 
 /**
- * The repository-relative file a registration came from, given the stack
- * captured at the registration. The root is resolved once and kept:
- * every registration in one process comes from one tree.
+ * The repository-relative path of the test file this process runs, which
+ * is the file every test it registers belongs to. Deno runs each test
+ * file in a realm of its own, with that file as the main module, so the
+ * path is the one the command named: the one a skip list is keyed by and
+ * a suite knows as its unit. A test registered from a helper module the
+ * file imports belongs to the file all the same.
+ *
+ * Undefined where the main module is no file inside a repository, and
+ * where finding the repository is not permitted to read the filesystem.
  */
-export function registeringFile(stack: string): string | undefined {
-  const url = registeringModule(stack);
-  if (url === undefined) return undefined;
-  if (!treeRootResolved) {
-    treeRootResolved = true;
-    try {
-      treeRoot = repositoryRootOf(decodeURIComponent(new URL(url).pathname));
-    } catch {
-      treeRoot = undefined;
-    }
+export function runningFile(): string | undefined {
+  if (!runFileResolved) {
+    runFileResolved = true;
+    runFile = repositoryPathOf(Deno.mainModule);
   }
-  return treeRoot === undefined ? undefined : relativeToRoot(url, treeRoot);
+  return runFile;
 }
 
 /**
@@ -363,12 +315,16 @@ export interface RegistrationCapture {
 
 let installed: RegistrationCapture | undefined;
 
+/** Whether anything has asked for the capture yet. */
+let consulted = false;
+
 /**
  * The capture this process installed, for the bdd re-exports to consult.
  * Undefined when no preload ran, which is every invocation that is not
  * recording.
  */
 export function activeCapture(): RegistrationCapture | undefined {
+  consulted = true;
   return installed;
 }
 
@@ -396,16 +352,16 @@ export function installRegistrationCapture(
   // write the replacement map into. With neither, the report is the
   // better source and nothing is wrapped.
   if (skips === undefined && !writableSpool(spool)) return undefined;
-  // The bdd re-export decides whether to wrap as it is evaluated, and
-  // declares itself machinery in the same breath. Finding it declared
-  // here means it decided before this ran and handed back the real
-  // `describe` and `it`, so nothing of ours sits inside a describe chain
-  // any more: no leaf reaches the name map, and no leaf is checked
-  // against the skip list. A skip list says what this invocation is not
-  // to run, so an invocation that cannot apply one stops rather than
-  // running what it was told to leave alone. A name map is metadata, and
-  // losing it is said out loud and carried.
-  if ([...frameworkModules].some((url) => url.endsWith(BDD_MODULE_SUFFIX))) {
+  // The bdd re-export decides whether to wrap as it is evaluated, by
+  // asking for the capture. Finding the capture asked for already means
+  // it decided before this ran and handed back the real `describe` and
+  // `it`, so nothing of ours sits inside a describe chain any more: no
+  // leaf reaches the name map, and no leaf is checked against the skip
+  // list. A skip list says what this invocation is not to run, so an
+  // invocation that cannot apply one stops rather than running what it
+  // was told to leave alone. A name map is metadata, and losing it is
+  // said out loud and carried.
+  if (consulted) {
     const detail = "the bdd re-export loaded before this preload, so no " +
       "leaf reaches the name map or the skip list";
     if (skips !== undefined) throw new Error(`test records: ${detail}`);
@@ -502,7 +458,7 @@ export function buildCapture(
       (through as any)(...args);
       return;
     }
-    const file = registeringFile(new Error().stack ?? "");
+    const file = runningFile();
     if (file !== undefined) names.set(definition.name, file);
     if (capture.skipped(file, definition.name)) {
       through({ ...definition, ...extra, ignore: true });

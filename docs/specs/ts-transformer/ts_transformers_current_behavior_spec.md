@@ -145,6 +145,10 @@ present; no stage handles a missing one.
      printed node is read as its type and never as a node (§12). It is a plain
      identity lookup with **no** `getOriginalNode` fallback, since a node
      derived from a printed one says whatever its deriving changed.
+   - `printedWithin` — for a node the printer built below the root of a
+     print, that root; a node the printer reused from the source is authored
+     syntax and is not marked. `printPieceIn()` finds one held outside its
+     root, which SchemaGeneration refuses (§12). Same identity lookup.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -1047,6 +1051,38 @@ report these through the same collector (deduplicated via §2.2's
   to the local schema use, since the unread node is a print with no source
   position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
   the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
+- **Error** `cfc-write-authorized-by:unread` (`schema-generator.ts`,
+  `writer-binding-diagnostics.ts`) — a `WriteAuthorizedBy` or
+  `TrustedActionWrite*` policy written through another alias whose writer
+  binding the schema generator cannot read: one passed through a parameter a
+  conditional alias checks, say, or a conditional alias with more than one
+  branch other than `never`. Its schema would carry no write restriction, so
+  compilation fails. It fails over stored source (`storedSource`) too: unlike
+  the authoring-shape gates, which that mode demotes to warnings, it guards a
+  write restriction, and a reload that cannot read one does not run without
+  it. A policy written directly is not reported:
+  the direct path (`toSchema<WriteAuthorizedBy<…>>()`, a cell constructor's
+  type argument) mints its claim here, and the validator above refuses a
+  binding that is not a direct `typeof`. A schema read from a type alone has
+  no reference and is not reported either. See §11 of the schema-generator mapping spec,
+  rule 8 of `cfc_authoring_contract.md`, and
+  `test/protected-cell-policy.test.ts`.
+- **Warning** `cfc-label:unread` (`common-fabric-formatter.ts`,
+  `unread-label-diagnostics.ts`) — a CFC label list (`confidentiality`,
+  `integrity`, `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, or a
+  UI contract's `requiredEventIntegrity`, the trusted pattern it requires
+  when it writes none, and the same lists inside a `Cfc<T, M>` payload, its UI
+  contract's included) that the lowering could not read in full: the argument
+  is not a tuple, or something in an atom is not a literal, an object literal,
+  `AnyOf<…>`, or `PolicyOf<typeof …>`, whether the atom itself, a field of an
+  object atom, or an alternative of an `AnyOf` clause (a union of literals,
+  say). The schema carries what it could not read as no label, as an atom that
+  serializes as `null` (an unread value, not an authored `null`), or as a field
+  left out; compilation continues. It names the label as written, a label substitution built
+  included, or its type when it was read from a type alone, and points to the
+  label argument when it has a source position, otherwise to the local schema
+  use. See §11 of the schema-generator mapping spec and
+  `packages/schema-generator/test/schema/cfc-authoring.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
@@ -1387,9 +1423,8 @@ the binding takes its instantiated declared type, which holds every branch.
 
 Pattern result inference reads returned input bindings through the same
 function when a returned binding carries a scope wrapper. Scope detection reads
-both the emitted node and the recovered declaration: the printer can emit
-`unknown` for a scoped generic array, while its declaration still names the
-scope the result must retain. A node printed from a type is registered with that
+the emitted node, and a node printed from a type names the scope wrapper that
+type carries. A node printed from a type is registered with that
 type rather than with the type at the expression, which is the pattern body's
 view: the names a printed node spells
 resolve to nothing where it is emitted, so schema generation reads it by the
@@ -1706,6 +1741,11 @@ If schemas are not already present via type args:
 
 ### 10.5 Cell factories and related APIs
 
+Inferred schema types are retained through `typeToTypeNodeWithRegistry()`,
+including its placeholder when the checker cannot print the type. Schema
+generation reads that placeholder through its `printedFrom` record, so an
+expanded array default keeps both its element schema and `default: []`.
+
 Injected behaviors:
 
 - `cell(...)`, `new Cell(...)`, `new OpaqueCell(...)`, `new Stream(...)`, etc.:
@@ -1715,17 +1755,42 @@ Injected behaviors:
     expressions before falling back to the direct value type
   - direct semantic `any` values emit `true`
   - direct semantic `unknown` values emit `{ type: "unknown" }`
+  - contextual array defaults preserve the element schema and `default: []`,
+    together with any scope such as `PerUser<Writable<T[] | Default<[]>>>`
   - if the value type at a generic helper definition site is an uninstantiated
     type parameter, CTS degrades the emitted schema to `{ type: "unknown" }`
     instead of leaking `{}` or omitting the schema
 - `Cell.for(...)`-style calls:
   - wrap with `.asSchema(schema)` unless already wrapped
+  - contextual `Writable<Default<T[], []>>` and
+    `Writable<T[] | Default<[]>>` both preserve the array's element schema and
+    `default: []`
 - `wish(...)`:
   - append schema as second argument if missing
+  - the schema describes `T`, the requested resource, never the `WishState<T>`
+    the call returns (the runtime wraps it in that state). Without a type
+    argument, `T` is the one TypeScript infers for the call from its contextual
+    type: `const s: WishState<X> = wish(...)` gets `X`'s schema, and a call in a
+    pattern's returned object, whose context names no `T`, gets
+    `{ type: "unknown" }`, as `wish<unknown>(...)` does. A call with no
+    contextual type gets no schema
+  - contextual `WishState<Default<T[], []>>` and
+    `WishState<T[] | Default<[]>>` both inject the array's element schema and
+    `default: []`
   - explicit or contextual unresolved generic type parameters degrade to
     `{ type: "unknown" }`
 - `generateObject(...)`:
-  - ensure options object has `schema` property (merge/spread as needed)
+  - inject a missing `schema` property into the options object (merge/spread as
+    needed). An authored schema takes precedence over the generated schema,
+    including schemas supplied through variables, spreads, quoted keys, or
+    computed keys
+  - the schema describes `T`, the generated value. Without a type argument, use
+    the `T` TypeScript infers for the resolved call from its contextual type:
+    `const s: BuiltInLLMGenerateObjectState<X> = generateObject(...)` gets `X`'s
+    schema, without adding the optionality of the state's `result` field. A
+    call with no contextual type, or whose inferred `T` is `any`, gets no
+    inferred schema. This includes destructuring or a pattern's returned object
+    when its context supplies no result type
   - explicit or contextual unresolved generic result types degrade to
     `{ type: "unknown" }`
 - `sqliteQuery<Row>(...)`:
@@ -1848,22 +1913,77 @@ adjustments:
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
 - a node the type-driven shrink builds keeps the scope wrapper and the default
-  of the type it stands for, at every level it retains. A scope wrapper the
-  type's alias names wraps the shrunk value as `__cfHelpers.PerUser<...>` (or
-  the wrapper of the same name), and a default the type carries in its
-  `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
-  printed from the brand's payload. Branded members that disagree on the value
-  restore no default, and a scope the type carries only as its brand, with no
-  alias left to name it, is not restored. Neither is a scope wrapper around a
-  cell: schema generation reads the wrapper by the scoped type it is registered
-  with, which would undo the capability narrowing of the cell inside it. A
-  default restored on a value that a union also lets be `undefined` or `null`
-  wraps the whole union, since the runtime reads a missing property's default
-  only from the top of the property's schema. A restored `Default` does not
-  count toward the preference for the node-driven candidate, which applies where
-  only that candidate holds an authored `Default` (`getScopeWrapper` and
+  of the type it stands for, at every level it retains. A scope wrapper wraps
+  the shrunk value as `__cfHelpers.PerUser<...>` (or the wrapper of its scope)
+  whether the type's alias names it or the type carries only its scope brand,
+  as a wrapper reached through an alias of the author's own does
+  (`type Rec = PerUser<Inner>`, which the checker reports as `Rec`). A brand
+  the checker distributed over a union is read from its members, each shrunk on
+  its own and wrapped as one union, except that a union of every literal of one
+  type — `boolean`, held as `false | true` — is wrapped as the type it was
+  written as. A brand over an alternative the checker flattened into several
+  intersection members restores no scope, having no type of its own to shrink:
+  the branded type is no substitute, since the node built from it carries the
+  brand into the wrapper, where schema generation refuses the scope it then
+  reads twice. A default the type
+  carries in its `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`,
+  with `V` printed from the brand's payload. Branded members that disagree on
+  the value restore no default. A scope wrapper around a cell is not restored:
+  schema generation reads the wrapper by the scoped type it is registered with,
+  which would undo the capability narrowing of the cell inside it. A default
+  restored on a value that a union also lets be `undefined` or `null` wraps the
+  whole union, since the runtime reads a missing property's default only from
+  the top of the property's schema. A restored `Default` does not count toward
+  the preference for the node-driven candidate, which applies where only that
+  candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
+- a node built from part of a value keeps the value's CFC labels. The literal
+  a property chain builds, each node a type-driven or node-driven shrink
+  builds, and a node the narrowing of cells rebuilds is recorded as narrowing
+  the value it stands for, through the `narrowedFrom` schema hint, with the
+  node the value's declaration writes where one is at hand; schema generation
+  adds the labels that value's own formatting attaches at its top (the
+  schema-generator mapping spec's §13). A capture leaf printed from its type
+  stands for the value its declaration spells, which the print may not, as
+  with a `typeof` binding in a label. A node built from part of a narrowed
+  node or of such a print, rebuilt from one by a later pass, or built from the
+  type of one narrows the same value, its parts matched by property name and
+  array element (`recordNarrowedFrom` and `recordDeclaredValue` in
+  `core/cross-stage-state.ts`; `recordNarrowing` and `carryNarrowing` in
+  `transformers/type-shrinking.ts`; `test/narrowed-capture-labels.test.ts`).
+  A rest binding (`{ ...rest }`), and a binding under a computed key, reads
+  no one property, so no property's declaration spells its value
+- a pass that reads the structure of a node printed from a type reads the
+  print's unfolding in its place: a node of the print's own kind built from the
+  type it was printed from, each type node below it printed afresh from its own
+  type (`unfoldPrint` in `transformers/type-shrinking.ts`). Node-driven
+  shrinking and the application of identity-only paths unfold a literal, a union
+  (into one print for each of its members), an array (`T[]` or `readonly T[]`,
+  as the printer writes one), and a cell reference. The narrowing of cells to
+  their observed capability unfolds a literal, and reads the value of a printed
+  cell, or of each cell in a printed nullable union, printed from the type
+  arguments its wrapper was given. A union carrying a `Default` brand, and an
+  object with a property keyed by a symbol, say something only as a whole and do
+  not unfold; a print of any other kind does not either. A print that does not
+  unfold is kept whole. A print thus goes through each pass as the authored node
+  for its type would, every part a pass keeps is read by its type, and no pass
+  builds a node from a piece of a print
+  (`test/printed-type-node-schema.test.ts`). A scoped cell
+  (`PerUser<Writable<T>>`), whose scope only its alias names, is rebuilt when
+  the narrowing of cells reaches its scope wrapper directly: its cell, printed
+  afresh, is narrowed inside a rebuilt scope wrapper registered with the scoped
+  cell's type, through which node-driven shrinking and identity-only paths then
+  reach the cell. Schema generation reads the scope from the wrapper's name and
+  the cell from the node inside it. Capability narrowing does not reach a scoped
+  cell through the printed union of an optional member, so that cell keeps its
+  authored capability and value shape. Node-driven shrinking keeps the print of
+  a scoped cell whole. Two rules keep what a print says through the unfolding: a
+  narrowed wrapper around a nullable cell's value alternatives is not registered
+  with the union's type, which schema generation would read in the wrapper's
+  place; and the declared members of a generic declaration, written in terms of
+  parameters an instantiation binds, do not shrink that instantiation
+  (`resolveMembersFromDeclaration`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property
@@ -2284,7 +2404,11 @@ Special path:
   resolve, an `import("…")` type, or the brand of an expanded `Default` never
   reaches node analysis, and a type the checker will not print is read from
   that type rather than from its `unknown` placeholder
-  (`test/printed-type-node-schema.test.ts`).
+  (`test/printed-type-node-schema.test.ts`). A type argument holding a type
+  node the printer built below a print, outside that print, is refused with an
+  error: the generator would read it as a node, and it says only part of what
+  the type does (`CrossStageState.printPieceIn()`; §10.7 says how the passes
+  that read inside a print avoid building one).
 - the generator uses its node-based path when the resolved type is `any` and
   the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
   argument, synthetic or not, contains an `any` or `unknown` keyword anywhere,
@@ -3077,8 +3201,11 @@ stage gated on a harness-supplied option rather than on source content: its
 `filter` requires `TransformationOptions.patternCoverage` to be set and the
 file not to be a declaration file, and a filtered-out stage returns the source
 file untouched (`Transformer.toFactory`, `src/core/transformers.ts`). Nothing
-inside this package ever sets the option; it exists for the runner's `cf test`
-pattern-coverage mechanism described in `docs/development/COVERAGE.md`.
+inside this package ever sets the option; it exists for the authored-pattern
+coverage mechanism described in `docs/development/COVERAGE.md`. In the full
+run, that coverage comes from three suites: `pattern-unit`, through `cf test`,
+and `pattern-reload` and the arm of `pattern-integration` with server execution
+off, through the browser worker's runtime.
 
 ### 16.1 Enablement and plumbing
 
@@ -3093,10 +3220,15 @@ The option is constructed end-to-end by the runner/CLI chain:
 
 1. `cf test` resolves a coverage directory from the `--pattern-coverage-dir`
    flag, falling back to the `CF_PATTERN_COVERAGE_DIR` environment variable
-   (`packages/cli/commands/test.ts`). Per `docs/development/COVERAGE.md`, that
-   variable is read in exactly this one place — jobs running plain `deno test`
-   or talking to a Toolshed server never reach this code, so setting it there
-   has no effect.
+   (`packages/cli/commands/test-command.ts`). The browser-driven integration
+   suites do not run through `cf test`. Their harness,
+   `packages/integration/pattern-coverage.ts`, reads the same variable to turn
+   the browser worker's collector on. The worker's runtime takes its collector
+   through `RuntimeOptions.patternCoverage`, as `docs/development/COVERAGE.md`
+   describes. Two pattern integration tests also read it, since they run a
+   pattern in the test process: `recommend-a-book.test.ts` builds a collector
+   of its own, and `agent-book-inputs.test.ts` hands the directory to
+   `runTestPattern`.
 2. The test runner builds one `PatternCoverageCollector` per test file and
    passes it as the `patternCoverage` harness option to
    `engine.compileAndEvaluateModules` (`packages/cli/lib/test-runner.ts`; the
@@ -3327,10 +3459,10 @@ end_of_record
 `<url-encoded relative test path>[--<participant>].pattern-coverage.lcov`
 file per test into the coverage directory (`patternCoverageOutputPath`;
 `packages/cli/lib/test-runner.ts`). Per `docs/development/COVERAGE.md`, those
-files feed the CI coverage-debt gate as the sole source of covered-line data
-for authored pattern files (currently only the `pattern-unit-test` job), and
-`DA` records exist only for lines the instrumentation could name — the
-denominator caveat documented there.
+files feed the repository-wide coverage figure as a source of covered-line data
+for authored pattern files (the `pattern-unit` suite), and `DA` records exist
+only for lines the instrumentation could name — the denominator caveat
+documented there.
 
 Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV

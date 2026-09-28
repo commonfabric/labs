@@ -85,6 +85,24 @@ interface RootedSchemaVisit {
   parent?: RootedSchemaVisit;
 }
 
+/** A union being narrowed without consuming another path segment. */
+interface SchemaPathExpansion {
+  /** Definition map against which the branches resolve local references. */
+  defs: JSONSchemaObj["$defs"];
+
+  /** The compound branch list being expanded. */
+  branches: readonly JSONSchema[];
+
+  /** A co-declared `oneOf`, when `branches` is the `anyOf` list. */
+  oneOf: JSONSchemaObj["oneOf"];
+
+  /** Number of path segments still to consume at this union. */
+  remaining: number;
+
+  /** The enclosing union expansion, if any. */
+  parent: SchemaPathExpansion | undefined;
+}
+
 const rootedSchemaVisitIsActive = (
   visit: RootedSchemaVisit | undefined,
   root: object,
@@ -664,6 +682,7 @@ export class ContextualFlowControl {
     extraConfidentiality: Set<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
+    expanding?: SchemaPathExpansion,
   ): JSONSchema {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
@@ -685,11 +704,9 @@ export class ContextualFlowControl {
           cursor,
           { $defs: defs },
         );
-        // Resolve schema refs can resolve to a fullSchema, in which case we
-        // need to replace our defs.
-        if (isObjectOrArray(cursor) && cursor.$defs) {
-          defs = cursor.$defs;
-        }
+        // The resolved view carries the definitions its local refs need.
+        // A view without a map must also clear the referrer's definitions.
+        defs = isObjectOrArray(cursor) ? cursor.$defs : undefined;
       }
       // A false schema spelled as an object — `{ not: true }`, which is how a
       // reference to a `false` definition resolves — admits nothing, and
@@ -728,6 +745,29 @@ export class ContextualFlowControl {
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
+        // A type-list arm replaces its type with a scalar. Only a compound
+        // can recur here without consuming a path segment.
+        const branches = Array.isArray(cursorObject.type)
+          ? undefined
+          : cursorObject.anyOf ?? cursorObject.oneOf;
+        let nextExpansion = expanding;
+        if (branches !== undefined) {
+          const oneOf = cursorObject.oneOf;
+          const remaining = path.length - index;
+          for (let visit = expanding; visit; visit = visit.parent) {
+            if (
+              visit.defs === defs && visit.branches === branches &&
+              visit.oneOf === oneOf && visit.remaining === remaining
+            ) return false;
+          }
+          nextExpansion = {
+            defs,
+            branches,
+            oneOf,
+            remaining,
+            parent: expanding,
+          };
+        }
         const options = typeless
           ? [{ ...cursorObject, type: "object" as const }, {
             ...cursorObject,
@@ -748,6 +788,7 @@ export class ContextualFlowControl {
             extraConfidentiality,
             defaultEmptyProperties,
             defaultMissingProperty,
+            nextExpansion,
           );
           if (typeof optSchema !== "boolean" && typeof optSchema !== "object") {
             return optSchema;
@@ -1186,6 +1227,30 @@ export function resolveExternalRootRefForStructure(
     return internSchema(rest) as JSONSchemaObj;
   }
   return resolved;
+}
+
+/**
+ * Like {@link resolveExternalRootRefForStructure}, except that a local root
+ * `$ref` resolves too, against the `$defs` the schema carries: a definition
+ * declares the structure of every position of its type, the handle it holds
+ * among it, whichever form the reference to it takes. Any other reference reads
+ * as the schema itself without consulting the resolver: one naming a
+ * definition the schema does not carry, as a union option read apart from the
+ * `$defs` it names does, where the resolver would log the miss, and one naming
+ * an embedded schema such as `vnode.json`. So does a local reference that
+ * resolves to a boolean.
+ */
+export function resolveRootRefForStructure(
+  schema: JSONSchemaObj,
+): JSONSchemaObj {
+  const ref = schema.$ref;
+  if (typeof ref !== "string") return schema;
+  if (isExternalSchemaRef(ref)) {
+    return resolveExternalRootRefForStructure(schema);
+  }
+  if (localDefinition(schema, ref) === undefined) return schema;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
+  return isObjectNotArray(resolved) ? resolved : schema;
 }
 
 /** Whether the schema's body (its `$defs` excluded) names a local `#/...`. */

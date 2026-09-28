@@ -28,7 +28,7 @@ type Call = [name: string, ...args: unknown[]];
  * categories those roll up to.
  */
 const TRACED_METHODS = [
-  "visitAnyValue",
+  "visitUnhandledValue",
   "visitBigint",
   "visitBoolean",
   "visitFabricArray",
@@ -82,22 +82,14 @@ for (const name of TRACED_METHODS) {
     traced;
 }
 
-/** Calls `visitValue()` on a fresh `Tracing`, returning it and the result. */
-function trace(
-  value: unknown,
-  tag: FabricValuePlusTag | null,
-): { vis: Tracing; result: VisitResult<Date, unknown> } {
-  const vis = new Tracing();
-  const result = vis.visitValue(value as Date, tag);
-
-  return { vis, result };
-}
+/** The error `visitUnhandledValue()` throws, as a case expects it. */
+const UNHANDLED = /Cannot visit unhandled value: /;
 
 /** The part of a primitive's chain after its category method. */
 function primitiveTail(value: unknown, tag: string): Call[] {
   return [
     ["visitPrimitiveValue", value, tag],
-    ["visitAnyValue", value, tag],
+    ["visitUnhandledValue", value, tag],
   ];
 }
 
@@ -121,7 +113,8 @@ const JS_PRIMITIVE_CASES = {
 
 /**
  * One case per tag: a label, a value, its tag, the calls expected in order, and
- * the expected result.
+ * either the expected result or, as a `RegExp`, the error expected to be
+ * thrown.
  */
 const CASES: [string, unknown, FabricValuePlusTag, Call[], unknown][] = [];
 
@@ -132,7 +125,7 @@ for (const tag of Object.values(JS_PRIMITIVE_TYPE_VALUE_TAGS)) {
     [method, ...args],
     ["visitJsPrimitiveValue", value, tag],
     ...primitiveTail(value, tag),
-  ], undefined]);
+  ], UNHANDLED]);
 }
 
 for (
@@ -148,7 +141,7 @@ for (
     [`visit${name}`, value],
     ["visitFabricPrimitiveValue", value, tag],
     ...primitiveTail(value, tag),
-  ], undefined]);
+  ], UNHANDLED]);
 }
 
 {
@@ -172,8 +165,8 @@ for (
     ], DO_RECURSE_VALUES],
     ["the tag `PlusType`", date, "PlusType", [
       ["visitPlusType", date],
-      ["visitAnyValue", date, "PlusType"],
-    ], undefined],
+      ["visitUnhandledValue", date, "PlusType"],
+    ], UNHANDLED],
   );
 }
 
@@ -189,12 +182,18 @@ describe("DefaultValueVisitor", () => {
         );
       });
 
-      for (const [label, value, tag, calls, result] of CASES) {
+      for (const [label, value, tag, calls, expected] of CASES) {
         it(`calls the method for ${label}, which rolls up through its categories`, () => {
-          const traced = trace(value, tag);
+          const vis = new Tracing();
+          const run = () => vis.visitValue(value as Date, tag);
 
-          expect(traced.vis.calls).toEqual(calls);
-          expect(traced.result).toBe(result);
+          if (expected instanceof RegExp) {
+            expect(run).toThrow(expected);
+          } else {
+            expect(run()).toBe(expected);
+          }
+
+          expect(vis.calls).toEqual(calls);
         });
       }
 
@@ -238,15 +237,26 @@ describe("DefaultValueVisitor", () => {
       });
     });
 
-    describe("the `visited*()` methods", () => {
+    describe("the `mapped*()` methods", () => {
       it("return `undefined`", () => {
         const vis = new Tracing();
 
-        expect(vis.visitedFabricArrayElement([1], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricArrayGap([], 0, 1)).toBeUndefined();
-        expect(vis.visitedFabricInstance(new FabricMap(new Map()), {}))
+        expect(vis.mappedFabricArrayElement([1], 0, 1)).toBeUndefined();
+        expect(vis.mappedFabricInstanceState(new FabricMap(new Map()), {}))
           .toBeUndefined();
-        expect(vis.visitedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
+        expect(vis.mappedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
+      });
+    });
+
+    describe("the `visiting*()` methods", () => {
+      it("return `undefined`", () => {
+        const vis = new Tracing();
+
+        expect(vis.visitingFabricArrayElement([1], 0, 1)).toBeUndefined();
+        expect(vis.visitingFabricArrayGap([], 0, 1)).toBeUndefined();
+        expect(vis.visitingFabricInstanceState(new FabricMap(new Map()), {}))
+          .toBeUndefined();
+        expect(vis.visitingFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
       });
     });
   });
@@ -271,7 +281,7 @@ describe("DefaultValueVisitor", () => {
       const vis = new Tracing();
       const date = new Date(0);
 
-      visitValue([date], vis);
+      expect(() => visitValue([date], vis)).toThrow(UNHANDLED);
       expect(vis.calls.filter(([name]) => name === "visitPlusType")).toEqual([
         ["visitPlusType", date],
       ]);

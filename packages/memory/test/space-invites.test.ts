@@ -175,6 +175,31 @@ describe("space-invites", () => {
     inFragment.hash = `${inFragment.hash.slice(1)}&inviter=${space}`;
     expect(() => parseInviteLink(inFragment)).toThrow("invalid-link");
   });
+  it("carries no access in the link, so none can be edited in or out of it", () => {
+    // Access lives only in the server's invitation row, fixed by the owner's
+    // signed create request. A link names where and which invitation, never
+    // what it grants, so an OWNER link and a WRITE link have the same shape.
+    const invite = {
+      host: "https://example.com",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://shell.example", invite);
+    expect([...link.searchParams.keys()].sort()).toEqual([
+      "host",
+      "invite",
+      "space",
+    ]);
+    expect(parseInviteLink(link)).toEqual(invite);
+    for (const access of ["OWNER", "WRITE", "READ"]) {
+      const inQuery = new URL(link);
+      inQuery.searchParams.set("access", access);
+      expect(() => parseInviteLink(inQuery)).toThrow("invalid-link");
+      const inFragment = new URL(link);
+      inFragment.hash = `${inFragment.hash.slice(1)}&access=${access}`;
+      expect(() => parseInviteLink(inFragment)).toThrow("invalid-link");
+    }
+  });
   it("generates invite IDs that begin with a letter and vary with the first random byte", () => {
     const ids = new Set<string>();
     for (let first = 0; first < 256; first++) {

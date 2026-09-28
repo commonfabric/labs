@@ -74,6 +74,7 @@ export abstract class BaseFabricCodec<
     typeTag: string,
     state: State,
     env: LiveEnvironment,
+    mutable?: boolean,
   ): FabricValuePlus<PlusType>;
 
   /**

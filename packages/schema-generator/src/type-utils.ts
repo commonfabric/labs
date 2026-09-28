@@ -1004,13 +1004,25 @@ export function extractValueFromLiteralType(
     const props = typeChecker.getPropertiesOfType(type);
     const result: Record<string, FabricValue> = {};
     for (const prop of props) {
-      const name = String(prop.escapedName as string);
-      // Symbol-keyed members (`__@...`) mean this is a brand, not data.
-      if (name.startsWith("__@")) return undefined;
+      // Symbol-keyed members (`__@...`) mean this is a brand, not data. Only
+      // the escaped name tells the two apart: escaping gives a written name
+      // that starts with `__` a third underscore, so the value is keyed by the
+      // unescaped name instead.
+      if (String(prop.escapedName as string).startsWith("__@")) {
+        return undefined;
+      }
       const propType = typeChecker.getTypeOfSymbol(prop);
       const extracted = extractValueFromLiteralType(propType, typeChecker);
       if (!extracted) return undefined;
-      result[name] = extracted.value;
+      // Defined as an own property: `result[name] =` with the name
+      // `__proto__` would set the prototype on an engine that keeps
+      // `Object.prototype.__proto__`.
+      Object.defineProperty(result, prop.getName(), {
+        value: extracted.value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return { value: result };
   }

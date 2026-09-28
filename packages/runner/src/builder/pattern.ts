@@ -5,6 +5,7 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
@@ -44,6 +45,12 @@ import {
   SUBPATTERN_ARGUMENT_BUILTIN_REFS,
 } from "./builtin-replayability.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
+import {
+  pushOntoFrameStack,
+  pushOntoRootFrameStack,
+  removeFromFrameStack,
+  topFrame,
+} from "./frame-context.ts";
 import { toJSONMethod } from "./json-member.ts";
 import { connectInputAndOutputs } from "./node-utils.ts";
 import { brandTrustedPattern, noteDerivedCopy } from "./pattern-metadata.ts";
@@ -51,6 +58,7 @@ import { reactive } from "./reactive.ts";
 import {
   type CellAliasResolver,
   moduleToEncodableForm,
+  moduleWithAliasBindings,
   patternToEncodableForm,
   withAliasBindings,
 } from "./to-encodable-form.ts";
@@ -581,11 +589,20 @@ function factoryFromPattern<T, R>(
   const resultSchema = resultSchemaArg ?? {};
 
   const serializedNodes = Array.from(allNodes).map((node) => {
-    const module = withAliasBindings(
-      node.module,
-      resolveCellAlias,
-      false,
-    ) as unknown as Module;
+    // A module binds through its members, once it is known to be an inert
+    // plain object; rebuilding any other one member by member would run a
+    // getter, or drop a symbol or non-enumerable key, so the value walk gets it
+    // and refuses it. A node whose module is a pattern or a reactive (the
+    // dynamic-module arm, which no builder makes yet) binds it as the value it
+    // is: a graph for a pattern, an alias for a reactive. The serialized
+    // `Node.module` type does not yet say so, hence the assertion.
+    const module = (isInertPlainObject(node.module) && isModule(node.module))
+      ? moduleWithAliasBindings(node.module, resolveCellAlias, false)
+      : withAliasBindings(
+        node.module,
+        resolveCellAlias,
+        false,
+      ) as unknown as Module;
     const inputs = withAliasBindings(
       node.inputs,
       resolveCellAlias,
@@ -1153,8 +1170,6 @@ function anonymousSpaceName(frame: Frame): string {
   return toURI(createRef({ inSpace: ordinal }, frame.cause));
 }
 
-const frames: Frame[] = [];
-
 /**
  * Pushes a frame that inherits the runtime, transaction, space and
  * implementation identity of the frame beneath it, unless it is a
@@ -1182,8 +1197,24 @@ export function pushFrame(frame: Partial<Frame> = {}): Frame {
     ...frame,
   };
 
-  frames.push(result);
+  pushOntoFrameStack(result);
   return result;
+}
+
+/**
+ * Pushes `runtime`'s default frame onto the root frame stack, whatever context
+ * the call is made in, and returns it. It carries the runtime and nothing else:
+ * whatever frame is on top when a runtime is constructed belongs to someone
+ * else, and its space and transaction would outlive it on the root stack.
+ */
+export function pushRuntimeDefaultFrame(runtime: Runtime): Frame {
+  const frame: Frame = {
+    reactives: new Set(),
+    generatedIdCounter: 0,
+    runtime,
+  };
+  pushOntoRootFrameStack(frame);
+  return frame;
 }
 
 export function pushFrameFromCause(
@@ -1235,24 +1266,24 @@ export function pushFrameFromCause(
     ...(eventTime !== undefined && { eventTime }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
-  frames.push(frame);
+  pushOntoFrameStack(frame);
   return frame;
 }
 
 /**
- * Removes `frame` from the stack, wherever on it the frame sits: disposing one
- * runtime while another has pushed a frame over it removes one from the middle.
- * A frame that is no longer on the stack is left alone.
+ * Removes `frame` from the current frame context's stack or the root stack,
+ * wherever on it the frame sits (see `removeFromFrameStack`).
  */
 export function popFrame(frame: Frame): void {
-  const index = frames.indexOf(frame);
-  if (index !== -1) {
-    frames.splice(index, 1);
-  }
+  removeFromFrameStack(frame);
 }
 
+/**
+ * Returns the innermost frame visible to the current code: the top of its own
+ * frame context's stack, else of the root stack (see `frame-context.ts`).
+ */
 export function getTopFrame(): Frame | undefined {
-  return frames.length ? frames[frames.length - 1] : undefined;
+  return topFrame();
 }
 
 /** The full type of the `pattern` function including all overloads. */

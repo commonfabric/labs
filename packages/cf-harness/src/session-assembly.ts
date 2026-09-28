@@ -168,6 +168,10 @@ export interface HarnessSessionConfig {
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   browserAccess?: HarnessBrowserAccessLease;
   reasoningEffort?: string;
+
+  /** Reasoning effort for the `research` tool's own model turns. */
+  researchReasoningEffort?: string;
+
   compactThreshold?: number;
   promptCacheMode?: "implicit" | "explicit";
 
@@ -356,6 +360,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.reasoningEffort !== undefined
       ? { reasoningEffort: config.reasoningEffort }
+      : {}),
+    ...(config.researchReasoningEffort !== undefined
+      ? { researchReasoningEffort: config.researchReasoningEffort }
       : {}),
     ...(config.compactThreshold !== undefined
       ? { compactThreshold: config.compactThreshold }

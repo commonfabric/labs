@@ -231,20 +231,17 @@ describe("the pattern and package suites", () => {
       .toEqual(["runner", "shell"]);
   });
 
-  it("owns both deployed-topology posture gates", async () => {
+  it("owns the deployed-topology posture gate", async () => {
     const suite = byId("deployed-topology");
     expect(suite.units).toEqual([
-      "packages/background-piece-service/integration/posture-gate.test.ts",
       "packages/cf-harness/integration/fabric-session-posture-gate.test.ts",
     ]);
-    expect(suite.needs).toContain("bg-piece-service-binary");
     expect(suite.needs).toContain("toolshed");
     const made = await suite.command(
       suite.units.map((unit) => ({ unit, skip: [] })),
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
     );
     expect(made.map((invocation) => invocation.junit?.[0]?.scope)).toEqual([
-      "background-piece-service",
       "cf-harness",
     ]);
   });

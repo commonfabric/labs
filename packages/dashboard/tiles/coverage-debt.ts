@@ -23,19 +23,13 @@
 
 import type { Status, Tile, TileView } from "../types.ts";
 import {
-  type CoverageDebtGitHub,
   type CoverageDebtSample,
+  type CoverageDebtSource,
   CoverageDebtStore,
+  liveCoverageDebtSource,
   refreshCoverageDebt,
 } from "../coverage-debt-history.ts";
-import {
-  friendlyError,
-  github,
-  githubDownload,
-  groupDigits,
-  median,
-  sparkline,
-} from "../lib.ts";
+import { friendlyError, groupDigits, median, sparkline } from "../lib.ts";
 import { CHART_HIGHLIGHT, CHART_LINE } from "../theme.ts";
 
 /** Days of history the tile charts. */
@@ -60,10 +54,11 @@ export const COVERAGE_STALE_DAYS = 5;
 
 /**
  * How often the tile looks for a landing. The figure it reports cannot exist
- * sooner than about twelve minutes after a commit lands, because that is when
- * the `main` run's Coverage Check finishes and uploads it, and commits land
- * about that often. So five minutes tracks the number about as closely as the
- * number can be known, and a refresh that finds nothing new costs one request.
+ * until the `main` run for a landed commit has finished and the relay has
+ * stored that run's coverage measurements, which takes longer than this, so
+ * five minutes tracks the number about as closely as the number can be known.
+ * A refresh that finds nothing new costs a listing for each of today and
+ * yesterday.
  */
 export const COVERAGE_REFRESH_MS = 5 * 60_000;
 
@@ -182,39 +177,33 @@ export function coverageDebtView(
   };
 }
 
-/** Builds the tile against a store, a clock and a GitHub client. */
+/** Builds the tile against a history file, a clock and the record store. */
 export function makeCoverageDebt(
   options: {
-    github?: CoverageDebtGitHub;
+    source?: CoverageDebtSource;
     store?: CoverageDebtStore;
     now?: () => number;
   } = {},
 ): Tile {
-  const client: CoverageDebtGitHub = options.github ??
-    { json: github, download: githubDownload };
+  const source = options.source ?? liveCoverageDebtSource();
   let store = options.store;
   return {
     label: "coverage debt",
     intervalMs: COVERAGE_REFRESH_MS,
-    async collect(ctx): Promise<TileView> {
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) {
-        return { status: "unknown", value: "—", sub: "set GH_TOKEN" };
-      }
+    async collect(): Promise<TileView> {
       store ??= new CoverageDebtStore();
       const now = options.now?.() ?? Date.now();
       const history = await refreshCoverageDebt({
-        token,
         days: COVERAGE_WINDOW_DAYS,
         now,
-        github: client,
+        source,
         store,
       });
       if (history.samples.length === 0 && history.error !== undefined) {
         const message = history.error instanceof Error
           ? history.error.message
           : String(history.error);
-        console.error("coverage debt: could not read main runs:", message);
+        console.error("coverage debt: could not read the store:", message);
         return {
           status: "unknown",
           value: "—",

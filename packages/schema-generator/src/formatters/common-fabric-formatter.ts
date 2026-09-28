@@ -52,7 +52,13 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { combineIfcLabels } from "../ifc-labels.ts";
+import { withIfcLabels } from "../ifc-labels.ts";
+import {
+  holdsUnreadLabel,
+  holdsUnreadMetadataLabel,
+  reportUnreadLabel,
+} from "../unread-label-diagnostics.ts";
+import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
@@ -64,6 +70,15 @@ const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
  * reads (`undefined` written as a type), so it cannot stand for this.
  */
 const UNREAD: unique symbol = Symbol("unread syntax");
+
+/**
+ * Whether `name`, an alias this formatter lowers, is lowered from its syntax.
+ * That is every one but `Projection`, a conditional type: what it is depends on
+ * its argument (a `Ref<Root, Path>` projects to `ProjectionOf<Root, Path>`,
+ * anything else to `never`, a union member by member), so the lowering reads
+ * the type the checker resolves it to, as it does the direct spelling.
+ */
+const lowersFromSyntax = (name: string): boolean => name !== "Projection";
 
 /**
  * The type of the value `member` holds, given `type`, its type: `type` less
@@ -315,6 +330,65 @@ const holdsTypeParameter = (
     holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
 
 /**
+ * The one branch of the conditional type `body` that is not `never`, reached
+ * through nested conditionals and parentheses, when it is a reference. The
+ * checker resolves `body` to that branch or to `never`, so an alias it
+ * resolves `body` to is that branch's. With it come the type parameters that
+ * the checker may bind differently from what is written: each of `parameters`
+ * a conditional checks, which it reads member by member over a union, and each
+ * one a conditional infers.
+ */
+const soleConditionalBranch = (
+  body: ts.TypeNode,
+  checker: ts.TypeChecker,
+  parameters: readonly ts.TypeParameterDeclaration[],
+):
+  | {
+    branch: ts.TypeReferenceNode;
+    unreadable: ts.TypeParameterDeclaration[];
+  }
+  | undefined => {
+  if (!ts.isConditionalTypeNode(unwrapTypeParentheses(body))) return undefined;
+  const leaves: ts.TypeNode[] = [];
+  const unreadable: ts.TypeParameterDeclaration[] = [];
+  const collectInferred = (node: ts.Node): void => {
+    if (ts.isInferTypeNode(node)) unreadable.push(node.typeParameter);
+    ts.forEachChild(node, collectInferred);
+  };
+  const visit = (node: ts.TypeNode): void => {
+    const bare = unwrapTypeParentheses(node);
+    if (!ts.isConditionalTypeNode(bare)) {
+      if (bare.kind !== ts.SyntaxKind.NeverKeyword) leaves.push(bare);
+      return;
+    }
+    unreadable.push(
+      ...parameters.filter((parameter) =>
+        holdsTypeParameter(bare.checkType, checker, [parameter])
+      ),
+    );
+    collectInferred(bare.extendsType);
+    visit(bare.trueType);
+    visit(bare.falseType);
+  };
+  visit(body);
+  const [branch] = leaves;
+  return leaves.length === 1 && branch && ts.isTypeReferenceNode(branch)
+    ? { branch, unreadable }
+    : undefined;
+};
+
+/**
+ * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
+ * metadata carrier, which a CFC alias intersects its payload with.
+ */
+const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
+  const properties = member.getProperties();
+  return properties.length === 1 && properties[0]!.name === "__ct_cfc__"
+    ? properties[0]
+    : undefined;
+};
+
+/**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
  * `undefined` where it cannot be told apart. Every CFC alias adds its metadata
  * to its payload as one more member of an intersection, a carrier holding only
@@ -325,14 +399,47 @@ const holdsTypeParameter = (
  */
 const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
   if (!type.isIntersection()) return undefined;
-  const carries = (member: ts.Type) => {
-    const properties = member.getProperties();
-    return properties.length === 1 && properties[0]!.name === "__ct_cfc__";
-  };
   // An intersection has two members at least, so one left means a carrier.
-  const rest = type.types.filter((member) => !carries(member));
+  const rest = type.types.filter((member) => !cfcCarrierProperty(member));
   return rest.length === 1 ? rest[0] : undefined;
 };
+
+/**
+ * The labelled parts of `type`, an intersection of CFC metadata carriers and
+ * one other member, or `undefined` for any other type: that member, the
+ * payload, and each carrier's metadata. The checker drops a CFC alias's name
+ * where it reduces the alias's type, as `Confidential<T | null, …>` at
+ * `T = string` reduces to `string & carrier` once `null & carrier` is
+ * nothing. Then the carrier is all that says the value is labelled.
+ */
+const cfcCarriedParts = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { payload: ts.Type; metadata: ts.Type[] } | undefined => {
+  if (!type.isIntersection()) return undefined;
+  const metadata: ts.Type[] = [];
+  const rest: ts.Type[] = [];
+  for (const member of type.types) {
+    const carrier = cfcCarrierProperty(member);
+    if (carrier) {
+      metadata.push(
+        memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+      );
+    } else rest.push(member);
+  }
+  return metadata.length > 0 && rest.length === 1
+    ? { payload: rest[0]!, metadata }
+    : undefined;
+};
+
+/**
+ * Whether `value`, metadata read from a type, holds no `undefined`: no value
+ * the type could not spell.
+ */
+const readInFull = (value: unknown): boolean =>
+  value !== undefined &&
+  (!isObjectOrArray(value) ||
+    (Array.isArray(value) ? value : Object.values(value)).every(readInFull));
 
 /**
  * The type `parameterTypes` gives `node` when `node` is a bare reference to one
@@ -369,7 +476,9 @@ const lowersDownAliasChain = (
   checker: ts.TypeChecker,
   visited: ReadonlySet<ts.TypeAliasDeclaration>,
 ): boolean => {
-  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  if (CFC_ALIAS_NAMES.has(declaration.name.text)) {
+    return lowersFromSyntax(declaration.name.text);
+  }
   // A scope wrapper reads its payload from its argument, so one reached with
   // none is not lowered.
   if (SCOPE_WRAPPER_NAMES.has(declaration.name.text)) return args.length > 0;
@@ -498,7 +607,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
-    if (aliasName && CFC_ALIAS_NAMES.has(aliasName)) {
+    if (
+      aliasName && CFC_ALIAS_NAMES.has(aliasName) && lowersFromSyntax(aliasName)
+    ) {
       return true;
     }
 
@@ -509,6 +620,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         CFC_ALIAS_NAMES,
       )
     ) {
+      return true;
+    }
+
+    if (cfcCarriedParts(type, context.typeChecker)) {
       return true;
     }
 
@@ -600,6 +715,34 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     if (resolvedCfcAlias) {
       return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
+    }
+
+    // With no alias name left to follow, and no reference naming the policy,
+    // the metadata carriers say the value is labelled, and with what. Read in
+    // part, a policy could claim what its author never wrote together, or
+    // break an invariant between its parts: an `ownerPrincipal` needs the
+    // `writeAuthorizedBy` whose binding, a `typeof`, no type spells. So the
+    // carriers are read in full, or the value is its payload alone.
+    const carried = cfcCarriedParts(type, context.typeChecker);
+    if (carried) {
+      const payload = this.#schemaGenerator.formatChildType(
+        carried.payload,
+        context,
+        undefined,
+      );
+      const metadata = carried.metadata.map((carrier) =>
+        this.#extractLiteralLikeValue(carrier, undefined, context)
+      );
+      return metadata.every((labels) =>
+          isObjectOrArray(labels) && !Array.isArray(labels) &&
+          readInFull(labels)
+        )
+        ? metadata.reduce<MutableJSONSchema>(
+          (schema, labels) =>
+            withIfcLabels(schema, labels as Record<string, unknown>),
+          payload,
+        )
+        : payload;
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)
@@ -1476,14 +1619,15 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolved.aliasName,
       resolved.aliasArgs,
       context,
-      resolved.aliasArgNodes ?? this.#getAliasTypeArgumentNodes(context),
+      resolved.aliasArgNodes ??
+        this.#referenceArgumentNodes(resolved.aliasName, context),
       resolved.parameterTypes ?? NO_PARAMETER_TYPES,
     );
     if (ifc === undefined) {
       return baseSchema;
     }
 
-    return this.#mergeIfcMetadata(baseSchema, ifc);
+    return withIfcLabels(baseSchema, ifc);
   }
 
   /** The schema of the payload, the first argument, of a resolved alias. */
@@ -1503,7 +1647,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // member's annotation still names it.
     const reachedByName = resolved.aliasArgNodes === undefined;
     const argNodes = resolved.aliasArgNodes ??
-      this.#getAliasTypeArgumentNodes(context);
+      this.#referenceArgumentNodes(resolved.aliasName, context);
     const parameterTypes = resolved.parameterTypes ?? NO_PARAMETER_TYPES;
     const baseTypeNode = argNodes?.[0];
     // A payload still referring to a parameter that substitution had an
@@ -1678,6 +1822,30 @@ export class CommonFabricFormatter implements TypeFormatter {
         );
         if (resolved) return resolved;
       }
+      // Reduced, a policy's type can lose its name: `Confidential<string |
+      // null, L>` is `string & carrier`, since `null & carrier` is nothing, and
+      // `Confidential<null, L>` is `never`. The reference still names the
+      // policy, and holds its arguments as written, `null` among them. A
+      // payload that is itself `never`, as `Confidential<never, L>`'s is, is
+      // the type the checker gave rather than a member it dropped, so that
+      // policy lowers as its type does, accepting nothing.
+      if (
+        declaration && terminals.has(declaration.name.text) &&
+        !typeWithAlias.aliasSymbol
+      ) {
+        const resolved = this.#resolveAliasChainFromDeclaration(
+          terminals,
+          declaration,
+          undefined,
+          reference.typeArguments ?? [],
+          context,
+          new Set([declaration]),
+        );
+        const payload = resolved?.aliasArgs[0];
+        if (payload && (payload.flags & ts.TypeFlags.Never) === 0) {
+          return resolved;
+        }
+      }
     }
 
     const aliasName = typeWithAlias.aliasSymbol?.name;
@@ -1686,7 +1854,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     const aliasArgs = typeWithAlias.aliasTypeArguments ?? [];
     if (terminals.has(aliasName)) {
-      return { aliasName, aliasArgs };
+      return lowersFromSyntax(aliasName) ? { aliasName, aliasArgs } : undefined;
     }
 
     const aliasSymbol = typeWithAlias.aliasSymbol;
@@ -1724,6 +1892,9 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): ResolvedAliasChain | undefined {
     const aliasName = aliasDeclaration.name.text;
     if (terminals.has(aliasName)) {
+      // A chain that reaches `Projection` stops: the type it is written in is
+      // read as the checker resolves it.
+      if (!lowersFromSyntax(aliasName)) return undefined;
       return {
         aliasName,
         // Alias chains substitute syntax until they reach a terminal. Only its
@@ -1733,7 +1904,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           ? aliasArgNodes.map((node, index) =>
             aliasArgs?.[index] ??
               (node
-                ? this.#resolveTypeNodeToType(node, context, parameterTypes)
+                ? this.#resolveTypeNodeToType(node, context)
                 : context.typeChecker.getUnknownType())
           )
           : (aliasArgs ?? []).filter((type): type is ts.Type =>
@@ -1819,15 +1990,7 @@ export class CommonFabricFormatter implements TypeFormatter {
   #resolveTypeNodeToType(
     typeNode: ts.TypeNode,
     context: GenerationContext,
-    parameterTypes: ParameterTypes,
   ): ts.Type {
-    const bound = boundParameterType(
-      typeNode,
-      context.typeChecker,
-      parameterTypes,
-    );
-    if (bound) return bound;
-
     const fromRegistry = context.typeRegistry?.get(typeNode);
     if (fromRegistry) {
       return fromRegistry;
@@ -1867,18 +2030,43 @@ export class CommonFabricFormatter implements TypeFormatter {
         parameterTypes,
       );
     };
+    // A label list the lowering cannot read in full would lower as no label or
+    // with a `null` atom without a word to the author.
+    const reportUnread = (index: number) =>
+      reportUnreadLabel(
+        context,
+        aliasName,
+        aliasArgs[index],
+        aliasArgNodes?.[index],
+      );
+    const readLabels = (index: number): unknown => {
+      const labels = readValue(index);
+      if (holdsUnreadLabel(labels)) reportUnread(index);
+      return labels;
+    };
+    // The list a trusted pattern's name stands for when the policy writes no
+    // `requiredEventIntegrity` of its own, checked as a written one is.
+    const patternLabels = (pattern: unknown, index: number): unknown[] => {
+      const labels = [pattern];
+      if (holdsUnreadLabel(labels)) reportUnread(index);
+      return labels;
+    };
 
     switch (aliasName) {
       case "Cfc": {
         const payload = readValue(1);
-        return isObjectOrArray(payload) ? { ...payload } : undefined;
+        if (!isObjectOrArray(payload) || Array.isArray(payload)) {
+          return undefined;
+        }
+        if (holdsUnreadMetadataLabel(payload)) reportUnread(1);
+        return { ...payload };
       }
       case "Confidential":
-        return { confidentiality: readValue(1) };
+        return { confidentiality: readLabels(1) };
       case "Integrity":
-        return { integrity: readValue(1) };
+        return { integrity: readLabels(1) };
       case "AddIntegrity":
-        return { addIntegrity: readValue(1) };
+        return { addIntegrity: readLabels(1) };
       case "RepresentsCurrentUser":
         return {
           addIntegrity: [{
@@ -1894,29 +2082,35 @@ export class CommonFabricFormatter implements TypeFormatter {
           }],
         };
       case "RequiresIntegrity":
-        return { requiredIntegrity: readValue(1) };
+        return { requiredIntegrity: readLabels(1) };
       case "MaxConfidentiality":
-        return { maxConfidentiality: readValue(1) };
+        return { maxConfidentiality: readLabels(1) };
       case "ExactCopy":
         return { exactCopyOf: readValue(1) };
       case "WriteAuthorizedBy":
-        return this.#buildWriteAuthorizedByMetadata(context, aliasArgNodes);
+        return this.#buildWriteAuthorizedByMetadataForArg(
+          context,
+          aliasArgNodes,
+          aliasName,
+        );
       case "TrustedActionWriteWithIntegrity":
         return this.#buildTrustedActionWriteMetadata({
           context,
           aliasArgNodes,
+          aliasName,
           action: readValue(2),
           trustedPattern: readValue(3),
-          requiredEventIntegrity: readValue(4),
+          requiredEventIntegrity: readLabels(4),
         });
       case "TrustedActionWrite": {
         const trustedPattern = readValue(3);
         return this.#buildTrustedActionWriteMetadata({
           context,
           aliasArgNodes,
+          aliasName,
           action: readValue(2),
           trustedPattern,
-          requiredEventIntegrity: [trustedPattern],
+          requiredEventIntegrity: patternLabels(trustedPattern, 3),
         });
       }
       case "TrustedActionUiContract": {
@@ -1927,8 +2121,8 @@ export class CommonFabricFormatter implements TypeFormatter {
             action: readValue(1),
             trustedPattern,
             requiredEventIntegrity: aliasArgs.length > 3
-              ? readValue(3)
-              : [trustedPattern],
+              ? readLabels(3)
+              : patternLabels(trustedPattern, 2),
           },
         };
       }
@@ -1944,17 +2138,6 @@ export class CommonFabricFormatter implements TypeFormatter {
           },
         );
       case "ProjectionOf":
-        return this.#buildProjectionMetadata(
-          aliasArgs,
-          aliasArgNodes,
-          context,
-          {
-            fromIndex: 1,
-            pathIndex: 1,
-            defaultFrom: "/",
-          },
-        );
-      case "Projection":
         return this.#buildProjectionMetadata(
           aliasArgs,
           aliasArgNodes,
@@ -1992,52 +2175,23 @@ export class CommonFabricFormatter implements TypeFormatter {
     const directPath = this.#encodeJsonPointerPath(
       readValue(options.pathIndex),
     );
-    if (directPath !== undefined) {
-      return {
-        projection: {
-          from,
-          path: directPath,
-        },
-      };
-    }
-
-    const sourceRefType = aliasArgs[0] as TypeWithInternals | undefined;
-    const sourceRefNode = aliasArgNodes?.[0];
-    const nestedPathType = sourceRefType?.aliasTypeArguments?.[1];
-    const nestedPathNode =
-      sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
-        ? sourceRefNode.typeArguments?.[1]
-        : undefined;
-    const nestedPath = this.#encodeJsonPointerPath(
-      this.#extractLiteralLikeValue(nestedPathType, nestedPathNode, context),
-    );
-    if (nestedPath === undefined) {
+    if (directPath === undefined) {
       return undefined;
     }
 
     return {
       projection: {
         from,
-        path: nestedPath,
+        path: directPath,
       },
     };
-  }
-
-  #buildWriteAuthorizedByMetadata(
-    context: GenerationContext,
-    aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
-  ): Record<string, unknown> | undefined {
-    return this.#buildWriteAuthorizedByMetadataForArg(
-      context,
-      aliasArgNodes,
-      1,
-    );
   }
 
   #buildTrustedActionWriteMetadata(
     options: {
       context: GenerationContext;
       aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined;
+      aliasName: string;
       action: unknown;
       trustedPattern: unknown;
       requiredEventIntegrity: unknown;
@@ -2046,7 +2200,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const writeMetadata = this.#buildWriteAuthorizedByMetadataForArg(
       options.context,
       options.aliasArgNodes,
-      1,
+      options.aliasName,
     );
     return {
       ...(writeMetadata ?? {}),
@@ -2059,18 +2213,30 @@ export class CommonFabricFormatter implements TypeFormatter {
     };
   }
 
+  /**
+   * The write claim of `aliasName`, a policy whose second argument is its
+   * writer binding. The binding must be a direct `typeof`
+   * (cfc_authoring_contract.md), read from its node;
+   * `WriteAuthorizedByValidationTransformer` reports any other spelling. A
+   * policy written through another alias whose binding has no node to read
+   * would leave that reference's schema with no write restriction, which
+   * nothing else would report, so that is an error here.
+   */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
     aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
-    bindingIndex: number,
+    aliasName: string,
   ): Record<string, unknown> | undefined {
-    // The binding itself must be a direct `typeof` (cfc_authoring_contract.md);
-    // `WriteAuthorizedByValidationTransformer` reports any other spelling.
-    const bindingNode = aliasArgNodes?.[bindingIndex];
-    if (!bindingNode || !ts.isTypeQueryNode(bindingNode)) {
+    const bindingNode = aliasArgNodes?.[1];
+    if (!bindingNode) {
+      if (this.#writesPolicyThroughAlias(aliasName, context)) {
+        reportUnreadWriterBinding(context, aliasName);
+      }
       return undefined;
     }
-    if (!ts.isIdentifier(bindingNode.exprName)) {
+    if (
+      !ts.isTypeQueryNode(bindingNode) || !ts.isIdentifier(bindingNode.exprName)
+    ) {
       return undefined;
     }
 
@@ -2082,6 +2248,35 @@ export class CommonFabricFormatter implements TypeFormatter {
         ),
       },
     };
+  }
+
+  /**
+   * Whether the context's written reference names an alias other than
+   * `aliasName`, the policy being lowered, and denotes that policy, as
+   * `Checked<typeof save>` denotes a `WriteAuthorizedBy`. Such a policy is
+   * written through the alias, whose syntax is what passes its binding on. A
+   * reference that denotes something else writes no policy: the payload node
+   * the transformer's direct `WriteAuthorizedBy` path hands over, while it
+   * mints the claim itself, is one. So does a schema read from a type alone,
+   * such as a capture's, which has no reference at all.
+   */
+  #writesPolicyThroughAlias(
+    aliasName: string,
+    context: GenerationContext,
+  ): boolean {
+    const reference = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+    if (
+      !reference || !ts.isTypeReferenceNode(reference) ||
+      this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
+    ) {
+      return false;
+    }
+    const denoted = this.#resolveTypeNodeToType(
+      reference,
+      context,
+    ) as TypeWithInternals;
+    return denoted.aliasSymbol?.name === aliasName;
   }
 
   #writeAuthorizedByIdentityForBinding(
@@ -2116,6 +2311,66 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
+   * Helper for {@link #formatResolvedCfcAlias}: the argument nodes of
+   * `aliasName`, the canonical alias the checker resolved the context's
+   * reference to. A reference that names it holds them. A reference to a
+   * conditional alias whose one branch other than `never` names it holds them
+   * as that branch writes them: an argument that is one of the alias's
+   * parameters is the reference's argument for it, and one that holds no
+   * parameter is itself. An argument holding a parameter the conditional
+   * checks or infers is read from its type, as the checker may bind that
+   * parameter to one member of a union, and so is any argument holding some
+   * other parameter. Any other reference holds the arguments of another alias
+   * (`Pick2<A, B>`'s are not `Confidential`'s), so it gives none.
+   */
+  #referenceArgumentNodes(
+    aliasName: string,
+    context: GenerationContext,
+  ): readonly (ts.TypeNode | undefined)[] | undefined {
+    const checker = context.typeChecker;
+    const reference = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, checker);
+    if (!reference || !ts.isTypeReferenceNode(reference)) return undefined;
+    if (
+      this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
+    ) {
+      return this.#getAliasTypeArgumentNodes(context);
+    }
+
+    const declaration = this.#getTypeAliasDeclarationForSymbol(
+      checker.getSymbolAtLocation(reference.typeName),
+      context,
+    );
+    const parameters: readonly ts.TypeParameterDeclaration[] =
+      declaration?.typeParameters ?? [];
+    const conditional = declaration &&
+      soleConditionalBranch(declaration.type, checker, parameters);
+    if (
+      !conditional ||
+      this.#resolveTypeReferenceName(conditional.branch.typeName, context) !==
+        aliasName
+    ) {
+      return undefined;
+    }
+    const argumentNodes = reference.typeArguments ?? [];
+    return (conditional.branch.typeArguments ?? []).map((argument) => {
+      if (holdsTypeParameter(argument, checker, conditional.unreadable)) {
+        return undefined;
+      }
+      const bare = unwrapTypeParentheses(argument);
+      const parameter = ts.isTypeReferenceNode(bare) &&
+          ts.isIdentifier(bare.typeName) && !bare.typeArguments?.length
+        ? checker.getSymbolAtLocation(bare.typeName)?.declarations?.find(
+          ts.isTypeParameterDeclaration,
+        )
+        : undefined;
+      const index = parameter ? parameters.indexOf(parameter) : -1;
+      if (index >= 0) return argumentNodes[index];
+      return holdsTypeParameter(argument, checker) ? undefined : argument;
+    });
+  }
+
+  /**
    * The type arguments written on the reference being formatted. The
    * reference is read through parentheses and plain aliases
    * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
@@ -2131,18 +2386,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
     return typeNode.typeArguments ? [...typeNode.typeArguments] : undefined;
-  }
-
-  #mergeIfcMetadata(
-    schema: MutableJSONSchema,
-    ifc: Record<string, unknown>,
-  ): MutableJSONSchema {
-    if (typeof schema === "boolean") {
-      return schema === false ? { not: true, ifc } : { ifc };
-    }
-
-    const existingIfc = isObjectOrArray(schema.ifc) ? schema.ifc : {};
-    return { ...schema, ifc: combineIfcLabels(existingIfc, ifc) };
   }
 
   #encodeJsonPointerPath(value: unknown): string | undefined {
@@ -2388,15 +2631,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const typeText = checker.typeToString(type);
-    if (
-      typeText.length >= 2 &&
-      ((typeText.startsWith('"') && typeText.endsWith('"')) ||
-        (typeText.startsWith("'") && typeText.endsWith("'")))
-    ) {
-      return typeText.slice(1, -1);
-    }
-
     // `AnyOf<X>` is `{ readonly __ct_cfc_any_of__?: X }` as a type. That brand
     // is how the library writes the metadata into the type, so a type read
     // without a node is recognized by it, not by an alias name an author may
@@ -2411,12 +2645,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return Array.isArray(alternatives) ? { anyOf: alternatives } : undefined;
     }
 
-    const objectFlags =
-      (type as { objectFlags?: ts.ObjectFlags }).objectFlags ??
-        0;
-    if (
-      checker.isTupleType(type) || (objectFlags & ts.ObjectFlags.Tuple) !== 0
-    ) {
+    if (checker.isTupleType(type)) {
       return checker.getTypeArguments(type as ts.TypeReference).map((
         element,
       ) => this.#extractLiteralLikeValue(element, undefined, context));

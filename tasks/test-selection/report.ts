@@ -8,9 +8,9 @@
  * comment that tells it. Everything here is a pure function over three
  * runs' records — this one, the one before it on the default branch, and
  * the pull request's own — the manifest that pull request's run
- * resolved, and the coverage figures the two default-branch runs
- * measured. The gathering and the posting are in
- * `tasks/post-main-report.ts`.
+ * resolved, the identities this run did not fail for, and the coverage
+ * figures the two default-branch runs measured. The gathering and the
+ * posting are in `tasks/post-main-report.ts`.
  *
  * Five properties keep this on the right side of the dashboard's rule
  * that reporting is about the system and never about individuals, and
@@ -27,17 +27,14 @@
 
 import {
   ALIAS_DIRECTORY,
+  type CoverageFigures,
   type FlakeEvidence,
   type TestIdentity,
   testIdentityKey,
   testIdentityOfKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import {
-  coverageMetricGroupName,
-  coverageMetricMeasuredSet,
-} from "../ci-check-lib.ts";
-import { isLaneMeasurement } from "../lane-measurement.ts";
+import { excusedMeasurement, isLaneMeasurement } from "../lane-measurement.ts";
 import type { WithheldReason } from "./manifest.ts";
 import {
   COVERAGE_COMMENT_LINES,
@@ -56,23 +53,47 @@ import {
 export const MAIN_REPORT_MARKER = "<!-- main-run-report -->";
 
 /**
- * What one identity did across a whole run. A run holds several records
- * for one identity whenever a lane repeats it, whenever it is sharded,
- * and whenever an attempt is re-run, so the outcome of a run is a fold
- * of those rather than any one of them. `mixed` is the test disagreeing
- * with itself at one commit, which is the same judgement the scorer
- * makes and the only evidence of a flake a single run can hold.
+ * What one identity did across a whole run, folded to one word. `mixed`
+ * is the test disagreeing with itself at one commit, which is the same
+ * judgement the scorer makes and the only evidence of a flake a single
+ * run can hold.
  */
 export type Verdict = "pass" | "fail" | "mixed" | "skip";
 
-/** What every identity in one run did, by its canonical key. */
-export type RunOutcomes = ReadonlyMap<string, Verdict>;
+/**
+ * What one identity did across a whole run: how many of its runs passed
+ * and how many failed. A run holds several records for one identity
+ * whenever a lane repeats it, whenever it is sharded, and whenever an
+ * attempt is re-run, and each record is one of its runs. A skip judged
+ * nothing, so it counts as neither.
+ */
+export interface Outcome {
+  passed: number;
+  failed: number;
+}
 
-/** Uncovered lines per coverage metric, as a run measured them. */
-export type CoverageFigures = ReadonlyMap<string, number>;
+/** What every identity in one run did, by its canonical key. */
+export type RunOutcomes = ReadonlyMap<string, Outcome>;
 
 /**
- * Folds a run's records into one verdict per identity, leaving out the
+ * The verdict one identity's runs come to, or nothing for an identity
+ * the run holds no record of. An identity whose every record is a skip
+ * is `skip`.
+ */
+export function verdictOf(outcome: Outcome | undefined): Verdict | undefined {
+  if (outcome === undefined) return undefined;
+  const { passed, failed } = outcome;
+  return passed > 0 && failed > 0
+    ? "mixed"
+    : failed > 0
+    ? "fail"
+    : passed > 0
+    ? "pass"
+    : "skip";
+}
+
+/**
+ * Counts a run's records into one outcome per identity, leaving out the
  * lane's measurements of itself.
  *
  * A lane writes what its setup and each of its batches cost through the
@@ -82,24 +103,50 @@ export type CoverageFigures = ReadonlyMap<string, number>;
  */
 export function outcomesOf(
   records: Iterable<TestRecord>,
-): Map<string, Verdict> {
-  const seen = new Map<string, { pass: boolean; fail: boolean }>();
+): Map<string, Outcome> {
+  const outcomes = new Map<string, Outcome>();
   for (const record of records) {
     if (isLaneMeasurement(record.test)) continue;
     const key = testIdentityKey(record.test);
-    const already = seen.get(key) ?? { pass: false, fail: false };
-    if (record.outcome === "pass") already.pass = true;
-    if (record.outcome === "fail") already.fail = true;
-    seen.set(key, already);
-  }
-  const outcomes = new Map<string, Verdict>();
-  for (const [key, { pass, fail }] of seen) {
-    outcomes.set(
-      key,
-      pass && fail ? "mixed" : fail ? "fail" : pass ? "pass" : "skip",
-    );
+    const outcome = outcomes.get(key) ?? { passed: 0, failed: 0 };
+    if (record.outcome === "pass") outcome.passed++;
+    if (record.outcome === "fail") outcome.failed++;
+    outcomes.set(key, outcome);
   }
   return outcomes;
+}
+
+/**
+ * The identities a run's lanes recorded excusing: those whose failures
+ * the run did not fail for. A run that recorded none excused nothing,
+ * which is every run whose tests did not run in lanes.
+ *
+ * `reports` holds one list of records per report, and every attempt of
+ * every job writes a report of its own. A re-run lane can excuse in one
+ * attempt a test it failed in another without excusing, and that other
+ * attempt failed the run for it. So an identity is excused only where
+ * some report excused it and every report that failed it excused it.
+ */
+export function excusedIn(
+  reports: Iterable<Iterable<TestRecord>>,
+): Set<string> {
+  const excused = new Set<string>();
+  const unexcused = new Set<string>();
+  for (const records of reports) {
+    const failed = new Set<string>();
+    const excusing = new Set<string>();
+    for (const record of records) {
+      if (isLaneMeasurement(record.test)) {
+        const key = excusedMeasurement(record.test.n);
+        if (key !== undefined) excusing.add(key);
+      } else if (record.outcome === "fail") {
+        failed.add(testIdentityKey(record.test));
+      }
+    }
+    for (const key of excusing) excused.add(key);
+    for (const key of failed) if (!excusing.has(key)) unexcused.add(key);
+  }
+  return new Set([...excused].filter((key) => !unexcused.has(key)));
 }
 
 /**
@@ -194,6 +241,32 @@ export interface FirstFailure {
   flakes?: FlakeEvidence;
 }
 
+/**
+ * A test too flaky to judge a change by that failed every one of its
+ * runs at this commit and passed every one at the parent.
+ *
+ * Its failures did not fail the run, and several runs of it at one
+ * commit are what make this the one thing worth saying about it. The
+ * counts are carried rather than judged, because one failure after one
+ * pass is what the test does on its own and five after five is not.
+ */
+export interface ExcusedFailure {
+  test: TestIdentity;
+
+  /** Its runs at this commit, every one of which failed. */
+  failed: number;
+
+  /** Its runs at the parent, every one of which passed. */
+  passed: number;
+
+  /**
+   * How often the store saw it disagree with itself, and over how many
+   * runs, which is what calls it flaky. Absent where the manifest carries
+   * no counts for it.
+   */
+  flakes?: FlakeEvidence;
+}
+
 /** A rise in the repository's whole uncovered-line count. */
 export interface CoverageRise {
   from: number;
@@ -252,6 +325,7 @@ export interface RenameSuggestion {
 /** Everything one run on the default branch has to tell one pull request. */
 export interface Report {
   firstFailures: FirstFailure[];
+  excusedFailures: ExcusedFailure[];
   coverageRise?: CoverageRise;
   measuredSetRises: MeasuredSetRise[];
   flakyNewTests: FlakyNewTest[];
@@ -261,6 +335,7 @@ export interface Report {
 /** Whether a report holds anything at all worth saying. */
 export function reportIsEmpty(report: Report): boolean {
   return report.firstFailures.length === 0 &&
+    report.excusedFailures.length === 0 &&
     report.coverageRise === undefined &&
     report.measuredSetRises.length === 0 &&
     report.flakyNewTests.length === 0 &&
@@ -281,6 +356,15 @@ export interface ReportInput {
 
   /** What the pull request behind this commit did, and what it knew. */
   pullRequest: PullRequestView;
+
+  /**
+   * The identities this run did not fail for, as its lanes recorded
+   * excusing them, against the flake counts the manifest it resolved
+   * carries for each where those could be read. Empty for a run that
+   * recorded excusing nothing, which a run whose tests did not run in
+   * lanes never does.
+   */
+  nonGating: ReadonlyMap<string, FlakeEvidence | undefined>;
 
   /** Every coverage figure this run measured. */
   coverage: CoverageFigures;
@@ -324,7 +408,7 @@ export function selectionOf(
   key: string,
 ): Selection {
   if (view.ran === undefined) return "unknown";
-  const there = view.ran.get(key);
+  const there = verdictOf(view.ran.get(key));
   if (there === "pass") return "passed-there";
   if (there === "fail" || there === "mixed") return "failed-there";
   // A skip and no record at all ask the same question — why did this run
@@ -344,8 +428,9 @@ export function selectionOf(
 }
 
 /**
- * The tests that failed for the first time at this commit: each passed in
- * the previous run on the default branch and failed in this one.
+ * The identities that passed in the previous run on the default branch
+ * and failed in this one, which is what failing for the first time at
+ * this commit means.
  *
  * The comparison is what stops the comment landing on whoever merged
  * next after somebody else broke something. A test that was already
@@ -362,21 +447,90 @@ export function selectionOf(
  * carries what a later run found that the pull request's run could not
  * have found for itself, and a failure it reported is not that.
  */
-export function firstFailures(input: ReportInput): FirstFailure[] {
-  const failures: FirstFailure[] = [];
-  for (const [key, verdict] of input.current) {
-    if (verdict !== "fail") continue;
-    if (input.previous.get(key) !== "pass") continue;
+function failingFromHere(input: ReportInput): FailingFromHere[] {
+  const found: FailingFromHere[] = [];
+  for (const [key, here] of input.current) {
+    const there = input.previous.get(key);
+    if (verdictOf(here) !== "fail" || !passedThroughout(there)) continue;
     const selection = selectionOf(input.pullRequest, key);
     if (selection === "failed-there") continue;
-    const flakes = input.pullRequest.flakes.get(key);
-    failures.push({
-      test: identityOf(key),
+    found.push({
+      key,
       selection,
-      ...(flakes === undefined || flakes.flakes === 0 ? {} : { flakes }),
+      failed: here.failed,
+      passed: there.passed,
     });
   }
-  return failures.sort(byIdentity);
+  return found;
+}
+
+/** Whether a run judged an identity and every run of it passed. */
+function passedThroughout(outcome: Outcome | undefined): outcome is Outcome {
+  return verdictOf(outcome) === "pass";
+}
+
+/** One identity failing for the first time here, and what is known of it. */
+interface FailingFromHere {
+  key: string;
+  selection: ReportedSelection;
+
+  /** Its runs here, every one of which failed. */
+  failed: number;
+
+  /** Its runs at the parent, every one of which passed. */
+  passed: number;
+}
+
+/**
+ * The tests that failed for the first time at this commit and failed the
+ * run doing it. One this run did not fail for is an excused failure
+ * instead, which says something different about it.
+ */
+export function firstFailures(input: ReportInput): FirstFailure[] {
+  return failingFromHere(input)
+    .filter(({ key }) => !input.nonGating.has(key))
+    .map(({ key, selection }) => ({
+      test: identityOf(key),
+      selection,
+      ...withEvidence(input.pullRequest.flakes.get(key)),
+    }))
+    .sort(byIdentity);
+}
+
+/**
+ * The tests that failed for the first time at this commit without
+ * failing the run: each is one this run's lanes recorded excusing, which
+ * they do for a test held back from pull requests as too flaky to judge a
+ * change by, and each failed every one of its runs here and passed every
+ * one at the parent.
+ *
+ * That is the one statement about such a test that several runs at one
+ * commit make available, and nothing weaker is said about it. A test
+ * that passed as well as failed here is disagreeing with itself, which is
+ * what it is held back for, and one the parent did not pass throughout is
+ * one this commit cannot be compared against.
+ */
+export function excusedFailures(input: ReportInput): ExcusedFailure[] {
+  return failingFromHere(input)
+    .filter(({ key }) => input.nonGating.has(key))
+    .map(({ key, failed, passed }) => ({
+      test: identityOf(key),
+      failed,
+      passed,
+      ...withEvidence(input.nonGating.get(key)),
+    }))
+    .sort(byIdentity);
+}
+
+/**
+ * The store's counts for a test, where they say it has disagreed with
+ * itself at all. A label on no evidence tells somebody a real failure
+ * may be noise, which is the thing the label exists to avoid saying.
+ */
+function withEvidence(
+  flakes: FlakeEvidence | undefined,
+): { flakes?: FlakeEvidence } {
+  return flakes === undefined || flakes.flakes === 0 ? {} : { flakes };
 }
 
 function byIdentity(
@@ -386,39 +540,6 @@ function byIdentity(
   const left = testIdentityKey(a.test);
   const right = testIdentityKey(b.test);
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-/**
- * Every source group in a set of figures: a package's source measured by
- * every test the run ran. Under selection a pull request measures a
- * sample of this, so it is a trend rather than something to compare.
- */
-export function groupFigures(figures: CoverageFigures): Map<string, number> {
-  return figuresNamed(figures, coverageMetricGroupName);
-}
-
-/**
- * Every measured set's figure: one member's source measured by one
- * suite's tests alone. A run measures the whole of this however much of
- * the corpus it ran, which is what makes it the one figure worth
- * comparing between two runs.
- */
-export function measuredSetFigures(
-  figures: CoverageFigures,
-): Map<string, number> {
-  return figuresNamed(figures, coverageMetricMeasuredSet);
-}
-
-function figuresNamed(
-  figures: CoverageFigures,
-  nameOf: (metric: string) => string | null,
-): Map<string, number> {
-  const named = new Map<string, number>();
-  for (const [metric, lines] of figures) {
-    const name = nameOf(metric);
-    if (name !== null) named.set(name, lines);
-  }
-  return named;
 }
 
 /**
@@ -433,12 +554,15 @@ function figuresNamed(
  * A change that touched no source at all is not asked about. The
  * repository-wide figure moves a little between runs on its own, so a
  * documentation or workflow change would otherwise be told about a rise
- * it could not have caused.
+ * it could not have caused. Nor is a pair of runs only one of which found
+ * the compile cache cold: a cold run reaches compile branches a warm one
+ * does not, so its count sits lower with nothing about the tests changed.
  */
 export function coverageRise(input: ReportInput): CoverageRise | undefined {
   if (input.touched.size === 0) return undefined;
-  const wasBy = groupFigures(input.coverageBefore);
-  const isBy = groupFigures(input.coverage);
+  if (input.coverageBefore.cold !== input.coverage.cold) return undefined;
+  const wasBy = input.coverageBefore.groups;
+  const isBy = input.coverage.groups;
   const before = wasBy.get("workspace");
   const after = isBy.get("workspace");
   if (before === undefined || after === undefined) return undefined;
@@ -470,8 +594,8 @@ export function measuredSetRises(input: ReportInput): MeasuredSetRise[] {
   // lines any set's tests reach, and the figures move a little between
   // runs on their own.
   if (input.touched.size === 0) return [];
-  const before = measuredSetFigures(input.coverageBefore);
-  const after = measuredSetFigures(input.coverage);
+  const before = input.coverageBefore.sets;
+  const after = input.coverage.sets;
   const { reached, ran } = input.coverageGate;
   const rises: MeasuredSetRise[] = [];
   for (const [set, lines] of after) {
@@ -518,8 +642,8 @@ export function measuredSetRises(input: ReportInput): MeasuredSetRise[] {
 export function flakyNewTests(input: ReportInput): FlakyNewTest[] {
   const flaky: FlakyNewTest[] = [];
   if (!input.pullRequest.manifest) return flaky;
-  for (const [key, verdict] of input.current) {
-    if (verdict !== "mixed") continue;
+  for (const [key, outcome] of input.current) {
+    if (verdictOf(outcome) !== "mixed") continue;
     if (input.previous.has(key)) continue;
     if (input.pullRequest.flakes.has(key)) continue;
     flaky.push({ test: identityOf(key) });
@@ -686,6 +810,7 @@ export function buildReport(input: ReportInput): Report {
   const rise = coverageRise(input);
   return {
     firstFailures: firstFailures(input),
+    excusedFailures: excusedFailures(input),
     ...(rise === undefined ? {} : { coverageRise: rise }),
     measuredSetRises: measuredSetRises(input),
     flakyNewTests: flakyNewTests(input),
@@ -739,8 +864,7 @@ const SELECTION_PROSE: Record<ReportedSelection, string> = {
     "default branch anyway, where no execution of it passed at this " +
     "commit and none failed in the previous run. What the store counts " +
     "as a flake is a test passing and failing at one commit, which is " +
-    "not what either of those two runs saw. A failure of it does not " +
-    "fail the run on that branch, so nothing is red for this.",
+    "not what either of those two runs saw.",
   unrecorded: "This pull request's own run was to have run it and " +
     "recorded nothing for it, so what it did there is not known. A test " +
     "job that fails before it uploads leaves its share of a run's records " +
@@ -750,6 +874,24 @@ const SELECTION_PROSE: Record<ReportedSelection, string> = {
   unknown: "The pull request's own run could not be read, so there is " +
     "nothing to say about whether it ran this test.",
 };
+
+/**
+ * How often the store saw a test disagree with itself, and over how many
+ * runs, as the end of a sentence. The counts rather than the share, so a
+ * reader can weigh them: seven in nine hundred is not the claim seven in
+ * nine is.
+ */
+function disagreed({ flakes, runs }: FlakeEvidence): string {
+  return `disagree with itself ${
+    flakes === 1 ? "once" : `${flakes} times`
+  } in ${runs} ${runs === 1 ? "run" : "runs"} over the last ` +
+    `${FLAKE_WINDOW_DAYS} days`;
+}
+
+/** Every one of a number of runs, as the object of a sentence. */
+function everyRun(count: number): string {
+  return count === 1 ? "its one run" : `all ${count} of its runs`;
+}
 
 /** What the comment says about each route past the coverage gate. */
 const ROUTE_PROSE: Record<MeasuredSetRoute, string> = {
@@ -799,13 +941,45 @@ export function renderReport(
       out.push(`- ${shownIdentity(failure.test)}`);
       out.push(`  ${SELECTION_PROSE[failure.selection]}`);
       if (failure.flakes !== undefined) {
-        const { flakes, runs } = failure.flakes;
         out.push(
-          `  The store has seen this test disagree with itself ${
-            flakes === 1 ? "once" : `${flakes} times`
-          } in ${runs} ${runs === 1 ? "run" : "runs"} over the last ` +
-            `${FLAKE_WINDOW_DAYS} days, so this failure may be its own ` +
-            "and not the change's.",
+          `  The store has seen this test ${disagreed(failure.flakes)}, ` +
+            "so this failure may be its own and not the change's.",
+        );
+      }
+    }
+  }
+
+  if (report.excusedFailures.length > 0) {
+    out.push("");
+    out.push(
+      report.excusedFailures.length === 1
+        ? "### A known flaky test that failed every time it ran"
+        : "### Known flaky tests that failed every time they ran",
+    );
+    out.push("");
+    out.push(
+      "Test selection holds a test like this back from pull requests as " +
+        "too flaky to judge a change by. The default branch runs it " +
+        "anyway, and its failures never fail the run, so the run's result " +
+        "says nothing about it. Each test listed failed every one of its " +
+        "runs at this commit and passed every one at the commit before. " +
+        "The more runs that is, the less likely the test did it " +
+        "on its own, but a test's runs at one commit share a lane, so one " +
+        "bad runner does it too, and this is weak evidence either way. " +
+        "Look at the failures in the run: if they come from this change, " +
+        "the change broke the test and nothing else will say so, and if " +
+        "they do not, nothing needs doing.",
+    );
+    for (const failure of report.excusedFailures) {
+      out.push("");
+      out.push(
+        `- ${shownIdentity(failure.test)} failed ` +
+          `${everyRun(failure.failed)} at this commit and passed ` +
+          `${everyRun(failure.passed)} at the commit before.`,
+      );
+      if (failure.flakes !== undefined) {
+        out.push(
+          `  The store has seen it ${disagreed(failure.flakes)}.`,
         );
       }
     }

@@ -17,7 +17,6 @@ import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
 import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
 import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
 import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
-import { coverageDebt } from "./tiles/coverage-debt.ts";
 import { githubMembers } from "./tiles/github-members.ts";
 import { buildSnapshot, discordOnline } from "./tiles/discord-online.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
@@ -28,12 +27,7 @@ import {
 } from "./tiles/github-ci-spend.ts";
 import { projectMonthly, settled } from "./spend.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
-import {
-  benchmark,
-  formatNs,
-  trendPct,
-  trendStatus,
-} from "./tiles/benchmark.ts";
+import { benchmark, trendPct, trendStatus } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
 import {
   byUrl,
@@ -784,7 +778,6 @@ Deno.test("gated tiles gray out cleanly without their env", async () => {
     [benchmark, "GH_TOKEN"],
     [dau, "SIGNOZ_URL"],
     [githubMembers, "GH_TOKEN"],
-    [coverageDebt, "GH_TOKEN"],
   ] as const;
   for (const [tile, needle] of cases) {
     const v = await tile.collect(ctx([]));
@@ -940,26 +933,12 @@ Deno.test("benchmark: trend classification — flat/down good, up warn, steep up
   assertEquals(st([100, 120, 140, 160, 180, 200, 240]), "bad"); // steep rise
 });
 
-Deno.test("benchmark: fewer than a week of days claims no trend", () => {
-  const t = (v: number[]) => v.map((_, i) => i * 86_400_000);
-  // A big jump, but only three days of data -> reported flat (too little to judge).
-  assertEquals(trendPct(t([100, 500, 2000]), [100, 500, 2000]), 0);
-});
-
 Deno.test("benchmark: the trend ignores a lone spike", () => {
   const flat = [100, 100, 100, 100, 100, 100, 100, 100];
   const spiked = [...flat];
   spiked[3] = 400; // a 4x outlier — a median level does not move to meet it
   const times = flat.map((_, i) => i * 86_400_000);
   assertEquals(trendStatus(trendPct(times, spiked)), "good");
-});
-
-Deno.test("benchmark: formatNs picks a readable unit", () => {
-  assertEquals(formatNs(500), "500ns");
-  assertEquals(formatNs(1500), "1.5µs");
-  assertEquals(formatNs(2_000_000), "2.0ms");
-  assertEquals(formatNs(50_000_000), "50ms");
-  assertEquals(formatNs(NaN), "—");
 });
 
 Deno.test("registry: unique labels and positive intervals", () => {

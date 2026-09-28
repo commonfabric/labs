@@ -15,10 +15,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import {
-  currentPatternIntegrationShard,
-  selectPatternIntegrationShard,
-} from "./pattern-integration-shard.ts";
 import { initializeCapabilityGateController } from "./capability-gate-controller.ts";
 
 const ROOT = join(import.meta.dirname!, "..");
@@ -128,10 +124,7 @@ async function checkPattern(rel: string): Promise<Outcome> {
   }
 }
 
-const PATTERNS = selectPatternIntegrationShard(
-  discoverPatterns(),
-  currentPatternIntegrationShard(),
-);
+const PATTERNS = discoverPatterns();
 
 describe("capability gate (W1): full pattern-set gate verification", () => {
   for (const rel of PATTERNS) {

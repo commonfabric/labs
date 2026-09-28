@@ -446,4 +446,62 @@ describe("stored-argument-validation", () => {
       tx.abort();
     }
   });
+
+  it("finds stored `FabricError`s with different messages unique under `uniqueItems`", () => {
+    // The default merge hands the validator the argument read through views,
+    // and a view of a `FabricInstance` has no own keys: compared as it reads,
+    // every such entry equals every other.
+
+    const tx = runtime.edit();
+    try {
+      const argument = runtime.getCell(space, "unique-errors", undefined, tx);
+      argument.set([
+        { v: FabricError.fromNativeError(new Error("AAA")) },
+        { v: FabricError.fromNativeError(new Error("ZZZ")) },
+      ]);
+      const schema: JSONSchema = { type: "array", uniqueItems: true };
+
+      expect(validateSchemaValue(schema, argument.getRaw())).toBeUndefined();
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toBeUndefined();
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("matches a `const` equal to a stored argument holding a `FabricError`", () => {
+    const tx = runtime.edit();
+    try {
+      const argument = runtime.getCell(space, "const-error", undefined, tx);
+      argument.set({ v: FabricError.fromNativeError(new Error("boom")) });
+      const schema = { const: argument.getRaw() } as JSONSchema;
+
+      expect(validateSchemaValue(schema, argument.getRaw())).toBeUndefined();
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toBeUndefined();
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("finds a view of a stored `FabricError` in an `enum` holding the stored value", () => {
+    const tx = runtime.edit();
+    try {
+      const argument = runtime.getCell<{ v: unknown }>(
+        space,
+        "enum-error",
+        undefined,
+        tx,
+      );
+      argument.set(
+        { v: FabricError.fromNativeError(new Error("boom")) } as never,
+      );
+      const stored = (argument.getRaw() as { v: unknown }).v;
+      const schema = { enum: [stored] } as JSONSchema;
+
+      expect(validateSchemaValue(schema, argument.get().v)).toBeUndefined();
+    } finally {
+      tx.abort();
+    }
+  });
 });

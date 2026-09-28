@@ -128,6 +128,7 @@ import {
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
 import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -199,13 +200,10 @@ type SerializeForLLMObservationParams = {
 
 function normalizeInputSchema(schemaLike: unknown): JSONSchema {
   let inputSchema: any = schemaLike;
-  if (isBoolean(inputSchema)) {
-    inputSchema = {
-      type: "object",
-      properties: {},
-      additionalProperties: inputSchema,
-    };
-  }
+  // `false` is the argument schema of a pattern that takes no argument, which
+  // the runner runs with no input. Its object form accepts only `{}`, which is
+  // the one call such a tool takes.
+  if (isBoolean(inputSchema)) inputSchema = objectSchemaOfBoolean(inputSchema);
   if (!isObjectNotArray(inputSchema)) inputSchema = { type: "object" };
   const stripped = stripInjectedResult(inputSchema);
   return prepareSchemaForLLM(stripped);
@@ -331,11 +329,25 @@ function resolveRefsForLLM(
 }
 
 /**
- * Prepare a schema for use in LLM tool definitions by:
- * 1. Stripping internal `asCell` markers and removing cycles
- * 2. Inlining all $ref references
+ * The object form of a boolean schema: an object that declares no properties
+ * and allows any others (`true`) or none (`false`). The LLM routes take a
+ * schema only as an object.
+ */
+function objectSchemaOfBoolean(schema: boolean): JSONSchema {
+  return { type: "object", properties: {}, additionalProperties: schema };
+}
+
+/**
+ * Prepare a schema for an LLM request, as a tool's input or as the shape of a
+ * generated object, by:
+ * 1. Writing a `true` schema in its object form (`objectSchemaOfBoolean`). A
+ *    `false` schema stays as written: its object form would accept `{}`, where
+ *    `false` accepts nothing, so the LLM routes refuse the request instead
+ * 2. Stripping internal `asCell` markers and removing cycles
+ * 3. Inlining all $ref references
  */
 function prepareSchemaForLLM(schema: JSONSchema): JSONSchema {
+  if (schema === true) return objectSchemaOfBoolean(schema);
   if (!isObjectOrArray(schema)) return schema;
   const sanitized = sanitizeSchemaForLinks(schema);
   return resolveRefsForLLM(sanitized);
@@ -3149,7 +3161,12 @@ async function handleInvoke(
     );
 
     if (pattern) {
-      runtime.run(tx, pattern, invocationArgs, result);
+      // The model's tool call instantiates the pattern, in a continuation of
+      // the dialog's action: no principal's act attributes what its setup
+      // initializes.
+      runtime.run(tx, pattern, invocationArgs, result, {
+        attributeInitialization: false,
+      });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
       // `result` of its own. Overwriting would silently DISCARD caller data
@@ -4141,7 +4158,7 @@ async function startRequest(
     // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
     // audit S4) admits it only from builtin authors — the same gating that
     // stops pattern code from forging the stamp.
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "llmDialog",
     });

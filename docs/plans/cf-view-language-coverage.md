@@ -15,7 +15,14 @@ editor workspace files, Swift package resolutions, and the `.cfg` files whose
 source opens a JSON object. Python has syntax highlighting and a structure tree
 of its classes and functions. Swift has syntax highlighting and a structure
 tree of its types, functions, initializers, and type-level properties, and its
-package manifests select it through their `.swift` extension.
+package manifests select it through their `.swift` extension. Kotlin, which
+covers Gradle's Kotlin build scripts, has syntax highlighting and a structure
+tree of its types, objects, functions, constructors, and type-level
+properties. TOML, which covers Gradle version catalogs and Cargo manifests and
+lock files, has syntax highlighting and a structure tree of tables and keys.
+Java properties files, ProGuard and R8 keep rules, and XML, which covers
+Android manifests and resources, SVG, and Apple property lists, have syntax
+highlighting; properties files list their keys, and XML lists its elements.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -30,13 +37,15 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python and Swift run on Tree-sitter through a shared, language-neutral adapter,
-which Go, shell, and HTML will use as well.
+Python, Swift, Kotlin, and TOML run on Tree-sitter through a shared,
+language-neutral adapter, which Go, shell, and HTML will use as well. Java
+properties, ProGuard rules, and XML use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, and diff support to honest
+JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, Java properties,
+ProGuard, XML, and diff support to honest
 handling of every textual syntax in the active
 `commonfabric` repositories.
 
@@ -144,16 +153,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Accepted maximum |
-| --- | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -171,6 +180,13 @@ made the same way. Its byte and source figures are what Swift adds, and they
 are held to the later-grammar maximums in the next paragraph. A view loads only
 the grammars of the languages it shows, so only a view showing Swift pays
 Swift's initialization.
+
+The Kotlin and TOML columns are the
+[September 2026 Android formats measurement](../history/packages/cli/cf-view-android-formats-2026-09.md),
+made the same way in two rounds on a shared machine, each beside a Swift run
+that stayed close to Swift's recorded figures. Each timing is the higher of the
+two rounds' 95th percentiles. Kotlin is over two maximums, for the reason under
+"Kotlin over its re-color maximum".
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -294,6 +310,26 @@ languages after Python: 584 lines are spent, so 416 remain, about 139 each. The
 than an allowance all three can take, and the first to reach the cumulative
 maximum starts its own comparison.
 
+#### Kotlin over its re-color maximum
+
+Kotlin re-colors the measured source in 26 milliseconds at the median and 33
+at the 95th percentile, against a 25-millisecond maximum, and parses it with
+structure in 54 at the 95th percentile in one of two rounds, against 50. The
+source repeats a seven-line unit as dense as Swift's, so the difference is in
+the grammar: its incremental parse costs about 5 milliseconds wherever an edit
+falls, against Swift's 0.2, and its query runs about 3 milliseconds longer. On
+100 kilobytes of the Weaver app's own Kotlin, which is less dense, it re-colors
+in 21 at the 95th percentile and parses in 46.
+
+The overrun starts the comparison under "Reconsidering the dependency". The
+other Kotlin grammar pays the same incremental parse, ships its WebAssembly
+build only as a release asset, and leaves more of the Weaver app unparsed. No
+focused Kotlin implementation exists, and one would give up the structure tree.
+The comparison therefore keeps the dependency, and the maximums stay where they
+are. Kotlin's overrun is on a source denser than the code it serves, and a
+change that lowers either the grammar's incremental parse or the adapter's
+per-capture cost is the way to bring it inside.
+
 #### Reconsidering the dependency
 
 Reopen the parser decision for a language when any of these conditions becomes
@@ -415,10 +451,20 @@ diffs, and incomplete edits.
 
 - [ ] Add HTML, CSS, and SCSS.
 - [ ] Delegate HTML `style` and `script` regions to CSS and JavaScript.
-- [ ] Add strict XML separately from permissive HTML.
-- [ ] Route SVG, Apple property lists, and entitlement files through XML.
+- [x] Add strict XML separately from permissive HTML.
+- [x] Route SVG, Apple property lists, and entitlement files through XML.
 - [ ] Evaluate the HTML and CSS parsers already pinned by the UI package
   before adding a dependency.
+
+XML is implemented ahead of the rest of this stage, for the Android formats
+under Stage 14. It uses a focused scanner rather than Tree-sitter: the official
+Tree-sitter XML grammar attaches its WebAssembly build to its GitHub releases
+but no npm package carries it, and XML's lexical syntax is simple enough that
+a scanner covers it, with a structure tree of elements. The
+scanner also selects `.xcprivacy` privacy manifests and `.xcworkspacedata`
+workspace files, which are XML. It colored all 88 XML, SVG, property list,
+entitlement, and privacy manifest files in the local checkouts of the
+organization's repositories without altering their source.
 
 Completion gate: host and embedded syntax ranges preserve the complete input,
 including malformed and partially edited markup.
@@ -481,8 +527,8 @@ Cargo keep their place.
 
 - [x] Add Swift source.
 - [ ] Add Rust source.
-- [ ] Add TOML.
-- [ ] Recognize Cargo manifests and lock files.
+- [x] Add TOML.
+- [x] Recognize Cargo manifests and lock files.
 - [x] Recognize Swift package manifests and package-resolution JSON.
 - [ ] Delegate embedded notebook cells when their language metadata names one
   of the implemented languages.
@@ -514,6 +560,14 @@ variables are not structure. `.swift` selects Swift, which covers
 `Package@swift-5.9.swift`, and so does a module's textual `.swiftinterface`.
 `swift` and `xcrun swift` shebangs select it for an extensionless script.
 Fixtures come from Fabric Mobile, gVisor, Loom, and Loom Scripts.
+
+TOML runs on the Tree-sitter adapter with the
+[`tree-sitter-grammars/tree-sitter-toml`](https://github.com/tree-sitter-grammars/tree-sitter-toml)
+grammar, whose npm package ships its WebAssembly build. It is implemented ahead
+of Rust for the Gradle version catalogs under Stage 14, and it covers Cargo
+manifests through their `.toml` extension and Cargo lock files by name. It
+colored every character other than white space in the 14 TOML files in the
+local checkouts of the organization's repositories.
 
 Completion gate: Fabric Mobile and surveyed gVisor native-language files have
 complete source and manifest selection.
@@ -555,3 +609,66 @@ passes direct-file and diff fixtures.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.
+
+## Stage 14: Kotlin and Android build configuration
+
+Kotlin and the Android build formats are implemented ahead of Stages 3 to 9,
+as Swift was. The July survey predates the Android port of the
+`commonfabric-weaver` repository. A September 25, 2026 read of that repository
+found 453 Kotlin source and script files, 10 XML manifests and resources, 2
+Java properties files, and one ProGuard rules file. The six months before the
+read hold 1,035 path-change events on those Kotlin paths, 14 on the XML, 3 on
+the properties files, and 1 on the rules file. No other local checkout of an
+organization repository holds Kotlin, Java properties, or ProGuard rules, and
+none holds Java source or Groovy Gradle scripts.
+
+- [x] Add Kotlin source and Kotlin scripts, which cover Gradle's
+  `build.gradle.kts` and `settings.gradle.kts`.
+- [x] Add Gradle version catalogs through TOML.
+- [x] Add Java properties files, which cover `gradle.properties` and the Gradle
+  wrapper's settings.
+- [x] Add ProGuard and R8 keep rules.
+- [x] Add Android manifests and resources through XML.
+- [x] Add a `commonfabric-weaver` fixture for each format.
+
+Kotlin runs on the Tree-sitter adapter with the
+[`tree-sitter-grammars/tree-sitter-kotlin`](https://github.com/tree-sitter-grammars/tree-sitter-kotlin)
+grammar, through a package holding only its WebAssembly build;
+`docs/development/DEPENDENCIES.md` gives the procedure for rolling it. The
+grammar ends a statement at a line break between a catch block and a `catch` or
+`finally` clause after it, and then misreads the clause or leaves the whole
+declaration holding it unparsed. The adapter hands the parser each such line
+break as a space, which it does for any grammar that names the stretches of
+source whose line breaks the language ignores. A line break that ends a line
+comment after the block stays, because it ends the comment, so a clause after
+such a comment is left to the grammar. A coverage check over the 453 Kotlin
+files found every file reconstructed exactly and 1.35 percent of characters
+other than white space without a token class. Semicolons, which the grammar
+consumes without a node a query can name, are 2,081 of those characters. 21
+files hold a region the parser could not parse, covering 2.22 percent of lines.
+Without the line-break handling, those figures are 9.5 percent, 54 files, and
+14.8 percent.
+
+Structure covers classes, interfaces, enumerations, objects, companion objects,
+type aliases, functions, methods, secondary constructors, initializer blocks,
+and each property declared on a type, in a primary constructor, or at file
+level, under the first name it binds. `.kt` and `.kts` select Kotlin, and so do
+`kotlin` shebangs.
+
+Java properties files and ProGuard rules use focused scanners. The Tree-sitter
+properties grammar lexes keys and values one character at a time, and
+re-colored a 100-kilobyte file in 39 milliseconds at the 95th percentile, over
+the 25-millisecond maximum; the scanner colors the same file in about 5
+milliseconds. No Tree-sitter grammar exists for ProGuard rules. `.pro` is also
+the suffix of Qt project files and Prolog, and a Qt project's continuation
+lines can start with compiler flags, so a `.pro` file is ProGuard only when a
+line starts with one of ProGuard's option names, apart from the two names an
+Android module template creates.
+
+The
+[September 2026 Android formats measurement](../history/packages/cli/cf-view-android-formats-2026-09.md)
+records the costs and the coverage checks.
+
+Completion gate: every Kotlin, Gradle, properties, ProGuard, and Android XML
+file in `commonfabric-weaver` selects its language, and direct files, diffs,
+and incomplete edits pass the shared fixture contract. The gate passes.

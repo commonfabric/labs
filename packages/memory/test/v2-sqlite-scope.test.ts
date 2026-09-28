@@ -14,6 +14,7 @@ import { connect, loopback } from "../v2/client.ts";
 import { table } from "../v2/sqlite/schema.ts";
 import type { CellScope, SqliteDbRef } from "../v2.ts";
 import { testSessionOpenAuth } from "./v2-auth-test-helpers.ts";
+import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
 
 const SPACE = "did:key:z6Mk-sqlite-scope-test";
 const ALICE = "did:key:z6Mk-alice";
@@ -29,13 +30,7 @@ describe("sqlite cell-db scope (per-user / per-session files)", () => {
     dbId = `of:scope-db-${crypto.randomUUID()}`;
     server = new Server({
       store: new URL("memory://sqlite-scope-test"),
-      // Mirror the real auth hook: trust a principal handed in via `authorization`.
-      authorizeSessionOpen(message) {
-        const principal =
-          (message.authorization as { principal?: unknown } | undefined)
-            ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: testSessionOpenAuth,
     });
   });

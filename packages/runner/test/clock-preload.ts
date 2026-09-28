@@ -96,6 +96,10 @@ installFakeClock({
     // The land-off all-no-op-wave pin drives the same serving loop and
     // S1 quiescence advance — the same wall-clock pacing contract.
     "executor-no-op-wave",
+    // The sustained-input suite drives a live ExecutorHost whose flush
+    // deadline must cut real settles while input keeps arriving, which is
+    // the wall-clock behavior under test.
+    "executor-sustained-input",
     // The Phase-3 client event-append suite drives a live memory server
     // plus the queue's real-time discharge pacing (retry backoff is a
     // wall-clock policy, and the tests wait on transport edges with

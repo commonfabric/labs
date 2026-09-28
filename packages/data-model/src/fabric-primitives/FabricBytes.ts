@@ -156,15 +156,17 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
         typeTag: string,
         state: string,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricBytes | ProblematicValue {
         try {
           const bytes = fromBase64url(state);
           return new FabricBytes(bytes, true);
         } catch {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Bytes: invalid base64: ${state}`,
+            mutable,
           );
         }
       }

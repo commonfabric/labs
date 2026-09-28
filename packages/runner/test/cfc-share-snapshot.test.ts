@@ -1,5 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +17,7 @@ import {
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const visitor = await Identity.fromPassphrase("snapshot-share-visitor");
 const owner = await Identity.fromPassphrase("snapshot-share-owner");
@@ -49,7 +55,7 @@ const setup = async () => {
   );
   const [reader, author] = runtimes;
   const authorTx = author.edit();
-  authorTx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(authorTx, {
     kind: "builtin",
     builtinId: "snapshot-owner",
   });
@@ -461,13 +467,64 @@ describe("cfc-share-snapshot", () => {
     }
   });
 
+  it("refuses a recipient whose only attestation a link carried", async () => {
+    // A document whose root holds a link to the owner's descriptor carries
+    // that descriptor's attestation as a link's entry, which names whom the
+    // linked document represents, not this one.
+    const fixture = await setup();
+    try {
+      const tx = fixture.runtimes[0].edit();
+      const linking = fixture.runtimes[0].getCell(
+        visitor.did(),
+        "link-carried-recipient",
+        undefined,
+        tx,
+      );
+      writeSeedEnvelopeDoc(tx, visitor.did());
+      seedStoredEnvelope(tx, {
+        space: visitor.did(),
+        id: linking.getAsNormalizedFullLink().id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: {},
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: owner.did(),
+                }],
+              },
+              origin: "link",
+            }],
+          },
+        },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+      await linking.sync();
+      expect(() =>
+        prepareSnapshotShare(fixture.source, {
+          user: linking.withTx(undefined),
+        })
+      ).toThrow(/one persisted principal attestation/);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("refuses a recipient changed after review", async () => {
     const fixture = await setup();
     try {
       const target = { user: fixture.recipient };
       const prepared = prepareSnapshotShare(fixture.source, target);
       const tx = fixture.runtimes[0].edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "snapshot-owner",
       });
@@ -732,7 +789,7 @@ describe("cfc-share-snapshot", () => {
         thirdMember.getCellFromLink(shared.getAsNormalizedFullLink()).get()
       ).toThrow(/read ceiling/);
       const createOutsider = thirdMember.edit();
-      createOutsider.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(createOutsider, {
         kind: "builtin",
         builtinId: "snapshot-owner",
       });

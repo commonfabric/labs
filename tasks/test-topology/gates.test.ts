@@ -129,12 +129,10 @@ describe("the repository's gate suites", () => {
     expect(reached("tasks/test-identity-aliases.jsonl")).toEqual([
       "check-test-aliases",
     ]);
-    // Two gates read the workflow: one holds every action it uses to a
-    // pinned commit, and one probes the shape of the job matrix on behalf
-    // of a tripwire.
+    // One gate reads the workflow: it holds every action the workflow uses
+    // to a pinned commit.
     expect(reached(".github/workflows/deno.yml")).toEqual([
       "check-action-pins",
-      "check-tripwires",
     ]);
     // The baselines and the patterns beside them reach one gate each,
     // rather than both reaching both.

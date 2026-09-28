@@ -60,14 +60,17 @@ export function createDefaultJsonRegistry(): CodecRegistry<JsonCodecValue> {
 /**
  * Constructs a `JsonCodecEngine` over {@link createDefaultJsonRegistry}, for a
  * caller that wants this package's classes rather than a set of its own.
- * `options.lenient` is passed through.
+ * `options.lenient` and `options.slotLimit` are passed through.
  */
 export function newDefaultJsonCodecEngine(
-  options?: { lenient?: boolean },
+  options?: { lenient?: boolean; slotLimit?: number },
 ): JsonCodecEngine {
   return new JsonCodecEngine({
     registry: createDefaultJsonRegistry(),
     lenient: options?.lenient ?? false,
+    ...(options?.slotLimit === undefined
+      ? {}
+      : { slotLimit: options.slotLimit }),
   });
 }
 

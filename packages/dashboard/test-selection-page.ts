@@ -18,6 +18,11 @@ import {
 } from "@commonfabric/test-support/records";
 import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
 import {
+  LIVE_PAGE_BADGE,
+  LIVE_PAGE_CLIENT,
+  LIVE_PAGE_STYLES,
+} from "./live-page.ts";
+import {
   compactSpan,
   escapeHtml,
   groupDigits,
@@ -55,6 +60,7 @@ export const TEST_SELECTION_PATH = "/test-selection";
 
 const STYLES = `
   ${DETAIL_PAGE_STYLES}
+  ${LIVE_PAGE_STYLES}
   .summary{display:flex;flex-wrap:wrap;gap:10px 34px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:4px}
   .summary div{display:flex;flex-direction:column;gap:2px}
   .summary dt{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle)}
@@ -235,18 +241,24 @@ function summary(manifest: Manifest): string {
   }</dl>`;
 }
 
-/** The page's frame, which every state of it wears. */
+/**
+ * The page's frame, which every state of it wears. Everything that changes
+ * from one manifest to the next is inside `<main>`, which the page replaces
+ * as the server renders it again.
+ */
 function frame(head: string, body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Test selection</title>
 ${DASHBOARD_THEME_HEAD}
 <style>
 ${STYLES}
-</style></head><body>
-  <div class="top"><a class="back" href="/">← dashboard</a><b>Test selection</b><span>${head}</span></div>
+</style></head><body><main>
+  <div class="top"><a class="back" href="/">← dashboard</a><b>Test selection</b>${LIVE_PAGE_BADGE}<span>${head}</span></div>
   ${body}
   <p class="note">What a pull request runs, from the newest manifest the selection publisher wrote.</p>
+</main>
 ${dashboardThemeToggle()}
 ${DASHBOARD_THEME_CLIENT}
+${LIVE_PAGE_CLIENT}
 </body></html>`;
 }
 

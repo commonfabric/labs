@@ -560,6 +560,7 @@ export const resolveConsoleConfig = async (
       "artifact-root",
       "model",
       "reasoning-effort",
+      "research-reasoning-effort",
       "loom-authoring-config",
       "fabric-api-url",
       "fabric-identity",
@@ -728,6 +729,8 @@ export const resolveConsoleConfig = async (
   // Unset, a turn names no effort and the provider applies its own default.
   const reasoningEffort = flag("reasoning-effort") ??
     nonEmpty(env.CF_HARNESS_REASONING_EFFORT);
+  const researchReasoningEffort = flag("research-reasoning-effort") ??
+    nonEmpty(env.CF_HARNESS_RESEARCH_REASONING_EFFORT);
 
   const spaceDb = flag("space-db") ?? nonEmpty(env.CF_HARNESS_SPACE_DB);
   const spaceDbPath = spaceDb === undefined ? undefined : resolve(cwd, spaceDb);
@@ -744,6 +747,9 @@ export const resolveConsoleConfig = async (
     ),
     model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(researchReasoningEffort !== undefined
+      ? { researchReasoningEffort }
+      : {}),
     fabricSession,
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -864,6 +870,15 @@ export const resolveConsoleConfig = async (
       source: reasoningEffort === undefined
         ? "provider default"
         : source("reasoning-effort", "CF_HARNESS_REASONING_EFFORT"),
+    }, {
+      name: "research reasoning effort",
+      value: researchReasoningEffort ?? "provider default",
+      source: researchReasoningEffort === undefined
+        ? "provider default"
+        : source(
+          "research-reasoning-effort",
+          "CF_HARNESS_RESEARCH_REASONING_EFFORT",
+        ),
     }],
   };
 };

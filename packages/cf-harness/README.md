@@ -345,8 +345,8 @@ What is not done yet:
     Timeline places the model-facing result beside the full fields withheld from
     it, labeled by omission rule. See [console/README.md](console/README.md)
 - [integration/](integration/)
-  - the deployed-topology posture gate, which a continuous-integration job runs
-    against a toolshed it starts
+  - the deployed-topology posture gate, which the `deployed-topology` suite of
+    the test topology runs against a toolshed it starts
 - [docs/SKILLS_SUPPORT_SPEC.md](docs/SKILLS_SUPPORT_SPEC.md)
   - staged Agent Skills support design
 - [../../docs/plans/cf-harness-codex-subscription-auth.md](../../docs/plans/cf-harness-codex-subscription-auth.md)
@@ -794,8 +794,7 @@ inside a Claude Code session reports both.
 A service reaches this through `OTEL_SERVICE_NAME`, which it already sets to
 name itself for tracing. Every process it spawns inherits the variable, so a
 harness a service launches reports `invoker=service` and carries the service's
-own name in `service`. The local dev launcher sets the name for both toolshed
-and the background piece service.
+own name in `service`.
 
 No filesystem path and no git metadata contributes to any field. An absent field
 means the value was not there to read.
@@ -1653,7 +1652,9 @@ light identity path is recorded as deferred rather than misreported as verified.
 An identity mismatch is always refused.
 
 Each exact documentation, source-file, or metadata read is limited to 32,000
-characters. Metadata uses the rendered argument and result types; redundant raw
+characters. Metadata uses the rendered argument and result types, each followed
+by a `type Name = …` line for every definition it refers to by name, so a row
+type such as `LedgerTransaction[]` arrives with its fields; redundant raw
 schemas remain in the retained pattern record. Metadata larger than the limit is
 refused before its pattern is admitted; documentation and source-file reads
 support continuation windows.
@@ -1665,7 +1666,11 @@ exact source ids read in the current call. If a draft claiming completeness
 still cites an unread id and one of the scope's model turns remains, the loop
 allows one tool-free citation-only repair against that same catalog. It never
 fuzzily accepts, completes, or reopens an invented id, and the repair adds no
-private tool calls or extends the scope's budget.
+private tool calls or extends the scope's budget. A final answer that is not
+JSON gets the same kind of turn one step earlier: one tool-free re-ask, quoting
+only the parser's message, while a model turn remains. The reply is parsed as
+strictly as the first answer, nothing is patched into it, and a reply that still
+does not parse fails the call as malformed synthesis.
 
 The `kit` result envelope carries the scoped findings and distinguishes
 `complete` from `incomplete`. Selected patterns require verified published
@@ -3346,10 +3351,11 @@ deno task test
 ```
 
 `integration/` holds one file, `fabric-session-posture-gate.test.ts`, and the
-"Deployed Topology Posture Gates" job in `.github/workflows/deno.yml` names it
-directly against a toolshed it starts. There is no package task for it: the gate
-needs a serving deployment, so `API_URL` is what admits it, and every case is
-skipped without one. That file's own header carries a local invocation.
+test topology's `deployed-topology` suite (`tasks/test-topology/`) runs it
+against a toolshed its `toolshed` capability starts. There is no package task
+for it: the gate needs a serving deployment, so `API_URL` is what admits it, and
+every case is skipped without one. That file's own header carries a local
+invocation.
 
 On Linux, Docker/runsc runs default to the host UID/GID. On macOS, the default
 omits `--user` because Docker Desktop bind mounts may expose host files as

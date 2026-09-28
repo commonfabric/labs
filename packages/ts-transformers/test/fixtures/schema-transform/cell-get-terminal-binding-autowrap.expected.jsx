@@ -265,11 +265,7 @@ const __cfLift_7 = __cfHelpers.lift<{
     type: "object",
     properties: {
         label: {
-            anyOf: [{
-                    type: "string"
-                }, {
-                    type: "undefined"
-                }],
+            type: ["string", "undefined"],
             asCell: ["readonly"]
         }
     }
@@ -287,8 +283,9 @@ const __cfLift_7 = __cfHelpers.lift<{
 // Context: `.filter` over the read array lowers through `filterWithPattern`, so
 //   the element schema of its own lift shrinks to the `sentAt` the callback
 //   reads. `label` pins the optional spelling: optionality rides through the
-//   lift rather than blocking the site, so the input schema carries `label` as
-//   an unrequired `anyOf` and the result widens to include `undefined`.
+//   lift rather than blocking the site, so the input schema carries `label`
+//   unrequired, as `string` or `undefined`, and the result widens to include
+//   `undefined`.
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
     const label = __cf_pattern_input.key("label");

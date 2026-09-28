@@ -329,12 +329,16 @@ it("keeps wrong-subject evidence closed and sibling clauses untouched", () => {
 And it fires on evidence — a membership fact the runtime minted, not a
 string the pattern supplied — which is the same integrity axis the mint
 gate above protects. Two switches govern this, and both are built:
-`cfcPolicyEvaluation`, which decides whether rules are evaluated at all,
-is off in the core preset and on in the maximum-enforcement bundle; the
-render ceiling, which mints that membership fact
-(`packages/runner/src/cfc/render-ceiling.ts`), is complete and ships as
-a browser toggle. Where the bundle is on, the rule above is consulted;
-in the core preset it is carried.
+`cfcPolicyEvaluation`, which decides whether rules are evaluated at the
+commit and sink gates, is pinned to `enforce` in the core preset, so the
+rule above is consulted there; the render ceiling, which mints that
+membership fact (`packages/runner/src/cfc/render-ceiling.ts`), is
+complete and ships as a browser toggle. The display boundary follows
+the render ceiling rather than the dial: it consults the rule wherever
+the ceiling is on, reading the manifest the label pins from the space
+the label is stored in, so the owner and each verified reader of the
+policy's subject space see the value and nobody else does
+(`packages/runtime-client/test/backends/render-audience.test.ts`).
 
 The stored label never loosens. Under `cfcDeclaredMonotonicity: "enforce"`
 a re-mint that drops a clause is refused, naming the document, the path

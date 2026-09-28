@@ -251,6 +251,14 @@ values. See [host embedding](../features/host-embedding.md) and the
 [`cf-share-snapshot` component](../common/components/COMPONENTS.md#cf-share-snapshot)
 for the host and pattern interfaces.
 
+### 3.2 Sealed custody copies
+
+A second route-3 host operation copies a reviewed value into the custody of a
+trusted-declassifier policy rather than to a reader: `cfc/custody-seal.ts`,
+specified in [sealed custody](cfc-custody-seal.md). It releases nothing itself.
+The copy's audience is the policy's release rules, which a rule can bind to the
+seal through the input witness on `TransformedBy`.
+
 ## 4. The rewrite event (specify now, build later)
 
 When a widening must survive without evaluation (§2.4), route 2 proper: an

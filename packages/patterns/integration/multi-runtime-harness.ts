@@ -22,21 +22,15 @@
  * `system:` origin, and so what lets a `#profile` wish open its real create
  * surface rather than an account of why it could not.
  *
- * POSTURE (server-execution v2): the self-hosted standalone server has no
- * serving host — no ExecutorHost, no serving loop — and its engine reads
- * this realm's ambient flag, which nothing here enables. Under the ON
- * posture that combination is a MIXED topology no deployment produces:
- * the worker clients resolve `EXPERIMENTAL_SERVER_EXECUTION=true` from
- * env and send event appends, and the in-process engine's OFF-arm
- * admission refuses them deterministically ("the OFF arm has no
- * event-append admission"), so every cross-session consequence silently
- * never happens (first observed on the first CI run of the ON pattern
- * lanes, 2026-08-21). So when the environment resolves the ON posture
- * (the first session's explicit override, then the canonical env mapping,
- * then the first-party default) and no explicit `apiUrl` was passed, the
- * harness targets the integration environment's toolshed (`env.API_URL`) —
- * the real ON topology, serving loop included — instead of self-hosting.
- * An explicitly OFF first session keeps the in-process standalone server.
+ * POSTURE (server-execution v2): the posture resolves the way a deployed
+ * entry point resolves it — the first session's explicit override, then the
+ * canonical env mapping, then the first-party default — and the self-hosted
+ * server matches it. OFF, it is a plain standalone storage server. ON, it is
+ * a serving one (`listenServingMemoryServer()`), with an `ExecutorHost`
+ * serving loop over it as a serving toolshed has, so the events the worker
+ * clients append are delivered. A storage server without that loop under ON
+ * clients is a topology no deployment produces, in which every cross-session
+ * consequence silently never happens.
  */
 
 import { fromFileUrl } from "@std/path/from-file-url";
@@ -47,7 +41,6 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
@@ -62,6 +55,7 @@ import {
   PATTERNS_ROOT,
 } from "@commonfabric/integration/pattern-coverage";
 import type { CfcWriteFloorMode } from "@commonfabric/runner/cfc";
+import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import {
   type CommitRejection,
@@ -174,9 +168,10 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const RPC_TIMEOUT_MS = 120_000;
 
 /** Total event-consequence quiescence budget per `settle()` call on a
- * toolshed-backed harness (see `settle`): generous against the measured
- * ~2–3 s serving drain of a 40-event pipelined storm, small against the
- * suite timeouts a wedged consequence would otherwise eat. */
+ * harness whose server serves, or that it cannot see into (see `settle`):
+ * generous against the measured ~2–3 s serving drain of a 40-event
+ * pipelined storm, small against the suite timeouts a wedged consequence
+ * would otherwise eat. */
 const SERVED_SETTLE_QUIESCENCE_BUDGET_MS = 10_000;
 
 /**
@@ -587,19 +582,31 @@ export class MultiRuntimeSession {
   }
 }
 
+/** The in-process server a harness hosts, when it hosts one. */
+type HostedServer = {
+  /** The server's `idle()`, which covers storage and not a serving loop. */
+  idle(): Promise<void>;
+
+  /** Closes the server, and its serving loop first when it has one. */
+  close(): Promise<void>;
+};
+
 export class MultiRuntimeHarness {
   readonly sessions: MultiRuntimeSession[];
   readonly pieceId: string;
-  #server?: StandaloneMemoryServer;
+  #server?: HostedServer;
+  #awaitsServedConsequences: boolean;
 
   private constructor(
     sessions: MultiRuntimeSession[],
     pieceId: string,
-    server?: StandaloneMemoryServer,
+    server: HostedServer | undefined,
+    awaitsServedConsequences: boolean,
   ) {
     this.sessions = sessions;
     this.pieceId = pieceId;
     this.#server = server;
+    this.#awaitsServedConsequences = awaitsServedConsequences;
   }
 
   static async create(
@@ -609,10 +616,9 @@ export class MultiRuntimeHarness {
       throw new Error("MultiRuntimeHarness needs at least one session");
     }
     const spaceName = options.spaceName ?? crypto.randomUUID();
-    // The ON posture needs a serving host, which the standalone in-process
-    // server does not have — see the header's POSTURE block. Resolve the
-    // posture exactly like a deployed entry point (canonical env mapping,
-    // else the first-party default) and pick the backend accordingly.
+    // Resolve the posture exactly like a deployed entry point (canonical env
+    // mapping, else the first-party default), and host a server matching it —
+    // see the header's POSTURE block.
     const firstSession = options.sessions[0];
     const explicitServerExecution = typeof firstSession === "string"
       ? undefined
@@ -620,12 +626,14 @@ export class MultiRuntimeHarness {
     const serverExecutionOn = explicitServerExecution ??
       experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
       SERVER_EXECUTION_DEFAULT_ENABLED;
-    const targetUrl = options.apiUrl ??
-      (serverExecutionOn ? new URL(env.API_URL) : undefined);
-    const server = targetUrl ? undefined : StandaloneMemoryServer.start({
-      serve: (request) => systemPatternsRoute().serve(request),
-    });
-    const apiUrl = (targetUrl ?? server!.url).href;
+    const serve = (request: Request) => systemPatternsRoute().serve(request);
+    const server = options.apiUrl !== undefined
+      ? undefined
+      : serverExecutionOn
+      ? await listenServingMemoryServer({ serve })
+      : StandaloneMemoryServer.start({ serve });
+    const targetUrl = options.apiUrl ?? server!.url;
+    const apiUrl = targetUrl.href;
 
     const sessions: MultiRuntimeSession[] = [];
     let bootstrap: WorkerClient | undefined;
@@ -693,7 +701,14 @@ export class MultiRuntimeHarness {
         await session.client().call("openPiece", { pieceId });
       }
 
-      return new MultiRuntimeHarness(sessions, pieceId, server);
+      // A server the harness cannot see into, or one whose serving loop runs
+      // behind its storage, has consequences still to arrive once it is idle.
+      return new MultiRuntimeHarness(
+        sessions,
+        pieceId,
+        server,
+        server === undefined || serverExecutionOn,
+      );
     } catch (error) {
       bootstrap?.terminate();
       for (const session of sessions) {
@@ -728,33 +743,31 @@ export class MultiRuntimeHarness {
    * 4. Every runtime settles again, so a foreign write that just arrived and
    *    re-derives local cells has its recompute run before this round ends.
    *
-   * With a running toolshed (when `apiUrl` was passed, or the ON posture
-   * resolved one) there is no in-process server handle for step 2, and under
-   * the ON posture the toolshed's serving loop processes this harness's event
-   * appends ASYNCHRONOUSLY — a fixed round count of idle/barrier hops races
-   * the drain (the OW52 shape: a 40-event pipelined storm needs ~2–3 s of
-   * server time while 20 rounds complete in well under a second, so the
-   * assert read a mid-drain head). Step 2's replacement is the
-   * client-observable stand-in for `server.idle()`: wait until every event
-   * each session fired has its terminal consequence ARRIVED back at that
-   * session (speculation.md §4 step 2 — the overlay's outstanding-intent set
-   * empties exactly then). CAVEAT (#6158 review F2): this covers
-   * FIRST-ORDER consequences only — a server-side cascade child (an event a
-   * served handler itself emits) is no session's intent and commits in a
-   * LATER wave, outside the wait; cascades ride the ordinary barrier rounds,
-   * so a test asserting on cascade results still needs enough rounds (or a
-   * `waitFor`). The wait shares ONE budget across the whole `settle()`
-   * call, so a genuinely wedged consequence degrades to the old behavior
-   * (the caller's assert speaks) instead of hanging the harness — LOUDLY:
-   * exhausting the budget with intents still outstanding warns once, so a
-   * red assert after it self-identifies as budget exhaustion (a slow
-   * serving drain) rather than re-opening the OW52 loss triage. The
-   * barrier then pulls each replica to a head ≥ every first-order
-   * consequence commit. Instant on an OFF-posture toolshed run (no
-   * overlay, no outstanding intents).
+   * Step 2 covers storage and not a serving loop. Under the ON posture a
+   * serving loop — the self-hosted one, or a toolshed's when `apiUrl` was
+   * passed — processes this harness's event appends asynchronously, and a
+   * toolshed offers no handle for step 2 at all. A fixed round count of
+   * idle/barrier hops races that drain (a 40-event pipelined storm needs
+   * ~2–3 s of server time while 20 rounds complete in well under a second,
+   * so the assert read a mid-drain head). So those harnesses add a wait to
+   * step 2: until every event each session fired has its terminal
+   * consequence ARRIVED back at that session (speculation.md §4 step 2 — the
+   * overlay's outstanding-intent set empties exactly then). CAVEAT: this
+   * covers FIRST-ORDER consequences only — a server-side cascade child (an
+   * event a served handler itself emits) is no session's intent and commits
+   * in a LATER wave, outside the wait; cascades ride the ordinary barrier
+   * rounds, so a test asserting on cascade results still needs enough rounds
+   * (or a `waitFor`). The wait shares ONE budget across the whole `settle()`
+   * call, so a genuinely wedged consequence leaves the caller's assert to
+   * speak instead of hanging the harness — LOUDLY: exhausting the budget
+   * with intents still outstanding warns once, so a red assert after it
+   * identifies itself as budget exhaustion (a slow serving drain) rather than
+   * a lost write. The barrier then pulls each replica to a head ≥ every
+   * first-order consequence commit. The wait returns at once where there is
+   * no overlay and so no outstanding intent, as on an OFF-posture toolshed.
    */
   async settle(rounds = 2): Promise<void> {
-    const quiescenceDeadline = this.#server === undefined
+    const quiescenceDeadline = this.#awaitsServedConsequences
       ? Date.now() + SERVED_SETTLE_QUIESCENCE_BUDGET_MS
       : undefined;
     let quiescenceWarned = false;

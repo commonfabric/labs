@@ -10,6 +10,46 @@ This demo is the canonical copyable form for a module-authored direct policy:
 `THIS_POLICY.subject`. `cfcAtom` constructs concrete runtime atoms; the two
 surfaces are intentionally separate.
 
+`blessed-computation.tsx` releases the output of one function defined in the
+policy's own module. When every write of a transaction comes from one verified
+function, the runtime mints a `TransformedBy` atom naming that function's module
+and export name onto what it writes, and the rule matches it with
+`moduleIdentity: THIS_POLICY.moduleIdentity`, which binds to the defining
+module's identity at evaluation time. Another function of the same module, a
+handler copying a raw input, or a different version of the module does not
+satisfy the rule. `blessed-object.tsx` does the same for a function returning an
+object, whose object node is released along with its fields.
+
+`custody-projector.tsx` is demo-grade: its rule names the projector alone rather
+than requiring the seal's input witness. It is a room whose members seal their
+stances into the policy's custody through the host's `cf-custody-seal`, and
+whose policy releases only what its projector computes over the sealed box: one
+of the listed answers. It shows the pattern side of the
+[custody seal](../../../docs/specs/cfc-custody-seal.md): seats named by attested
+cells, the policy read from a declaring cell's label, and the box link the seal
+writes into the room. Under its identity-only rule a member's own code can feed
+the projector a crafted box and learn another member's entry from the answers.
+The same rule requiring `TransformedBy{builtin cfc-custody-seal}` as its input
+witness releases the answer over the box the seal linked, and refuses one over
+any document other code put in its place; the spec's limits say what that still
+leaves open.
+
+`witnessed-chain.tsx` narrows the tally rule with an `inputWitness`: it releases
+the tally only when every confidential location the tally read was written by
+the module's `commit` step, and every one `commit` read was written by its
+`submit` step. Public inputs do not constrain the witness, so it does not prove
+that every value the tally read came from `commit`. A relay between the two, a
+vote planted beside the committed ones, a vote list written by other code, and a
+brief other code added before `commit` ran are refused, though the tally's own
+identity would release each of them. The briefs are objects in a list, which the
+runtime stores behind references, and a reference `submit` stored carries its
+stamp as the object does. `submit` is attributed only when its transaction reads
+something labeled: storing a pushed brief reads the document holding the list,
+which here holds the committed input's default. Without that default its first
+write carries no stamp, and the second level releases nothing.
+`docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
+and what it does not.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -33,4 +73,8 @@ Run:
 ```sh
 deno task cf check packages/patterns/cfc-exchange-rules/direct-release.tsx --show-transformed --no-run
 deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/blessed-object.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/custody-projector.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx
 ```

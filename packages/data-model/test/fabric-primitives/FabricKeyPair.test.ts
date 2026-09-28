@@ -289,6 +289,10 @@ describe("FabricKeyPair", () => {
           });
         });
 
+        it("returns a frozen record", () => {
+          expect(Object.isFrozen(codec.encode(materialPair(), env))).toBe(true);
+        });
+
         it("throws for an instance holding handles", async () => {
           const pair = new FabricKeyPair(await generatePair());
 
@@ -404,6 +408,13 @@ describe("FabricKeyPair", () => {
           // No algorithm field: each `CryptoKey` carries its own, which is
           // what the reconstructed pair reads it from.
           expect(state.algorithm).toBe(undefined);
+        });
+
+        it("returns a frozen record for material and for handles", async () => {
+          const handles = new FabricKeyPair(await generatePair());
+
+          expect(Object.isFrozen(codec.encode(materialPair(), env))).toBe(true);
+          expect(Object.isFrozen(codec.encode(handles, env))).toBe(true);
         });
       });
 
@@ -601,7 +612,9 @@ describe("FabricKeyPair", () => {
     it("throws for an instance holding handles", async () => {
       const pair = new FabricKeyPair(await generatePair());
 
-      expect(() => hashStringOf(pair)).toThrow(/cannot hash a key pair/);
+      expect(() => hashStringOf(pair)).toThrow(
+        "Cannot hash a `FabricKeyPair` that holds opaque handles",
+      );
     });
   });
 });

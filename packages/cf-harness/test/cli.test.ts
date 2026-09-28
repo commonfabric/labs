@@ -922,6 +922,18 @@ Deno.test("parseCfHarnessCliArgs rejects an empty reasoning effort flag", async 
   );
 });
 
+Deno.test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--research-reasoning-effort", "  "],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--research-reasoning-effort requires a non-empty value",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and environment", async () => {
   const fromFlag = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--sandbox-docker-runtime", "runc"],

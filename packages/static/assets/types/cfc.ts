@@ -166,9 +166,13 @@ export type CfcPatternVariable = CfcAtomObject & {
 export type CfcThisPolicySubjectPattern = CfcAtomObject & {
   readonly thisPolicyField: "subject";
 };
+export type CfcThisPolicyModuleIdentityPattern = CfcAtomObject & {
+  readonly thisPolicyField: "moduleIdentity";
+};
 export type CfcThisPolicyPattern = CfcAtomObject & {
   readonly thisPolicy: true;
   readonly subject: CfcThisPolicySubjectPattern;
+  readonly moduleIdentity: CfcThisPolicyModuleIdentityPattern;
 };
 export type CfcPatternString =
   | string

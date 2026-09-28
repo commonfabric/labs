@@ -1,8 +1,8 @@
 /**
  * coverage-debt: the median day's move over a run of daily measurements, and
  * the view it produces. The samples are supplied directly, so nothing here
- * reaches GitHub or the filesystem; the tile's own collection is covered by
- * coverage-debt-history.test.ts.
+ * reaches the record store or the filesystem; the tile's own collection is
+ * covered by coverage-debt-history.test.ts.
  */
 
 import { expect } from "@std/expect";
@@ -11,18 +11,16 @@ import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import type { Ctx } from "../types.ts";
-import type { GitHubDownload } from "../lib.ts";
 import {
-  type CoverageDebtGitHub,
   type CoverageDebtSample,
+  type CoverageDebtSource,
   CoverageDebtStore,
 } from "../coverage-debt-history.ts";
-import { artifactZip } from "../test/artifact-zip.ts";
+import { fakeCoverageStore } from "../test/coverage-store.ts";
 import {
   COVERAGE_MIN_DAYS,
   COVERAGE_STALE_DAYS,
   COVERAGE_TREND_DAYS,
-  coverageDebt,
   coverageDebtView,
   dailyChangeLabel,
   makeCoverageDebt,
@@ -39,55 +37,20 @@ const context: Ctx = {
   env: () => undefined,
 };
 
-const withToken: Ctx = {
-  ...context,
-  env: (key) => key === "GH_TOKEN" ? "t" : undefined,
-};
-
-/** A `perf-metrics` file recording `lines`, with a warm compile cache. */
-const metricsFile = (lines: number) =>
-  JSON.stringify({
-    metrics: [{
-      name: "coverage-debt: workspace uncovered lines",
-      durationSeconds: lines,
-    }],
-    compileCacheStates: { "pattern-unit": "warm" },
-  });
-
 /**
- * Answers with one successful `main` run a day, each measuring `lines`, or
- * fails every request. They fit on a page, and a page holding fewer runs than
- * the listing serves is its last, so every day of them is a day read whole.
+ * A store holding one `main` run a day, each measuring `lines`, or failing
+ * every request.
  */
-function stubGitHub(lines: number | Error): CoverageDebtGitHub {
-  const runs = Array.from({ length: 70 }, (_, back) => ({
-    id: 1000 + back,
-    created_at: new Date(NOW - back * DAY_MS).toISOString(),
-    head_branch: "main",
-    event: "push",
-    conclusion: "success",
-  }));
-  return {
-    // deno-lint-ignore require-await
-    json: async <T>(path: string): Promise<T> => {
-      if (lines instanceof Error) throw lines;
-      if (path.includes("/runs?")) {
-        const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 1);
-        return { workflow_runs: page === 1 ? runs : [] } as T;
-      }
-      return {
-        artifacts: [{ id: 7, name: "perf-metrics", expired: false }],
-      } as T;
-    },
-    download: async (): Promise<GitHubDownload> => {
-      if (lines instanceof Error) throw lines;
-      return {
-        ok: true,
-        status: 200,
-        body: await artifactZip("perf-metrics.json", metricsFile(lines)),
-      };
-    },
-  };
+function stubStore(lines: number | Error): CoverageDebtSource {
+  return lines instanceof Error
+    ? fakeCoverageStore([], lines)
+    : fakeCoverageStore(
+      Array.from({ length: 70 }, (_, back) => ({
+        day: new Date(NOW - back * DAY_MS).toISOString().slice(0, 10),
+        runId: 1000 + back,
+        lines,
+      })),
+    );
 }
 
 const dayAt = (back: number) =>
@@ -293,21 +256,15 @@ describe("coverage-debt", () => {
   });
 
   describe("collect()", () => {
-    it("returns gray without a GitHub token, having asked GitHub nothing", async () => {
-      const view = await coverageDebt.collect(context);
-      expect(view.status).toBe("unknown");
-      expect(view.sub).toContain("GH_TOKEN");
-    });
-
     it("returns the view its window of days supports", async () => {
       const directory = await Deno.makeTempDir({ prefix: "coverage-tile-" });
       try {
         const tile = makeCoverageDebt({
-          github: stubGitHub(64000),
+          source: stubStore(64000),
           store: new CoverageDebtStore(join(directory, "history.json")),
           now: () => NOW,
         });
-        const view = await tile.collect(withToken);
+        const view = await tile.collect(context);
         expect(view.status).toBe("good");
         expect(view.value).toBe("64,000 lines");
         // Every day of the window measured the same number, so the median day
@@ -325,11 +282,11 @@ describe("coverage-debt", () => {
       console.error = (...parts: unknown[]) => void logged.push(parts[0]);
       try {
         const tile = makeCoverageDebt({
-          github: stubGitHub(new Error("HTTP 500")),
+          source: stubStore(new Error("HTTP 500")),
           store: new CoverageDebtStore(join(directory, "history.json")),
           now: () => NOW,
         });
-        const view = await tile.collect(withToken);
+        const view = await tile.collect(context);
         expect(view.status).toBe("unknown");
         expect(view.value).toBe("—");
         expect(view.sub).toBeDefined();
@@ -337,7 +294,7 @@ describe("coverage-debt", () => {
         console.error = error;
         await Deno.remove(directory, { recursive: true });
       }
-      expect(logged).toEqual(["coverage debt: could not read main runs:"]);
+      expect(logged).toEqual(["coverage debt: could not read the store:"]);
     });
 
     it("keeps its history in the dashboard cache directory by default", async () => {
@@ -346,10 +303,10 @@ describe("coverage-debt", () => {
       Deno.env.set("DASHBOARD_CACHE_DIR", directory);
       try {
         const tile = makeCoverageDebt({
-          github: stubGitHub(64000),
+          source: stubStore(64000),
           now: () => NOW,
         });
-        expect((await tile.collect(withToken)).status).toBe("good");
+        expect((await tile.collect(context)).status).toBe("good");
         expect([...Deno.readDirSync(directory)].map((entry) => entry.name))
           .toEqual(["fabric-wall-coverage-debt.json"]);
       } finally {

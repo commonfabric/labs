@@ -11,6 +11,7 @@
 
 import {
   type AliasResolver,
+  isMainPush,
   parseReportGroups,
   type RunContext,
   type StoredReport,
@@ -314,14 +315,8 @@ export function provenance(
   if (context.ci === undefined) return undefined;
   const branch = context.branch ?? "";
   if (branch.length === 0) return undefined;
-  // A baseline is a run of code the tree itself carries: a push to the
-  // default branch that the fork flag does not mark. The flag marks a run
-  // whose head repository differs from this one, and marks a run whose
-  // payload did not name both, so neither can stand as a baseline.
-  const place =
-    context.ci.event === "push" && branch === "main" && !context.ci.fork
-      ? "main"
-      : "pr";
+  // A baseline is a run of code the tree itself carries.
+  const place = isMainPush(context) ? "main" : "pr";
   return { place, source: branch };
 }
 
@@ -332,7 +327,11 @@ export interface ReadReport {
   /** Where each identity in it runs, by identity key. */
   surfaces: Map<string, Surface>;
 
-  /** Every passing duration, by identity key and then by day. */
+  /**
+   * Every passing duration a continuous-integration runner measured, by
+   * identity key and then by day. A workstation's are left out, since a
+   * cost predicts what a lane's runner will spend.
+   */
   durations: Map<string, Map<string, number[]>>;
 
   /** What the lanes in this object measured about themselves. */
@@ -428,8 +427,11 @@ export function readReport(
       // A cost predicts what a lane will spend running this test again,
       // and only a passing execution measures that. A failure ended
       // where the failure was reached, and where a wait's safety net
-      // ended it, its duration is that net's bound.
-      if (record.outcome !== "pass") continue;
+      // ended it, its duration is that net's bound. And only a lane's
+      // runner measures what a lane will spend: a workstation is another
+      // machine, faster or slower by however it differs, so its record
+      // counts as evidence about the test and not about its cost.
+      if (record.outcome !== "pass" || where.place === "local") continue;
       let byDay = durations.get(key);
       if (byDay === undefined) {
         byDay = new Map();
@@ -735,6 +737,9 @@ export function buildManifest(input: BuildInput): Manifest {
     calibration: {
       setupCost: input.calibration?.setupCost ?? {},
       suites: input.calibration?.suites ?? {},
+      ...(input.calibration?.suitesWithCoverage === undefined
+        ? {}
+        : { suitesWithCoverage: input.calibration.suitesWithCoverage }),
       prologue: input.calibration?.prologue ?? LANE_PROLOGUE_SECONDS,
     },
     entries,
@@ -768,7 +773,7 @@ interface Contributions {
   /** What the lanes in them measured about themselves. */
   lanes: LaneObservation[];
 
-  /** The slowest passing runs of each identity, by key and then by day. */
+  /** The passing runs of each identity, by key and then by day. */
   samples: Map<string, Map<string, DaySamples>>;
 
   /**
@@ -814,9 +819,10 @@ function rememberSurface(
  * Merges what one batch contributed into what a fold holds, giving what
  * reading that batch's objects into the fold directly would have given.
  * The duration samples are the part of that which has to be shown rather
- * than assumed: a day's sample keeps only its slowest runs, and
- * `mergeSamples` keeps of two parts what one accumulation of the whole
- * would have kept, so a day read in parts costs what the day costs.
+ * than assumed: a day's sample counts its runs by bucket, and
+ * `mergeSamples` adds the counts of two parts, which is what one
+ * accumulation of the whole would have counted, so a day read in parts
+ * costs what the day costs.
  */
 function absorb(into: Contributions, batch: Contributions): void {
   for (const [key, surface] of batch.surfaces) {

@@ -444,6 +444,110 @@ describe("space-invites", () => {
       await f.close();
     }
   });
+  it("issues and redeems an OWNER invitation, refusing non-owner issuers and a body edited after signing", async () => {
+    const f = await fixture();
+    try {
+      const writer = await Identity.generate({ implementation: "noble" });
+      const invite = await f.client(f.owner).create({
+        access: "OWNER",
+        ttlSeconds: 60,
+      });
+      expect(invite).toMatchObject({ access: "OWNER", maxUses: 1 });
+      expect(
+        await f.client(f.guest).redeem({
+          inviteId: invite.inviteId,
+          code: invite.code,
+        }),
+      ).toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      // The new owner administers the space: it grants WRITE by invitation
+      // and changes the ACL document over its own session.
+      const writeInvite = await f.client(f.guest).create({
+        access: "WRITE",
+        ttlSeconds: 60,
+      });
+      expect(
+        (await f.client(writer).redeem({
+          inviteId: writeInvite.inviteId,
+          code: writeInvite.code,
+        })).currentAccess,
+      ).toBe("WRITE");
+      // A WRITE holder can issue no invitation, OWNER or otherwise.
+      for (const access of ["OWNER", "WRITE"] as const) {
+        const credentials = createInviteCredentials();
+        const refused = await f.raw("create", {
+          inviteId: credentials.inviteId,
+          codeVerifier: inviteCodeVerifier({
+            host: f.host,
+            space: f.space,
+            ...credentials,
+          }),
+          access,
+          ttlSeconds: 60,
+        }, writer);
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toEqual({ code: "not-owner" });
+      }
+      // The owner signs a WRITE issuance; the same proof carrying OWNER
+      // is refused, because the proof covers the body's digest.
+      const credentials = createInviteCredentials();
+      const signed = {
+        inviteId: credentials.inviteId,
+        codeVerifier: inviteCodeVerifier({
+          host: f.host,
+          space: f.space,
+          ...credentials,
+        }),
+        access: "WRITE",
+        ttlSeconds: 60,
+      };
+      const url = new URL(`/api/spaces/${f.space}/invites/create`, f.host);
+      const headers = await signFirstPartyHttpRequest({
+        url,
+        method: "POST",
+        body: JSON.stringify(signed),
+        signer: f.owner,
+      });
+      const edited = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...signed, access: "OWNER" }),
+      });
+      expect(edited.status).toBe(401);
+      expect(await edited.json()).toEqual({ code: "invalid-proof" });
+      // A redemption body cannot name the access it wants.
+      const asking = await f.raw("redeem", {
+        inviteId: writeInvite.inviteId,
+        code: writeInvite.code,
+        access: "OWNER",
+      }, writer);
+      expect(asking.status).toBe(400);
+      await asking.body?.cancel();
+      const { client, session } = await f.memory(f.guest);
+      try {
+        const acl = await session.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: aclDocId(f.space),
+            value: {
+              value: {
+                [f.owner.did()]: "OWNER",
+                [f.guest.did()]: "OWNER",
+                [writer.did()]: "READ",
+              },
+            },
+          }],
+        });
+        expect(acl.seq).toBeGreaterThan(1);
+      } finally {
+        await client.close();
+      }
+      expect(await f.client(f.owner).list()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
   it("does not recreate revoked admission when a still-fresh signed create proof is replayed", async () => {
     const f = await fixture();
     try {
@@ -510,10 +614,13 @@ describe("space-invites", () => {
         headers: { Origin: "https://shell.example" },
       });
       expect(capability.headers.get("access-control-allow-origin")).toBe("*");
+      // `access` names what this service can issue. A service without the
+      // field predates OWNER invitations and refuses them.
       expect(await capability.json()).toEqual({
         version: 1,
         maxUses: 1000,
         maxTtlSeconds: 2592000,
+        access: ["READ", "WRITE", "OWNER"],
       });
       const preflight = await fetch(
         `${f.host}/api/spaces/${f.space}/invites/redeem`,

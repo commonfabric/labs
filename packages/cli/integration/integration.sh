@@ -1349,16 +1349,17 @@ run_piece_data_files() {
 # markers close the previous step's record and the exit trap closes the last
 # one, so a failing step is recorded with the failure.
 #
-# `all` runs every step, and every step also runs under one of the sections CI
-# dispatches: piece-values, piece-call, and piece-links. Both hold in
-# packages/cli/test/integration-sections.test.ts, which reads this table and
-# the cli-integration-test matrix in .github/workflows/deno.yml.
+# `all` runs every step, and CI runs each step through the arm that runs it
+# alone: the test topology's `cli-core` suite (tasks/test-topology/cli.ts)
+# makes a unit of every such arm, and a lane is given those units. Both hold
+# in packages/cli/test/integration-sections.test.ts, which reads this table
+# and the `cli-core` units.
 #
 # Two kinds of arm live here. A **step arm** runs exactly one step, and
 # every step has one, so any step can be run and scheduled on its own. A
-# **group arm** runs several, for a person running the script by hand and
-# for the continuous-integration legs. Where a group arm and a step arm
-# would share a name, the step arm takes an `-only` suffix.
+# **group arm** runs several, for a person running the script by hand. Where
+# a group arm and a step arm would share a name, the step arm takes an
+# `-only` suffix.
 case "$SECTION" in
   all)
     cf_test_step_begin piece-values

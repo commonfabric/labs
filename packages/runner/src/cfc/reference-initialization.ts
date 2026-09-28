@@ -1,4 +1,9 @@
 import {
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import {
+  isCellLink,
   isPrimitiveCellLink,
   isWriteRedirectLink,
   type NormalizedFullLink,
@@ -39,6 +44,41 @@ export function recordReferencedArgumentFields(
         path,
       },
       value: staged,
+    }, runtimeWritePolicyAuthorization);
+  }
+}
+
+/**
+ * Records the slots a runtime replaying a piece's setup carries over from the
+ * stored argument document: every slot `stored` holds that `supplied` does not
+ * name, with the bytes it holds. The replay stages the whole document again,
+ * so these slots are staged with what they already hold. The commit verifier
+ * independently checks that the transaction leaves each one unchanged, and a
+ * slot it changes receives nothing from this record.
+ */
+export function recordReplayedArgumentSlots(
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  supplied: unknown,
+  stored: unknown,
+): void {
+  if (!isFabricPlainObject(stored as FabricValue) || isCellLink(stored)) return;
+  const named = isFabricPlainObject(supplied as FabricValue) &&
+      !isCellLink(supplied)
+    ? supplied as Record<string, unknown>
+    : {};
+  for (const [slot, value] of Object.entries(stored as object)) {
+    if (Object.hasOwn(named, slot)) continue;
+    tx.recordCfcWritePolicyInput({
+      kind: "initialization",
+      mode: "replay",
+      target: {
+        space: argument.space,
+        id: argument.id,
+        scope: argument.scope,
+        path: [...argument.path, slot],
+      },
+      value: value as FabricValue,
     }, runtimeWritePolicyAuthorization);
   }
 }

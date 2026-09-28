@@ -211,9 +211,7 @@ function getCfCommand(rootDir: string): string[] {
 }
 
 /**
- * Finds all `.test.tsx` pattern tests that match the given filter (if any). A
- * filter of the form `<chunk>/<total-chunks>` selects the files whose stable
- * filename hash belongs to that chunk.
+ * Finds all `.test.tsx` pattern tests that match the given filter (if any).
  */
 async function findPatternTests(
   rootDir: string,
@@ -224,20 +222,7 @@ async function findPatternTests(
   // hands over when a lane was asked for part of this suite. A name
   // filter cannot express a set of unrelated files, and a list of them is
   // exactly what selection produces.
-  if (only !== undefined) return selectPatternTestFiles([...only]);
-  const { chunkStr, totalChunksStr, nameFilter } = (filter ?? "")
-    .match(
-      /^(?:(?<chunkStr>[1-9][0-9]*)[/](?<totalChunksStr>[1-9][0-9]*)|(?<nameFilter>.+)|)$/,
-    )!
-    .groups as {
-      chunkStr?: string;
-      totalChunksStr?: string;
-      nameFilter?: string;
-    };
-
-  const chunk = chunkStr ? parseInt(chunkStr) : undefined;
-  const totalChunks = totalChunksStr ? parseInt(totalChunksStr) : undefined;
-
+  if (only !== undefined) return selectPatternTestFiles(only);
   const testFiles: string[] = [];
   for (const tree of PATTERN_TREES) {
     for await (
@@ -247,52 +232,17 @@ async function findPatternTests(
       })
     ) {
       const relative = normalizePatternPath(path.relative(rootDir, entry.path));
-      if (!nameFilter || matchesPatternFilter(relative, nameFilter)) {
+      if (!filter || matchesPatternFilter(relative, filter)) {
         testFiles.push(relative);
       }
     }
   }
-
-  if (chunk && totalChunks) {
-    if (chunk > totalChunks) {
-      throw new Error(`Nonsensical chunk demand: ${chunk}/${totalChunks}`);
-    }
-    console.log(`Testing pattern chunk ${chunk} of ${totalChunks}.`);
-    console.log(`${testFiles.length} tests in total across all chunks.`);
-    return selectPatternTestFiles(testFiles, {
-      index: chunk,
-      total: totalChunks,
-    });
-  } else {
-    return selectPatternTestFiles(testFiles);
-  }
+  return selectPatternTestFiles(testFiles);
 }
 
-const FNV1A_OFFSET_BASIS = 0x811c9dc5;
-const FNV1A_PRIME = 0x01000193;
-const UTF8_ENCODER = new TextEncoder();
-
-function fnv1a32(value: string): number {
-  let hash = FNV1A_OFFSET_BASIS;
-  for (const byte of UTF8_ENCODER.encode(value)) {
-    hash ^= byte;
-    hash = Math.imul(hash, FNV1A_PRIME) >>> 0;
-  }
-  return hash;
-}
-
-export function selectPatternTestFiles(
-  files: string[],
-  shard?: { index: number; total: number },
-): string[] {
-  const sorted = files.map((file) => file.replaceAll("\\", "/")).toSorted();
-  if (!shard) return sorted;
-  if (shard.index < 1 || shard.index > shard.total) {
-    throw new Error(`Nonsensical chunk demand: ${shard.index}/${shard.total}`);
-  }
-  return sorted.filter((file) =>
-    fnv1a32(file) % shard.total === shard.index - 1
-  );
+/** The pattern test paths `files` names, slash-separated and sorted. */
+export function selectPatternTestFiles(files: readonly string[]): string[] {
+  return files.map((file) => file.replaceAll("\\", "/")).toSorted();
 }
 
 /**
@@ -301,7 +251,7 @@ export function selectPatternTestFiles(
  * path and cut into runs of neighbors, one process each, `concurrency` of
  * them at a time: files that sit together share most of their modules, so
  * each such run compiles those once, and the runs overlap only where a
- * directory straddles a cut. A run is sized from the shard as a whole, about
+ * directory straddles a cut. A run is sized from the list as a whole, about
  * a `concurrency`th of it, so the count of processes stays near
  * `concurrency` however the files divide among program roots; a run never
  * straddles a root, since each process is handed one. A file that fails to

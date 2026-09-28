@@ -4,7 +4,9 @@
  * The memory server authenticates a client by verifying the signature on its
  * `session.open` invocation; the verified issuer becomes the session principal
  * that storage partitioning keys off. Toolshed's `/api/storage/memory` route
- * and the standalone test server use this shared verifier.
+ * and the standalone test server use this shared verifier, and
+ * {@link authorizeLoopbackSessionOpen} applies it to the signed opens an
+ * in-process memory server receives.
  *
  * The handshake adds three anti-replay checks on top of the signature:
  *
@@ -205,4 +207,27 @@ export const verifySessionOpenAuthorization = async (
   }
 
   return invocation.iss;
+};
+
+/**
+ * Authorizes a `session.open` on an in-process memory server. A signed open
+ * is verified as a deployed memory server verifies it, and admitted as the
+ * signature's issuer. An unsigned open is admitted, unverified, as the
+ * principal its `authorization.principal` names, or with no principal when it
+ * names none. Trusting that unsigned claim confines this authorizer to
+ * in-process emulation, where every client shares the process: tests, and
+ * local emulated storage such as `cf dev`.
+ */
+export const authorizeLoopbackSessionOpen = (
+  message: SessionOpenMessage,
+  context: VerifySessionOpenOptions,
+): Promise<string> | string | undefined => {
+  const { authorization } = message;
+  if (wireAuthorizationOf(authorization) !== undefined) {
+    return verifySessionOpenAuthorization(message, context);
+  }
+  return isFabricPlainObject(authorization) &&
+      typeof authorization.principal === "string"
+    ? authorization.principal
+    : undefined;
 };

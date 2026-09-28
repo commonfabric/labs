@@ -311,7 +311,7 @@ describe("test-selection", () => {
       });
       const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain(
-        "workspace-unit costs 400.0s before it runs anything",
+        "workspace-unit costs 6m40s before it runs anything",
       );
       expect(text).toContain("none of its 1 tests ran");
       expect(text).not.toContain("unschedulable");
@@ -338,7 +338,7 @@ describe("test-selection", () => {
       expect(
         planLines(await planned(manifest, [tree(10)]), undefined).join("\n"),
       ).toMatch(
-        /the mandatory set alone puts a lane \d+\.\ds past its budget/,
+        /the mandatory set alone puts a lane (\d+(\.\d)?[hms])+ past its budget/,
       );
       expect(
         planLines(await planned(manifest, [tree(1)]), undefined).join("\n"),
@@ -538,11 +538,11 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBe(true);
     expect(verdict.loneSeconds).toBeCloseTo(600, 5);
     // What `explain` prints is that figure, not the entry's own 200: a
-    // reader told "200s is past the bound" would go looking for a bound
-    // below 200 that does not exist.
+    // reader told "3m20s is past the bound" would go looking for a bound
+    // below 3m20s that does not exist.
     const said = explainLines(manifest, test, verdict).join("\n");
-    expect(said).toContain("600.0s is past the bound");
-    expect(said).not.toContain("200.0s is past the bound");
+    expect(said).toContain("10m is past the bound");
+    expect(said).not.toContain("3m20s is past the bound");
   });
 
   it("reports a test no lane could hold as unschedulable, not selected", async () => {
@@ -850,6 +850,17 @@ describe("dispatch()", () => {
     expect(result.code).toBe(0);
     expect(result.out).toContain("workspace-unit/packages/memory");
     expect(result.out).toContain("no baseline yet");
+    expect(result.out).not.toContain("with coverage on");
+  });
+
+  it("says what the measured sets cost with coverage on, as far as it can", async () => {
+    // The manifest has fitted no suite's batches with coverage on, so
+    // what the set costs is something it cannot say yet.
+    const result = await ran(["coverage"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(
+      "no lane has run workspace-unit with coverage on",
+    );
   });
 
   it("names a member that carries no set beside the sets", async () => {

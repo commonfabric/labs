@@ -74,8 +74,7 @@ These facts are what the plan is built on.
 - About a dozen production modules call `createSession({ spaceName })` directly
   and never reach `Runtime.resolveSpaceName`: the shell library, the
   command-line interface, the piece package, both connector runtimes, the
-  background piece service, the pattern-index harness, and the Toolshed
-  pattern-lifecycle route.
+  pattern-index harness, and the Toolshed pattern-lifecycle route.
 - Two of those resolve a name with no network at all. The shell library's
   `resolveSpaceDid` is documented as resolving "without touching any runtime",
   and the command-line interface's ingest-channel helper does the same. Keeping

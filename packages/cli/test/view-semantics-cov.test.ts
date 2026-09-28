@@ -612,7 +612,10 @@ Deno.test("diff semantics: an offset with no file mapping types to null", () => 
   }
 });
 
-Deno.test("diff semantics: a definition outside the diff opens as a file", () => {
+// Named apart from the test of the same case in view-diff.test.ts: two
+// tests of one package with one name are one identity, and a lane running
+// both files cannot say which of them a record belongs to.
+Deno.test("diff semantics: fileLines colors a definition outside the diff, and nothing outside the root", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     Deno.writeTextFileSync(

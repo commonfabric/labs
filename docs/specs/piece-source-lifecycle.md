@@ -284,14 +284,19 @@ about anything a host serves.
 Opening a missing runtime-supplied piece revalidates the deployment's advertised
 identity. Resolved source may be shared within a reconciler for the same
 destination space, full source URL, and advertised identity. Retention is bounded
-by entry count and source string size. Every caller still compiles and verifies
-that identity in its destination space, including source-closure persistence on
-a compiler cache hit. Compilation or identity failure retires the source used by
-that attempt so a later open can retry. Disposal cancels pending source work and
-prevents an open still syncing or compiling from supplying a pattern. Existing
-pieces continue to reconcile their own recorded origins independently of this
-source sharing. Registry changes continue to invalidate compiled sidecar
-surfaces; retained source contains no compiled patterns or schema references.
+by entry count and source string size. An open that finds no verified pattern
+for that source compiles it and verifies that identity in its destination space,
+including source-closure persistence on a compiler cache hit. The pattern that
+open verified is retained with the source and answers later opens for the same
+destination, URL, and identity without compiling again, because that destination
+already holds its closure. It answers only within the schema registry epoch that
+compiled it: its serialized graph carries `cid:` schema references that a
+registry clear retires, so an open after a clear compiles again. Compilation or
+identity failure retires the source used by that attempt, with any pattern kept
+beside it, so a later open can retry. Disposal cancels pending source work and
+prevents an open still syncing or compiling from supplying or retaining a
+pattern. Existing pieces continue to reconcile their own recorded origins
+independently of this source sharing.
 
 A piece that pattern code instantiates — a nested pattern, a piece a handler
 creates with `inSpace` — runs a module of the instantiating program, and what it
@@ -1145,6 +1150,7 @@ route, and replicated-host failover remain open design work.
 |---|---|---|
 | Register a late host hint before a space opens | **Implemented** | `StorageManager.registerSpaceHost` adds the route. A seed can only be confirmed, and the first accepted late hint becomes authoritative |
 | Keep an accepted late hint stable before opening | **Implemented** | `StorageManager.registerSpaceHost` accepts the first late hint and rejects a different hint before or after the space opens |
+| Name the reason a late hint was refused | **Implemented** | `StorageManager.registerSpaceHostDetailed`, `Runtime.registerSpaceHostDetailed` and `RuntimeClient.registerSpaceHostDetailed` return `known-different-host` with the host already fixed, or `default-route-in-use` for a provider that issued a stateful operation through the default host. `registerSpaceHost` returns the same verdict as a boolean |
 | Replace a provisional default route after opening | **Implemented** | The first late hint invalidates an unseeded provider that opened through the default host before its session accepts a stateful operation. It cancels unfinished connection, initial or reconnect session signature creation, mount, and ACL work. Registered document reads, existing sync barriers, and overlapping read-only calls continue through the hinted host, including verified CFC schema documents discovered from the hinted data. Transactions based on the old replica are rejected as inconsistent at issue time, including when they write another space. A matching default-host hint confirms without reconnecting. Ordinary transactions, ACL setup, and SQLite source registration fix the route when issued, even if acknowledgement later fails |
 | Hydrate durable hints in a new runtime | **Implemented** | The runtime processor watches the home-space site table, selects its last origin-only HTTP or HTTPS route for each space, and registers those hints. It ignores credentials, paths, queries, fragments, malformed URLs, unsupported schemes, and entries whose `did` does not start with `did:`. Hydration can replace a provisional default route. A route already accepted through IPC remains fixed; a conflicting table route accepted first makes later IPC registration fail |
 | Apply one origin-only grammar to every route | **Partial** | `normalizeSpaceHost` rejects credentials, a non-root path, a query, and a fragment. Seeds, live hints, and hydration use it. The shared fabric-authority helper defaults to HTTPS and derives HTTP only for loopback when the current runtime route explicitly uses HTTP. Applying the grammar to the default host and future effective-host results remains required |

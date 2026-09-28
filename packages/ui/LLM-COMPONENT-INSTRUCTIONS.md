@@ -932,6 +932,33 @@ label):
 </cf-toast-provider>
 ```
 
+### cf-custody-seal
+
+**Purpose**: The trusted host confirmation that seals the actor's draft into a
+custody room's trusted-declassifier policy. The dialog is the host's, not the
+pattern's: it shows what the runtime checked (room, readers, seats, policy
+digest, the actor's sources) apart from what the room's terms say (question,
+answers, and a leak bound conditional on the policy). **Tag**:
+`<cf-custody-seal>`
+
+**Bindings**:
+
+- `$draft` - the value to seal
+- `$terms` - the room's terms document
+- `$policy` - a cell holding the room's custody policy reference
+- `$sources` - the actor's source policy: a list of the actor's own `Context`
+  and `Resource` atoms, in the actor's home space
+
+**Events**:
+
+- `cf-sealed` - no payload; fires when the seal commits. A binding that changes
+  while a commit is in flight suppresses it, so read the room when you must
+  know.
+
+Only a trusted click on the dialog's **Seal & consent** seals; a scripted click
+cannot. See `docs/common/components/COMPONENTS.md` and
+`docs/specs/cfc-custody-seal.md`.
+
 ## Styling Components
 
 Components expose CSS custom properties and parts for styling:

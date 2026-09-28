@@ -262,19 +262,40 @@ const TEST_SEGMENTS = new Set([
   "fixture",
   "mocks",
   "__mocks__",
+  "__snapshots__",
+  "baselines",
+  "integration",
+  "e2e",
 ]);
 
-/** Whether a path names a test or test-support file: a test-ish directory
- * segment, or a basename like `x.test.ts`, `x.spec.js`, `x_test.go`,
- * `test_x.py`, `x.stories.tsx`, `conftest.py`, or `x.golden`. */
+/** Whether a directory segment conventionally holds tests or test support:
+ * one of `TEST_SEGMENTS`, a suite like `browser-tests`, or a helper library
+ * like `test-utils`. */
+function isTestSegment(segment: string): boolean {
+  const s = segment.toLowerCase();
+  return TEST_SEGMENTS.has(s) || /[-_.]tests$/.test(s) ||
+    /^test[-_]?(support|utils?|helpers?)$/.test(s);
+}
+
+/** Whether a path names a test or test-support file: one under a test-ish
+ * directory, or a basename like `x.test.ts`, `x.spec.js`, `x.test.d.ts`,
+ * `x_test.go`, `x_spec.rb`, `x-fixture.ts`, `x-fixtures.ts`, `x.stories.tsx`,
+ * `test_x.py`, `test-helpers.ts`, `conftest.py`, or `x.golden`. The marker
+ * must precede the final extension, so data about a test, such as
+ * `x.test.ts.jsonl`, does not qualify. A `test-` prefix names tooling about
+ * tests as often as tests, as in `test-runner.ts`, so only pytest's
+ * `test_*.py` and helper libraries qualify by prefix. Likewise `_spec` also
+ * names specification documents, so only RSpec's `*_spec.rb` qualifies by that
+ * suffix. */
 export function isTestPath(path: string): boolean {
   const segs = path.split(/[\\/]/);
-  if (segs.some((s) => TEST_SEGMENTS.has(s.toLowerCase()))) return true;
-  const base = segs[segs.length - 1] ?? "";
-  return /\.(test|spec)\./i.test(base) ||
-    /(_|-)test\./i.test(base) ||
-    /^test(_|-)/i.test(base) ||
-    /\.stories\./i.test(base) ||
+  const base = (segs.pop() ?? "").toLowerCase();
+  if (segs.some(isTestSegment)) return true;
+  return /(\.(test|spec|stories)|[-_]test|[-_]fixtures?)(\.d)?\.[^.]+$/
+    .test(base) ||
+    /^test_.*\.py$/.test(base) ||
+    /_spec\.rb$/.test(base) ||
+    /^test[-_]?(support|utils?|helpers?)\./.test(base) ||
     base === "conftest.py" ||
     base.endsWith(".golden");
 }

@@ -91,7 +91,10 @@ node-based analyzer, a printed node gives way to the caller's own type at that
 position when that type carries something, and to the type the node was
 printed from when the caller's is `any`, `unknown`, or an unbound type
 parameter. The schema hints attached to the node still apply, through the
-context's `hintsNode`.
+context's `hintsNode`. A printed member of a type literal the caller built reads
+as the property would in the object type the literal stands for: a callable is
+left out, unless calling it makes a stream, a cell, or a database, which reads
+as that wrapper's `asCell`, with the UI contract hint the member carries.
 
 A print can carry syntax its type does not: in place of printing a type, the
 checker writes a member's own annotation where it denotes the member's type,
@@ -908,7 +911,8 @@ inside those payloads.
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
-| `ProjectionOf<T, P>` / `Projection<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `ProjectionOf<T, P>` | `{ projection: { from: "/", path: P } }` |
+| `Projection<SourceRef>` | what the checker resolves it to: `ProjectionOf<Root, Path>` for a `Ref<Root, Path>`, `never` for anything else, member by member for a union |
 
 Mechanics:
 
@@ -925,13 +929,42 @@ Mechanics:
   own declaration as ordinary metadata.
   An authored wrapper around a library alias is also read from its declaration,
   preserving any binding fixed inside the wrapper.
+- `Projection` is a conditional type, so the lowering never follows it by
+  syntax: a user alias chain that reaches it stops there, and the type written
+  with it is read as the checker resolved it, as the direct spelling is.
 - A canonical alias reached by its own name reads its payload, like its
-  labels, from the reference's own argument nodes. A payload that is itself a
+  labels, from the reference's own argument nodes when that reference names
+  the same alias. A reference to a conditional alias whose one branch other
+  than `never` names the canonical alias holds its arguments as that branch
+  writes them: an argument that is one of the conditional alias's parameters
+  is the reference's argument for it, and one holding no parameter is itself.
+  An argument holding a parameter the conditional checks or infers is read
+  from its type, since the checker binds such a parameter member by member,
+  and so is any other argument that holds a parameter without being one
+  (`T[]`, `keyof T`).
+  Any other reference to an alias the checker resolved to it (`MyProjection<R>`
+  to `ProjectionOf<Root, Path>`) holds that alias's arguments, so the canonical
+  alias is read from its type alone. A `WriteAuthorizedBy` written through
+  another alias, whose binding neither way reads, is the
+  `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
+  since its schema would carry no write restriction. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
   `AnyOf` clauses. A named type in the payload stays a `$ref` to its
   definition.
+- A policy's type can lose its alias name. A payload member its metadata
+  carrier cannot intersect is reduced away: `Confidential<string | null, L>` is
+  `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
+  `NonNullable<…>`, which intersects with `{}`, drops the name too. A written
+  reference that names the policy still lowers it from its own arguments,
+  `null` and a `typeof` writer binding included. Read from a type alone, the
+  value is its one member besides the carriers, labelled with each carrier's
+  metadata as its types spell it (`cfcCarriedParts`), provided every value in
+  it reads. A writer binding, which only a `typeof` node names, does not, and a
+  policy read in part could claim what its author never wrote together, such
+  as an `ownerPrincipal` without its `writeAuthorizedBy`. Then the value is its
+  payload alone. The `null` the checker dropped is in the schema neither way.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
   `substituteTypeNode`). Substitution starts at the authored reference's
@@ -1005,9 +1038,19 @@ Mechanics:
   alias name, so an authored type named `AnyOf` is read as itself. A
   `PolicyOf` reached from a type alone, with no annotation that denotes it,
   has no binding to read: its brand is read as an ordinary object,
-  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. Projection paths
-  encode as JSON
-  Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
+  `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
+  extraction cannot read in full is reported as the `cfc-label:unread` warning
+  (`unread-label-diagnostics.ts`), naming the label: an argument that is not a
+  tuple, or an atom with anything unread in it, whether the atom itself, a
+  field of an object atom, or an alternative of an `AnyOf` clause. A union of
+  literals is one such thing, and that `PolicyOf` brand another. A UI
+  contract that writes no `requiredEventIntegrity` requires its trusted
+  pattern, and that list is checked too. The schema carries what it could not
+  read as no label, as an atom that serializes as `null` (an unread value, not
+  an authored `null`, which is a literal read like any other), or as a field
+  left out.
+  Projection paths encode as JSON Pointers with `~0`/`~1` escaping
+  (`encodeJsonPointerPath`).
 - `ifc` combines with the base schema's existing `ifc` one key at a time
   (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
   `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
@@ -1115,14 +1158,19 @@ as of this writing.
 
 Hint shape (`src/interface.ts`): `SchemaHints` is `WeakMap<ts.Node,
 SchemaHint>`, where `SchemaHint` is `{ items?: unknown; cfcUiContract?:
-UiContractHint }` and `UiContractHint` is `{ helper: "UiAction" |
-"UiPromptSlot" | "UiDisclosure"; action?; surface?; role?; kind?;
-trustedPattern?; requiredEventIntegrity? }`. Every member is read-only: the
+UiContractHint; narrowedFrom?: NarrowedFrom }`, `UiContractHint` is
+`{ helper: "UiAction" | "UiPromptSlot" | "UiDisclosure"; action?; surface?;
+role?; kind?; trustedPattern?; requiredEventIntegrity? }`, and `NarrowedFrom`
+is `{ type: ts.Type; typeNode?: ts.TypeNode }`. Every member is read-only: the
 generator only reads hints, and copies the `requiredEventIntegrity` list on the
-way into the emitted schema. Lookups always try the node and
-`ts.getOriginalNode(node)` (`src/ui-contract.ts`, called from
-`schema-generator.ts` and `object-formatter.ts`; the producer writes both —
-`cross-stage-state.ts`).
+way into the emitted schema. A node holds a hint of each kind, recorded apart
+from the others. The producer writes `items` and `cfcUiContract` to the node
+and its original (`cross-stage-state.ts`), and `narrowedFrom` to the node
+alone. A `cfcUiContract` lookup tries the node and `ts.getOriginalNode(node)`
+(`src/ui-contract.ts`, called from `schema-generator.ts` and
+`object-formatter.ts`); an `items` lookup reads the current hint node
+(`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads the node, and the
+node inside its parentheses (`schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
   `items: { type: "unknown", …element wrapper markers }` for property-only
@@ -1141,6 +1189,26 @@ way into the emitted schema. Lookups always try the node and
   against the emitted literal
   (`ts-transformers/.../schema-generator.ts`, preferring an
   existing `$UI` property when present).
+- **`narrowedFrom`** names the value a node was built from part of, such as a
+  capture narrowed to the members its callback reads. The node's schema keeps
+  the value's labels: the `ifc` that formatting `type`, spelled by `typeNode`
+  where given, attaches at its top, through the definitions it references,
+  combined into the node's own as an outer declaration's
+  (`applyNodeSchemaHints` in `schema-generator.ts`, `withIfcLabels` and
+  `declaredIfcLabels` in `ifc-labels.ts`). The value is formatted apart from
+  the position, in definitions of its own, with nothing reported, and only for
+  its labels: a type no CFC wrapper holds, other than a union or an
+  intersection, reads as `{}` (`GenerationContext.labelsOnly`). A value that
+  may be `undefined` or `null` has the labels of its one other member. A node
+  narrowed from any other union stands for any of its members, so it has the
+  union's labels, every member's confidentiality, and each other label every
+  member declares alike (`joinMemberIfcLabels`). A member is spelled by the
+  node its type is written as: the declaration's own node where that denotes
+  the member alone, as an optional property's does, and otherwise the member
+  of the union the declaration writes, read through parentheses and through
+  aliases without type parameters (`readAuthoredTypeNode`). A member with no
+  such node is read by its type. A schema whose own reference
+  chain already holds every label is left as it is (`holdsIfcLabels`).
 
 ## 14. Options
 

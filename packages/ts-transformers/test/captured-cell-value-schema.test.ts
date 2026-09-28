@@ -72,8 +72,13 @@ describe("captured-cell-value-schema", () => {
         ${readContact("Contact | Other")}`,
     });
 
+    // `Other` keeps only the `name` the read reaches.
     expect(schema).toEqual({
-      anyOf: [{ $ref: "#/$defs/Contact" }, { $ref: "#/$defs/Other" }],
+      anyOf: [{ $ref: "#/$defs/Contact" }, {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      }],
       asCell: ["readonly"],
     });
   });
@@ -87,23 +92,35 @@ describe("captured-cell-value-schema", () => {
     });
 
     expect(schema).toEqual({
-      anyOf: [{ $ref: "#/$defs/Contact" }, { type: "undefined" }],
+      anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Contact" }],
       asCell: ["readonly"],
     });
   });
 
   describe("a generic type", () => {
-    // Read from its declaration, a generic describes its parameters unbound:
+    // The value is read by the type the capture instantiates. Read from its
+    // declaration instead, a generic would describe its parameters unbound:
     // `Contact<{ label: string; extra: number }>` of `Contact<T extends {
     // label: string }>` would describe `name` by the constraint and drop
     // `extra` from every read.
 
-    const unread = { asCell: ["readonly"] };
+    /** A value whose `name` has the schema `name`. */
+    const named = (name: unknown) => ({
+      type: "object",
+      properties: { name },
+      required: ["name"],
+      asCell: ["readonly"],
+    });
+    const WIDE_NAME = {
+      type: "object",
+      properties: { label: { type: "string" }, extra: { type: "number" } },
+      required: ["label", "extra"],
+    };
     const CONSTRAINED = "interface Contact<T extends { label: string }> " +
       "{ name: T }";
     const WIDER = "Contact<{ label: string; extra: number }>";
 
-    it("emits no value schema for an argument wider than the constraint of a type the module declares with `export`", async () => {
+    it("emits the value schema for an argument wider than the constraint of a type the module declares with `export`", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
@@ -111,10 +128,10 @@ describe("captured-cell-value-schema", () => {
           ${readContact(WIDER)}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named(WIDE_NAME));
     });
 
-    it("emits no value schema for an argument wider than the constraint of a type the module imports", async () => {
+    it("emits the value schema for an argument wider than the constraint of a type the module imports", async () => {
       const schema = await capturedContactSchema({
         "/types.ts": `export ${CONSTRAINED}`,
         "/test.tsx":
@@ -123,10 +140,10 @@ describe("captured-cell-value-schema", () => {
           ${readContact(WIDER)}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named(WIDE_NAME));
     });
 
-    it("emits no value schema for an argument wider than the constraint of a type the module declares", async () => {
+    it("emits the value schema for an argument wider than the constraint of a type the module declares", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
@@ -134,10 +151,10 @@ describe("captured-cell-value-schema", () => {
           ${readContact(WIDER)}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named(WIDE_NAME));
     });
 
-    it("emits no value schema for a type reading its parameter through `keyof`", async () => {
+    it("emits the value schema for a type reading its parameter through `keyof`", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
@@ -145,10 +162,10 @@ describe("captured-cell-value-schema", () => {
           ${readContact("Contact<{ foo: string }>")}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named({ type: "string", enum: ["foo"] }));
     });
 
-    it("emits no value schema for a type reading its parameter through an indexed access", async () => {
+    it("emits the value schema for a type reading its parameter through an indexed access", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
@@ -158,10 +175,10 @@ describe("captured-cell-value-schema", () => {
           ${readContact('Contact<{ name: "Ada" }>')}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named({ type: "string", enum: ["Ada"] }));
     });
 
-    it("emits no value schema for an argument replacing the default of a type the module declares with `export`", async () => {
+    it("emits the value schema for an argument replacing the default of a type the module declares with `export`", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
@@ -169,7 +186,7 @@ describe("captured-cell-value-schema", () => {
           ${readContact("Contact<string>")}`,
       });
 
-      expect(schema).toEqual(unread);
+      expect(schema).toEqual(named({ type: "string" }));
     });
 
     it("emits the payload of an alias the CFC lowering fills from the argument", async () => {

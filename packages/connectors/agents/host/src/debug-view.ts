@@ -17,6 +17,7 @@ import {
   deepEqual,
   type Pattern,
 } from "@commonfabric/runner";
+import { applyCfcPolicyToExistingValue } from "@commonfabric/runner/cfc/policy-application";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
@@ -26,6 +27,7 @@ import {
   recordValue,
 } from "./command-authorization.ts";
 import type { BoundCommandProducer } from "./command-producers.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 const AGENT_SESSIONS_DEBUG_CAUSE_PREFIX = "agent-sessions-debug";
 const SHALLOW_PIECE_LINK_LIST_SCHEMA = internSchema({
@@ -45,7 +47,7 @@ async function protectOwnerDebugCells(
   expectedDocuments?: ReadonlyMap<Cell<unknown>, unknown>,
 ): Promise<void> {
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -58,8 +60,9 @@ async function protectOwnerDebugCells(
       ) {
         throw new Error("debug view changed before owner protection");
       }
-      cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid))
-        .applyCfcSchemaToExistingValue();
+      applyCfcPolicyToExistingValue(
+        cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid)),
+      );
     }
     tx.prepareCfc();
   } catch (error) {
@@ -408,7 +411,7 @@ async function debugRegistration(
   );
   await syncDocumentRoot(manager, registration);
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -422,8 +425,9 @@ async function debugRegistration(
         `refusing to adopt an unprotected debug registration for ${ownerDid}`,
       );
     }
-    protectedRegistration.asSchema(agentOwnerSchema(ownerDid))
-      .applyCfcSchemaToExistingValue();
+    applyCfcPolicyToExistingValue(
+      protectedRegistration.asSchema(agentOwnerSchema(ownerDid)),
+    );
     tx.prepareCfc();
   } catch (error) {
     tx.abort(error);
@@ -581,7 +585,7 @@ async function registerDebugPiece(
     throw error;
   }
   const privateUpdate = await manager.runtime.editWithRetry((tx) => {
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -672,7 +676,7 @@ async function registerDebugPiece(
       }
     }
     const registrationRollback = await manager.runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: AGENT_CONNECTOR_WRITER_ID,
       });

@@ -15,6 +15,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "../support/serving-waits.ts";
+import { sessionDemandOf } from "../support/session-demand.ts";
 
 const owner = await Identity.fromPassphrase("root preload owner");
 const service = await Identity.fromPassphrase("root preload service");
@@ -151,10 +152,12 @@ describe("SpaceServer", () => {
     };
     const facade = new Proxy(server, {
       get(target, key, receiver) {
-        if (key === "demandedInstancesForSpace") {
+        if (key === "demandForSpace") {
           return () => {
             onPass?.();
-            return rootIds.map((id) => ({ id, scope, scopeKey, root: true }));
+            return sessionDemandOf(
+              rootIds.map((id) => ({ id, scope, scopeKey, root: true })),
+            );
           };
         }
         const value = Reflect.get(target, key, receiver);

@@ -35,6 +35,7 @@ import {
   namesValueBinding,
   type PreservedBindingType,
   reportUnknownReactiveType,
+  typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
@@ -64,6 +65,15 @@ import {
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
 type CellScope = "space" | "user" | "session";
 
+/**
+ * The scope each `commonfabric` scope wrapper declares, keyed by the wrapper's
+ * name. `cellScopeFromType()` reads it from a type's alias and falls back to
+ * the scope brand, which also covers a wrapper reached through an alias of the
+ * author's own. `typeNodeContainsScopeWrapper()` reads it from authored
+ * syntax, where only the spelling is available; a wrapper that spelling hides
+ * behind an alias is still carried by the inferred type, whose alias and brand
+ * schema generation reads.
+ */
 const SCOPE_ALIAS_TO_CELL_SCOPE: ReadonlyMap<string, CellScope | "any"> =
   new Map([
     ["PerSpace", "space"],
@@ -867,13 +877,20 @@ function typeToInjectableSchemaTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
+  typeRegistry: TypeRegistry | undefined,
   state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   if (!type) return undefined;
   if (isUnresolvedSchemaType(type)) {
     return createUnknownSchemaTypeNode(factory);
   }
-  return typeToSchemaTypeNode(type, checker, sourceFile, state);
+  // `printedFrom` retains the type behind the placeholder when the checker
+  // cannot print its expanded brands, so schema generation reads that type.
+  return typeToTypeNodeWithRegistry(
+    type,
+    { checker, factory, sourceFile, state },
+    typeRegistry,
+  );
 }
 
 function normalizeSchemaInjectionTypeNode(
@@ -918,6 +935,25 @@ function inferSchemaContextualType(
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
   return checker.getContextualType(node) ?? inferContextualType(node, checker);
+}
+
+/**
+ * The first type argument TypeScript inferred for a call with a contextual type.
+ *
+ * `wish()` and `generateObject()` take schemas describing `T`; their return
+ * types wrap it in state. The resolved signature retains `T` independently of
+ * those wrappers and their optional fields. A call with no contextual type
+ * gets no inferred schema.
+ */
+function inferContextualTypeArgument(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!inferSchemaContextualType(node, checker)) return undefined;
+  const signature = checker.getResolvedSignature(node);
+  return signature
+    ? checker.getTypeArgumentsForResolvedSignature(signature)?.[0]
+    : undefined;
 }
 
 function scopedFactoryContextualScope(
@@ -1135,6 +1171,7 @@ function resolveInjectableSchemaType(
       checker,
       sourceFile,
       factory,
+      typeRegistry,
       state,
     ),
     type: inferredType,
@@ -2093,13 +2130,13 @@ function objectLiteralHasPreservedValueTypeNodes(
       state,
     );
     // Inference can erase a scope wrapper or print a writer binding as a
-    // structural function type. Authored syntax retains both declarations.
+    // structural function type. The explicit node names what it loses: a scope
+    // wrapper, which a node printed from the binding's declared type names
+    // too, and a writer binding, which only authored syntax names.
     if (
       explicit &&
       (namesValueBinding(explicit.typeNode, checker) ||
-        typeNodeContainsScopeWrapper(explicit.typeNode) ||
-        (explicit.preservedTypeNode &&
-          typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
+        typeNodeContainsScopeWrapper(explicit.typeNode))
     ) {
       return true;
     }
@@ -4143,7 +4180,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           factory,
           typeRegistry,
           context.state,
-          () => inferSchemaContextualType(node, checker),
+          () => inferContextualTypeArgument(node, checker),
         );
 
         const schemaCall = createRegisteredSchemaCallFromResolvedType(
@@ -4193,11 +4230,11 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           typeRegistry,
           context.state,
           () => {
-            const contextualType = inferSchemaContextualType(node, checker);
-            const objectProp = contextualType?.getProperty("object");
-            return objectProp
-              ? checker.getTypeOfSymbolAtLocation(objectProp, node)
-              : undefined;
+            const inferred = inferContextualTypeArgument(node, checker);
+            // An inferred `any` supplies no result shape for an LLM schema.
+            return inferred && (inferred.flags & ts.TypeFlags.Any)
+              ? undefined
+              : inferred;
           },
         );
 
@@ -4209,22 +4246,22 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         );
 
         if (schemaCall) {
+          // Caller options follow the generated schema so authored schemas
+          // reached through spreads or computed keys take precedence.
           let newOptions: ts.Expression;
           if (args.length > 0 && ts.isObjectLiteralExpression(args[0]!)) {
-            // Add schema property to existing object literal
             newOptions = factory.createObjectLiteralExpression(
               [
-                ...(args[0] as ts.ObjectLiteralExpression).properties,
                 factory.createPropertyAssignment("schema", schemaCall),
+                ...(args[0] as ts.ObjectLiteralExpression).properties,
               ],
               true,
             );
           } else if (args.length > 0) {
-            // Options is an expression (not literal) -> { ...opts, schema: ... }
             newOptions = factory.createObjectLiteralExpression(
               [
-                factory.createSpreadAssignment(args[0]!),
                 factory.createPropertyAssignment("schema", schemaCall),
+                factory.createSpreadAssignment(args[0]!),
               ],
               true,
             );

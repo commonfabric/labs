@@ -4,6 +4,7 @@
 
 import type { FabricValue } from "@/interface.ts";
 import type { FabricHash } from "@/fabric-primitives";
+import { debugStr } from "@/value-debug";
 
 import {
   cachedFrozenObjectHashElseUndefined,
@@ -20,13 +21,13 @@ import { ValueHasher } from "./ValueHasher.ts";
  * Common helper for the exported hash functions, which _might_ return a plain
  * `string` when passed `stringOkay = true`.
  */
-function hashOfInternal(value: unknown, stringOkay: false): FabricHash;
+function hashOfInternal(value: FabricValue, stringOkay: false): FabricHash;
 function hashOfInternal(
-  value: unknown,
+  value: FabricValue,
   stringOkay: true,
 ): FabricHash | string;
 function hashOfInternal(
-  value: unknown,
+  value: FabricValue,
   stringOkay: boolean,
 ): FabricHash | string {
   switch (typeof value) {
@@ -74,7 +75,7 @@ function hashOfInternal(
     }
 
     default: {
-      throw new Error(`Cannot hash value of type \`${typeof value}\``);
+      throw new Error(debugStr`Cannot hash value: $quote${value}`);
     }
   }
 }
@@ -93,7 +94,7 @@ export function hashOf(value: FabricValue): FabricHash {
  * Like `hashOf()`, except always returns a plain string of the hash, encoded as
  * base64url, _without_ a `<type>:` prefix.
  */
-export function hashStringOf(value: unknown): string {
+export function hashStringOf(value: FabricValue): string {
   const result = hashOfInternal(value, true);
   return (typeof result === "string") ? result : result.hashString;
 }

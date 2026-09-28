@@ -53,7 +53,8 @@ import { PERFORMANCE_VIEW_STYLES } from "../performance-views.ts";
 import { artifactZip, bytes, makeZip } from "../test/artifact-zip.ts";
 
 // The history store falls back to the system temporary directory when no cache
-// directory is named. The package's test runner names a fresh one for each run.
+// directory is named. The package's test task preloads a module that names a
+// fresh one for each run.
 // Running this file directly gets whatever the last run left behind, which then
 // feeds these tests in place of their own fixtures. Name a directory here when
 // nothing else has.

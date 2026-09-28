@@ -637,6 +637,42 @@ Deno.test("order-independent policy extraction covers the full static authoring 
   }
 });
 
+Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defining identity", () => {
+  const [artifact] = compilePolicySource(`
+    export const releaseTally = exchangeRule({
+      appliesTo: THIS_POLICY,
+      pre: {
+        integrity: [{
+          type: "https://commonfabric.org/cfc/atom/TransformedBy",
+          identity: {
+            kind: "verified",
+            moduleIdentity: THIS_POLICY.moduleIdentity,
+            symbol: "tally",
+          },
+        }],
+      },
+      post: { dropClause: true },
+    });
+    export const rules = exchangeRules([releaseTally]);
+  `);
+
+  assertEquals(artifact.manifest.moduleIdentity, "sha256:policy");
+  const rule = artifact.manifest.template.exchangeRules[0] as {
+    preCondition?: unknown;
+  };
+  assertEquals(rule.preCondition, {
+    confidentiality: [{ thisPolicy: true }],
+    integrity: [{
+      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+      identity: {
+        kind: "verified",
+        moduleIdentity: { thisPolicyField: "moduleIdentity" },
+        symbol: "tally",
+      },
+    }],
+  });
+});
+
 Deno.test("authoring transformer diagnoses every invalid module binding form", async () => {
   const validRule = `exchangeRule({
     appliesTo: THIS_POLICY,

@@ -9,9 +9,11 @@ import {
 } from "../acl.ts";
 import {
   type CreateInvite,
+  type InviteAccess,
   inviteCodeVerifier,
   type InviteMetadata,
   type InviteRedemption,
+  isInviteAccess,
   isInviteId,
   isInviteSecret,
   type RedeemReceipt,
@@ -61,7 +63,7 @@ interface ActiveRow {
   issuedBy: string;
   createdAt: number;
   expiresAt: number;
-  access: "READ" | "WRITE";
+  access: InviteAccess;
   maxUses: number;
   ttlSeconds: number;
 }
@@ -212,16 +214,20 @@ export function executeInvite(
         ...(commit ? { commit } : {}),
       };
     }
-    if (!acl || acl[principal as keyof ACL] !== "OWNER") {
-      return failure("not-owner");
-    }
+    const administrator = acl?.[principal as keyof ACL];
+    if (administrator !== "OWNER") return failure("not-owner");
     switch (request.operation) {
       case "create": {
         const body = request.body;
         const maxUses = body.maxUses ?? 1;
         if (
           !isInviteId(body.inviteId) || !isInviteSecret(body.codeVerifier) ||
-          !["READ", "WRITE"].includes(body.access) ||
+          // An invitation grants at most its issuer's own access. Only an
+          // explicit OWNER reaches this point, so today every InviteAccess
+          // passes; the bound stays here so that admitting lesser issuers
+          // later cannot let a WRITE holder mint an OWNER link.
+          !isInviteAccess(body.access) ||
+          !isCapable(administrator, body.access) ||
           !Number.isSafeInteger(maxUses) || maxUses < 1 ||
           maxUses > SPACE_INVITE_CAPABILITY.maxUses ||
           !Number.isSafeInteger(body.ttlSeconds) || body.ttlSeconds < 1 ||

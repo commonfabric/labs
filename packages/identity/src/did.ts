@@ -36,6 +36,32 @@ export function isDID(input: unknown): input is DID {
   return typeof input === "string" && input.startsWith(DID_PREFIX);
 }
 
+/**
+ * The DID syntax of the W3C DID Core specification (section 3.1): a lowercase
+ * method name, then a method-specific identifier of letters, digits, `.`, `-`,
+ * `_`, percent-escapes, and `:` separators, not ending in `:`.
+ */
+const WELL_FORMED_DID =
+  /^did:[a-z0-9]+:(?:[A-Za-z0-9._:-]|%[0-9A-Fa-f]{2})*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})$/;
+
+/**
+ * The longest well-formed DID, in characters. A `did:key` over any key type
+ * this repository signs with is under 60.
+ */
+const MAX_WELL_FORMED_DID_LENGTH = 256;
+
+/**
+ * Whether `input` is a DID in DID Core syntax, at most 256 characters long.
+ * {@link isDID} admits any string after `did:`, whitespace, parentheses, and
+ * direction-override characters included; ask this instead where a DID is
+ * shown to a person or read as the principal a claim names, so that no other
+ * spelling of it passes for it.
+ */
+export function isWellFormedDID(input: unknown): input is DID {
+  return typeof input === "string" &&
+    input.length <= MAX_WELL_FORMED_DID_LENGTH && WELL_FORMED_DID.test(input);
+}
+
 /** Whether `input` is a DID whose method is `key`. */
 export function isDIDKey(input: unknown): input is DIDKey {
   return typeof input === "string" && input.startsWith(DID_KEY_PREFIX);

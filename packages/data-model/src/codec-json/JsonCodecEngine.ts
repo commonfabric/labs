@@ -20,7 +20,9 @@ import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
  *
  * Public instance surface, one boundary type and two directions:
  * - `encode(value, env?)` -- full pipeline: tree-encode + stringify
- * - `decode(data, env)` -- full pipeline: parse + tree-decode
+ * - `decode(data, env)` -- full pipeline: parse + tree-decode, refusing text
+ *   past `slotLimit` when the engine has one
+ * - `slotLimit` -- the most slots a decode accepts, or `undefined` for none
  *
  * The machinery beneath belongs elsewhere. The walks and this format's account
  * of how a container is written down are `JsonEncodeAct`'s and
@@ -43,9 +45,47 @@ import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
  * receiver cannot tell from two that were always distinct.
  */
 export class JsonCodecEngine extends BaseCodecEngine<JsonCodecValue, string> {
+  readonly #slotLimit: number | undefined;
+
+  /**
+   * Constructs an instance. The options other than `slotLimit` are those of
+   * `BaseCodecEngine`. `options.slotLimit`, when given, makes `decode()` refuse
+   * text standing for more slots than it allows, as `parseWireText()` counts
+   * them, with the array elements and record members counted before the text
+   * is parsed. That bounds what a decode of untrusted text builds, however
+   * small the text. It must be a non-negative integer.
+   *
+   * @throws If `options.slotLimit` is not a non-negative integer.
+   */
+  constructor(
+    options: {
+      registry: CodecRegistry<JsonCodecValue>;
+      lenient?: boolean;
+      mutable?: boolean;
+      slotLimit?: number;
+    },
+  ) {
+    super(options);
+    const { slotLimit } = options;
+    if (
+      slotLimit !== undefined &&
+      !(Number.isSafeInteger(slotLimit) && slotLimit >= 0)
+    ) {
+      throw new RangeError(
+        `\`slotLimit\` must be a non-negative integer, not ${slotLimit}`,
+      );
+    }
+    this.#slotLimit = slotLimit;
+  }
+
   //
   // Instance members
   //
+
+  /** The most slots a decode accepts, or `undefined` for no limit. */
+  get slotLimit(): number | undefined {
+    return this.#slotLimit;
+  }
 
   /** @inheritDoc */
   protected override newEncodeAct(env: LiveEnvironment): JsonEncodeAct {
@@ -62,7 +102,7 @@ export class JsonCodecEngine extends BaseCodecEngine<JsonCodecValue, string> {
     env: LiveEnvironment,
     _data: string,
   ): JsonDecodeAct {
-    return new JsonDecodeAct(this, env);
+    return new JsonDecodeAct(this, env, this.#slotLimit);
   }
 
   //
@@ -95,13 +135,11 @@ export class JsonCodecEngine extends BaseCodecEngine<JsonCodecValue, string> {
 
   /**
    * Live environment for the throwaway checks in the testing helpers
-   * below. Deep-freezes, as the ordinary decode path does. Paired with a
-   * lenient engine, a cell reference degrades to a `ProblematicValue`
-   * rather than throwing.
+   * below. Paired with a lenient engine, a cell reference degrades to a
+   * `ProblematicValue` rather than throwing.
    */
   static readonly #testingLiveEnvironment = Object.freeze(
     new NullLiveEnvironment(
-      true,
       "no live environment (validity check in a test-only helper).",
     ),
   );

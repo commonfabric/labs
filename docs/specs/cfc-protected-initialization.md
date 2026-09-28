@@ -80,6 +80,96 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+When a link's source is a reference staged in the same transaction, or a value
+holding one, preparation derives that reference's labels through the recorded
+chain. A reference at or above the source path supplies the label there. One
+held below it supplies the labels at the matching paths beneath the link, and
+none at the link itself. This does not depend on staging order or on the
+references occupying different documents. Each hop retains the source's nested
+labels and applies the ordinary evidence and carried-label checks. An integrity
+floor uses those same derived labels, so the source's real authorship can meet
+it. A chain of pending references that never reaches a value refuses label
+derivation terminally. An object holding a reference back to itself or another
+object is valid. Preparation expands each held reference once per branch, then
+follows back-references only as far as a source path, floor, or carried view
+requires. This keeps the persisted view finite; reads beyond it follow the
+stored references and consume the labels at each hop. A carried view is checked
+in full at the link's first occurrence, and a repeated occurrence supplies the
+entries covering the requested paths.
+
+Within one derivation, sibling branches can reuse a complete result when the
+pending document graph has shared sources and no cycles, and the result carries
+no caller-specific projection request. The cache belongs to that derivation:
+preparation can persist source metadata between calls, so later calls derive
+against the current snapshot. Graphs with document cycles retain their
+branch-local expansion rules. Ordinary chains need no shared-result cache.
+The persisted view still contains every distinct labeled path; sharing work
+does not reduce the size of a flat label map for a branching graph.
+
+## Setup replay over a stored argument
+
+A runtime that starts a piece it did not create replays the setup of the
+sub-pieces its pattern composes, and the replay stages each argument document
+again. The slots the caller does not name are carried over from the stored
+document with the bytes they hold, and the runtime records each such slot as a
+replay. The record permits nothing but leaving those bytes as they are.
+
+Preparation defers a protected field's writer requirement when the field lies
+at or under a recorded replay slot and no write the transaction recorded
+changes a byte at the field, at an ancestor where the difference reaches the
+field, or below it. The deferred requirement is waived only when the envelope
+the transaction would store leaves the field as it was too: the policy claims
+and the label positions they declare are the same throughout the document,
+and every label entry at the field, above it or below it is the same. The
+stored schema document and envelope version are then kept, and labels
+elsewhere in the document persist as for any write. An authoritative
+transaction, which commits each document whole, receives no deferral. Any other
+write attempt at a protected field — pattern code setting a whole document with
+the field's own bytes among them — requires the field's ordinary writer.
+
+## Attribution of an initialized value
+
+An initialized value is the pattern's default, and the principal whose runtime
+constructed the cell chose nothing of it. A claim the field's schema makes
+about the current principal — `RepresentsCurrentUser`, `AuthoredByCurrentUser`
+— names a principal only when the initialization is their act: the
+transaction of a handler run they invoked, a piece start deferred from one,
+and the transaction that brings a piece into being outside any action — a
+deploy, a host creating a piece on the principal's behalf. The runtime marks
+those transactions (`CfcTxState.attributedInitialization`, set through the
+runtime's authorization); the piece a handler creates, its cross-space
+children included, is initialized in the handler's own transaction, and a
+served creation carries the requester's trust snapshot. A builtin that
+instantiates a pattern from a continuation of its action declines the mark
+(`attributeInitialization: false`): the piece is nobody's act.
+
+In any other transaction — a runtime starting a piece it finds set up, a
+collection builtin instantiating a sub-pattern over a new entry, a source
+update installing a new field's default — the seed, the reference that
+exposes it, the new field's default and the cells a setup projects result
+fields to are all persisted without a claim about the current principal.
+Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
+`ownerPrincipal` binding is established by the first write an acting
+principal makes through the field's writer, and that write mints the claim
+for its actor as every handler write does. From then on the field is that
+principal's: the `ownerPrincipal` placeholder names the principal the stored
+label represents, and a write through the writer by any other principal is
+refused (`ownerPrincipal mismatch`), as is one to a field whose stored label
+names more than one principal. An initialization on nobody's behalf leaves
+the stored owner as it is.
+
+An initialization that is nobody's act leaves the claim a stored label
+already makes at its path about a principal: the claim is carried forward as
+it stands. A preserved runtime output and a replayed argument slot write
+nothing and are nobody's act either, so what they store equals what was
+stored; a source update another principal's runtime performs re-projects the
+fields and strips no owner.
+
+A default computed at run time rather than declared — an initializer wrapped
+in a lift — is seeded in the reactive pass that first serializes it, which is
+no handler's transaction, so it is not attributed either. Declaring such
+defaults, and settling their attribution, is open work.
+
 ## Authorization and transaction evidence
 
 An initialization policy input is authoritative only when the runtime records it
