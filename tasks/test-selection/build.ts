@@ -327,7 +327,11 @@ export interface ReadReport {
   /** Where each identity in it runs, by identity key. */
   surfaces: Map<string, Surface>;
 
-  /** Every passing duration, by identity key and then by day. */
+  /**
+   * Every passing duration a continuous-integration runner measured, by
+   * identity key and then by day. A workstation's are left out, since a
+   * cost predicts what a lane's runner will spend.
+   */
   durations: Map<string, Map<string, number[]>>;
 
   /** What the lanes in this object measured about themselves. */
@@ -423,8 +427,11 @@ export function readReport(
       // A cost predicts what a lane will spend running this test again,
       // and only a passing execution measures that. A failure ended
       // where the failure was reached, and where a wait's safety net
-      // ended it, its duration is that net's bound.
-      if (record.outcome !== "pass") continue;
+      // ended it, its duration is that net's bound. And only a lane's
+      // runner measures what a lane will spend: a workstation is another
+      // machine, faster or slower by however it differs, so its record
+      // counts as evidence about the test and not about its cost.
+      if (record.outcome !== "pass" || where.place === "local") continue;
       let byDay = durations.get(key);
       if (byDay === undefined) {
         byDay = new Map();
@@ -730,6 +737,9 @@ export function buildManifest(input: BuildInput): Manifest {
     calibration: {
       setupCost: input.calibration?.setupCost ?? {},
       suites: input.calibration?.suites ?? {},
+      ...(input.calibration?.suitesWithCoverage === undefined
+        ? {}
+        : { suitesWithCoverage: input.calibration.suitesWithCoverage }),
       prologue: input.calibration?.prologue ?? LANE_PROLOGUE_SECONDS,
     },
     entries,

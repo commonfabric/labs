@@ -78,14 +78,18 @@ and presence (ON) or absence (OFF) of `/api/health/stats.servingLoop`; a mixed
 server/client/shell posture is never a valid arm exercise.
 
 The ON-only skip registry in `tasks/server-execution-on-skips.ts` follows the
-role that resolves ON, is printed loudly, and was EMPTY at the flip. The OFF
-arm always runs every file. The two pattern step guards named in their source
-files remain exceptions that read the raw environment only to decide whether a
-registered step is skipped; their runtimes still adopt the lane toolshed's
-published posture. Authored-pattern coverage follows the role that resolves
-OFF, while the default role retains V8 coverage. The default role's test-record
-identity remains unmarked; the opposite role gets the variant for its actual
-posture (`server-execution` for ON or `server-execution-off` for OFF).
+role that resolves ON. The test topology leaves a whole-file entry out of that
+role's suite and declares it unavailable. A step entry keeps its file, and the
+file skips the step itself through `serverExecutionOnStepSkip()`. The selection
+manifest records every entry with its phase and reason. The registry held no
+entries when ON became the default. The OFF arm always runs every file. The two
+pattern step guards named in their source files remain exceptions that read the
+raw environment only to decide whether a registered step is skipped; their
+runtimes still adopt the lane toolshed's published posture. Authored-pattern
+coverage follows the role that resolves OFF, while the default role retains V8
+coverage. The default role's test-record identity remains unmarked; the opposite
+role gets the variant for its actual posture (`server-execution` for ON or
+`server-execution-off` for OFF).
 
 The deployed-topology gates follow `default`: the cf-harness fabric-session
 factory runs against the default toolshed, the CLI adopts and verifies the

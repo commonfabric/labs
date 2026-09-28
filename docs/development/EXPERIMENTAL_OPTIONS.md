@@ -442,18 +442,19 @@ server](#clients-that-are-not-built-alongside-their-server).
   integration coverage is whichever CI role resolves ON. In CI (testing.md §2), `default`
   follows the constant and `opposite` is its explicit inverse; both are
   probed through the shared role
-  resolver; the opposite lane uses `build-toolshed-opposite`, whose shell
-  define is baked from the resolved inverse. The
-  `deployed-topology-gate` job exercises cf-harness's fabric session at
-  the default resolution, and the CLI lanes probe the server their `cf`
-  adopts its posture from —
-  with ON-arm skips and OFF-arm authored coverage following the resolved arm.
-  Skips are only through `tasks/server-execution-on-skips.ts`, printed loudly
-  (EMPTY at the flip, its stated precondition). End
-  state: after a soak on main at the ON default, the flag retires and the
-  OFF code path is removed — a separate post-soak
-  PR (the plan's Phase 7 task 2; it also removes the opposite guard lanes and
-  `build-toolshed-opposite`).
+  resolver; the opposite suites use the `toolshed-baked-opposite` capability,
+  whose shell define is baked from the resolved inverse, and the
+  `binaries-opposite` suite compiles that toolshed. The `deployed-topology`
+  suite exercises cf-harness's fabric session at the default resolution, and the
+  CLI suites probe the server their `cf` adopts its posture from — with ON-arm
+  skips and OFF-arm authored coverage following the resolved arm. Skips are only
+  through `tasks/server-execution-on-skips.ts`. The test topology declares each
+  entry unavailable in the ON suite, and the selection manifest records it with
+  its phase and reason. The registry was EMPTY at the flip, its stated
+  precondition. End state: after a soak on main at the ON default, the flag
+  retires and the OFF code path is removed — a separate post-soak PR (the plan's
+  Phase 7 task 2; it also removes the opposite suites and the
+  `toolshed-baked-opposite` capability).
 - **Status on 2026-09-11 (the served source update).** Under ON,
   `setsrc` runs on the space's serving runtime as well, and `cf piece
   setsrc` requests it: the update's setup transaction commits directly to
@@ -536,7 +537,8 @@ server](#clients-that-are-not-built-alongside-their-server).
   (effects + outbox) remains.
 - **Path to removal.** Soak on main at the ON default; then the post-soak PR
   retires the flag, removes the OFF path (and the opposite regression-guard
-  lanes + `build-toolshed-opposite`), and closes out this entry.
+  suites and the `toolshed-baked-opposite` capability), and closes out this
+  entry.
 
 ---
 

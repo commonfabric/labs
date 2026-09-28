@@ -19,6 +19,14 @@ export interface CodecEngineConfig<Encoded> {
   readonly lenient: boolean;
 
   /**
+   * Whether a decode leaves what it builds mutable. When `false`, a decode's
+   * result is deep-frozen; when `true`, every container the decode builds and
+   * every value a codec builds for it is left mutable, and only values frozen
+   * by nature -- a `FabricPrimitive`, say -- are frozen.
+   */
+  readonly mutable: boolean;
+
+  /**
    * The codecs this engine encodes and decodes with, and so which classes it
    * can carry.
    */

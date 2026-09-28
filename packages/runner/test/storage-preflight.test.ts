@@ -4,12 +4,24 @@
  * every copy it makes says where it came from. That is not visible in the
  * replaced value at all -- trust and the content-addressed entry ref live in
  * identity-keyed side tables -- so it is what these cases look at.
+ *
+ * The one claim the module makes about a result's type is that a pattern the
+ * builder made flattens to a `FabricValue`. That rests on what the builder
+ * produces, so its cases build real patterns, one for each kind of thing a
+ * graph can hold, and check each result as the data model would.
  */
 
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { type FabricValue, isValidFabricValue } from "@commonfabric/data-model";
+import { Identity } from "@commonfabric/identity";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
 import { flattenBuilderArtifacts } from "../src/storage-preflight.ts";
+import { Runtime } from "../src/runtime.ts";
+import type { PatternFactory } from "../src/builder/types.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   brandTrustedBuilderArtifact,
   isTrustedBuilderArtifact,
@@ -68,5 +80,83 @@ describe("flattenBuilderArtifacts()", () => {
     const value = { a: 1, b: { c: [1, 2, 3] } };
     expect(flattenBuilderArtifacts(value)).toBe(value);
     expect(resolveOriginal(value)).toBe(value);
+  });
+
+  describe("a pattern the builder made", () => {
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+    let commonfabric: ReturnType<typeof createTrustedBuilder>["commonfabric"];
+
+    beforeEach(async () => {
+      const signer = await Identity.fromPassphrase("test operator");
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      ({ commonfabric } = createTrustedBuilder(runtime));
+    });
+
+    afterEach(async () => {
+      await runtime.dispose();
+      await storageManager.close();
+    });
+
+    /** Flattens a builder-made pattern, typed as the overload promises. */
+    function flattened<T, R>(pattern: PatternFactory<T, R>): FabricValue {
+      return flattenBuilderArtifacts(pattern);
+    }
+
+    it("flattens to a `FabricValue` when its result aliases an input", () => {
+      const { pattern } = commonfabric;
+      const p = pattern<{ x: number }>(({ x }) => ({ y: x }));
+      expect(isValidFabricValue(flattened(p))).toBe(true);
+    });
+
+    it("flattens to a `FabricValue` when it holds a lift", () => {
+      const { lift, pattern } = commonfabric;
+      const double = lift((n: number) => n * 2);
+      const p = pattern<{ x: number }>(({ x }) => ({ y: double(x) }));
+      expect(isValidFabricValue(flattened(p))).toBe(true);
+    });
+
+    it("flattens to a `FabricValue` when it holds a handler", () => {
+      const { handler, pattern } = commonfabric;
+      const bump = handler(
+        { type: "object", properties: {} },
+        { type: "object", properties: { n: { type: "number" } } },
+        () => {},
+      );
+      const p = pattern<{ n: number }>(({ n }) => ({ bump: bump({ n }) }));
+      expect(isValidFabricValue(flattened(p))).toBe(true);
+    });
+
+    it("flattens to a `FabricValue` when it holds a nested pattern", () => {
+      const { pattern } = commonfabric;
+      const inner = pattern<{ a: number }>(({ a }) => ({ b: a }));
+      const outer = pattern<{ x: number }>(({ x }) => ({ y: inner({ a: x }) }));
+      expect(isValidFabricValue(flattened(outer))).toBe(true);
+    });
+
+    it("flattens to a `FabricValue` when it maps with a pattern", () => {
+      // Authored `.map()` is lowered by the transformer to `mapWithPattern()`,
+      // which is what the builder takes directly.
+
+      const { pattern } = commonfabric;
+      const op = pattern(({ element }: any) => ({ v: element }));
+      const p = pattern<{ items: number[] }>(({ items }) => ({
+        out: (items as any).mapWithPattern(op, {}),
+      }));
+      expect(isValidFabricValue(flattened(p))).toBe(true);
+    });
+
+    it("flattens to a `FabricValue` when its result holds natives", () => {
+      const { pattern } = commonfabric;
+      const p = pattern(() => ({
+        bytes: new Uint8Array([1, 2]),
+        when: new Date(0),
+      }));
+      expect(isValidFabricValue(flattened(p))).toBe(true);
+    });
   });
 });

@@ -3,6 +3,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { markEffectCompletion } from "../executor/effect-completion.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("builtins", { enabled: true, level: "warn" });
 
@@ -30,7 +31,7 @@ export async function settleAbandonedRequest(
 ): Promise<void> {
   const { error } = await runtime.editWithRetry((tx) => {
     if (runtime.cfcEnforcementMode !== "disabled") {
-      tx.setCfcImplementationIdentity({ kind: "builtin", builtinId });
+      setCfcImplementationIdentity(tx, { kind: "builtin", builtinId });
     }
     markEffectCompletion(tx, effectKey);
     write(tx);

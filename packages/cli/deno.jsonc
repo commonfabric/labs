@@ -4,7 +4,7 @@
     "cli": "deno run --allow-run --allow-env --allow-read ./launcher.ts --labs-root ../.. --config ../../deno.jsonc --cli-entrypoint ./mod.ts --",
     "cli-no-pwd-override": "CF_CLI_NAME=cf deno run --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run ./mod.ts",
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-sharded-test-files.ts CLI_TEST_SHARD cli . --serial='**/*.serial.test.ts' --all-access=test/view-procfs.test.ts -- --no-check --parallel --allow-ffi --allow-read --allow-write --allow-run --allow-env --allow-net=127.0.0.1 --ignore='**/*.test.tsx',test/piece-integration.test.ts --shuffle=$(deno task -q test-seed)",
+    "deno-test": "deno run --allow-read --allow-write --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-test-batches.ts . --serial='**/*.serial.test.ts' --all-access=test/view-procfs.test.ts -- --no-check --parallel --allow-ffi --allow-read --allow-write --allow-run --allow-env --allow-net=127.0.0.1 --ignore='**/*.test.tsx',test/piece-integration.test.ts --shuffle=$(deno task -q test-seed)",
     "integration": "CF_CLI_INTEGRATION_USE_LOCAL=1 CF_LOG_LEVEL=error ./integration/integration.sh",
     "fuse-integration": "CF_CLI_INTEGRATION_USE_LOCAL=1 CF_LOG_LEVEL=error ./integration/fuse-exec.sh",
     "acl-integration": "CF_CLI_INTEGRATION_USE_LOCAL=1 CF_LOG_LEVEL=error ./integration/acl.sh"

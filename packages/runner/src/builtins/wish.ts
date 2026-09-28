@@ -2078,6 +2078,9 @@ export function wish(
   const sidecarRunOptions = (surface: SidecarSurface) => ({
     parentPieceRootId: parentCell.getAsNormalizedFullLink().id,
     sourceOrigin: surface.origin,
+    // A sidecar the wish instantiates, in a continuation of its action, is
+    // no principal's act.
+    attributeInitialization: false,
   });
 
   addCancel(() => {

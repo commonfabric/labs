@@ -18,6 +18,7 @@ import {
   setCompileCacheRuntimeVersionForTesting,
   sourceDocKey,
 } from "../src/compilation-cache/cell-cache.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("module byte cache test");
 const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
@@ -245,7 +246,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
 
       const damageTx = rt.edit();
       const previousIdentity = damageTx.getCfcState().implementationIdentity;
-      damageTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(damageTx, {
         kind: "builtin",
         builtinId: "compile-cache",
       });
@@ -263,7 +264,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
           damageTx,
         ).set({ damaged: true });
       } finally {
-        damageTx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(damageTx, previousIdentity);
       }
       damageTx.prepareCfc();
       expect((await damageTx.commit()).error).toBeUndefined();

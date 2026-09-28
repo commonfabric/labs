@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   linkProbeSubPath,
+  linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
@@ -406,10 +407,11 @@ describe("link-resolution", () => {
         undefined,
         tx,
       );
-      const linkData = targetCell.getAsLink();
-      // Manually set schema on the link
+      let linkData = targetCell.getAsLink();
+      // Manually set schema on the link, as a new link, since a link's payload
+      // is fixed once it is made.
       if (isSigilLink(linkData)) {
-        linkRefPayload(linkData).schema = schema;
+        linkData = linkRefFrom({ ...linkRefPayload(linkData), schema });
       }
       sourceCell.setRaw({ link: linkData });
       tx.commit();

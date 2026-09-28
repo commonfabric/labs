@@ -173,6 +173,7 @@ import {
   type CfcLabelViewResponse,
   ClientNotificationType,
   type CustodySealCommitRequest,
+  type CustodySealCommitResponse,
   type CustodySealPrepareRequest,
   type CustodySealPreview,
   type DetectNonIdempotentRequest,
@@ -234,10 +235,12 @@ import {
   type PieceUpdateSourceRequest,
   type PieceUpdateSourceResponse,
   type RecreateSpaceRootPatternRequest,
+  type RegisterSpaceHostDetailedRequest,
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
   type ResolveSpaceNameRequest,
+  RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
   type SetBreakpointsRequest,
@@ -259,6 +262,7 @@ import {
   type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
+  type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
   type SpaceSetAclEntryRequest,
@@ -806,6 +810,32 @@ export function securityContextFrom(
   } satisfies EveryFieldOf<RuntimeSecurityContext>;
 }
 
+/**
+ * The message reporting a host that did not answer the boot-time health
+ * check. The check gives one verdict over the backend and every space host,
+ * so the message names them all where there is more than one. Hosts are
+ * compared as the check compares them, as parsed URLs; one that does not
+ * parse is named as written, since that is what failed the check.
+ */
+function unreachableHostMessage(data: InitializationData): string {
+  const asChecked = (host: string) => {
+    try {
+      return new URL(host).toString();
+    } catch {
+      return host;
+    }
+  };
+  const backend = asChecked(data.apiUrl);
+  const spaceHosts = new Set<string>();
+  for (const host of Object.values(data.spaceHostMap ?? {})) {
+    const checked = asChecked(host);
+    if (checked !== backend) spaceHosts.add(checked);
+  }
+  const quoted = [...spaceHosts].map((host) => `"${host}"`).join(", ");
+  return `Could not connect to "${data.apiUrl}"` +
+    (spaceHosts.size > 0 ? ` or to a space host (${quoted})` : "");
+}
+
 /** Builds the refusal for a detached client's or a disposed runtime's seal. */
 const custodySealingUnavailable = () =>
   new Error("Custody sealing is unavailable");
@@ -851,6 +881,11 @@ export class RuntimeProcessor {
   #runtime: Runtime;
   #cc: PiecesController;
   #spaces = new Map<DID, PiecesController>();
+  // The boot-time health check's verdict, and whether `initialize()` waited
+  // for it before returning. A processor built without `initialize()` made
+  // no check and reads as healthy.
+  #health: Promise<boolean> = Promise.resolve(true);
+  #awaitedHealth = false;
   #identity: Identity;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
@@ -970,8 +1005,9 @@ export class RuntimeProcessor {
   /**
    * The runtime and home context this processor was built over, the tables
    * it keeps by space, by client, and by session, the disposed flag, the
-   * render policy and ceiling a mount inherits, and the per-space context
-   * step, which a test drives directly.
+   * render policy and ceiling a mount inherits, the boot-time health check's
+   * verdict and whether `initialize()` waited for it, and the per-space
+   * context step, which a test drives directly.
    */
   get accessForTestingOnly(): {
     runtime: Runtime;
@@ -999,6 +1035,8 @@ export class RuntimeProcessor {
     >;
     renderConfidentialityCeiling: RenderConfidentialityCeiling | undefined;
     readonly renderDeclassificationPolicy: RenderDeclassificationPolicy;
+    readonly health: Promise<boolean>;
+    readonly awaitedHealth: boolean;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1009,6 +1047,12 @@ export class RuntimeProcessor {
       },
       set runtime(value) {
         outerThis.#runtime = value;
+      },
+      get health() {
+        return outerThis.#health;
+      },
+      get awaitedHealth() {
+        return outerThis.#awaitedHealth;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -2044,9 +2088,14 @@ export class RuntimeProcessor {
     const terms = this.#hostSelectedCell(request.terms);
     const policy = this.#hostSelectedCell(request.policy);
     const settings = this.#hostSelectedCell(request.allowedSources);
-    const prepared = await prepareCustodySeal(draft, { terms, policy }, {
-      allowedSources: settings,
-    });
+    const box = request.box === undefined
+      ? undefined
+      : this.#hostSelectedCell(request.box);
+    const prepared = await prepareCustodySeal(
+      draft,
+      { terms, policy, ...(box === undefined ? {} : { box }) },
+      { allowedSources: settings },
+    );
     if (unavailable()) throw new Error("Custody sealing is unavailable");
     const id = crypto.randomUUID();
     this.#custodySeals.set(clientScopedKey(client, id), {
@@ -2061,6 +2110,7 @@ export class RuntimeProcessor {
       instance: prepared.instance,
       policy: prepared.policy,
       sources: [...prepared.sources],
+      witnessedRelease: prepared.witnessedRelease,
       stance: prepared.stance,
     };
   }
@@ -2077,7 +2127,7 @@ export class RuntimeProcessor {
   async handleCustodySealCommit(
     request: CustodySealCommitRequest,
     client: WorkerClient = ownerClient,
-  ): Promise<CellResponse> {
+  ): Promise<CustodySealCommitResponse> {
     const key = clientScopedKey(client, request.id);
     const pending = this.#custodySeals.get(key);
     this.#custodySeals.delete(key);
@@ -2103,7 +2153,11 @@ export class RuntimeProcessor {
       const sealed = await commitCustodySeal(pending.consent, event, {
         signal: commit.signal,
       });
-      return { cell: createCellRef(sealed.receipt) };
+      return {
+        receipt: createCellRef(sealed.receipt),
+        box: createCellRef(sealed.box),
+        instance: sealed.instance,
+      };
     } finally {
       this.#custodySealCommits.delete(key);
     }
@@ -2931,6 +2985,17 @@ export class RuntimeProcessor {
     };
   }
 
+  handleRegisterSpaceHostDetailed(
+    request: RegisterSpaceHostDetailedRequest,
+  ): SpaceHostRegistrationResponse {
+    return {
+      registration: this.#runtime.registerSpaceHostDetailed(
+        request.space,
+        request.host,
+      ),
+    };
+  }
+
   async handleResolveSpaceName(
     request: ResolveSpaceNameRequest,
   ): Promise<SpaceResponse> {
@@ -3315,6 +3380,8 @@ export class RuntimeProcessor {
         return await this.handleResolveSpaceName(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
+      case RequestType.RegisterSpaceHostDetailed:
+        return this.handleRegisterSpaceHostDetailed(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetLoggerCounts:
@@ -3586,10 +3653,12 @@ export class RuntimeProcessor {
    * wires the runtime's console, navigation, piece-creation, and error
    * bridges to `postToClient()`, and starts the home-space site-table watch.
    * Rejects when the runtime's server-execution posture diverges from what
-   * the host declared, or when the API host fails its health check. The
-   * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`. `clients` resolves the
-   * current authorized recipients of runtime-wide access-loss notifications.
+   * the host declared, or, with `awaitHealth`, when a host fails the health
+   * check. Otherwise the check runs alongside: the returned processor handles
+   * requests at once, and a host the check could not reach is reported to
+   * the clients connected when it answers. A caller that needs storage and
+   * pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide notifications.
    */
   static async initialize(
     data: InitializationData,
@@ -3697,8 +3766,17 @@ export class RuntimeProcessor {
 
     assertServerExecutionPostureAgreement(data.experimental, runtime);
 
-    if (!await runtime.healthCheck()) {
-      throw new Error(`Could not connect to "${data.apiUrl}"`);
+    // The check fans out to the default host and every seeded one, so it
+    // answers at the pace of the slowest of them. The reply does not wait for
+    // it: storage reconnects with its own backoff, and a host that stays
+    // unreachable is reported below. The check cannot reject on its own; a
+    // rejection is treated as an unreachable host all the same.
+    const health = runtime.healthCheck().then(
+      (healthy) => healthy,
+      () => false,
+    );
+    if (data.awaitHealth === true && !await health) {
+      throw new Error(unreachableHostMessage(data));
     }
 
     // Allow the worker to acknowledge initialization immediately. Consumers
@@ -3714,6 +3792,24 @@ export class RuntimeProcessor {
       securityContextFrom(data, identity.did()),
       clients,
     );
+    processor.#health = health;
+    processor.#awaitedHealth = data.awaitHealth === true;
+    if (!processor.#awaitedHealth) {
+      // Nothing between the check and the return awaits, so the host has its
+      // reply, and its error listener in place, before this notice can go
+      // out. An `await` added on that path would reorder the two.
+      const built = processor;
+      void health.then((healthy) => {
+        if (healthy || built.#isDisposed) return;
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.HostUnreachable,
+            message: unreachableHostMessage(data),
+          });
+        }
+      });
+    }
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
     // any present-but-unknown value becomes "deny"; absent stays "allow".

@@ -1,12 +1,28 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { dirname } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
 import { commandWords, withoutComments } from "./ci-workflow.ts";
 import { phaseOf } from "./ci-step-phases.ts";
-import { EXPECTED_COVERAGE_ARTIFACT_NAMES } from "./coverage-check.ts";
-import { PATTERN_INTEGRATION_SHARD_COUNT } from "./select-pattern-integration-files.ts";
-import { UNLAUNCHED_MEMBERS_FILE } from "./unlaunched-members.ts";
+import {
+  BINARY_CACHE_DIR,
+  cachedBinaries,
+  COMPILE_CACHE_FILE,
+} from "./ci-capabilities.ts";
+import {
+  COVERAGE_PROFILE_DIR,
+  COVERAGE_REPORT_DIR,
+  COVERAGE_REPORT_FILE,
+  DEFAULT_COVERAGE_DIR,
+  measuredSetOfReport,
+} from "./ci-lane.ts";
+import { measuredSetDirectory } from "./test-selection/coverage.ts";
+import {
+  FULL_LANES_MAX,
+  FULL_RUN_LABEL,
+  LANES,
+} from "./test-selection/policy.ts";
 
 function jobBlock(workflow: string, jobId: string): string {
   const jobsStart = workflow.indexOf("jobs:\n");
@@ -32,19 +48,6 @@ function jobIds(workflow: string): string[] {
       /^ {2}([A-Za-z_][A-Za-z0-9_-]*):\n/gm,
     ),
   ].map((match) => match[1]);
-}
-
-function expandedJobCount(job: string): number {
-  const includeRows = [...job.matchAll(/^ {10}- [A-Za-z_][A-Za-z0-9_-]*:/gm)];
-  if (includeRows.length > 0) return includeRows.length;
-
-  const dimensions = [
-    ...job.matchAll(/^ {8}[A-Za-z_][A-Za-z0-9_-]*: \[([^\]]+)\]$/gm),
-  ];
-  return dimensions.reduce(
-    (count, dimension) => count * dimension[1].split(",").length,
-    1,
-  );
 }
 
 function stepBlock(job: string, stepName: string): string {
@@ -84,19 +87,6 @@ function boundMinutes(
 ): number | null {
   const alias = value.match(/^\*([a-z][a-z0-9-]*)$/);
   return alias ? anchors.get(alias[1]) ?? null : null;
-}
-
-function neededJobIds(job: string): string[] {
-  const marker = "\n    needs:\n";
-  const needsStart = job.indexOf(marker);
-  assert(needsStart >= 0, "job needs list not found");
-
-  const needsBody = job.slice(needsStart + marker.length);
-  const nextProperty = needsBody.search(/^ {4}[A-Za-z_][A-Za-z0-9_-]*:/m);
-  const needs = nextProperty < 0 ? needsBody : needsBody.slice(0, nextProperty);
-  return [...needs.matchAll(/^ {6}- ([A-Za-z_][A-Za-z0-9_-]*)$/gm)].map(
-    (match) => match[1],
-  );
 }
 
 const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
@@ -231,83 +221,17 @@ Deno.test("CI browser tests use the runner's installed Chrome", async () => {
   }
 });
 
-Deno.test("Check preserves a native crash from Deno lint", async () => {
-  const contents = await workflow("deno.yml");
-  const check = jobBlock(contents, "check");
-  const lint = stepBlock(check, "🧹 Lint codebase");
-  const describe = stepBlock(check, "📋 Describe Deno lint core dump");
-  const upload = stepBlock(check, "📤 Upload Deno lint core dump");
-
-  assertStringIncludes(lint, "ulimit -c unlimited");
-  assertStringIncludes(
-    lint,
-    'sudo sysctl -w kernel.core_pattern="$GITHUB_WORKSPACE/deno-core.%p"',
-  );
-  assertStringIncludes(
-    lint,
-    "deno task run-recorded lint repo deno-lint -- deno lint",
-  );
-  assertStringIncludes(describe, "if: ${{ failure() }}");
-  assertStringIncludes(describe, 'file "$core"');
-  assertStringIncludes(upload, "if: ${{ failure() }}");
-  assertStringIncludes(upload, "uses: actions/upload-artifact@");
-  assertStringIncludes(
-    upload,
-    "name: deno-lint-core-a${{ github.run_attempt }}",
-  );
-  assertStringIncludes(upload, "path: deno-core.*");
-  assertStringIncludes(upload, "if-no-files-found: ignore");
-  assert(
-    check.indexOf("🧹 Lint codebase") <
-        check.indexOf("📋 Describe Deno lint core dump") &&
-      check.indexOf("📋 Describe Deno lint core dump") <
-        check.indexOf("📤 Upload Deno lint core dump") &&
-      check.indexOf("📤 Upload Deno lint core dump") <
-        check.indexOf("🔎 Type check codebase"),
-    "the lint crash report must run immediately after the lint step",
-  );
-});
-
-Deno.test("Status waits for every pull request validation job", async () => {
-  const contents = await workflow("deno.yml");
-  const gate = jobBlock(contents, "status");
-  const pushOnlyJobs = new Set([
-    "attest-binaries",
-    "deploy-rapids",
-    "deploy-shell-staging",
-  ]);
-  const expected = jobIds(contents).filter((jobId) =>
-    jobId !== "status" && !pushOnlyJobs.has(jobId)
-  ).sort();
-
-  assertEquals(neededJobIds(gate).sort(), expected);
-  assertStringIncludes(contents, "name: CI\n");
-  assertStringIncludes(gate, 'name: "Status"');
-  assertStringIncludes(
-    gate,
-    "if: ${{ always() && github.event_name == 'pull_request' }}",
-  );
-  assertStringIncludes(gate, "JOB_RESULTS: ${{ toJSON(needs) }}");
-  assertStringIncludes(gate, 'select(.value.result != "success")');
-  assertStringIncludes(gate, "permissions: {}");
-
-  // A path filter would leave the required check pending on a pull request
-  // that touches none of the listed paths.
-  const triggers = workflowTriggers(contents);
-  assertStringIncludes(triggers, "  pull_request:\n");
-  assertEquals(triggers.includes("\n    paths:"), false);
-});
-
 Deno.test("the first CI wave leaves runner capacity for another run", async () => {
-  const contents = await workflow("deno.yml");
+  const ci = await parsedWorkflow("deno.yml");
   const githubParallelRunnerLimit = 60;
-  const firstWaveJobs = jobIds(contents)
-    .map((jobId) => jobBlock(contents, jobId))
-    .filter((job) => !/^ {4}needs:/m.test(job));
-  const firstWaveRunnerCount = firstWaveJobs.reduce(
-    (count, job) => count + expandedJobCount(job),
-    0,
-  );
+  // A job without dependencies starts at once, as many times as its matrix
+  // has entries. The full run's matrix waits for the job counting it.
+  const firstWaveRunnerCount = Object.values(ci.jobs)
+    .filter((job) => needsOf(job).length === 0)
+    .reduce((count, job) => {
+      const lanes = job.strategy?.matrix?.lane;
+      return count + (Array.isArray(lanes) ? lanes.length : 1);
+    }, 0);
 
   assert(
     firstWaveRunnerCount < githubParallelRunnerLimit / 2,
@@ -315,6 +239,8 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
+  // The full run's lanes are held to the same limit by the cap on them.
+  assert(FULL_LANES_MAX <= githubParallelRunnerLimit / 2);
 });
 
 Deno.test("every step we name carries a phase marker", async () => {
@@ -355,37 +281,40 @@ Deno.test("every work step is bounded before its job is", async () => {
   const headroom = 10;
   const contents = await workflow("deno.yml");
   const anchors = anchoredMinutes(contents);
+  // Every bound is written as an alias, which the text shows and the parsed
+  // workflow, having resolved it, does not.
+  for (const bound of contents.matchAll(/^ +timeout-minutes: (.+)$/gm)) {
+    assert(
+      boundMinutes(anchors, bound[1]!) !== null,
+      `timeout-minutes ${bound[1]} is not an anchored bound`,
+    );
+  }
+
   // The deploy jobs hand the work to a script that lives elsewhere — one on the
   // bastion, one in Cloud Storage — and how long that takes is not this
   // workflow's to say. They carry no bound, so none is asked of them here.
   const unboundedJobs = new Set(["deploy-rapids", "deploy-shell-staging"]);
-
-  for (const jobId of jobIds(contents)) {
+  const ci = await parsedWorkflow("deno.yml");
+  for (const [jobId, job] of Object.entries(ci.jobs)) {
     if (unboundedJobs.has(jobId)) continue;
-    const job = jobBlock(contents, jobId);
-    const jobValue = job.match(/^ {4}timeout-minutes: (.+)$/m);
-    assert(jobValue, `${jobId}: job has no timeout-minutes`);
-    const jobBound = boundMinutes(anchors, jobValue[1]);
+    const jobBound = job["timeout-minutes"];
     assert(
-      jobBound,
-      `${jobId}: timeout-minutes ${jobValue[1]} is not an anchored bound`,
+      typeof jobBound === "number",
+      `${jobId}: job has no timeout-minutes`,
     );
 
-    const work = stepBlocks(job).filter((step) =>
-      phaseOf(step.name) === "work"
+    const work = (job.steps ?? []).filter((step) =>
+      step.name !== undefined && phaseOf(step.name) === "work"
     );
     // Every job here does work of its own, so an empty list means the steps
     // went unread rather than that this job had none to bound.
     assert(work.length > 0, `${jobId}: no work step found`);
 
     for (const step of work) {
-      const stepValue = step.body.match(/^ {8}timeout-minutes: (.+)$/m);
-      assert(stepValue, `${jobId}: "${step.name}" has no timeout-minutes`);
-      const stepBound = boundMinutes(anchors, stepValue[1]);
+      const stepBound = step["timeout-minutes"];
       assert(
-        stepBound,
-        `${jobId}: "${step.name}" timeout-minutes ${stepValue[1]} is not an ` +
-          `anchored bound`,
+        typeof stepBound === "number",
+        `${jobId}: "${step.name}" has no timeout-minutes`,
       );
       assert(
         jobBound - stepBound >= headroom,
@@ -441,209 +370,669 @@ Deno.test("the run report checks out the commit it reports on", async () => {
   assertStringIncludes(comment, "fetch-depth: 2");
 });
 
-Deno.test("coverage requirements follow sharded test matrices", async () => {
-  const contents = await workflow("deno.yml");
-  const jobs = [
-    ["test", "coverage-profile-workspace-", "shard"],
-    ["runner-test", "coverage-profile-runner-", "shard"],
-    [
-      "generated-patterns-integration-test",
-      "coverage-profile-generated-patterns-",
-      "shard",
-    ],
-    [
-      "pattern-integration-test",
-      "coverage-profile-pattern-integration-",
-      "shard",
-    ],
-    ["pattern-unit-test", "coverage-profile-pattern-unit-", "chunk"],
-  ] as const;
+//
+// The workflow as GitHub reads it
+//
+// The lanes' steps are written once, under a YAML anchor, and the two lane
+// jobs alias them. A reader of the text sees them in one job only, so the
+// checks about the lanes read the parsed workflow, where every job holds its
+// own steps.
+//
 
-  for (const [jobId, artifactPrefix, dimension] of jobs) {
-    const job = jobBlock(contents, jobId);
-    const shardMatch = job.match(
-      new RegExp(`^ {8}${dimension}: \\[([0-9, ]+)\\]$`, "m"),
-    );
-    const totalMatch = job.match(/^ {8}total: \[(\d+)\]$/m);
-    assert(shardMatch, `${jobId} ${dimension} matrix not found`);
-    assert(totalMatch, `${jobId} total matrix not found`);
+interface Step {
+  name?: string;
+  id?: string;
+  if?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, string | boolean | number>;
+  "timeout-minutes"?: unknown;
+}
 
-    const shards = shardMatch[1].split(",").map((value) =>
-      Number(value.trim())
-    );
-    const total = Number(totalMatch[1]);
-    if (jobId === "pattern-integration-test") {
-      assertEquals(
-        total,
-        PATTERN_INTEGRATION_SHARD_COUNT,
-        "pattern integration matrix must use its measured weight profile",
-      );
+interface Job {
+  name?: string;
+  if?: string;
+  needs?: string | string[];
+  uses?: string;
+  with?: Record<string, string>;
+  secrets?: unknown;
+  environment?: string;
+  "timeout-minutes"?: unknown;
+  permissions?: Record<string, string>;
+  env?: Record<string, string>;
+  outputs?: Record<string, string>;
+  strategy?: { "fail-fast"?: boolean; matrix?: Record<string, unknown> };
+  steps?: Step[];
+}
+
+interface Workflow {
+  name: string;
+  on: Record<string, unknown>;
+  env?: Record<string, string | number>;
+  jobs: Record<string, Job>;
+}
+
+async function parsedWorkflow(name: string): Promise<Workflow> {
+  return parseYaml(await workflow(name)) as Workflow;
+}
+
+function needsOf(job: Job): string[] {
+  return job.needs === undefined
+    ? []
+    : typeof job.needs === "string"
+    ? [job.needs]
+    : job.needs;
+}
+
+function namedStep(job: Job, name: string): Step {
+  const step = job.steps?.find((step) => step.name === name);
+  assert(step, `${name} step not found`);
+  return step;
+}
+
+/** The jobs that lay out a pull request's lanes or the full run's. */
+const LANE_JOBS = ["tests"] as const;
+
+/**
+ * What one run of a step's script did: its exit code, what it wrote to
+ * `GITHUB_OUTPUT`, and what it wrote to its standard output and error.
+ */
+interface StepRun {
+  code: number;
+  output: string;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Runs a step's script the way GitHub runs one with no `shell` of its own,
+ * `bash -e`, with the named commands replaced by stand-ins written as shell
+ * scripts. Expressions are replaced by `x`, and `GITHUB_OUTPUT` names a file
+ * whose contents come back.
+ */
+async function runStep(
+  run: string,
+  env: Record<string, string>,
+  standIns: Record<string, string> = {},
+): Promise<StepRun> {
+  const dir = await Deno.makeTempDir({ prefix: "ci-workflow-step-" });
+  try {
+    for (const [command, body] of Object.entries(standIns)) {
+      await Deno.writeTextFile(`${dir}/${command}`, `#!/bin/sh\n${body}\n`, {
+        mode: 0o755,
+      });
     }
-    assertEquals(
-      shards,
-      Array.from({ length: total }, (_, index) => index + 1),
-      `${jobId} must list every ${dimension} exactly once`,
+    await Deno.writeTextFile(
+      `${dir}/step.sh`,
+      run.replaceAll(/\$\{\{.*?\}\}/g, "x"),
     );
-    assertStringIncludes(
-      job,
-      `name: ${artifactPrefix}\${{ matrix.${dimension} }}`,
-    );
-    assertEquals(
-      EXPECTED_COVERAGE_ARTIFACT_NAMES.filter((name) =>
-        name.startsWith(artifactPrefix)
-      ),
-      shards.map((shard) => `${artifactPrefix}${shard}`),
-      `${jobId} coverage requirements must match its matrix`,
-    );
+    await Deno.writeTextFile(`${dir}/output`, "");
+    const { code, stdout, stderr } = await new Deno.Command("bash", {
+      args: ["-e", "step.sh"],
+      cwd: dir,
+      env: {
+        PATH: `${dir}:${Deno.env.get("PATH")}`,
+        GITHUB_OUTPUT: `${dir}/output`,
+        GITHUB_STEP_SUMMARY: `${dir}/summary`,
+        ...env,
+      },
+    }).output();
+    return {
+      code,
+      output: await Deno.readTextFile(`${dir}/output`),
+      stdout: new TextDecoder().decode(stdout),
+      stderr: new TextDecoder().decode(stderr),
+    };
+  } finally {
+    await Deno.remove(dir, { recursive: true });
   }
-});
+}
 
-Deno.test("every workspace test job uploads its unlaunched-package record", async () => {
-  // The record is written only by a run that stopped early, so a job that
-  // leaves it out of its artifact looks exactly like a job that never left
-  // one, and the coverage gate scores the packages that job never started.
-  const contents = await workflow("deno.yml");
-  const runners = jobIds(contents).filter((jobId) =>
-    stepBlocks(jobBlock(contents, jobId)).some((step) =>
-      /^ +run: deno task test$/m.test(step.body)
-    )
+/** `message`, followed by what the script of `run` wrote to stderr. */
+function withStderr(message: string, run: StepRun): string {
+  return `${message}; the script's stderr:\n${run.stderr}`;
+}
+
+/** Asserts that the script of `run` exited with `code`. */
+function assertStepCode(run: StepRun, code: number, what: string): void {
+  assertEquals(run.code, code, withStderr(what, run));
+}
+
+/** Asserts that the script of `run` failed. */
+function assertStepFailed(run: StepRun, what: string): void {
+  assert(run.code !== 0, withStderr(what, run));
+}
+
+Deno.test("the lanes run every test when the full run is planned, and a selection otherwise", async () => {
+  // A pull request runs its lanes over a selection, and anything else,
+  // including a pull request carrying the full-run label, runs every test.
+  // `plan-full` is the one place that decides which: the lanes read its
+  // outputs, and fall back to a pull request's lanes where it was skipped.
+  const ci = await parsedWorkflow("deno.yml");
+  const plan = ci.jobs["plan-full"];
+  const tests = ci.jobs.tests;
+  assertEquals(
+    plan.if,
+    "github.event_name != 'pull_request' || " +
+      `contains(github.event.pull_request.labels.*.name, '${FULL_RUN_LABEL}')`,
+  );
+  assertEquals(plan.outputs, {
+    of: "${{ steps.count.outputs.of }}",
+    lanes: "${{ steps.count.outputs.lanes }}",
+    args: "--full",
+  });
+  assertEquals(needsOf(tests), ["plan-full"]);
+  // A skipped plan is how a pull request's lanes start at once; a failed or
+  // cancelled one is a run that cannot know its lanes.
+  assertEquals(
+    tests.if,
+    "!cancelled() && (needs.plan-full.result == 'success' || " +
+      "needs.plan-full.result == 'skipped')",
   );
 
-  assertEquals(runners, ["test"], "jobs running the workspace test runner");
-  for (const jobId of runners) {
-    const upload = stepBlock(
-      jobBlock(contents, jobId),
-      "📤 Upload coverage report",
-    );
-    assertStringIncludes(upload, `coverage/lcov/${UNLAUNCHED_MEMBERS_FILE}\n`);
-  }
+  // A pull request's lane count is the dial, written where the plan is
+  // skipped, and this holds it to the dial.
+  const selected = Array.from({ length: LANES }, (_, index) => index + 1);
+  const of = `\${{ needs.plan-full.outputs.of || ${LANES} }}`;
+  assertEquals(
+    tests.strategy?.matrix?.lane,
+    `\${{ fromJSON(needs.plan-full.outputs.lanes || '[${
+      selected.join(", ")
+    }]') }}`,
+  );
+  assertEquals(tests.name, `Tests (\${{ matrix.lane }}/${of})`);
+  assertEquals(tests.env?.LANE_JOB, `Tests (\${{ matrix.lane }}/${of})`);
+  assertEquals(
+    tests.env?.LANE_ARGS,
+    `--lane \${{ matrix.lane }} --of ${of} ` +
+      "${{ needs.plan-full.outputs.args || " +
+      "format('--base origin/{0}', github.base_ref) }}",
+  );
 });
 
-Deno.test("sharded pattern caches follow their shard topology", async () => {
-  const contents = await workflow("deno.yml");
-  for (
-    const [jobId, selector, dimension] of [
-      [
-        "generated-patterns-integration-test",
-        "'tasks/select-generated-pattern-files.ts'",
-        "shard",
-      ],
-      [
-        "pattern-integration-test",
-        "'tasks/select-pattern-integration-files.ts'",
-        "shard",
-      ],
-      ["pattern-unit-test", "'tasks/integration.ts'", "chunk"],
-    ] as const
-  ) {
-    const job = jobBlock(contents, jobId);
-    const topology = `-\${{ matrix.total }}-\${{ matrix.${dimension} }}-`;
-    assertEquals(job.split(topology).length - 1, 2);
-    const key = job.match(/^ {10}key: (.+)$/m);
-    assert(key, `${jobId} cache key not found`);
-    assertStringIncludes(key[1], selector);
-    const restoreKeys = job.match(/restore-keys: \|\n((?: {12}.+\n)+)/);
-    assert(restoreKeys, `${jobId} restore prefixes not found`);
-    assertEquals(restoreKeys[1].trim().split("\n").length, 1);
-  }
-});
+Deno.test("a lane runs the lane runner and holds the token alone", async () => {
+  const ci = await parsedWorkflow("deno.yml");
 
-Deno.test("every compile byte cache is keyed on the compiler fingerprint", async () => {
-  // A compile byte cache holds bytes one compiler emitted, and the runtime
-  // stores each of them under `compileCache:<fingerprint>/<identity>`. Keying
-  // the CI entry on that same fingerprint is what makes a restored entry usable
-  // rather than dead weight, and the compile-cache-key action is where the
-  // value comes from. A job that points the compiler at a cache file is the
-  // one that needs it, so that is what this reads rather than a step name.
-  const contents = await workflow("deno.yml");
-  const fingerprint = "${{ steps.compile-cache-key.outputs.fingerprint }}";
-  const resolver = "uses: ./.github/actions/compile-cache-key";
-
-  let entries = 0;
-  for (const jobId of jobIds(contents)) {
-    const job = jobBlock(contents, jobId);
-    const steps = stepBlocks(job);
-    const resolves = steps.some((step) => step.body.includes(resolver));
-    const files = new Set(
-      [...job.matchAll(/CF_COMPILE_CACHE_FILE[:=] ?(.+)$/gm)].map((match) =>
-        match[1].trim().replace(/\s*\\$/, "").replace(/^"|"$/g, "")
-      ),
-    );
-
-    if (files.size === 0) {
-      assert(!resolves, `${jobId} resolves a fingerprint it keys nothing on`);
-      continue;
-    }
-    assert(
-      resolves,
-      `${jobId} uses a compile cache without resolving the fingerprint`,
-    );
-
-    for (const file of files) {
-      let resolved = false;
-      let cached = false;
-      for (const step of steps) {
-        if (step.body.includes(resolver)) resolved = true;
-        if (!step.body.includes(`path: ${file}\n`)) continue;
-        cached = true;
-        assert(
-          resolved,
-          `${jobId} keys ${file} before resolving the fingerprint`,
+  for (const id of LANE_JOBS) {
+    const job = ci.jobs[id];
+    assertEquals(job.strategy?.["fail-fast"], false);
+    assertEquals(job.permissions, { contents: "read" });
+    // Only the lane step holds the token, which the lane hands on to the
+    // suites that declared `github-api` and to nothing else.
+    assertEquals(job.env?.GITHUB_TOKEN, undefined);
+    const lane = namedStep(job, "🧪 Run the lane");
+    assertEquals(lane.env?.GITHUB_TOKEN, "${{ secrets.GITHUB_TOKEN }}");
+    for (const step of job.steps ?? []) {
+      if (step !== lane) {
+        assertEquals(
+          step.env?.GITHUB_TOKEN,
+          undefined,
+          `${step.name} holds the token`,
         );
-
-        const key = step.body.match(/^ {10}key: (.+)$/m);
-        assert(key, `${jobId} has no key for ${file}`);
-        assertStringIncludes(key[1], fingerprint);
-
-        const restoreKeys = step.body.match(
-          /restore-keys: \|\n((?: {12}.+\n)+)/,
-        );
-        for (const prefix of restoreKeys?.[1].trim().split("\n") ?? []) {
-          assertStringIncludes(prefix, fingerprint);
-        }
-        entries += 1;
       }
-      assert(cached, `${jobId} caches nothing at ${file}`);
     }
+    // The plan heads a step of its own, ahead of the lane's step, which
+    // packs the same plan and only names it.
+    const plan = namedStep(job, "🗺️ Plan the lane");
+    assertStringIncludes(
+      plan.run ?? "",
+      "\ndeno run -A tasks/ci-lane.ts $LANE_ARGS --dry-run\n",
+    );
+    assertStringIncludes(
+      lane.run ?? "",
+      "\ndeno run -A tasks/ci-lane.ts $LANE_ARGS --described\n",
+    );
+    const steps = job.steps ?? [];
+    assert(steps.indexOf(plan) < steps.indexOf(lane));
+    // The diff behind a change is taken against the merge base.
+    const checkout = namedStep(job, "📥 Checkout repository");
+    assertEquals(checkout.with?.["fetch-depth"], 0);
+    assertEquals(checkout.with?.["persist-credentials"], false);
   }
-  assert(entries > 0, "no compile byte cache found in deno.yml");
 });
 
-Deno.test("pattern shard selection fails loudly instead of running an empty shard", async () => {
-  // `mapfile -t X < <(deno run … select-pattern-integration-files.ts …)`
-  // discards the selector's exit status: a selector failure leaves the
-  // array empty WITHOUT failing the step, and the step then runs ZERO test
-  // files and exits green — a silently empty shard. The selector itself
-  // throws on an empty selection (every shard carries the
-  // internally-sharded files), so empty output is only ever a failure; the
-  // exit status is the discriminator, and only a plain command
-  // substitution propagates it under `bash -e`.
+Deno.test("the full run's count reaches the lanes as a list of lanes", async () => {
+  const plan = (await parsedWorkflow("deno.yml")).jobs["plan-full"];
+  const count = namedStep(plan, "🗺️ Count the lanes the full run needs");
+  assertStringIncludes(
+    count.run ?? "",
+    "deno run -A tasks/ci-lane.ts --full --lane-count",
+  );
 
-  const contents = withoutComments(await workflow("deno.yml"));
-  for (
-    // Both stable pattern roles use the same selector contract.
-    const jobId of [
-      "pattern-integration-test",
-      "pattern-integration-test-server-execution-opposite",
-    ]
-  ) {
-    const job = jobBlock(contents, jobId);
+  const answering = (body: string) =>
+    runStep(count.run ?? "", {}, {
+      deno: body,
+    });
+  const three = await answering("echo 3");
+  assertStepCode(three, 0, "a count of three fails");
+  assertEquals(
+    three.output,
+    "of=3\nlanes=[1,2,3]\n",
+    withStderr("a count of three", three),
+  );
+
+  // A planner that failed, or that answered with something other than a
+  // count, fails the step rather than handing the lanes an empty matrix.
+  assertStepFailed(await answering("exit 1"), "a failed count passes");
+  assertStepFailed(await answering("echo three"), "a word passes");
+});
+
+Deno.test("a lane keeps each binary under an exact key and its compile cache by compiler", async () => {
+  // A lane runs a binary it restores without asking what it was built from,
+  // so each binary's key names everything it is built from and has no
+  // prefix to fall back on. A lane builds only the binaries it needs, so
+  // each has an entry of its own: one entry holding both would keep
+  // whichever the first lane to save happened to build. A compiled pattern
+  // is reused only where its source is unchanged, so the compile cache may
+  // fall back to another lane's, as long as the same compiler wrote it, and
+  // its key moves with the pattern sources so that a fallback is saved
+  // fresh.
+  const job = (await parsedWorkflow("deno.yml")).jobs.tests;
+  const steps = job.steps ?? [];
+  const at = (id: string) => steps.findIndex((step) => step.id === id);
+  const cacheOf = (path: string) => {
+    const index = steps.findIndex((step) =>
+      step.uses?.startsWith("actions/cache@") && step.with?.path === path
+    );
+    assert(index >= 0, `nothing caches ${path}`);
+    return { index, step: steps[index]! };
+  };
+
+  const names = Object.keys(cachedBinaries());
+  assert(names.length > 0, "no cached binary is declared");
+  for (const name of names) {
+    const binary = cacheOf(`${BINARY_CACHE_DIR}/${name}`);
     assert(
-      !/mapfile[^\n]*<\s*<\([^\n]*select-pattern-integration-files/.test(job),
-      `${jobId}: the shard selector must not feed mapfile through a ` +
-        `process substitution — that discards its exit status, and a ` +
-        `selector failure then runs an empty shard green`,
+      at("binary-cache-key") >= 0 && at("binary-cache-key") < binary.index,
     );
-    assertStringIncludes(
-      job,
-      "SELECTED_FILES=$(deno run --allow-read " +
-        "../../tasks/select-pattern-integration-files.ts",
+    assertEquals(
+      binary.step.with?.key,
+      `lane-binary-${name}-\${{ steps.binary-cache-key.outputs.key }}`,
     );
-    assertStringIncludes(
-      job,
-      "::error::select-pattern-integration-files.ts selected no files",
+    assertEquals(binary.step.with?.["restore-keys"], undefined);
+  }
+
+  const fingerprint = "${{ steps.compile-cache-key.outputs.fingerprint }}";
+  const compile = cacheOf(dirname(COMPILE_CACHE_FILE));
+  assert(
+    at("compile-cache-key") >= 0 && at("compile-cache-key") < compile.index,
+  );
+  assert(
+    String(compile.step.with?.key).startsWith(`cc-lane-${fingerprint}-`),
+    "the compile cache's key does not open with the compiler's fingerprint",
+  );
+  assertStringIncludes(String(compile.step.with?.key), "hashFiles(");
+  assertEquals(
+    String(compile.step.with?.["restore-keys"]).trim(),
+    `cc-lane-${fingerprint}-`,
+  );
+
+  // An empty key would name every build alike, so the step that resolves it
+  // fails rather than handing on nothing.
+  const resolve = steps[at("binary-cache-key")]!.run ?? "";
+  assertStringIncludes(resolve, "tasks/binary-cache-key.ts");
+  const resolving = (body: string) => runStep(resolve, {}, { deno: body });
+  const found = await resolving("echo abc123");
+  assertStepCode(found, 0, "a key fails");
+  assertEquals(found.output, "key=abc123\n", withStderr("a key", found));
+  assertStepFailed(await resolving("true"), "an empty key passes");
+  assertStepFailed(await resolving("exit 1"), "a failed key passes");
+});
+
+Deno.test("a lane uploads what Status and a reader of a failure need", async () => {
+  const ci = await parsedWorkflow("deno.yml");
+  const job = ci.jobs.tests;
+
+  // The whole of what the lane converted, so a marker beside a report and
+  // the compile cache's state travel with the reports, and the raw profiles
+  // stay behind.
+  const coverage = namedStep(job, "📤 Upload the lane's coverage reports");
+  const paths = String(coverage.with?.path).trim().split("\n");
+  assertEquals(paths, [
+    `${DEFAULT_COVERAGE_DIR}/`,
+    `!${DEFAULT_COVERAGE_DIR}/${COVERAGE_PROFILE_DIR}/`,
+  ]);
+  assertEquals(
+    coverage.with?.name,
+    "lane-coverage-${{ github.job }}-${{ matrix.lane }}",
+  );
+  // A re-run of a lane replaces its first attempt's reports rather than
+  // sitting beside them.
+  assertEquals(coverage.with?.overwrite, true);
+
+  // An artifact is rooted at the directory its included paths share, and a
+  // download of several artifacts puts each under a directory named for it.
+  // A report the lane wrote therefore arrives at the path below, and the
+  // readers have to find its set there.
+  const included = paths.filter((at) => !at.startsWith("!"));
+  assertEquals(included.length, 1);
+  const root = included[0]!.replace(/\/$/, "");
+  const set = measuredSetDirectory({
+    suite: "workspace-unit",
+    set: { member: "packages/bakery", reachedBy: [], units: [] },
+  });
+  const written = [
+    DEFAULT_COVERAGE_DIR,
+    COVERAGE_REPORT_DIR,
+    set,
+    COVERAGE_REPORT_FILE,
+  ].join("/");
+  assert(written.startsWith(`${root}/`), "the report is outside the artifact");
+  const status = ci.jobs.status;
+  const download = namedStep(status, "📥 Download the lanes' coverage reports");
+  assertEquals(download.with?.pattern, "lane-coverage-*");
+  assertEquals(download.with?.["merge-multiple"], false);
+  const arrived = [
+    download.with?.path,
+    "lane-coverage-tests-1",
+    written.slice(root.length + 1),
+  ].join("/");
+  assertEquals(measuredSetOfReport(arrived), set);
+
+  // Status reads what the lanes uploaded, from where it downloaded it.
+  assertStringIncludes(
+    namedStep(status, "🔎 Hold the measured sets to their baselines").run ??
+      "",
+    `--reports ${download.with?.path}`,
+  );
+  assertStringIncludes(
+    namedStep(status, "📊 Report the run's coverage").run ?? "",
+    `tasks/coverage-report.ts --reports ${download.with?.path}`,
+  );
+
+  // A failing lane keeps its working directory under the job's temporary
+  // directory, which is where this reaches for it, and a process in the lane
+  // that crashes natively leaves its core beside it.
+  const failure = namedStep(job, "📋 Upload what a failing lane left behind");
+  assertEquals(failure.if, "${{ failure() }}");
+  assertEquals(failure.with?.path, "${{ runner.temp }}/ci-lane-*");
+  const lane = namedStep(job, "🧪 Run the lane").run ?? "";
+  assertStringIncludes(lane, "ulimit -c unlimited");
+  assertStringIncludes(
+    lane,
+    'kernel.core_pattern="$RUNNER_TEMP/ci-lane-cores/',
+  );
+
+  // The lane gathered every batch's records and marked each with its suite's
+  // variant already, so the ship step carries neither of its own.
+  const ship = namedStep(job, "📤 Ship test records");
+  assertEquals(ship.if, "always()");
+  assertEquals(ship.with, {
+    artifact: "${{ github.job }}-${{ matrix.lane }}",
+    job: "${{ env.LANE_JOB }}",
+  });
+  for (const id of LANE_JOBS) {
+    assertEquals(
+      ci.jobs[id].env?.CF_TEST_RECORDS_DIR,
+      "${{ github.workspace }}/test-records-spool",
     );
   }
+});
+
+Deno.test("Status waits for every job that runs a test", async () => {
+  const ci = await parsedWorkflow("deno.yml");
+  const status = ci.jobs.status;
+  const release = Object.keys(ci.jobs).filter((id) =>
+    ci.jobs[id].if ===
+      "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+  );
+  assertEquals(
+    needsOf(status).sort(),
+    Object.keys(ci.jobs).filter((id) =>
+      id !== "status" && !release.includes(id)
+    ).sort(),
+  );
+  assertEquals(status.name, "Status");
+  assertEquals(
+    status.if,
+    "!cancelled() && (github.event_name == 'pull_request' || " +
+      "github.event_name == 'push')",
+  );
+  assertEquals(status.permissions, {
+    contents: "read",
+    "pull-requests": "read",
+  });
+
+  // A path filter would leave the required check pending on a pull request
+  // that touches none of the listed paths.
+  const triggers = workflowTriggers(await workflow("deno.yml"));
+  assertStringIncludes(triggers, "  pull_request:\n");
+  assertEquals(triggers.includes("\n    paths:"), false);
+  // Adding or removing the full-run label starts a run that reads it.
+  const pullRequest = ci.on.pull_request;
+  assert(
+    typeof pullRequest === "object" && pullRequest !== null &&
+      "types" in pullRequest && Array.isArray(pullRequest.types),
+    "the pull_request trigger names no types",
+  );
+  for (const type of ["labeled", "unlabeled", "synchronize", "opened"]) {
+    assert(pullRequest.types.includes(type), `a ${type} event starts no run`);
+  }
+});
+
+Deno.test("nothing is released that the full run has not passed", async () => {
+  const ci = await parsedWorkflow("deno.yml");
+  for (const id of ["attest-binaries", "deploy-shell-staging"]) {
+    assert(
+      needsOf(ci.jobs[id]).includes("tests"),
+      `${id} does not wait for the full run`,
+    );
+  }
+  assertEquals(needsOf(ci.jobs["deploy-rapids"]), ["attest-binaries"]);
+});
+
+Deno.test("Status fails unless every job passed and the lanes ran", async () => {
+  const status = (await parsedWorkflow("deno.yml")).jobs.status;
+  const verify = namedStep(status, "🔎 Verify the run's jobs");
+  assertEquals(verify.if, "always()");
+  assertEquals(verify.env?.JOB_RESULTS, "${{ toJSON(needs) }}");
+  const verdict = async (
+    results: Record<string, string>,
+    code: number,
+    what: string,
+  ) =>
+    assertStepCode(
+      await runStep(verify.run ?? "", {
+        JOB_RESULTS: JSON.stringify(
+          Object.fromEntries(
+            Object.entries(results).map(([job, result]) => [job, { result }]),
+          ),
+        ),
+      }),
+      code,
+      what,
+    );
+
+  const selected = { "plan-full": "skipped", tests: "success" };
+  const full = { "plan-full": "success", tests: "success" };
+  await verdict(selected, 0, "a passing selected run fails");
+  await verdict(full, 0, "a passing full run fails");
+
+  // A lane that failed, or was cancelled, fails the run.
+  await verdict(
+    { ...selected, tests: "failure" },
+    1,
+    "a failed lane passes",
+  );
+  await verdict(
+    { ...full, tests: "cancelled" },
+    1,
+    "a cancelled lane passes",
+  );
+  await verdict(
+    { ...full, "plan-full": "failure", tests: "skipped" },
+    1,
+    "a failed plan passes",
+  );
+  // The lanes skipped, which is a run that tested nothing and would
+  // otherwise pass.
+  await verdict(
+    { "plan-full": "skipped", tests: "skipped" },
+    1,
+    "a run that tested nothing passes",
+  );
+});
+
+Deno.test("Status holds a pull request's measured sets to their baselines", async () => {
+  const status = (await parsedWorkflow("deno.yml")).jobs.status;
+  const gate = namedStep(
+    status,
+    "🔎 Hold the measured sets to their baselines",
+  );
+  assertEquals(
+    gate.if,
+    "${{ !cancelled() && github.event_name == 'pull_request' }}",
+  );
+  assertEquals(gate.env?.JOB_RESULTS, "${{ toJSON(needs) }}");
+  // The gate asks git which baselines' commits the branch holds.
+  assertEquals(
+    namedStep(status, "📥 Checkout repository").with?.["fetch-depth"],
+    0,
+  );
+
+  // The description is read as it stands, so an acceptance written after
+  // the push counts on a re-run. A run whose tests did not pass measured
+  // coverage through the failure, so the gate is told, and reports rather
+  // than gates.
+  const results = (plan: string, tests: string) =>
+    JSON.stringify({
+      "plan-full": { result: plan },
+      tests: { result: tests },
+    });
+  const words = async (jobResults: string, gh = "echo '$DESCRIPTION'") =>
+    await runStep(gate.run ?? "", {
+      BASE_REF: "main",
+      GITHUB_REPOSITORY: "commonfabric/labs",
+      JOB_RESULTS: jobResults,
+      PR_NUMBER: "42",
+      DESCRIPTION: "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+    }, {
+      deno: 'printf "%s\\n" "$@"',
+      gh: `[ "$2" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" ] || exit 9\n` +
+        gh.replace("'$DESCRIPTION'", '"$DESCRIPTION"'),
+    });
+  const passing = await words(results("skipped", "success"));
+  assertStepCode(passing, 0, "a passing run's gate fails");
+  assertEquals(passing.stdout.trim().split("\n"), [
+    "run",
+    "-A",
+    "tasks/coverage-gate.ts",
+    "--base",
+    "origin/main",
+    "--reports",
+    "lane-coverage",
+    "--body",
+    "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+    "--comment",
+    "coverage-comment.json",
+    "--pr",
+    "42",
+  ], withStderr("a passing run's gate", passing));
+  const full = await words(results("success", "success"));
+  assertEquals(
+    full.stdout,
+    passing.stdout,
+    withStderr("a full run's gate", full),
+  );
+  const failed = await words(results("skipped", "failure"));
+  assertEquals(
+    failed.stdout.trim().split("\n"),
+    [...passing.stdout.trim().split("\n"), "--tests-failed"],
+    withStderr("a failed run's gate", failed),
+  );
+  // A description that cannot be read fails the step rather than gating
+  // against an empty one.
+  assertStepFailed(
+    await words(results("skipped", "success"), "exit 1"),
+    "an unread description passes",
+  );
+
+  const comment = namedStep(status, "📤 Upload coverage comment");
+  assertEquals(comment.with?.name, "coverage-comment");
+  assertEquals(comment.with?.path, "coverage-comment.json");
+});
+
+Deno.test("Status records no tests, and ships the run's coverage from a push", async () => {
+  const status = (await parsedWorkflow("deno.yml")).jobs.status;
+
+  // It reads what every lane of the run produced, so no lane can be asked to
+  // run it, and the criterion in `docs/specs/test-records.md` under
+  // "Recording" puts it outside test records: no wrapper, and no JUnit file
+  // gathered. What its spool holds is the run's coverage measurements, which
+  // it ships under the name readers list the store for, and only from a push,
+  // because every reader takes a figure from a push to main alone.
+  assert(
+    !(status.steps ?? []).some((step) => step.run?.includes("run-recorded")),
+    "the job wraps a command in run-recorded",
+  );
+  assertEquals(
+    status.env?.CF_TEST_RECORDS_DIR,
+    "${{ github.workspace }}/test-records-spool",
+  );
+  const ship = namedStep(status, "📤 Ship test records");
+  assertEquals(ship.with, { artifact: COVERAGE_ARTIFACT, job: "Status" });
+  assertEquals(ship.if, "${{ !cancelled() && github.event_name == 'push' }}");
+  assertEquals(
+    namedStep(status, "📊 Report the run's coverage").if,
+    "${{ !cancelled() && github.event_name == 'push' }}",
+  );
+});
+
+Deno.test("the store half of the drift guard reads every record artifact", async () => {
+  const ci = await parsedWorkflow("deno.yml");
+  const status = ci.jobs.status;
+
+  // An identity is claimed by the suite that would run it, so a record
+  // artifact this does not see is a surface it cannot hold the topology to.
+  // It therefore waits for every job that ships records, and downloads them
+  // by the prefix the ship step names them under. A job shipping the run's
+  // coverage measurements alone ships no test's record.
+  const shippers = Object.keys(ci.jobs).filter((id) =>
+    (ci.jobs[id].steps ?? []).some((step) =>
+      step.uses === "./.github/actions/test-records-ship" &&
+      step.with?.artifact !== COVERAGE_ARTIFACT
+    )
+  );
+  assertEquals(shippers.sort(), [...LANE_JOBS].sort());
+  assertEquals(
+    shippers.filter((id) => !needsOf(status).includes(id)),
+    [],
+    "record-shipping jobs the store half does not wait for",
+  );
+  const download = namedStep(status, "📥 Download the lanes' test records");
+  assertEquals(download.with?.pattern, "test-records-*");
+
+  // The records are held to the commit the run checked out, and the
+  // directory is named rather than the files under it, so the guard is
+  // handed the download itself and fails when it holds nothing.
+  const check = namedStep(
+    status,
+    "🔎 Check the topology against this run's records",
+  );
+  assertEquals(
+    check.run?.trim(),
+    'deno task check-test-topology --commit "$GITHUB_SHA" ' +
+      `--records ${download.with?.path}`,
+  );
+  assertEquals(check.if, "${{ !cancelled() }}");
+});
+
+Deno.test("no step selects a server-execution arm by literal", async () => {
+  // Every assignment of the flag belongs to the lane runner's capabilities,
+  // which resolve both roles from one constant, so a flip of the default
+  // moves both together and a value pinned by hand cannot turn a flip into a
+  // mixed posture. Every assignment form counts — a YAML `env:` entry in
+  // either quote style, a shell `NAME=value`, and the shell
+  // default-assignment `${NAME:=value}`. Comments are stripped so a note
+  // naming a value is not read as setting it.
+  const literal = withoutComments(await workflow("deno.yml")).match(
+    /EXPERIMENTAL_SERVER_EXECUTION\s*(?::=|[:=])\s*['"]?(?:true|false)\b/,
+  );
+  assert(
+    literal === null,
+    `deno.yml selects a server-execution arm by literal: ${literal?.[0]}`,
+  );
 });
 
 Deno.test("Dashboard publishes only from main, never from a pull request", async () => {
@@ -726,31 +1115,6 @@ Deno.test("the Dashboard workflow records no tests", async () => {
   );
 });
 
-Deno.test("the Coverage Check job records no tests", async () => {
-  const job = jobBlock(
-    withoutComments(await workflow("deno.yml")),
-    "coverage-check",
-  );
-
-  // The gate reads the coverage artifacts of every test job in this run, so no
-  // lane can be asked to run it, and the criterion in `docs/specs/test-records.md`
-  // under "Recording" puts it outside test records: no wrapper, and no JUnit
-  // file gathered. What its spool holds is the run's coverage measurements,
-  // which it ships under the name readers list the store for, and only from
-  // a push, because every reader takes a figure from a push to main alone.
-  assert(
-    !job.includes("run-recorded"),
-    "the job wraps its command in run-recorded",
-  );
-  assertStringIncludes(job, "CF_TEST_RECORDS_DIR:");
-  const ship = stepBlock(job, "📤 Ship test records");
-  assertStringIncludes(ship, `artifact: ${COVERAGE_ARTIFACT}\n`);
-  assertStringIncludes(ship, "if: always() && github.event_name == 'push'");
-  assert(!ship.includes("junit:"), "the job gathers a JUnit file");
-  // The gate itself runs.
-  assertStringIncludes(job, "tasks/coverage-check.ts");
-});
-
 Deno.test("the CFC Property Suite workflow records no tests", async () => {
   const suite = withoutComments(await workflow("cfc-properties.yml"));
   const relay = withoutComments(await workflow("test-records-relay.yml"));
@@ -796,56 +1160,6 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
       "test/cfc-properties/\n",
   );
   assertStringIncludes(job, "deno task cfc-audit ");
-});
-
-Deno.test("the store half of the drift guard reads every record artifact", async () => {
-  const contents = withoutComments(await workflow("deno.yml"));
-  const job = jobBlock(contents, "test-topology-store-check");
-
-  // An identity is claimed by the suite that would run it, so a record
-  // artifact this job does not see is a surface it cannot hold the topology
-  // to. It therefore waits for every job that ships records, and downloads
-  // them by the prefix the ship step names them under.
-  // A job shipping the run's coverage measurements alone ships no test's
-  // record, so its artifact holds nothing to hold the topology to.
-  const shippers = jobIds(contents).filter((jobId) => {
-    const job = jobBlock(contents, jobId);
-    return jobId !== "test-topology-store-check" &&
-      job.includes("uses: ./.github/actions/test-records-ship") &&
-      !job.includes(`artifact: ${COVERAGE_ARTIFACT}\n`);
-  });
-  // The floor pins the extraction: zero found jobs would mean the search
-  // broke rather than that the workflow stopped shipping records.
-  assert(shippers.length >= 14, `only ${shippers.length} shipping jobs found`);
-  assertEquals(
-    shippers.filter((jobId) => !neededJobIds(job).includes(jobId)),
-    [],
-    "record-shipping jobs the store half does not wait for",
-  );
-  assertStringIncludes(job, "pattern: test-records-*");
-
-  // The records are held to the commit the run checked out, and the
-  // directory is named rather than the files under it, so the guard is
-  // handed the download itself and fails when it holds nothing. The whole
-  // command is compared, because a glob appended to the directory
-  // contains the directory.
-  const command = job.match(/deno task check-test-topology[^\n]*\n[^\n]*/);
-  assert(command, "the job does not run the topology check");
-  assertEquals(
-    command[0].replace(/\s+/g, " ").trim(),
-    'deno task check-test-topology --commit "$GITHUB_SHA" ' +
-      "--records test-records-artifacts",
-  );
-
-  // The guard reads the artifacts of every job in this run, so no lane can be
-  // asked to run it, and `docs/specs/test-records.md` under "Recording" puts
-  // it outside test records: no spool directory, no wrapper, no ship step.
-  assert(!job.includes("CF_TEST_RECORDS_DIR"), "the job spools test records");
-  assert(
-    !job.includes("run-recorded"),
-    "the job wraps its command in run-recorded",
-  );
-  assert(!job.includes("test-records-ship"), "the job ships test records");
 });
 
 Deno.test("One commit publishes one set of release artifacts", async () => {
@@ -929,38 +1243,32 @@ Deno.test("a release subject whose attestation does not verify fails the job", a
   const attested = [...job.matchAll(/^ {10}subject-name: (.+)$/gm)]
     .map((match) => baseName(match[1])).sort();
 
-  const dir = await Deno.makeTempDir();
+  const subjectsFile = await Deno.makeTempFile();
   try {
-    await Deno.writeTextFile(
-      `${dir}/gh`,
-      '#!/bin/sh\necho "$3" >> subjects\n' +
-        '[ "$3" = "$FAIL_SUBJECT" ] && { echo "no attestation" >&2; exit 1; }\n' +
-        "echo '{\"verified\":true}'\n",
-      { mode: 0o755 },
-    );
-    await Deno.writeTextFile(`${dir}/jq`, "#!/bin/sh\nexec cat\n", {
-      mode: 0o755,
-    });
-    await Deno.writeTextFile(`${dir}/step.sh`, script);
     const verify = async (failing: string) => {
-      await Deno.writeTextFile(`${dir}/subjects`, "");
-      const { code, stdout } = await new Deno.Command("bash", {
-        args: ["-e", "step.sh"],
-        cwd: dir,
-        env: { PATH: `${dir}:${Deno.env.get("PATH")}`, FAIL_SUBJECT: failing },
-        stderr: "null",
-      }).output();
-      return {
-        code,
-        stdout: new TextDecoder().decode(stdout),
-        subjects: (await Deno.readTextFile(`${dir}/subjects`)).split("\n")
-          .filter(Boolean),
-      };
+      await Deno.writeTextFile(subjectsFile, "");
+      const run = await runStep(
+        script,
+        { FAIL_SUBJECT: failing, SUBJECTS: subjectsFile },
+        {
+          gh: 'echo "$3" >> "$SUBJECTS"\n' +
+            '[ "$3" = "$FAIL_SUBJECT" ] && { echo "no attestation" >&2; exit 1; }\n' +
+            "echo '{\"verified\":true}'",
+          jq: "exec cat",
+        },
+      );
+      const subjects = (await Deno.readTextFile(subjectsFile)).split("\n")
+        .filter(Boolean);
+      return { ...run, subjects };
     };
 
     const passing = await verify("");
-    assertEquals(passing.code, 0);
-    assertEquals(passing.subjects.map(baseName).sort(), attested);
+    assertStepCode(passing, 0, "verifying every subject fails");
+    assertEquals(
+      passing.subjects.map(baseName).sort(),
+      attested,
+      withStderr("the verified subjects", passing),
+    );
     assertEquals(
       passing.stdout.match(
         /^::group::.*\n\{"verified":true\}\n::endgroup::$/gm,
@@ -969,13 +1277,13 @@ Deno.test("a release subject whose attestation does not verify fails the job", a
       "each subject's details are not printed inside a log group",
     );
     for (const subject of passing.subjects) {
-      assert(
-        (await verify(subject)).code !== 0,
+      assertStepFailed(
+        await verify(subject),
         `a failed verification of ${subject} passes the step`,
       );
     }
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(subjectsFile);
   }
 });
 
@@ -1147,42 +1455,9 @@ Deno.test("every test-records artifact name is store-safe and unique", async () 
     );
   }
   // The count pins the search itself: zero found steps would mean the
-  // extraction broke, not that the repository stopped shipping records.
-  assert(shipSteps >= 14, `only ${shipSteps} ship steps found`);
-});
-
-Deno.test("every deno.yml JUnit job spools and ships test records", async () => {
-  const contents = withoutComments(await workflow("deno.yml"));
-  const missing: string[] = [];
-  let junitJobs = 0;
-  for (const jobId of jobIds(contents)) {
-    const job = jobBlock(contents, jobId);
-    if (!job.includes("--junit-path=")) continue;
-    junitJobs++;
-    if (!job.includes("uses: ./.github/actions/test-records-ship")) {
-      missing.push(
-        `${jobId}: writes a JUnit file but has no test-records-ship step`,
-      );
-    } else {
-      const ship = stepBlock(job, "📤 Ship test records");
-      if (!ship.includes("if: always()")) {
-        missing.push(`${jobId}: does not ship test records after a failure`);
-      }
-      if (!ship.includes("junit:")) {
-        missing.push(`${jobId}: does not gather its JUnit file`);
-      }
-    }
-    if (!job.includes("CF_TEST_RECORDS_DIR:")) {
-      missing.push(
-        `${jobId}: runs tests without CF_TEST_RECORDS_DIR — the spool ` +
-          "half of the records is never written",
-      );
-    }
-  }
-  assertEquals(missing, []);
-  // Pin the search itself: zero junit jobs would mean the extraction
-  // broke, not that the repository stopped writing JUnit files.
-  assert(junitJobs >= 7, `only ${junitJobs} JUnit-writing jobs found`);
+  // extraction broke, not that the repository stopped shipping records. The
+  // lanes' step is written once, and Status ships the run's coverage.
+  assert(shipSteps >= 2, `only ${shipSteps} ship steps found`);
 });
 
 Deno.test("test-records-ship forwards its optional variant input", async () => {
@@ -1199,280 +1474,6 @@ Deno.test("test-records-ship forwards its optional variant input", async () => {
     'RESOLVED_VARIANT="${SHIP_VARIANT:-${CF_TEST_RECORDS_VARIANT:-}}"',
   );
   assertStringIncludes(action, 'args+=(--variant "$RESOLVED_VARIANT")');
-});
-
-Deno.test("server-execution records follow the stable default and opposite roles", async () => {
-  // The default continues the unmarked history. The opposite role exports the
-  // actual implementation arm as CF_TEST_RECORDS_VARIANT, which the shipping
-  // action consumes without hard-coding ON or OFF in the workflow.
-  const contents = withoutComments(await workflow("deno.yml"));
-  const packageJob = jobBlock(
-    contents,
-    "package-integration-test-server-execution-opposite",
-  );
-  const patternJob = jobBlock(
-    contents,
-    "pattern-integration-test-server-execution-opposite",
-  );
-  assertStringIncludes(
-    packageJob,
-    "--junit-path=../../test-results/${JUNIT_NAME}.xml",
-  );
-  assertStringIncludes(packageJob, "JUNIT_NAME: ${{ matrix.junit_name }}");
-  assertStringIncludes(
-    stepBlock(packageJob, "📤 Ship test records"),
-    "glob=test-results/${{ matrix.junit_name }}.xml",
-  );
-  assertStringIncludes(
-    patternJob,
-    "--junit-path=../../test-results/patterns-server-execution-opposite-${{ matrix.shard }}.xml",
-  );
-  assertStringIncludes(
-    stepBlock(patternJob, "📤 Ship test records"),
-    "glob=test-results/patterns-server-execution-opposite-${{ matrix.shard }}.xml",
-  );
-
-  for (
-    const jobId of ["package-integration-test", "pattern-integration-test"]
-  ) {
-    const ship = stepBlock(jobBlock(contents, jobId), "📤 Ship test records");
-    assert(
-      !ship.includes("variant:"),
-      `${jobId}: the default configuration must remain unmarked`,
-    );
-  }
-
-  for (
-    const jobId of [
-      "package-integration-test-server-execution-opposite",
-      "pattern-integration-test-server-execution-opposite",
-    ]
-  ) {
-    const job = jobBlock(contents, jobId);
-    assertStringIncludes(
-      stepBlock(job, "🧭 Resolve opposite server-execution posture"),
-      "tasks/server-execution-ci-command.ts env opposite",
-    );
-    const ship = stepBlock(job, "📤 Ship test records");
-    assert(
-      !ship.includes("variant:"),
-      `${jobId}: the arm variant must come from the shared role resolver`,
-    );
-  }
-});
-
-Deno.test("server-execution CI uses stable default and opposite roles", async () => {
-  // Both roles resolve from one helper. The default keeps the flag unset; the
-  // opposite build, server, and test processes inherit its explicit inverse.
-  const contents = await workflow("deno.yml");
-
-  for (
-    const jobId of ["package-integration-test", "pattern-integration-test"]
-  ) {
-    const job = jobBlock(contents, jobId);
-    assertStringIncludes(
-      job,
-      "tasks/server-execution-ci-command.ts env default",
-      `${jobId}: the default lane must resolve from the shared helper`,
-    );
-    assertStringIncludes(
-      job,
-      "tasks/server-execution-ci-command.ts probe default",
-      `${jobId}: the default lane must use the shared posture probe`,
-    );
-    assertStringIncludes(
-      job,
-      "server-execution-on-skips.ts",
-      `${jobId}: the lane must be able to carry the ON-arm skip list`,
-    );
-    assertStringIncludes(
-      job,
-      '[ "$SERVER_EXECUTION_ENABLED" = "true" ]',
-      `${jobId}: the skip list must apply only when this role is ON`,
-    );
-  }
-
-  // The opposite job resolves its role once into the job environment. Both
-  // the toolshed and test steps inherit it; no step may pin today's inverse
-  // value independently and turn a future flip into a mixed posture.
-  for (
-    const { jobId, runStep } of [
-      {
-        jobId: "package-integration-test-server-execution-opposite",
-        runStep: "🧪 Run ${{ matrix.step_name }} (opposite posture)",
-      },
-      {
-        jobId: "pattern-integration-test-server-execution-opposite",
-        runStep:
-          "🧩 Run end-to-end patterns integration tests (opposite posture)",
-      },
-    ]
-  ) {
-    const job = jobBlock(contents, jobId);
-    assertStringIncludes(
-      job,
-      "tasks/server-execution-ci-command.ts env opposite",
-    );
-    assertStringIncludes(
-      job,
-      "tasks/server-execution-ci-command.ts probe opposite",
-    );
-    for (
-      const stepName of [
-        "🔌 Start Toolshed server for testing (opposite posture)",
-        runStep,
-      ]
-    ) {
-      // The selecting steps exist under these names and, like every other
-      // step (asserted over the whole workflow below), carry no literal arm.
-      stepBlock(job, stepName);
-    }
-    assertStringIncludes(
-      job,
-      '[ "$SERVER_EXECUTION_ENABLED" = "true" ]',
-      `${jobId}: the ON-arm skip list follows the resolved posture`,
-    );
-    assertStringIncludes(
-      job,
-      "binary-toolshed-opposite",
-      `${jobId}: the opposite lane runs the opposite-built binary`,
-    );
-  }
-
-  // No step anywhere selects an arm by literal: every assignment of the flag
-  // is the resolve step's output, so a flip of the default moves both roles
-  // together and a value pinned by hand cannot turn a flip into a mixed
-  // posture. Every assignment form counts — a YAML `env:` entry in either
-  // quote style, a shell `NAME=value`, and the shell default-assignment
-  // `${NAME:=value}`. Comments are stripped so a note naming a value is not
-  // read as setting it; the CLI lane's `${EXPERIMENTAL_SERVER_EXECUTION:-…}`
-  // is a read, not an assignment, and does not match.
-  const literal = withoutComments(contents).match(
-    /EXPERIMENTAL_SERVER_EXECUTION\s*(?::=|[:=])\s*['"]?(?:true|false)\b/,
-  );
-  assert(
-    literal === null,
-    `deno.yml selects a server-execution arm by literal: ${literal?.[0]}`,
-  );
-
-  const buildOpposite = jobBlock(contents, "build-toolshed-opposite");
-  assertStringIncludes(
-    buildOpposite,
-    "tasks/server-execution-ci-command.ts env opposite",
-    "the opposite build must bake the posture resolved by the shared helper",
-  );
-
-  // The cf-harness fabric session is always exercised at the first-party
-  // default resolution.
-  const gate = jobBlock(contents, "deployed-topology-gate");
-  assertStringIncludes(gate, "integration/fabric-session-posture-gate.test.ts");
-  assertStringIncludes(
-    gate,
-    "tasks/server-execution-ci-command.ts env default",
-  );
-  assertStringIncludes(
-    gate,
-    "tasks/server-execution-ci-command.ts probe default",
-  );
-});
-
-Deno.test("the CLI lane follows the default and refuses a mixed posture", async () => {
-  // `cf` is a deployed CLIENT: it ADOPTS the arm the server publishes on
-  // /api/meta (experimentalOptionsForDeployedClient, authority "server")
-  // unless an explicit EXPERIMENTAL_SERVER_EXECUTION overrides it. A
-  // serving loop therefore proves only the SERVER's half — the review's
-  // finding-7 mixed posture (a client on the other arm) would still read
-  // as a passing ON exercise. The probe has to compare both arms and fail
-  // on a disagreement, which is what this pins.
-  const contents = await workflow("deno.yml");
-  const job = jobBlock(contents, "cli-integration-test");
-  const probe = stepBlock(
-    job,
-    "✅ Verify the default server-execution posture and cf adoption",
-  );
-
-  assertStringIncludes(
-    probe,
-    "tasks/server-execution-ci-command.ts probe default",
-    "the CLI probe must verify the resolved default server posture",
-  );
-  assertStringIncludes(
-    probe,
-    ".experimental.serverExecution",
-    "the CLI probe must read the posture the server PUBLISHES, which is what cf adopts",
-  );
-  assertStringIncludes(
-    probe,
-    'CLIENT_ARM="${EXPERIMENTAL_SERVER_EXECUTION:-$SERVER_ARM}"',
-    "the CLI probe must resolve the client arm the way cf does: an explicit env wins, else the published posture",
-  );
-  assertStringIncludes(
-    probe,
-    '[ "$CLIENT_ARM" != "$SERVER_ARM" ]',
-    "the CLI probe must fail on a client/server arm disagreement",
-  );
-  assertStringIncludes(
-    probe,
-    'if .experimental.serverExecution == null then "unpublished"',
-    "the CLI probe must preserve a published JSON false rather than treating it as absent",
-  );
-});
-
-Deno.test("both server-execution pattern roles upload failure logs", async () => {
-  const contents = await workflow("deno.yml");
-  const patternJob = jobBlock(
-    contents,
-    "pattern-integration-test-server-execution-opposite",
-  );
-  const upload = stepBlock(patternJob, "📋 Upload toolshed log on failure");
-
-  assertStringIncludes(upload, "if: failure()");
-  assertStringIncludes(upload, "uses: actions/upload-artifact@");
-  assertStringIncludes(
-    upload,
-    "name: toolshed-log-pattern-integration-server-execution-opposite-${{ matrix.shard }}",
-  );
-  assertStringIncludes(upload, "path: ${{ runner.temp }}/toolshed.log");
-  assertStringIncludes(upload, "retention-days: 14");
-  assertStringIncludes(upload, "if-no-files-found: ignore");
-
-  const defaultJob = jobBlock(contents, "pattern-integration-test");
-  const defaultUpload = stepBlock(
-    defaultJob,
-    "📋 Upload toolshed log on failure",
-  );
-  assertStringIncludes(defaultUpload, "if: failure()");
-  assertStringIncludes(
-    defaultUpload,
-    "name: toolshed-log-pattern-integration-${{ matrix.shard }}",
-  );
-});
-
-Deno.test("both package integration roles upload failure logs", async () => {
-  const contents = await workflow("deno.yml");
-  // Named for the JUnit name rather than the suite, which is what keeps the
-  // two roles' artifacts apart: both carry the same three suite names, and
-  // only the JUnit name says which arm a log came off.
-  for (
-    const job of [
-      "package-integration-test",
-      "package-integration-test-server-execution-opposite",
-    ]
-  ) {
-    const upload = stepBlock(
-      jobBlock(contents, job),
-      "📋 Upload toolshed log on failure",
-    );
-    assertStringIncludes(upload, "if: failure()");
-    assertStringIncludes(upload, "uses: actions/upload-artifact@");
-    assertStringIncludes(
-      upload,
-      "name: toolshed-log-package-integration-${{ matrix.junit_name }}",
-    );
-    assertStringIncludes(upload, "path: ${{ runner.temp }}/toolshed.log");
-    assertStringIncludes(upload, "retention-days: 14");
-    assertStringIncludes(upload, "if-no-files-found: ignore");
-  }
 });
 
 Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
@@ -1545,14 +1546,19 @@ Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", as
       `${id} can run in a called run`,
     );
   }
-  for (const id of ["coverage-check", "test-topology-store-check"]) {
-    assertEquals(
-      ci.jobs[id].if,
-      "(github.event_name == 'pull_request') || " +
-        "(github.event_name == 'push' && github.ref_name == 'main')",
-      `${id} can run in a called run`,
-    );
-  }
+  assertEquals(
+    ci.jobs.status.if,
+    "!cancelled() && (github.event_name == 'pull_request' || " +
+      "github.event_name == 'push')",
+    "status can run in a called run",
+  );
+  // A called run is not a pull request, so it runs every test.
+  assertEquals(
+    ci.jobs["plan-full"].if?.startsWith(
+      "github.event_name != 'pull_request' ||",
+    ),
+    true,
+  );
 
   // The relay follows a workflow by its own name, and a called run belongs to
   // its caller, so the relay names this workflow as well as the CI workflow

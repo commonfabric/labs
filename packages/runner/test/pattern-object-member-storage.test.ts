@@ -6,27 +6,17 @@
 // object-literal methods/getters/setters. So this test builds the pattern
 // through the BUILDER API directly (createBuilder -> commonfabric.pattern),
 // which is plain function calls and is not run through that validator. The
-// recipe callback returns an object literal with a method (or a getter), which
-// constructs fine; the question is purely what the RUNTIME does with that
-// member when the result is run and read.
+// recipe callback returns an object literal with a method (or a getter); the
+// question is what the builder and the runtime do with that member.
 //
-// Two candidate outcomes were considered up front:
-//   (a) THROW — storing the result throws "Not representable as a
-//       `FabricValue`: function" (packages/data-model convertible-js).
-//   (b) DROP — the function member is silently dropped (the result schema /
-//       projection omits function members before storage) and the rest of the
-//       result is stored fine.
+// The two member kinds behave DIFFERENTLY:
 //
-// OBSERVED OUTCOME (recorded after running against the real runtime). The two
-// member kinds behave DIFFERENTLY:
-//
-//   * METHOD member (`read() { ... }`) -> THROW. The member is a live function
-//     on the materialized result object. When `Runner.#updateResultProjection`
-//     converts the result with `fabricFromConvertibleJsValue(result)`, the
-//     function reaches `shallowFabricFromConvertibleJsValue` and throws
-//       "Not representable as a `FabricValue`: function"
-//     (packages/data-model/src/convertible-js.ts). The throw happens
-//     synchronously inside `runtime.run(...)` at setup time, before any commit.
+//   * METHOD member (`read() { ... }`) -> THROW, when the pattern is built. The
+//     member is a live function on the result object, and the builder binds a
+//     pattern's result through `withAliasBindings()`
+//     (packages/runner/src/builder/to-encodable-form.ts), which refuses a
+//     function that is not a builder artifact. So `pattern(...)` itself
+//     throws, before the pattern can be run.
 //
 //   * GETTER member (`get derived() { return 2; }`) -> NOT a function at all by
 //     the time the runtime sees it. A getter on an object literal is invoked
@@ -87,29 +77,19 @@ describe("Pattern result object with a function member", () => {
 
   it("throws when the result object carries a method member", () => {
     // The pattern returns an object literal carrying both a plain field and a
-    // method. Built through the builder API, this constructs without error...
-    const methodPattern = pattern<Record<string, never>>(() => {
-      return {
-        ok: true,
-        read() {
-          return 1;
-        },
-      } as unknown as Record<string, never>;
-    });
+    // method. Building it binds the result, which refuses the method: a
+    // function that is not a builder artifact has no place in a pattern.
 
-    const resultCell = runtime.getCell<{ ok?: boolean; read?: unknown }>(
-      space,
-      "pattern-object-member-storage: method",
-      undefined,
-      tx,
-    );
-
-    // ...but running it throws synchronously at result-projection time, when
-    // the live function is converted to a `FabricValue`. The error originates
-    // in packages/data-model/src/convertible-js.ts.
-    expect(() => runtime.run(tx, methodPattern, {}, resultCell)).toThrow(
-      "Not representable as a `FabricValue`: function",
-    );
+    expect(() =>
+      pattern<Record<string, never>>(() => {
+        return {
+          ok: true,
+          read() {
+            return 1;
+          },
+        } as unknown as Record<string, never>;
+      })
+    ).toThrow("not a builder artifact");
   });
 
   it("keeps a getter member's evaluated value alongside the plain field", async () => {

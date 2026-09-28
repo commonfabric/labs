@@ -3,6 +3,8 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   coverageRecords,
+  RECORD_SCHEMA_VERSION,
+  type RunContext,
   sampleEntry,
   sampleManifest,
   testIdentityKey,
@@ -13,9 +15,13 @@ import { MAIN_REPORT_MARKER } from "./test-selection/report.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import type { TestRecord } from "@commonfabric/test-support/records";
 
+import type { ManifestFetch } from "./test-selection/store.ts";
 import type { RunOutcomes } from "./test-selection/report.ts";
+import { excusedMeasurementName } from "./lane-measurement.ts";
+import { ciSubmissionsPrefix } from "./test-records-config.ts";
 import { buildZip } from "./zip-testing.ts";
 import {
+  committedAt,
   coverageOfRun,
   isReportable,
   main,
@@ -26,9 +32,11 @@ import {
   pullRequestHead,
   pullRequestOf,
   recordsInDirectory,
+  reportsFromArtifacts,
   runAt,
   runGit,
   runPartitions,
+  type StoredRun,
   withdrawReport,
 } from "./post-main-report.ts";
 
@@ -148,6 +156,106 @@ function record(name: string, outcome: TestRecord["outcome"]): TestRecord {
   };
 }
 
+/**
+ * The context line a pull request's run writes ahead of its records,
+ * naming the merge it tested. The branch tip is `b` repeated.
+ */
+function tested(commit: string): RunContext {
+  return {
+    schema: RECORD_SCHEMA_VERSION,
+    line: "context",
+    reportId: "01J8Z3K4Q5R6S7T8V9W0X1Y2Z3",
+    repo: "commonfabric/labs",
+    commit,
+    dirty: false,
+    env: "ci",
+    ci: {
+      workflowRunId: "3",
+      runAttempt: 1,
+      workflow: "CI",
+      job: "Test",
+      headCommit: "b".repeat(40),
+      event: "pull_request",
+    },
+    os: "linux",
+    arch: "x86_64",
+    denoVersion: "2.5.0",
+    startedAt: "2026-09-07T05:40:00Z",
+  };
+}
+
+/**
+ * The name of an object the store holds for a run in the continuous
+ * integration provider, under the day `day` its attempt started.
+ */
+function stored(day: string, stem: string): string {
+  return `${ciSubmissionsPrefix()}/v${RECORD_SCHEMA_VERSION}/${day}/` +
+    `${stem}.ndjson`;
+}
+
+/** A record a lane wrote about itself, which says the run ran in lanes. */
+const laneMeasurement: TestRecord = {
+  line: "record",
+  test: { k: "gate", s: "ci", n: "ci-lane batch workspace-unit" },
+  outcome: "pass",
+  durationMs: 1,
+};
+
+/** The record a lane writes for a test whose failures it excused. */
+function excusing(name: string): TestRecord {
+  return {
+    line: "record",
+    test: {
+      k: "gate",
+      s: "ci",
+      n: excusedMeasurementName(
+        testIdentityKey({ k: "unit", s: "bakery", n: name }),
+      ),
+    },
+    outcome: "pass",
+    durationMs: 0,
+  };
+}
+
+const kneads = { k: "unit", s: "bakery", n: "kneads" };
+const proves = { k: "unit", s: "bakery", n: "proves" };
+
+/** The one unit every test these cases name lives in. */
+const bakeryUnit = "packages/bakery/test/bakery.test.ts";
+
+/** A tree holding one suite of one unit, which is where these tests live. */
+const suites: Suite[] = [{
+  id: "workspace-unit",
+  recordSurfaces: [{ kind: "unit", scope: "bakery" }],
+  needs: ["deno"],
+  units: [bakeryUnit],
+  unavailable: [],
+  whole: [],
+  locate: () => undefined,
+  command: () => Promise.resolve([]),
+}];
+
+/** A manifest holding `kneads` back as too flaky to judge a change by. */
+const manifest = sampleManifest({
+  entries: [
+    sampleEntry(kneads, {
+      unit: bakeryUnit,
+      flakeRate: 0.5,
+      flakeEvidence: { flakes: 20, runs: 20 },
+      cost: 1,
+    }),
+    // No counts, as an entry from a manifest written before they were
+    // published has none.
+    sampleEntry(proves, {
+      unit: bakeryUnit,
+      flakeRate: 0.002,
+      cost: 1,
+      inputs: { catches: 3, sources: 2, churn: 0 },
+    }),
+  ],
+  withheld: [{ test: kneads, suite: "workspace-unit", reason: "flaky" }],
+});
+
 /** What one case says the world outside the reporter holds. */
 interface World {
   /** The run named in the event, and the run at the commit's parent. */
@@ -170,6 +278,42 @@ interface World {
 
   /** The run whose records artifact refuses to download. */
   unreadable?: number;
+
+  /**
+   * When each commit was made, by its hash, as the commits interface
+   * gives it; null for a commit that interface cannot find. A commit the
+   * case does not name was made at five in the morning.
+   */
+  committed?: Record<string, string | null>;
+
+  /** What the store gives for a manifest, by the moment it is asked at. */
+  manifests?: Record<string, ManifestFetch>;
+
+  /** The suites the tree declares. */
+  suites?: Suite[];
+
+  /**
+   * When the commit under report was made, as `git log` gives it; null
+   * for a git that refuses to say. Half past eight in the morning, two
+   * hours east of UTC, where a case does not say.
+   */
+  madeHere?: string | null;
+
+  /** Every moment a manifest was asked for at, which the case fills in. */
+  resolved?: string[];
+
+  /**
+   * Whether the pull request has a run of its own, run 3 at its head.
+   * Where a case does not say, it has one exactly when the case gives
+   * that run's records.
+   */
+  theirRun?: boolean;
+
+  /**
+   * What the pull request's own run recorded, as the store holds it, where
+   * the case gives that run's records.
+   */
+  theirRecords?: readonly (TestRecord | RunContext)[];
 }
 
 /**
@@ -214,8 +358,16 @@ async function reporting(
     }
     if (url.includes("/actions/workflows/")) {
       const sha = new URL(url).searchParams.get("head_sha");
+      const theirRun = world.theirRun ?? world.theirRecords !== undefined;
+      const theirs = !theirRun ? [] : [workflowRun({
+        id: 3,
+        head_sha: "b".repeat(40),
+        event: "pull_request",
+      })];
       return Response.json({
-        workflow_runs: world.runs.filter((run) => run.head_sha === sha),
+        workflow_runs: [...world.runs, ...theirs].filter((run) =>
+          run.head_sha === sha
+        ),
       });
     }
     if (url.endsWith("/zip")) {
@@ -258,8 +410,12 @@ async function reporting(
       return Response.json({ head: { sha: "b".repeat(40) } });
     }
     if (url.includes("/commits/")) {
+      const date = world.committed?.[url.slice(url.lastIndexOf("/") + 1)];
+      if (date === null) {
+        return new Response("no", { status: 404, statusText: "Not Found" });
+      }
       return Response.json({
-        commit: { committer: { date: "2026-09-07T05:00:00Z" } },
+        commit: { committer: { date: date ?? "2026-09-07T05:00:00Z" } },
       });
     }
     if (url.includes("/issues/") && url.includes("/comments")) {
@@ -271,22 +427,49 @@ async function reporting(
         })),
       );
     }
-    // The store, which these cases give nothing, so the pull request's
-    // own run reads as one nothing is known about.
-    return Response.json({ items: [] });
+    // The store, which holds the pull request's own run under the day it
+    // started where a case gives its records, and otherwise nothing, so
+    // that run reads as one nothing is known about.
+    if (url.includes("/storage/v1/")) {
+      const prefix = new URL(url).searchParams.get("prefix") ?? "";
+      const names = world.theirRecords === undefined
+        ? []
+        : [stored("2026/09/07", "run-3-Test")];
+      return Response.json({
+        items: names.filter((name) => name.startsWith(prefix))
+          .map((name) => ({ name })),
+      });
+    }
+    return new Response(
+      (world.theirRecords ?? []).map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      { status: 200 },
+    );
   }) as typeof fetch;
 
   try {
     await main(dryRun, {
       git: (...args: string[]) => {
+        if (args.includes("--format=%cI")) {
+          return world.madeHere === null
+            ? Promise.reject(new Error("git log failed"))
+            : Promise.resolve(
+              `${world.madeHere ?? "2026-09-07T08:30:00+02:00"}\n`,
+            );
+        }
         if (args[0] === "log") return Promise.resolve(`${world.subject}\n`);
         if (args[0] === "rev-parse") {
           return Promise.resolve(`${"c".repeat(40)}\n`);
         }
         return Promise.resolve("packages/bakery/src/oven.ts\n");
       },
-      topology: () => Promise.resolve([]),
-      manifest: () => Promise.resolve({ absent: "nothing published yet" }),
+      topology: () => Promise.resolve(world.suites ?? []),
+      manifest: ({ at }) => {
+        world.resolved?.push(at);
+        return Promise.resolve(
+          world.manifests?.[at] ?? { absent: "nothing published yet" },
+        );
+      },
     });
   } finally {
     globalThis.fetch = original;
@@ -440,39 +623,6 @@ describe("post-main-report", () => {
   });
 
   describe("manifestView()", () => {
-    const kneads = { k: "unit", s: "bakery", n: "kneads" };
-    const proves = { k: "unit", s: "bakery", n: "proves" };
-    const unit = "packages/bakery/test/bakery.test.ts";
-    const suites: Suite[] = [{
-      id: "workspace-unit",
-      recordSurfaces: [{ kind: "unit", scope: "bakery" }],
-      needs: ["deno"],
-      units: [unit],
-      unavailable: [],
-      whole: [],
-      locate: () => undefined,
-      command: () => Promise.resolve([]),
-    }];
-    const manifest = sampleManifest({
-      entries: [
-        sampleEntry(kneads, {
-          unit,
-          flakeRate: 0.5,
-          flakeEvidence: { flakes: 20, runs: 20 },
-          cost: 1,
-        }),
-        // No counts, as an entry from a manifest written before they
-        // were published has none.
-        sampleEntry(proves, {
-          unit,
-          flakeRate: 0.002,
-          cost: 1,
-          inputs: { catches: 3, sources: 2, churn: 0 },
-        }),
-      ],
-      withheld: [{ test: kneads, suite: "workspace-unit", reason: "flaky" }],
-    });
-
     it("reports what the packing reached and what was held back", () => {
       const view = manifestView(manifest, suites, new Set());
       expect(view.manifest).toBe(true);
@@ -496,7 +646,7 @@ describe("post-main-report", () => {
     it("carries the unit every entry lives in", () => {
       const view = manifestView(manifest, suites, new Set());
       expect(view.units.get(testIdentityKey(kneads)))
-        .toBe(`workspace-unit\t${unit}`);
+        .toBe(`workspace-unit\t${bakeryUnit}`);
     });
 
     // The tree decides what exists. A manifest naming a unit this tree no
@@ -529,37 +679,102 @@ describe("post-main-report", () => {
   });
 
   describe("outcomesFromStore()", () => {
-    /** Answers a store listing with these object names, each one record. */
+    /**
+     * Answers each store listing with the objects among these whose names
+     * are under the prefix it asks for, each one record, under a context
+     * naming the commit given for it where one is. An object is named for
+     * its day, as `stored()` names it.
+     */
     async function fromStore(
       names: readonly string[],
-    ): Promise<RunOutcomes | undefined> {
+      commits: Readonly<Record<string, string>> = {},
+      run: WorkflowRun = workflowRun({ id: 5 }),
+    ): Promise<StoredRun | undefined> {
       const original = globalThis.fetch;
       globalThis.fetch = ((input: string | URL | Request) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/storage/v1/")) {
+          const prefix = new URL(url).searchParams.get("prefix") ?? "";
           return Promise.resolve(
-            Response.json({ items: names.map((name) => ({ name })) }),
+            Response.json({
+              items: names.filter((name) => name.startsWith(prefix))
+                .map((name) => ({ name })),
+            }),
           );
         }
+        const commit = commits[url.slice(url.lastIndexOf("/") + 1)];
         return Promise.resolve(
           new Response(
-            JSON.stringify(record("kneads", "pass")) + "\n",
+            [
+              ...(commit === undefined ? [] : [tested(commit)]),
+              record("kneads", "pass"),
+            ].map((line) => JSON.stringify(line)).join("\n") + "\n",
             { status: 200 },
           ),
         );
       }) as typeof fetch;
       try {
-        return await outcomesFromStore(workflowRun({ id: 5 }));
+        return await outcomesFromStore(run);
       } finally {
         globalThis.fetch = original;
       }
     }
 
     it("folds the records of every object the run wrote", async () => {
-      const outcomes = await fromStore([
-        "labs/test-records/submissions/ci/v1/2026/09/07/run-5-Test.ndjson",
-      ]);
-      expect(outcomes?.get('["unit","bakery","kneads"]')).toBe("pass");
+      const outcomes = await fromStore([stored("2026/09/07", "run-5-Test")]);
+      expect(outcomes?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 1, failed: 0 });
+    });
+
+    it("reads each object once where a re-run's attempts are under two days", async () => {
+      // The run was created one day and re-run the next, so each attempt
+      // wrote its object under its own day, and both days are listed.
+
+      const outcomes = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/08", "run-5-Test-2"),
+        ],
+        {},
+        workflowRun({
+          id: 5,
+          created_at: "2026-09-07T23:00:00Z",
+          run_started_at: "2026-09-08T01:00:00Z",
+        }),
+      );
+      expect(outcomes?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 2, failed: 0 });
+    });
+
+    it("names the commit every report of the run tested", async () => {
+      const found = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/07", "run-5-Test-2"),
+        ],
+        {
+          "run-5-Test-1.ndjson": "d".repeat(40),
+          "run-5-Test-2.ndjson": "d".repeat(40),
+        },
+      );
+      expect(found?.commit).toBe("d".repeat(40));
+      expect(found?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 2, failed: 0 });
+    });
+
+    it("names no commit where the reports name several", async () => {
+      const found = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/07", "run-5-Test-2"),
+        ],
+        {
+          "run-5-Test-1.ndjson": "d".repeat(40),
+          "run-5-Test-2.ndjson": "e".repeat(40),
+        },
+      );
+      expect(found?.outcomes.size).toBe(1);
+      expect(found?.commit).toBeUndefined();
     });
 
     // A run whose records never arrived is a run nothing is known about,
@@ -633,6 +848,46 @@ describe("post-main-report", () => {
     // one an earlier attempt correctly made.
     it("says nothing at all when one artifact could not be read", async () => {
       expect(await unreadable()).toBeUndefined();
+    });
+  });
+
+  describe("reportsFromArtifacts()", () => {
+    it("returns each attempt's records apart, and none of the coverage upload's", async () => {
+      // A lane re-run is two artifacts, and what one attempt excused is
+      // only an excusal of what that attempt failed.
+
+      const zips: Record<number, Uint8Array> = {
+        5: await recordsZip([excusing("kneads"), record("kneads", "fail")]),
+        7: await recordsZip([record("kneads", "fail")]),
+      };
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
+        return Promise.resolve(
+          new Response(zips[id]! as BodyInit, { status: 200 }),
+        );
+      }) as typeof fetch;
+      const upload = (id: number, name: string) => ({
+        id,
+        name,
+        size_in_bytes: 1,
+        expired: false,
+      });
+      try {
+        expect(
+          await reportsFromArtifacts(7, [
+            upload(5, "test-records-lane-a1"),
+            upload(7, "test-records-lane-a2"),
+            upload(9, "test-records-coverage-a2"),
+          ]),
+        ).toEqual([
+          [excusing("kneads"), record("kneads", "fail")],
+          [record("kneads", "fail")],
+        ]);
+      } finally {
+        globalThis.fetch = original;
+      }
     });
   });
 
@@ -805,6 +1060,244 @@ describe("post-main-report", () => {
       expect(written[0]!.body).toContain("from 900 to 1000");
       expect(written[0]!.body).toContain("`packages/bakery`: 10 to 40");
     });
+
+    it("says what the pull request's own run did where the store holds it", async () => {
+      const written = await reporting(world({
+        theirRecords: [record("kneads", "pass")],
+      }));
+      expect(written[0]!.body).toContain(
+        "This pull request ran it, and it passed there",
+      );
+    });
+
+    it("says nothing about whether the pull request's own run ran the test where the store holds none of its records", async () => {
+      // The pull request's run is there to be found, and the relay has not
+      // shipped what it recorded, so no manifest is resolved for it either.
+
+      const resolved: string[] = [];
+      const written = await reporting(world({
+        suites,
+        theirRun: true,
+        manifests: { "2026-09-07T05:00:00.000Z": { manifest } },
+        resolved,
+      }));
+      expect(resolved).toEqual([]);
+      expect(written[0]!.body).toContain(
+        "The pull request's own run could not be read, so there is nothing " +
+          "to say about whether it ran this test.",
+      );
+      expect(written[0]!.body).not.toContain(
+        "This pull request did not run it",
+      );
+    });
+
+    describe("the manifest the pull request's own run resolved", () => {
+      // The pull request's run tested the merge `d…`, made at half past
+      // five, and ran `proves` and not `kneads`. Its branch tip `b…` was
+      // made at five. The manifest holding `kneads` back was published
+      // between the two, so only the merge's moment finds it.
+
+      const merge = "d".repeat(40);
+
+      const theirs = (fields: Partial<World> = {}): World =>
+        world({
+          suites,
+          theirRecords: [
+            tested(merge),
+            laneMeasurement,
+            record("proves", "pass"),
+          ],
+          committed: {
+            [merge]: "2026-09-07T05:30:00Z",
+            ["b".repeat(40)]: "2026-09-07T05:00:00Z",
+          },
+          manifests: {
+            "2026-09-07T05:30:00.000Z": { manifest },
+          },
+          ...fields,
+        });
+
+      it("resolves it at the moment the merge that run tested was made", async () => {
+        const written = await reporting(theirs());
+        expect(written[0]!.body).toContain("too flaky to judge a change by");
+      });
+
+      it("never resolves it at the moment the branch tip was made", async () => {
+        const written = await reporting(theirs({
+          manifests: { "2026-09-07T05:00:00.000Z": { manifest } },
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where the merge's date cannot be read", async () => {
+        const written = await reporting(theirs({
+          committed: { [merge]: null },
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where its records name no one merge", async () => {
+        const written = await reporting(theirs({
+          theirRecords: [
+            tested(merge),
+            laneMeasurement,
+            record("proves", "pass"),
+            tested("e".repeat(40)),
+            record("proves", "pass"),
+          ],
+          committed: {
+            [merge]: "2026-09-07T05:30:00Z",
+            ["e".repeat(40)]: "2026-09-07T05:30:00Z",
+          },
+        }));
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where that run did not run in lanes", async () => {
+        // A run of the jobs that ran every test in a fixed arrangement
+        // chose nothing, so no manifest says why it did not run a test.
+
+        const written = await reporting(theirs({
+          theirRecords: [tested(merge), record("proves", "pass")],
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+    });
+
+    describe("a test the run did not fail for", () => {
+      // The run under report ran in lanes, and a lane recorded excusing
+      // `kneads`, whose three runs failed here where its three runs at the
+      // parent passed. The manifest resolved at the moment the commit was
+      // made carries the store's counts for it.
+
+      /** The moment the commit under report was made, in UTC. */
+      const madeAt = "2026-09-07T06:30:00.000Z";
+
+      /** The run under report's records, with or without the excusal. */
+      const here = (excused: boolean): TestRecord[] => [
+        laneMeasurement,
+        ...(excused ? [excusing("kneads")] : []),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("proves", "pass"),
+      ];
+
+      const laned = (fields: Partial<World> = {}): World =>
+        world({
+          records: {
+            1: here(true),
+            2: [
+              record("kneads", "pass"),
+              record("kneads", "pass"),
+              record("kneads", "pass"),
+              record("proves", "pass"),
+            ],
+          },
+          suites,
+          manifests: { [madeAt]: { manifest } },
+          ...fields,
+        });
+
+      it("reports it as a known flaky test the run was not failed by", async () => {
+        const written = await reporting(laned());
+        expect(written.length).toBe(1);
+        const body = written[0]!.body!;
+        expect(body).toContain("A known flaky test that failed every time");
+        expect(body).toContain(
+          "failed all 3 of its runs at this commit and passed all 3 of its " +
+            "runs at the commit before",
+        );
+        expect(body).toContain("disagree with itself 20 times in 20 runs");
+        expect(body).not.toContain("Failing for the first time");
+      });
+
+      it("reports a first failure where the run did not run in lanes", async () => {
+        // Excusing a failure is a lane's decision, so a run with no lane
+        // in it failed for everything that failed in it.
+
+        const written = await reporting(laned({
+          records: { ...laned().records, 1: here(false).slice(1) },
+        }));
+        expect(written[0]!.body).toContain("Failing for the first time");
+        expect(written[0]!.body).not.toContain("known flaky test");
+      });
+
+      it("reports a first failure where the lane recorded excusing nothing", async () => {
+        // A lane withdraws an excusal from a batch that did not account
+        // for everything it was asked to run, and fails the run for it,
+        // whatever the manifest holds back.
+
+        const written = await reporting(laned({
+          records: { ...laned().records, 1: here(false) },
+        }));
+        expect(written[0]!.body).toContain("Failing for the first time");
+        expect(written[0]!.body).not.toContain("known flaky test");
+      });
+
+      it("reads no manifest for the run where no note needs its counts", async () => {
+        const resolved: string[] = [];
+        await reporting(laned({
+          records: { ...laned().records, 1: here(false) },
+          resolved,
+        }));
+        expect(resolved).toEqual([]);
+        await reporting(laned({ resolved }));
+        expect(resolved).toEqual([madeAt]);
+      });
+
+      describe("posts the note without the store's counts", () => {
+        // The counts label the note, and nothing about the note rests on
+        // them, so a manifest that cannot be read costs the label alone.
+
+        /** What the run posts, which must be the note with no counts. */
+        async function uncounted(fields: Partial<World>): Promise<string> {
+          const written = await reporting(laned(fields));
+          const body = written[0]!.body!;
+          expect(body).toContain("A known flaky test that failed every time");
+          expect(body).not.toContain("disagree with itself");
+          return body;
+        }
+
+        it("where no manifest was published", async () => {
+          await uncounted({ manifests: {} });
+        });
+
+        it("where the store could not be asked", async () => {
+          await uncounted({
+            manifests: {
+              [madeAt]: {
+                absent: "the listing was refused",
+                unreachable: true,
+              },
+            },
+          });
+        });
+
+        it("where git will not say when the commit was made", async () => {
+          await uncounted({ madeHere: null });
+        });
+
+        it("where the commit carries no usable date", async () => {
+          await uncounted({ madeHere: "whenever" });
+        });
+      });
+    });
   });
 
   describe("pullRequestHead()", () => {
@@ -824,19 +1317,10 @@ describe("post-main-report", () => {
       }
     }
 
-    it("gives the branch tip and the moment it was committed", async () => {
+    it("gives the branch tip", async () => {
       expect(
-        await asking((url) =>
-          /\/pulls\/\d+$/.test(url)
-            ? Response.json({ head: { sha: "b".repeat(40) } })
-            : Response.json({
-              commit: { committer: { date: "2026-09-07T05:00:00Z" } },
-            })
-        ),
-      ).toEqual({
-        sha: "b".repeat(40),
-        at: "2026-09-07T05:00:00.000Z",
-      });
+        await asking(() => Response.json({ head: { sha: "b".repeat(40) } })),
+      ).toBe("b".repeat(40));
     });
 
     // A number in a commit subject may name an issue, and an issue takes
@@ -856,13 +1340,40 @@ describe("post-main-report", () => {
         ),
       ).toBeUndefined();
     });
+  });
+
+  describe("committedAt()", () => {
+    /** Answers the commit lookup however a case says. */
+    async function asking(answer: Response): Promise<string | undefined> {
+      const original = globalThis.fetch;
+      globalThis.fetch = (() => Promise.resolve(answer)) as typeof fetch;
+      try {
+        return await committedAt("d".repeat(40));
+      } finally {
+        globalThis.fetch = original;
+      }
+    }
+
+    it("gives the moment the commit was made, in UTC", async () => {
+      expect(
+        await asking(Response.json({
+          commit: { committer: { date: "2026-09-07T07:30:00+02:00" } },
+        })),
+      ).toBe("2026-09-07T05:30:00.000Z");
+    });
 
     it("gives nothing when the commit carries no usable date", async () => {
       expect(
-        await asking((url) =>
-          /\/pulls\/\d+$/.test(url)
-            ? Response.json({ head: { sha: "b".repeat(40) } })
-            : Response.json({ commit: { committer: { date: "whenever" } } })
+        await asking(Response.json({
+          commit: { committer: { date: "whenever" } },
+        })),
+      ).toBeUndefined();
+    });
+
+    it("gives nothing when the interface could not find the commit", async () => {
+      expect(
+        await asking(
+          new Response("no", { status: 422, statusText: "Unprocessable" }),
         ),
       ).toBeUndefined();
     });

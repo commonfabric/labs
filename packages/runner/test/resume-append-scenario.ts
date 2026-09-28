@@ -126,8 +126,8 @@ class GatedStorageManager extends StorageManager {
   private constructor(o: Options, server: MemoryV2Server.Server, gate?: Gate) {
     super(o, new GatedSessionFactory(() => server, gate));
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 

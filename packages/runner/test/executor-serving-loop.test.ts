@@ -985,19 +985,22 @@ describe("stage F serving loop", () => {
     // address-level blind write mints no watch root (the cell route
     // registers a watch), so the demanded-root set stays exactly the
     // three never-a-piece ids.
+    const kickId = "of:r2-exclusion-kick";
     for (const n of [1, 2, 3]) {
       const tx = clientRuntime.edit();
       tx.writeValueOrThrow(
-        {
-          space,
-          id: "of:r2-exclusion-kick" as never,
-          scope: "space",
-          path: ["n"],
-        },
+        { space, id: kickId as never, scope: "space", path: ["n"] },
         n,
       );
       expect((await tx.commit()).error).toBeUndefined();
-      const kickSeq = Engine.serverSeq(engine);
+      // The kick's own seq, read from its document's head rather than the
+      // space's: the commit resolves only once the client's view reflects
+      // it, so the wave commit that advances W over the kick can land
+      // first, and W never covers that advance-only commit.
+      const kickSeq = Engine.selectDocHead(engine, {
+        id: kickId as never,
+        scopeKey: "space",
+      });
       // Each kick gets its own cycle rather than sharing one, which is
       // what makes the deferral counter below a per-root observation.
       // The target is THIS kick's seq: a watermark that already covers an
@@ -1905,6 +1908,9 @@ describe("stage F serving loop", () => {
     // successfully served wave.
     const activationTimes: number[] = [];
     const activationLog = new ArrivalLog<void>();
+    // When each park reached the host's park handler, which is where the
+    // re-activation it chains, backoff included, begins.
+    const parkTimes: number[] = [];
     let blowUp = true; // permanent failure, from the very first tenure
     host = new ExecutorHost({
       server,
@@ -1945,8 +1951,10 @@ describe("stage F serving loop", () => {
       onWaveCycle: cycles.record,
       onActivationSettled: (activatedSpace, outcome) =>
         activations.record({ space: activatedSpace, outcome }),
-      onSpaceParked: (parkedSpace, reason) =>
-        parks.record({ space: parkedSpace, reason }),
+      onSpaceParked: (parkedSpace, reason) => {
+        parkTimes.push(Date.now());
+        parks.record({ space: parkedSpace, reason });
+      },
     });
     onServingRuntime = () => Promise.resolve();
     openClient();
@@ -2015,7 +2023,18 @@ describe("stage F serving loop", () => {
     // #waitForInput and is lost when the loop is mid-cycle (the
     // healthy wave's self-echo drain) — a feed record instead
     // guarantees the next cycle runs and reads the throwing policy.
+    //
+    // The gap runs from the failing tenure's park as the host's park
+    // handler saw it, which is where the backoff starts. The test resumes
+    // from the failing commit and from `whenParked` only after that, by
+    // however long a loaded process takes to run it, and a gap measured
+    // from there comes out short by exactly that delay. The park and
+    // activation counts are taken while the healthy tenure still serves,
+    // so the entries they index are this park and the rebuild after it,
+    // however late the test observes either.
     const failing = host.spaceServer(space)!;
+    const parksBefore = parkTimes.length;
+    const countBefore = activationTimes.length;
     blowUp = true;
     const failTx = clientRuntime.edit();
     input.withTx(failTx).set({ value: 1_001 });
@@ -2024,8 +2043,7 @@ describe("stage F serving loop", () => {
       failing.whenParked,
       "the failing tenure's park to complete",
     );
-    const failedAgainAt = Date.now();
-    const countBefore = activationTimes.length;
+    const failedAgainAt = parkTimes[parksBefore];
     const trigger = clientRuntime.edit();
     input.withTx(trigger).set({ value: 1_002 });
     expect((await trigger.commit()).error).toBeUndefined();

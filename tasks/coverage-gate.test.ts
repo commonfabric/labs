@@ -12,6 +12,7 @@ import {
   publishedBaselines,
   runGate,
 } from "./coverage-gate.ts";
+import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
 import { coverageGateFor } from "./test-selection/coverage.ts";
 import type { MeasuredSet, Suite } from "./test-topology/suite.ts";
 import type { CoverageBaseline } from "./test-selection/manifest.ts";
@@ -65,6 +66,7 @@ function gateInput(
   return {
     reports: new Map(),
     members: [],
+    measured: over.members ?? [],
     baselines: [],
     nearest: (commits) => Promise.resolve(commits[0]),
     accepted: new Map(),
@@ -594,16 +596,34 @@ describe("coverage-gate", () => {
         .toContain("nothing would ever consult them");
     });
 
-    it("leaves an acceptance the other ratchet reads alone", async () => {
+    it("fails an acceptance naming anything but a workspace member", async () => {
+      // A name shaped like a directory the repository-wide figure rolls up
+      // to is read by nothing, so it has no effect, and says so.
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: coverageGateFor(suites, changed),
         members: ["packages/bakery"],
-        accepted: new Map([["tasks", 3], ["packages/runner", 4]]),
+        accepted: new Map([["tasks", 3], ["packages/bakery", 4]]),
       }));
-      expect(report.unknownAcceptances).toEqual([]);
+      expect(report.ok).toBe(false);
+      expect(report.unknownAcceptances).toEqual(["tasks"]);
+    });
+    it("fails an acceptance naming a member no measured set scores", async () => {
+      // A workspace member whose rise nothing gates is read by nothing, so
+      // an acceptance naming it has no effect, and says so.
+      const { root } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const report = await runGate(gateInput({
+        root,
+        gate: coverageGateFor(suites, changed),
+        members: ["packages/bakery", "packages/pantry"],
+        measured: ["packages/bakery"],
+        accepted: new Map([["packages/pantry", 3]]),
+      }));
+      expect(report.ok).toBe(false);
+      expect(report.unknownAcceptances).toEqual(["packages/pantry"]);
     });
 
     it("fails when no lane wrote the report of a forced set", async () => {
@@ -1213,6 +1233,133 @@ describe("coverage-gate", () => {
         console.error = error;
       }
     });
+
+    describe("the pull-request comment", () => {
+      /**
+       * Runs the gate over `job(10, 6)`, held to a baseline of `baseline`
+       * uncovered lines, with `extra` on its command line. Returns its
+       * status and the comment file, or undefined where it wrote none.
+       */
+      async function comment(
+        baseline: number,
+        extra: readonly string[],
+      ): Promise<{ status: number; written: unknown }> {
+        const { root, commit, reports, suites } = await job(10, 6);
+        const log = console.log;
+        console.log = () => {};
+        let status: number;
+        try {
+          status = await main(
+            ["--base", "HEAD~1", "--reports", reports, ...extra],
+            root,
+            {
+              topology: () => Promise.resolve(suites),
+              baselines: () =>
+                Promise.resolve([{
+                  suite: "workspace-unit",
+                  member: "packages/bakery",
+                  commit,
+                  createdAt: "2026-09-01T00:00:00.000Z",
+                  uncoveredLines: baseline,
+                }]),
+            },
+          );
+        } finally {
+          console.log = log;
+        }
+        const at = path.join(root, "coverage-comment.json");
+        let written: unknown;
+        try {
+          written = JSON.parse(await Deno.readTextFile(at));
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }
+        return { status, written };
+      }
+
+      /** The body of a comment the gate wrote. */
+      function bodyOf(written: unknown): string {
+        if (
+          typeof written !== "object" || written === null ||
+          !("body" in written) || typeof written.body !== "string"
+        ) {
+          throw new Error("The gate wrote a comment with no body.");
+        }
+        return written.body;
+      }
+
+      const asked = ["--comment", "coverage-comment.json", "--pr", "4211"];
+
+      it("writes the report as a regressed comment when the gate fails", async () => {
+        const { status, written } = await comment(1, asked);
+        expect(status).toBe(1);
+        expect(written).toMatchObject({ prNumber: 4211, state: "regressed" });
+        const body = bodyOf(written);
+        expect(
+          body.startsWith(`${COVERAGE_SUGGESTION_MARKER}\n## Coverage gate\n`),
+        )
+          .toBe(true);
+        expect(body).toContain(
+          "ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines",
+        );
+      });
+
+      it("writes a collapsed resolved comment when the gate passes", async () => {
+        const { status, written } = await comment(4, asked);
+        expect(status).toBe(0);
+        expect(written).toMatchObject({ prNumber: 4211, state: "resolved" });
+        const body = bodyOf(written);
+        expect(body.startsWith(`${COVERAGE_SUGGESTION_MARKER}\n<details>\n`))
+          .toBe(true);
+        expect(body).toContain(
+          "The coverage gate in the <strong>Status</strong> job passes.",
+        );
+        expect(body).toContain(
+          "| workspace-unit/packages/bakery | 4 | 4 | +0 | no rise |",
+        );
+        expect(body.trimEnd().endsWith("</details>")).toBe(true);
+      });
+
+      it("writes a regressed comment when it cannot read an acceptance", async () => {
+        const { status, written } = await comment(4, [
+          ...asked,
+          "--body",
+          "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+        ]);
+        expect(status).toBe(1);
+        expect(written).toMatchObject({ prNumber: 4211, state: "regressed" });
+        expect(bodyOf(written))
+          .toContain("Invalid ACCEPT_COVERAGE_DEBT acceptance");
+      });
+
+      it("leaves the comment as it was when the run's tests failed", async () => {
+        // The gate scored nothing, so a pass would claim a rise it never
+        // looked at had gone away.
+        const { status, written } = await comment(1, [
+          ...asked,
+          "--tests-failed",
+        ]);
+        expect(status).toBe(0);
+        expect(written).toBeUndefined();
+      });
+
+      it("still writes a failure it found in a run whose tests failed", async () => {
+        const { status, written } = await comment(4, [
+          ...asked,
+          "--tests-failed",
+          "--body",
+          "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+        ]);
+        expect(status).toBe(1);
+        expect(written).toMatchObject({ state: "regressed" });
+      });
+
+      it("writes no comment where none was asked for", async () => {
+        const { status, written } = await comment(1, []);
+        expect(status).toBe(1);
+        expect(written).toBeUndefined();
+      });
+    });
   });
 
   describe("the baselines a manifest carries", () => {
@@ -1260,6 +1407,48 @@ describe("coverage-gate", () => {
       expect(options?.reports).toBe("downloaded");
       expect(options?.body).toContain("ACCEPT_COVERAGE_DEBT");
       expect(options?.testsFailed).toBe(true);
+    });
+
+    it("takes the comment file and the pull request it is for", () => {
+      expect(
+        parseGateArgs([
+          "--base",
+          "origin/main",
+          "--comment",
+          "coverage-comment.json",
+          "--pr",
+          "4211",
+        ], "/tmp/root")?.comment,
+      ).toEqual({ path: "coverage-comment.json", prNumber: 4211 });
+      expect(parseGateArgs(["--base", "origin/main"], "/tmp/root")?.comment)
+        .toBeUndefined();
+    });
+
+    it("refuses a comment file without a pull request, and the reverse", () => {
+      expect(
+        parseGateArgs(
+          ["--base", "origin/main", "--comment", "coverage-comment.json"],
+          "/tmp/root",
+        ),
+      ).toBeUndefined();
+      expect(
+        parseGateArgs(["--base", "origin/main", "--pr", "4211"], "/tmp/root"),
+      ).toBeUndefined();
+    });
+
+    it("refuses a pull request that is not a positive whole number", () => {
+      for (const pr of ["0", "-3", "1.5", "12a", ""]) {
+        expect(
+          parseGateArgs([
+            "--base",
+            "origin/main",
+            "--comment",
+            "coverage-comment.json",
+            "--pr",
+            pr,
+          ], "/tmp/root"),
+        ).toBeUndefined();
+      }
     });
 
     it("refuses a flag it does not know, and one with no value", () => {

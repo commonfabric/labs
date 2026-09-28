@@ -128,6 +128,7 @@ import {
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
 import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -3149,7 +3150,12 @@ async function handleInvoke(
     );
 
     if (pattern) {
-      runtime.run(tx, pattern, invocationArgs, result);
+      // The model's tool call instantiates the pattern, in a continuation of
+      // the dialog's action: no principal's act attributes what its setup
+      // initializes.
+      runtime.run(tx, pattern, invocationArgs, result, {
+        attributeInitialization: false,
+      });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
       // `result` of its own. Overwriting would silently DISCARD caller data
@@ -4141,7 +4147,7 @@ async function startRequest(
     // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
     // audit S4) admits it only from builtin authors — the same gating that
     // stops pattern code from forging the stamp.
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "llmDialog",
     });

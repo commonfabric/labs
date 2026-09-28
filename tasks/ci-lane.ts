@@ -21,13 +21,18 @@
  * `main` cannot fix its number of lanes ahead of time the way a pull
  * request does, because the number depends on how much work there is and
  * the job matrix has to exist before anything starts. So one job asks
- * `--lane-count` and emits an integer, and that integer is the whole of
- * what passes from it to the lanes.
+ * `--lane-count` and emits an integer, and that integer and the `--full`
+ * the lanes are handed are the whole of what passes from it to them.
+ *
+ * A job prints its lane's plan in a step of its own, with `--dry-run`,
+ * and then runs the lane with `--described`, which packs the same plan
+ * again and names it in one line rather than printing it twice.
  *
  *   deno run -A tasks/ci-lane.ts --lane 3 --of 5 --base origin/main
  *   deno run -A tasks/ci-lane.ts --full --lane 1 --of 4
  *   deno run -A tasks/ci-lane.ts --full --lane-count
  *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --dry-run
+ *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --described
  */
 
 import { exists } from "@std/fs";
@@ -76,24 +81,37 @@ import {
   type SelectionReason,
   unholdableSuites,
 } from "./test-selection/plan.ts";
-import { type Census, census, isStandIn } from "./test-selection/census.ts";
+import {
+  census,
+  isStandIn,
+  type PricedCensus,
+  pricedForRun,
+  type PricedManifest,
+} from "./test-selection/census.ts";
 import {
   type CoverageGateSelection,
   measuredMembersOf,
   measuredSetDirectory,
   measuredSetName,
   measuredSets,
+  measuresSuite,
 } from "./test-selection/coverage.ts";
 import type {
   Manifest,
   UnschedulableEntry,
   WithheldReason,
 } from "./test-selection/manifest.ts";
-import { FULL_LANES_MAX, LANES } from "./test-selection/policy.ts";
+import {
+  FULL_LANES_MAX,
+  LANE_PROLOGUE_SECONDS,
+  LANES,
+} from "./test-selection/policy.ts";
 import { say } from "./step-summary.ts";
+import { duration } from "./test-selection/duration.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
 import {
   batchMeasurementName,
+  excusedMeasurementName,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
 } from "./lane-measurement.ts";
@@ -108,6 +126,16 @@ export interface LaneOptions {
 
   /** Print the plan and run nothing. */
   dryRun: boolean;
+
+  /**
+   * The plan was printed already, by a `--dry-run` of the same lane, so
+   * the lane names what it runs in one line rather than printing it
+   * again. A job does this so that the plan heads a step of its own,
+   * where a reader of a running job finds it rather than above thousands
+   * of lines of test output; the lane packs the same plan again, from the
+   * same tree and manifest, the way every lane packs its siblings' plan.
+   */
+  described?: boolean;
 
   /**
    * Print how many lanes the full run needs, and nothing else. This is
@@ -142,6 +170,14 @@ export const DEFAULT_COVERAGE_DIR = "coverage";
 
 /** Where a lane puts the profiles it collects, under its coverage directory. */
 export const COVERAGE_PROFILE_DIR = "raw";
+
+/**
+ * Where a lane puts the reports the authored-pattern instrumentation
+ * writes, under its coverage directory. They are LCOV already, so they sit
+ * among the reports rather than among the profiles, and outside the
+ * measured sets' layout, since no set is scored from them.
+ */
+export const PATTERN_COVERAGE_DIR = "lcov/pattern-runtime";
 
 /** Where a lane puts the reports it converts, under its coverage directory. */
 export const COVERAGE_REPORT_DIR = "lcov/sets";
@@ -212,6 +248,10 @@ export function parseLaneArgs(
       options.dryRun = true;
       continue;
     }
+    if (flag === "--described") {
+      options.described = true;
+      continue;
+    }
     if (flag === "--lane-count") {
       options.laneCount = true;
       continue;
@@ -247,6 +287,9 @@ export function parseLaneArgs(
   // full run's question for a command line that did not ask it, and a
   // workflow edit dropping the flag would still get a plausible integer.
   if (options.laneCount && !options.full) return undefined;
+  // A dry run does nothing but describe, so one told the plan was
+  // described already has nothing to do.
+  if (options.described && options.dryRun) return undefined;
   return options;
 }
 
@@ -365,7 +408,7 @@ export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
  */
 export function batchesOf(
   suites: readonly Suite[],
-  manifest: Manifest,
+  manifest: PricedManifest,
   selections: readonly Selection[],
 ): Batch[] {
   const bySuite = new Map<string, Suite>(
@@ -438,20 +481,25 @@ export function batchesOf(
     );
   }
   // What a lane costs beyond its tests is fitted from what its batches
-  // were seen to take, and a lane that runs out of time is killed with
-  // its later batches unrun and unmeasured. So the order a lane takes
-  // its batches in decides which suites the cost model can ever learn,
-  // and a suite the model cannot price is one that makes lanes run out
-  // of time. Two keys answer that, in this order.
+  // were seen to take, and a lane that the step timeout or a
+  // cancellation stops part way through leaves its later batches unrun
+  // and unmeasured. So the order a lane takes its batches in decides
+  // which suites the cost model can ever learn, and a suite the model
+  // cannot price is one that makes lanes run past the bound they are
+  // packed to finish inside. Two keys answer that, in this order.
   //
-  // A suite nothing has measured goes ahead of one something has,
-  // because it is the one worth measuring. And within each group the
-  // largest share of the lane goes first, because a lane that runs out
-  // of time should have spent it on the batch most worth knowing about
-  // and dropped the cheap ones. A share is read through `ownLoad`, which
-  // is what the packer charged the lane for the suite's tests, so a suite
-  // whose tests run slower than they were measured at, or run several
-  // times, is as large here as it was when the lane was filled.
+  // A suite whose charge this run did not measure goes ahead of one
+  // whose charge it did, because it is the one worth measuring. That is
+  // a suite no lane has run at all, and a suite no lane has run the way
+  // this run runs it: what a suite costs with coverage on is unknown
+  // until a lane has run it so, whatever it costs without. And within
+  // each group the largest share of the lane goes first, because a lane
+  // that runs out of time should have spent it on the batch most worth
+  // knowing about and dropped the cheap ones. A share is read through
+  // `ownLoad`, which is what the packer charged the lane for the suite's
+  // tests, so a suite whose tests run slower than they were measured at,
+  // or run several times, is as large here as it was when the lane was
+  // filled.
   //
   // Both keys are a function of the plan, and the identifier settles a
   // tie, so every attempt at a lane runs its batches in the same order
@@ -462,7 +510,7 @@ export function batchesOf(
   const keyed = [...batches.values()].map((batch) => ({
     batch,
     id: batch.suite.id,
-    measured: manifest.calibration.suites[batch.suite.id] === undefined ? 0 : 1,
+    measured: manifest.fitted.has(batch.suite.id) ? 1 : 0,
     seconds: selections
       .filter(({ entry }) => entry.suite === batch.suite.id)
       .map(({ entry, repeats }) => ownLoad(manifest, entry, repeats))
@@ -558,6 +606,13 @@ export interface BatchCoverage {
    * runs, which is what the full run asks for.
    */
   members?: ReadonlySet<string>;
+
+  /**
+   * Where the authored-pattern instrumentation writes, for the full run
+   * alone. What it measures feeds the repository-wide figure, which only
+   * the full run publishes; no measured set is scored from it.
+   */
+  patternDir?: string;
 }
 
 /**
@@ -574,10 +629,12 @@ export function batchCoverage(
   suiteId: string,
   gate: CoverageGateSelection,
 ): BatchCoverage | undefined {
-  const dir = path.join(coverageRoot(options), COVERAGE_PROFILE_DIR, suiteId);
-  if (options.full) return { dir };
-  const members = measuredMembersOf(gate, suiteId);
-  return members.size === 0 ? undefined : { dir, members };
+  if (!measuresSuite(gate, suiteId, options.full)) return undefined;
+  const root = coverageRoot(options);
+  const dir = path.join(root, COVERAGE_PROFILE_DIR, suiteId);
+  return options.full
+    ? { dir, patternDir: path.join(root, PATTERN_COVERAGE_DIR, suiteId) }
+    : { dir, members: measuredMembersOf(gate, suiteId) };
 }
 
 /**
@@ -599,9 +656,10 @@ export const COVERAGE_FAILURE_MARKER = "measured-through-a-failure.txt";
  *
  * A cold cache compiles every pattern from scratch, which runs compile
  * branches a warm run never reaches, so it moves the repository-wide
- * figure that the pattern suites contribute to. The record goes beside the
- * lane's reports, in the directory its coverage artifact holds, so that
- * whatever reads the figure can tell a cold run's from a warm one's.
+ * figure that the pattern suites contribute to. The record goes at the
+ * top of the lane's report directory, which its coverage artifact holds,
+ * so that whatever reads the figure can tell a cold run's from a warm
+ * one's.
  */
 export const COMPILE_CACHE_STATE_FILE = "compile-cache-state.txt";
 
@@ -763,6 +821,9 @@ export async function runBatch(
         ...(coverage.members === undefined
           ? {}
           : { measuredMembers: coverage.members }),
+        ...(coverage.patternDir === undefined
+          ? {}
+          : { patternCoverageDir: coverage.patternDir }),
       }),
     });
     for (const invocation of invocations) {
@@ -1152,10 +1213,10 @@ export function describePlan(
   // beside a lane that ran four times as long is told as much.
   const standing = standingOnStandIns(chosen.manifest, chosen.selections);
   lines.push(
-    `Projected: ${chosen.projectedSeconds.toFixed(0)}s of ${budget}s` +
+    `Projected: ${duration(chosen.projectedSeconds)} of ${duration(budget)}` +
       (standing.units === 0
         ? ""
-        : `, ${standing.seconds.toFixed(0)}s of it charged to ` +
+        : `, ${duration(standing.seconds)} of it charged to ` +
           `${standing.units} unit${standing.units === 1 ? "" : "s"} ` +
           `nothing has measured`),
   );
@@ -1168,7 +1229,7 @@ export function describePlan(
     const share = chosenFor(batch.suite.id, chosen.selections);
     lines.push(
       `| ${batch.suite.id} | ${batch.units.length} | ${share.identities} | ` +
-        `${share.seconds.toFixed(1)}s | ${batchRepeats(batch)} | ` +
+        `${duration(share.seconds)} | ${batchRepeats(batch)} | ` +
         `${share.why} |`,
     );
   }
@@ -1180,9 +1241,9 @@ export function describePlan(
     !unholdable.has(entry.suite)
   );
   if (expensive.length > 0) {
-    // A discretionary identity costing more than a lane's hard bound
-    // runs nowhere, because a lane holding it would be killed before it
-    // reported anything. Naming it is what turns that into something
+    // A discretionary identity costing more than the bound a lane is
+    // packed to finish inside runs nowhere, because no lane can hold it
+    // inside that bound. Naming it is what turns that into something
     // somebody can act on; the sixty-second rule is where such a test
     // gets split.
     lines.push("");
@@ -1195,7 +1256,7 @@ export function describePlan(
     for (const entry of named) {
       lines.push(
         `- ${entry.suite}: ${testIdentityKey(entry.test)} costs ` +
-          `${entry.cost.toFixed(0)}s, more than a lane can hold`,
+          `${duration(entry.cost)}, more than a lane can hold`,
       );
     }
     if (rest.length > 0) lines.push(`- and ${rest.length} more`);
@@ -1258,15 +1319,21 @@ export async function resolveManifest(
   return await deps.manifest({ at: manifestMoment(options) });
 }
 
-/** What reading this tree against its manifest came to. */
+/** The manifest this commit belongs to, and what the change touched. */
 interface Reading {
-  seen: Census;
+  /** The manifest, or nothing where the store holds none for the commit. */
+  manifest: Manifest | undefined;
+
+  /** The files the change touched, and none for the full run. */
+  changed: ReadonlySet<string>;
+
+  /** Which object the manifest was read from, or why there is none. */
   fetched: { objectName?: string; absent?: string };
 }
 
 /**
- * Resolves the manifest this commit belongs to and reads the working
- * tree against it.
+ * Resolves the manifest this commit belongs to and the files the change
+ * touched.
  *
  * Everything that plans anything starts here — a lane, and the job that
  * counts the full run's lanes — so the tree and the manifest are
@@ -1276,7 +1343,6 @@ interface Reading {
  */
 async function read(
   options: LaneOptions,
-  suites: readonly Suite[],
   deps: Pick<LaneDeps, "manifest">,
 ): Promise<Reading> {
   const manifest = await resolveManifest(options, deps);
@@ -1294,13 +1360,13 @@ async function read(
         "other lanes of this run packed from",
     );
   }
-  // A full run reads the manifest for what things cost and nothing else,
-  // and a run with no diff has touched nothing.
-  const changed = options.full
-    ? new Set<string>()
-    : await changedFiles(options.root, options.base);
   return {
-    seen: census(suites, manifest.manifest, changed),
+    manifest: manifest.manifest,
+    // A full run reads the manifest for what things cost and nothing
+    // else, and a run with no diff has touched nothing.
+    changed: options.full
+      ? new Set<string>()
+      : await changedFiles(options.root, options.base),
     fetched: {
       ...(manifest.objectName === undefined
         ? {}
@@ -1310,33 +1376,68 @@ async function read(
   };
 }
 
+/** What one run makes of a tree: the tree as it prices it, and packed. */
+export interface PlanOver {
+  /** The tree read against the manifest, priced the way the run prices it. */
+  seen: PricedCensus;
+
+  /** What the tree holds, packed into the run's lanes. */
+  laid: Plan;
+}
+
 /**
- * Packs what this tree holds into the lanes this run has.
+ * What a run packs a tree into, given the manifest it resolved, what its
+ * change touched, whether it is the full run, and how many lanes it has.
+ * Pure: the lanes of a run and anything describing what they did compute
+ * it here, so the two cannot come to different answers.
  *
- * The policy is the whole of what the two runs differ by here. Under
- * `everything` every identity is required, so the exclusions and the
- * value, density and exploration passes have nothing left to act on and
- * the packer behaves the same way for both.
+ * Whether the run is the full one is the whole of what the two runs
+ * differ by here. Under `everything` every identity is required, so the
+ * exclusions and the value, density and exploration passes have nothing
+ * left to act on and the packer behaves the same way for both.
  */
-function packing(
-  options: LaneOptions,
-  suites: readonly Suite[],
-  seen: Census,
-): Plan {
-  return plan({
-    manifest: seen.manifest,
-    mandatory: seen.mandatory,
-    capabilities: capabilitiesBySuite(suites),
-    wholeUnits: wholeUnits(suites),
-    lanes: options.of,
-    ...(options.full ? { policy: "everything" as const } : {}),
-  });
+export function planOver(input: {
+  suites: readonly Suite[];
+  manifest: Manifest | undefined;
+  changed: ReadonlySet<string>;
+  full: boolean;
+  lanes: number;
+}): PlanOver {
+  const seen = pricedOver(input);
+  return {
+    seen,
+    laid: plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(input.suites),
+      wholeUnits: wholeUnits(input.suites),
+      lanes: input.lanes,
+      ...(input.full ? { policy: "everything" as const } : {}),
+    }),
+  };
+}
+
+/**
+ * Helper for `planOver` and the full run's lane count, which reads a
+ * tree against a manifest and prices it the way the run prices it.
+ */
+function pricedOver(input: {
+  suites: readonly Suite[];
+  manifest: Manifest | undefined;
+  changed: ReadonlySet<string>;
+  full: boolean;
+}): PricedCensus {
+  return pricedForRun(
+    census(input.suites, input.manifest, input.changed),
+    input.suites,
+    input.full,
+  );
 }
 
 /** What every lane of a run works out before taking its own share. */
-export interface LanePlan extends Reading {
-  /** What the tree holds, packed into the run's lanes. */
-  laid: Plan;
+export interface LanePlan extends PlanOver {
+  /** Which object the manifest was read from, or why there is none. */
+  fetched: Reading["fetched"];
 }
 
 /**
@@ -1353,8 +1454,17 @@ export async function lanePlan(
   suites: readonly Suite[],
   deps: Pick<LaneDeps, "manifest">,
 ): Promise<LanePlan> {
-  const reading = await read(options, suites, deps);
-  return { ...reading, laid: packing(options, suites, reading.seen) };
+  const { manifest, changed, fetched } = await read(options, deps);
+  return {
+    fetched,
+    ...planOver({
+      suites,
+      manifest,
+      changed,
+      full: options.full,
+      lanes: options.of,
+    }),
+  };
 }
 
 /**
@@ -1362,43 +1472,91 @@ export async function lanePlan(
  * `FULL_LANES_MAX`.
  *
  * This is the whole of what the job ahead of the full run decides, and an
- * integer is the whole of what it emits. The lanes then read the same
+ * integer is the whole of what it answers. The lanes then read the same
  * tree against the same manifest and take their own share, the way the
  * pull-request lanes do, so nothing about what runs passes through a job
  * output and there is no second packing to disagree with theirs.
  *
- * Notes about what the count rests on go to the error stream, because
- * this answers on the standard one and a job reads the answer from
- * there.
+ * Everything else goes to the error stream, because this answers on the
+ * standard one and a job reads the answer from there: notes about what
+ * the count rests on, and what each lane at that count is projected to
+ * take, which also goes to the job summary.
  */
 export async function fullLanes(
   options: LaneOptions,
   deps: LaneDeps,
 ): Promise<number> {
-  const needed = await fullLanesNeeded(options, deps);
-  if (needed <= FULL_LANES_MAX) return needed;
-  console.error(
-    `ci-lane: the full run needs ${needed} lanes and takes ` +
-      `${FULL_LANES_MAX}, the most FULL_LANES_MAX allows, so a lane may run ` +
-      `past its budget`,
+  const suites = await (deps.topology ?? loadTopology)(options.root);
+  const { manifest, changed } = await read(options, deps);
+  const needed = fullLanesNeeded(suites, manifest, changed, options.full);
+  const lanes = Math.min(needed, FULL_LANES_MAX);
+  if (needed > lanes) {
+    console.error(
+      `ci-lane: the full run needs ${needed} lanes and takes ` +
+        `${FULL_LANES_MAX}, the most FULL_LANES_MAX allows, so a lane may ` +
+        `run past its budget`,
+    );
+  }
+  const { laid } = planOver({
+    suites,
+    manifest,
+    changed,
+    full: options.full,
+    lanes,
+  });
+  // Where the store gave no manifest, nothing was calibrated, and the
+  // prologue is the figure the lanes' budget was derived from.
+  describeFullLanes(
+    laid,
+    manifest?.calibration.prologue ?? LANE_PROLOGUE_SECONDS,
   );
-  return FULL_LANES_MAX;
+  return lanes;
+}
+
+/**
+ * What each lane of the full run is projected to take, on the error
+ * stream and in the job summary, since the count is the whole of what
+ * this answers on the standard one. The lanes pack this same plan, so
+ * what a lane is projected to take here is what it projects for itself.
+ */
+export function describeFullLanes(laid: Plan, prologue: number): void {
+  const longest = Math.max(
+    0,
+    ...laid.lanes.map((lane) => lane.projectedSeconds),
+  );
+  say([
+    `## The full run's ${laid.lanes.length} lane(s)`,
+    "",
+    `Each is packed against ${duration(laid.budgetSeconds)} of work, and ` +
+    `the job around it takes about ${duration(prologue)} more to set up ` +
+    `and ship. The longest is projected to take ` +
+    `${duration(longest + prologue)} in all.`,
+    "",
+    "| Lane | Tests | Projected work | Projected job |",
+    "| --- | --- | --- | --- |",
+    ...laid.lanes.map((lane) =>
+      `| ${lane.lane} | ${lane.selections.length} | ` +
+      `${duration(lane.projectedSeconds)} | ` +
+      `${duration(lane.projectedSeconds + prologue)} |`
+    ),
+  ], console.error);
 }
 
 /** How many lanes the full run would take with no cap on them. */
-async function fullLanesNeeded(
-  options: LaneOptions,
-  deps: LaneDeps,
-): Promise<number> {
-  const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen } = await read(options, suites, deps);
+function fullLanesNeeded(
+  suites: readonly Suite[],
+  manifest: Manifest | undefined,
+  changed: ReadonlySet<string>,
+  full: boolean,
+): number {
+  const seen = pricedOver({ suites, manifest, changed, full });
   if (seen.unmeasured === seen.manifest.entries.length) {
     // Nothing at all has a measured cost, so a cost model here would be
     // arithmetic over a figure this invented, and the answer would be
     // wrong by whatever that figure is wrong by. It errs in the
     // direction that breaks a run, too: too few lanes means every one of
-    // them runs past the bound its job is killed at, where too many
-    // means some jobs finish early.
+    // them runs past the bound it is packed to finish inside, where too
+    // many means some jobs finish early.
     //
     // So a lane per suite with anything to run goes in as a floor. It
     // needs no number nobody measured, and it keeps the count growing as
@@ -1469,35 +1627,50 @@ export async function runLane(
     );
   }
   const batches = batchesOf(suites, seen.manifest, mine.selections);
-  // A mandatory identity is placed however much it costs, and this is
-  // where a lane says it ran long.
-  if (laid.overBudgetSeconds > 0) {
-    console.log(
-      `ci-lane: the mandatory set puts a lane ` +
-        `${laid.overBudgetSeconds.toFixed(0)} seconds past the ` +
-        `${laid.budgetSeconds}-second budget`,
-    );
-  }
-
   const needs = new Set<CapabilityId>();
   for (const batch of batches) {
     for (const capability of batch.suite.needs) needs.add(capability);
   }
-  describePlan(
-    options,
-    batches,
-    [...needs].sort(),
-    fetched,
-    laid.unschedulable,
-    laid.crowding,
-    {
-      manifest: seen.manifest,
-      selections: mine.selections,
-      projectedSeconds: mine.projectedSeconds,
-    },
-    laid.budgetSeconds,
-  );
-  describeWithheld(laid.withheld, seen.mandatory);
+  if (options.described) {
+    // Enough to tell the plan this runs from the one described, should
+    // the two ever differ, and what it was projected to take beside the
+    // batches' own timings.
+    console.log(
+      `ci-lane: running lane ${options.lane} of ${options.of} as described: ` +
+        `${batches.length} batch(es) of ` +
+        `${batches.map((batch) => batch.suite.id).join(", ") || "nothing"}, ` +
+        `projected at ${duration(mine.projectedSeconds)} of ` +
+        `${duration(laid.budgetSeconds)}, ` +
+        (fetched.absent === undefined
+          ? `against ${fetched.objectName}`
+          : `unselected: ${fetched.absent}`),
+    );
+  } else {
+    // A mandatory identity is placed however much it costs, and this is
+    // where a lane says it ran long.
+    if (laid.overBudgetSeconds > 0) {
+      console.log(
+        `ci-lane: the mandatory set puts a lane ` +
+          `${duration(laid.overBudgetSeconds)} past its ` +
+          `${duration(laid.budgetSeconds)} budget`,
+      );
+    }
+    describePlan(
+      options,
+      batches,
+      [...needs].sort(),
+      fetched,
+      laid.unschedulable,
+      laid.crowding,
+      {
+        manifest: seen.manifest,
+        selections: mine.selections,
+        projectedSeconds: mine.projectedSeconds,
+      },
+      laid.budgetSeconds,
+    );
+    describeWithheld(laid.withheld, seen.mandatory);
+  }
   if (options.dryRun) return true;
 
   // Asked before any batch runs, because the first pattern a batch
@@ -1565,6 +1738,11 @@ export async function runLane(
   const nonGating = new Set(
     laid.nonGating.map((entry) => testIdentityKey(entry.test)),
   );
+  // Identities a batch excused, and identities a batch failed that could
+  // not excuse them. Only the first and not the second went without
+  // failing the run.
+  const excused = new Set<string>();
+  const unexcused = new Set<string>();
   try {
     for (const batch of batches) {
       // A failure never stops the lane: one failing batch would otherwise
@@ -1611,6 +1789,21 @@ export async function runLane(
       for (const unit of accounting.failedUnits) {
         failedUnits.add(`${batch.suite.id}\t${unit}`);
       }
+      for (const key of accounting.excused) {
+        (excusing ? excused : unexcused).add(key);
+      }
+    }
+    // Written once every batch has run, so that a batch that withdrew an
+    // excusal is heard before any is recorded, and a report of this run
+    // says what it did not fail for from what it did rather than from
+    // what the manifest would have it do.
+    if (spool !== undefined) {
+      spoolRecords(
+        spool,
+        [...excused].filter((key) => !unexcused.has(key)).sort().map((key) =>
+          measurementRecord(excusedMeasurementName(key), 0, true)
+        ),
+      );
     }
   } catch (error) {
     // A lane whose loop threw has failed, whatever the batches it got
@@ -1707,7 +1900,7 @@ export async function main(
   if (options === undefined) {
     console.error(
       "usage: ci-lane.ts [--lane N] [--of M] [--full] [--dry-run] " +
-        "[--lane-count] [--base <ref>] [--at <iso>] [--coverage-dir <dir>]",
+        "[--described] [--lane-count] [--base <ref>] [--at <iso>] [--coverage-dir <dir>]",
     );
     return 2;
   }

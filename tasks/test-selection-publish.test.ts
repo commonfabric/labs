@@ -35,6 +35,7 @@ import { emptyState } from "./test-selection/score.ts";
 import { CATCH_WEIGHT_MAIN } from "./test-selection/policy.ts";
 import { stateObjectName, statePrefix } from "./test-selection/store.ts";
 import { MANIFEST_SCHEMA_VERSION } from "./test-selection/manifest.ts";
+import { batchMeasurementName } from "./lane-measurement.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { join } from "@std/path";
 
@@ -424,7 +425,14 @@ function localObject(commit: string, at: string): string {
 function laneObject(
   commit: string,
   at: string,
-  { ran = 40, spent = 92, units = 1, placeless = false, batch = true } = {},
+  {
+    ran = 40,
+    spent = 92,
+    units = 1,
+    placeless = false,
+    batch = true,
+    measured = false,
+  } = {},
 ): string {
   const context: RunContext = {
     schema: 1,
@@ -447,19 +455,25 @@ function laneObject(
     denoVersion: "2.9.4",
     startedAt: at,
   };
-  const measured = (name: string, ms: number): TestRecord => ({
+  const figure = (name: string, ms: number): TestRecord => ({
     line: "record",
     test: { k: "gate", s: "ci", n: name },
     outcome: "pass",
     durationMs: ms,
   });
   return buildObjectBody(context, [
-    measured("ci-lane setup fuse", 14_800),
-    measured("ci-lane batch workspace-unit", spent * 1000),
+    figure("ci-lane setup fuse", 14_800),
+    figure(batchMeasurementName("workspace-unit", measured), spent * 1000),
     ...(batch
       ? [
-        measured("ci-lane ran batch workspace-unit", ran * 1000),
-        measured("ci-lane units batch workspace-unit", units),
+        figure(
+          batchMeasurementName("workspace-unit", measured, "ran"),
+          ran * 1000,
+        ),
+        figure(
+          batchMeasurementName("workspace-unit", measured, "units"),
+          units,
+        ),
       ]
       : []),
   ]);
@@ -546,6 +560,49 @@ describe("publish()", () => {
     // high for a lane packing more units than that batch held.
     expect(manifest.calibration.suites["workspace-unit"])
       .toEqual({ overhead: 0, correction: 1, unitOverhead: 52 });
+  });
+
+  it("publishes what a lane costs with coverage on apart from without", async () => {
+    // The batch with coverage on took the same tests 150 seconds where
+    // the one without took 92, so the unit is charged 110 with it on and
+    // 52 with it off.
+    const objects = seed();
+    objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z");
+    objects[CI(DAY, "4")] = laneObject("c4", "2026-08-20T04:00:00.000Z", {
+      spent: 150,
+      measured: true,
+    });
+    const { store, created } = fakeStore(objects);
+    const said = await saying(() =>
+      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noBaselines)
+    );
+    const manifest = await publishedManifest(created);
+    expect(manifest.calibration.suites).toEqual({
+      "workspace-unit": { overhead: 0, correction: 1, unitOverhead: 52 },
+    });
+    expect(manifest.calibration.suitesWithCoverage).toEqual({
+      "workspace-unit": { overhead: 0, correction: 1, unitOverhead: 110 },
+    });
+    expect(said).toContain(
+      "holds 1 suite(s) and 1 capability setup(s), and 1 of those suite(s) " +
+        "have a cost with coverage on",
+    );
+  });
+
+  it("counts a suite fitted only with coverage on among the suites", async () => {
+    const objects = seed();
+    objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z", {
+      measured: true,
+    });
+    const { store } = fakeStore(objects);
+    const said = await saying(() =>
+      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noBaselines)
+    );
+    expect(said).toContain(
+      "holds 1 suite(s) and 1 capability setup(s), and 1 of those suite(s) " +
+        "have a cost with coverage on",
+    );
+    expect(said).not.toContain("no suite has a measured cost");
   });
 
   it("publishes a cost model the manifest reader will carry", async () => {
@@ -1782,6 +1839,65 @@ describe("publish() over a store that answers badly", () => {
   });
 });
 
+describe("publish() reporting what measured sets cost", () => {
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+
+  /** The one suite, measuring its one member through its one unit. */
+  const measuring = () =>
+    Promise.resolve<Suite[]>([{
+      ...TOPOLOGY[0]!,
+      measured: [{
+        member: "packages/memory",
+        reachedBy: ["packages/memory/"],
+        units: [UNIT],
+      }],
+    }]);
+
+  it("names a measured set costing more than `LOCAL_COVERAGE_MAX_SECONDS` with coverage on", async () => {
+    // Its one unit's tests take a fraction of a second, and a batch with
+    // coverage on spent 52 seconds opening it.
+    const objects = seed();
+    objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z", {
+      measured: true,
+    });
+    const { store } = fakeStore(objects);
+    const said = await saying(() =>
+      publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        NOW,
+        measuring,
+        noBaselines,
+      )
+    );
+    expect(said).toContain(
+      "test selection: workspace-unit/packages/memory costs 52s with " +
+        "coverage on, past LOCAL_COVERAGE_MAX_SECONDS",
+    );
+  });
+
+  it("says what a set costs cannot be said before a lane has run its suite with coverage on", async () => {
+    const objects = seed();
+    objects[CI(DAY, "3")] = laneObject("c3", "2026-08-20T03:00:00.000Z");
+    const { store } = fakeStore(objects);
+    const said = await saying(() =>
+      publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        NOW,
+        measuring,
+        noBaselines,
+      )
+    );
+    expect(said).toContain(
+      "test selection: What 1 measured set(s) or exclusion-list entries " +
+        "cost with coverage on cannot be said yet: no lane has run " +
+        "workspace-unit with coverage on",
+    );
+    expect(said).not.toContain("past LOCAL_COVERAGE_MAX_SECONDS");
+  });
+});
+
 describe("publish() reporting what no lane can hold", () => {
   const NOW = new Date("2026-08-20T12:00:00.000Z");
 
@@ -1815,7 +1931,7 @@ describe("publish() reporting what no lane can hold", () => {
     const line = said.find((said) => said.includes("unschedulable"));
     expect(line).toBeDefined();
     expect(line).toContain("space > writes");
-    expect(line).toContain("400.0s");
+    expect(line).toContain("6m40s");
   });
 
   it("names the costliest few and counts the rest", async () => {

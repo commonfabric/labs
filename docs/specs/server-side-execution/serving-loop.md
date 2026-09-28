@@ -1426,7 +1426,11 @@ provisioning handlers (the event's acting principal + grant), and
 per-demanding-identity wish resolution — a demanded run acting as its
 demander (scopes.md §5) whose home-space bootstrap writes ride the
 same crossing (builtins.md §5 carries the register row; RULED
-2026-08-14).
+2026-08-14). Some bookkeeping writes are made once the run that
+triggered them has ended. Each crosses on that run's carriage, which
+its caller passes explicitly. They are the compile-cache and program
+writeback into a piece's own space, and the `agent` effect's index
+entry in the requester's home space (builtins.md).
 
 ## 3e. Pattern updates
 

@@ -694,6 +694,11 @@ using them is not optional in code that can reach a stored value:
   class whose codec is a stub, which this walk returns for.
   `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
   returns `false`.
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
@@ -981,8 +986,9 @@ export const set = (cache: Cache, key: string, value: string) =>
 > changes.
 
 - For CI wall-time optimization, follow
-  [CI Performance Policy](CI_PERFORMANCE.md). Do not keep splitting jobs once
-  the required test jobs are already in the same rough timing band.
+  [CI Performance Policy](CI_PERFORMANCE.md). CI packs every test into lanes by
+  measured cost, so there are no jobs to split or rebalance by hand; a lane that
+  runs long calls for a split test or a moved dial.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
 - Run all tests using `deno task test` (NOT `deno test`). It is not a

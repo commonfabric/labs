@@ -29,6 +29,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 
 import { CellHandle } from "./cell-handle.ts";
 import {
@@ -281,13 +282,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * Prepares a custody seal of `draft` into the room whose terms and policy
    * are named, for the trusted host to show before the actor confirms. The
    * worker reads and checks every cell, and keeps the consent; the preview is
-   * what crosses.
+   * what crosses. When `box` is named, the seal writes the link to the
+   * instance's box into it as it commits.
    */
   async prepareCustodySeal(cells: {
     draft: CellRef;
     terms: CellRef;
     policy: CellRef;
     allowedSources: CellRef;
+    box?: CellRef;
   }): Promise<CustodySealPreview> {
     return await this.#conn.request<RequestType.CustodySealPrepare>({
       type: RequestType.CustodySealPrepare,
@@ -295,19 +298,29 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       terms: cells.terms,
       policy: cells.policy,
       allowedSources: cells.allowedSources,
+      ...(cells.box === undefined ? {} : { box: cells.box }),
     });
   }
 
   /**
    * Seals a prepared preview after the trusted host receives the actor's
-   * confirmation, answering with the actor's receipt.
+   * confirmation, answering with the actor's receipt, the instance's box
+   * that the room's projector reads, and the instance sealed into.
    */
-  async commitCustodySeal<T = unknown>(id: string): Promise<CellHandle<T>> {
+  async commitCustodySeal<T = unknown>(id: string): Promise<{
+    receipt: CellHandle<T>;
+    box: CellHandle<unknown>;
+    instance: string;
+  }> {
     const response = await this.#conn.request<RequestType.CustodySealCommit>({
       type: RequestType.CustodySealCommit,
       id,
     });
-    return new CellHandle<T>(this, response.cell);
+    return {
+      receipt: new CellHandle<T>(this, response.receipt),
+      box: new CellHandle(this, response.box),
+      instance: response.instance,
+    };
   }
 
   /** Discards a custody seal preview the host closed or replaced. */
@@ -521,6 +534,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       forwardWorkerConsole: options.forwardWorkerConsole,
       patternCoverage: options.patternCoverage,
       concurrentWatchRefresh: options.concurrentWatchRefresh,
+      awaitHealth: options.awaitHealth,
     } satisfies EveryFieldOf<InitializationData>;
     const initialized = await (new RuntimeConnection(transport)).initialize(
       data,
@@ -993,6 +1007,28 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       host,
     });
     return res.value;
+  }
+
+  /**
+   * Record a host hint for a space as {@link registerSpaceHost} does, and
+   * return the reason along with a refusal. `known-different-host` carries the
+   * host the space is routed to. `default-route-in-use` is about this session alone:
+   * the space issued a stateful operation through the default host, and a
+   * runtime created later can still take the hint. Callers must not mount the
+   * space under this hint unless `accepted` is true.
+   */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    const res = await this.#conn.request<
+      RequestType.RegisterSpaceHostDetailed
+    >({
+      type: RequestType.RegisterSpaceHostDetailed,
+      space,
+      host,
+    });
+    return res.registration;
   }
 
   /**

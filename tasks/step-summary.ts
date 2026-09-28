@@ -8,6 +8,8 @@
  * inside the bound: what does not fit is left out and a line says so.
  */
 
+import { unicodeWidth } from "@std/cli/unicode-width";
+
 /** The largest summary GitHub accepts. */
 export const SUMMARY_LIMIT = 1024 * 1024;
 
@@ -66,11 +68,94 @@ export function appendSummary(text: string): void {
   Deno.writeTextFileSync(at, body, { append: true });
 }
 
-/** Says something both on the job's output and in its summary. */
-export function say(lines: readonly string[]): void {
+/**
+ * Says something both on the job's output and in its summary. The summary
+ * renders Markdown and the log does not, so the log gets each table drawn.
+ * `log` is where the output goes, for a command whose standard output is
+ * an answer something else reads.
+ */
+export function say(
+  lines: readonly string[],
+  log: (text: string) => void = console.log,
+): void {
   const text = `${lines.join("\n")}\n`;
-  console.log(text);
+  log(drawTables(text));
   appendSummary(text);
+}
+
+/**
+ * `text` with each Markdown table in it drawn in box-drawing characters,
+ * and everything else as it was. A table is a row of cells between pipes,
+ * a row of dashes under it, and the rows of cells after that. What a code
+ * fence holds is quoted rather than rendered, so it stays as it was.
+ */
+export function drawTables(text: string): string {
+  const lines = text.split("\n");
+  const drawn: string[] = [];
+  let fenced = false;
+  for (let at = 0; at < lines.length;) {
+    if (/^\s*(```|~~~)/.test(lines[at]!)) fenced = !fenced;
+    if (!fenced && isRow(lines[at]!) && isDelimiter(lines[at + 1])) {
+      const rows = [cellsOf(lines[at]!)];
+      at += 2;
+      while (at < lines.length && isRow(lines[at]!)) {
+        rows.push(cellsOf(lines[at++]!));
+      }
+      drawn.push(...box(rows));
+    } else {
+      drawn.push(lines[at++]!);
+    }
+  }
+  return drawn.join("\n");
+}
+
+/** Whether `line` is a row of a Markdown table. */
+function isRow(line: string): boolean {
+  return line.trimStart().startsWith("|");
+}
+
+/** Whether `line` is the row of dashes under a Markdown table's header. */
+function isDelimiter(line: string | undefined): boolean {
+  return line !== undefined && isRow(line) &&
+    cellsOf(line).every((cell) => /^:?-+:?$/.test(cell));
+}
+
+/** The cells of one row of a Markdown table, with their pipes unescaped. */
+function cellsOf(row: string): string[] {
+  return row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim().replaceAll("\\|", "|"));
+}
+
+/**
+ * `rows`, the first of them the header, drawn as a box. A row short of
+ * cells is drawn with the rest empty.
+ */
+function box(rows: readonly string[][]): string[] {
+  // In the columns a monospaced log gives each character: two for a wide
+  // one, and none for a mark combining with the one before it.
+  const width = unicodeWidth;
+  const widths = Array.from(
+    { length: Math.max(...rows.map((row) => row.length)) },
+    (_, column) => Math.max(...rows.map((row) => width(row[column] ?? ""))),
+  );
+  const rule = (left: string, middle: string, right: string) =>
+    left + widths.map((cells) => "─".repeat(cells + 2)).join(middle) + right;
+  const line = (row: readonly string[]) =>
+    "│" +
+    widths.map((cells, column) => {
+      const cell = row[column] ?? "";
+      return ` ${cell}${" ".repeat(cells - width(cell))} `;
+    }).join("│") +
+    "│";
+  const [header, ...body] = rows;
+  return [
+    rule("┌", "┬", "┐"),
+    line(header!),
+    rule("├", "┼", "┤"),
+    ...body.map(line),
+    rule("└", "┴", "┘"),
+  ];
 }
 
 /**

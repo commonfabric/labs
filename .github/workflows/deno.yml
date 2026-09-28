@@ -7,11 +7,15 @@ on:
   pull_request:
     branches:
       - main
+    # A label is how a pull request asks for the full run, so adding or
+    # removing one starts a run that reads the labels it now carries. A
+    # re-run would read the labels of the event it repeats.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   # The run of the suites in the next day's order calls this workflow with that
   # day's seed; see .github/workflows/test-order-tomorrow.yml. A called run
-  # runs the tests and nothing else. The jobs that gate the commit on coverage
-  # and topology, and the jobs that attest and deploy it, run only for a push
-  # or a pull request, whose own run already covers the commit.
+  # runs every test and nothing else. The job that gates the commit on coverage
+  # and topology, and the jobs that build, attest and deploy it, run only for a
+  # push or a pull request, whose own run already covers the commit.
   workflow_call:
     inputs:
       shuffle-seed:
@@ -34,12 +38,9 @@ concurrency:
 
 # The bounds the jobs below are built from. They are YAML anchors, used as
 # aliases at each job and each work step, so the numbers live here and nowhere
-# else. Most jobs take the first pair. The CLI integration suites take the
-# `cli-` ones, which are tighter because a wedged suite there is what they were
-# sized against. See "Step And Job Timeouts" in
-# docs/development/CI_PERFORMANCE.md for the sizing rule. The environment
-# variables holding the numbers are how a workflow declares a value an anchor
-# can name; nothing reads them.
+# else. See "Step And Job Timeouts" in docs/development/CI_PERFORMANCE.md for
+# the sizing rule. The environment variables holding the numbers are how a
+# workflow declares a value an anchor can name; nothing reads them.
 env:
   # GitHub's Ubuntu image includes Chrome. Astral uses it directly instead of
   # downloading another browser when the first browser test starts.
@@ -47,14 +48,14 @@ env:
   # Empty unless a caller names a seed, and an empty value leaves every runner
   # on the seed of the commit under test.
   CF_TEST_SHUFFLE_SEED: ${{ inputs.shuffle-seed }}
+  # Where the record store and the selection manifests are, as every
+  # workflow reading or writing them names it. An unset variable leaves the
+  # default in place.
+  TEST_RECORDS_BUCKET: ${{ vars.TEST_RECORDS_BUCKET }}
+  TEST_RECORDS_PREFIX: ${{ vars.TEST_RECORDS_PREFIX }}
+  TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
-  CLI_WORK_TIMEOUT_MINUTES: &cli-work-timeout 10
-  CLI_FUSE_WORK_TIMEOUT_MINUTES: &cli-fuse-work-timeout 15
-  CLI_JOB_TIMEOUT_MINUTES: &cli-job-timeout 25
-  # Server-execution role resolution and posture probes take this one; it is
-  # sized for short control-plane checks, not a suite.
-  POSTURE_PROBE_TIMEOUT_MINUTES: &posture-probe-timeout 5
 
 # Every step name must begin with a phase-marker emoji (setup / work / shutdown).
 # scripts/ci-gantt.ts reads that emoji to split each job bar by phase. See the
@@ -73,21 +74,36 @@ env:
 # that lives elsewhere, and how long that takes is not this workflow's to say.
 jobs:
   # ---------------------------------------------------------------------------
-  # Tier 0 – These jobs all start immediately with no dependencies
-  # GitHub allows this organization 60 parallel hosted runners. Keep this
-  # dependency-free wave below that shared limit so overlapping runs leave
-  # capacity for one another and for jobs whose dependencies have completed.
-  # See "Current Posture" in docs/development/CI_PERFORMANCE.md.
+  # The tests. Every test the repository has is declared in the test topology
+  # (tasks/test-topology.ts), and a lane runs its share of them through
+  # tasks/ci-lane.ts. Nothing here names a suite: adding a test, a kind of
+  # test, or a configuration of existing tests is a change to the topology and
+  # never to this file. docs/development/test-selection.md is the guide.
+  #
+  # A pull request runs five lanes over a selection chosen from the record
+  # store. A push to main, a called run, and a pull request labelled `ci: full`
+  # run every test instead, over as many lanes as `plan-full` counts.
   # ---------------------------------------------------------------------------
-  check:
-    name: "Check"
+  plan-full:
+    name: "Plan Full Run"
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci: full')
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
+    permissions:
+      contents: read
+    # The lanes read these, and fall back to a pull request's five lanes over
+    # a selection where this job was skipped.
+    outputs:
+      of: ${{ steps.count.outputs.of }}
+      lanes: ${{ steps.count.outputs.lanes }}
+      args: --full
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 🦕 Setup Deno
         uses: ./.github/actions/deno-setup
@@ -95,278 +111,52 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
-      - name: 🔎 Check codebase formatting
-        timeout-minutes: *work-timeout
-        run: deno task run-recorded format repo deno-fmt -- deno fmt --check
-
-      - name: 🧹 Lint codebase
+      # A count is all of the plan that passes from here to the lanes. Each lane
+      # reads the same tree against the same manifest and packs the same plan
+      # for itself, so there is no second planner to disagree with the lanes.
+      - name: 🗺️ Count the lanes the full run needs
+        id: count
         timeout-minutes: *work-timeout
         run: |
-          ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern="$GITHUB_WORKSPACE/deno-core.%p"
-          deno task run-recorded lint repo deno-lint -- deno lint
+          of=$(deno run -A tasks/ci-lane.ts --full --lane-count)
+          lanes=$(jq -cn --argjson of "$of" '[range(1; $of + 1)]')
+          echo "of=$of" >> "$GITHUB_OUTPUT"
+          echo "lanes=$lanes" >> "$GITHUB_OUTPUT"
 
-      - name: 📋 Describe Deno lint core dump
-        if: ${{ failure() }}
-        run: |
-          shopt -s nullglob
-          cores=(deno-core.*)
-          for core in "${cores[@]}"; do
-            file "$core"
-          done
-
-      - name: 📤 Upload Deno lint core dump
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: deno-lint-core-a${{ github.run_attempt }}
-          path: deno-core.*
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # This is the only type check for the paths listed in
-      # tasks/typecheck.ts: the test jobs in this workflow and the package
-      # test tasks run with --no-check and rely on it. Removing a path from
-      # that list removes its type checking entirely. The task records one
-      # typecheck-kind test per package group itself, so it carries no
-      # run-recorded wrapper.
-      - name: 🔎 Type check codebase
-        timeout-minutes: *work-timeout
-        run: deno task check
-
-      - name: 🧭 Check agent-facing facts
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-skill-facts --
-          deno task check-skill-facts
-
-      - name: 🧭 Check address examples
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-address-examples --
-          deno task check-address-examples
-
-      - name: 🚧 Check tripwires
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-tripwires --
-          deno task check-tripwires
-
-      - name: 📄 Type-check docs code blocks
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-docs --
-          deno task check-docs
-
-      - name: 🔎 Check the historical-documentation index
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-docs-history-index --
-          deno task check-docs-history-index
-
-      - name: 🔎 Check the benchmarks workflow against the names the dashboard reads
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-bench-workflow --
-          deno task check-bench-workflow
-
-      - name: 🚧 Guard against new polling waitFor in integration tests
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-no-waitfor --
-          deno task check-no-waitfor
-
-      - name: 🩹 Check for unresolved merge-conflict markers
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-conflict-markers --
-          deno task check-conflict-markers
-
-      - name: 🚧 Guard every test runner to shuffle its order
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-test-shuffle --
-          deno task check-test-shuffle
-
-      - name: 🩹 Check for literal control characters in source
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-control-characters --
-          deno task check-control-characters
-
-      - name: 🚧 Guard the verb-session walkthrough against its demo
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-verb-session-sync --
-          deno task check-verb-session-sync
-
-      - name: 🔎 Check pattern tier markers
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-pattern-tiers --
-          deno task check-pattern-tiers
-
-      - name: 🔎 Check for unused import map dependencies
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-unused-deps --
-          deno task check-unused-deps
-
-      - name: 🔎 Check Deno toolchain pins are aligned
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-deno-pins --
-          deno task check-deno-pins
-
-      - name: 🔎 Check action pins run the release they name
-        timeout-minutes: *work-timeout
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          deno task run-recorded gate repo check-action-pins --
-          deno task check-action-pins
-
-      - name: 🔎 Check single-copy packages resolve once
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-single-copy-deps --
-          deno task check-single-copy-deps
-
-      - name: 🚧 Guard against new import cycles between packages
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-package-cycles --
-          deno task check-package-cycles
-
-      - name: 🚧 Guard against programs built from local files by hand
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-local-program --
-          deno task check-local-program
-
-      - name: 🚧 Guard against a CLI slot nobody decided about completing
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-completion-slots --
-          deno task check-completion-slots
-
-      - name: 🚧 Guard against a CLI command nobody documented
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-command-docs --
-          deno task check-command-docs
-
-      - name: 🔎 Check generated commonfabric/cfc types are up to date
-        timeout-minutes: *work-timeout
-        working-directory: packages/static
-        run: >-
-          deno task run-recorded gate repo check-cfc-types --
-          deno task check-cfc-types
-
-      - name: 🔎 Check generated commonfabric types are up to date
-        timeout-minutes: *work-timeout
-        working-directory: packages/static
-        run: >-
-          deno task run-recorded gate repo check-commonfabric-types --
-          deno task check-commonfabric-types
-
-      - name: 🔎 Check type libraries declare no withheld globals
-        timeout-minutes: *work-timeout
-        working-directory: packages/static
-        run: >-
-          deno task run-recorded gate repo check-withheld-globals --
-          deno task check-withheld-globals
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: check
-          job: Check
-
-  cfcheck:
-    name: "CFC Pattern Check"
+  tests:
+    name: "Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})"
+    needs: plan-full
+    # A pull request skips `plan-full`, so its lanes start at once; a run of
+    # every test waits for the count.
+    if: >-
+      !cancelled() &&
+      (needs.plan-full.result == 'success' || needs.plan-full.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
+    permissions:
+      contents: read
     env:
       CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🔎 Check Common Fabric patterns
-        timeout-minutes: *work-timeout
-        run: deno task run-recorded typecheck repo cfcheck -- deno task cfcheck
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: cfcheck
-          job: CFC Pattern Check
-
-  pattern-compat:
-    name: "Pattern Update Compatibility (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
+      LANE_ARGS: >-
+        --lane ${{ matrix.lane }} --of ${{ needs.plan-full.outputs.of || 5 }}
+        ${{ needs.plan-full.outputs.args ||
+        format('--base origin/{0}', github.base_ref) }}
+      LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
-        total: [3]
+        # Every lane of the run packs the same plan and takes its own share of
+        # it, so nothing tells a lane what to run beyond its number.
+        lane: ${{ fromJSON(needs.plan-full.outputs.lanes || '[1, 2, 3, 4, 5]') }}
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      # Proves every pattern can still be applied over each contract recorded
-      # under packages/patterns/baselines/. The automatic updater performs NO
-      # structural check before swapping a pattern onto a running piece, so an
-      # incompatible schema that merges here reaches every deployed piece.
-      - name: 🔎 Check pattern update compatibility
-        timeout-minutes: *work-timeout
-        env:
-          PATTERN_COMPAT_SHARD: "${{ matrix.shard }}/${{ matrix.total }}"
-        run: >-
-          deno task run-recorded gate repo pattern-compat --
-          deno task pattern-compat
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-compat-${{ matrix.shard }}
-          job: >-
-            Pattern Update Compatibility
-            (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-
-  pattern-vintage:
-    name: "Pattern Update State and Baseline Integrity"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # The baseline check diffs against the merge base and needs real
-        # history. The replay step reads the same full checkout.
+        # The diff behind a pull request is taken against the merge base, and
+        # the gates that hold a file to being appended to read the base
+        # revision, so the lane needs real history.
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: 🦕 Setup Deno
         uses: ./.github/actions/deno-setup
@@ -374,229 +164,288 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
-      # Tier 2. pattern-compat proves the CONTRACT still fits; this replays a
-      # real captured DOCUMENT under today's source and fails if today's source
-      # cannot be materialized over it — the additive-required migration
-      # refuses a setup commit that no contract check sees as a failure to
-      # apply. The space roots auto-update onto a root someone is already
-      # using, so a break here bricks a live piece.
-      #
-      # It also checks the values SURVIVE, not merely that the migration
-      # applied: a moved storage key (`.for('x')` → `.for('y')`) leaves the
-      # declared contract untouched while the old documents go unreachable, and
-      # that now exits 1 naming the key. Emptiness is judged per leaf, so
-      # partial loss counts too.
-      #
-      # The limit worth knowing (docs/specs/pattern-update-testing.md):
-      # a value that merely CHANGED is warned about rather than failed on,
-      # because a replay recomputes as well as reads. So a moved key whose new
-      # slot the pattern SEEDS reads back non-empty and only warns. The same
-      # move into a slot that stays empty DOES fail, and
-      # `tasks/pattern-vintage-run.test.ts` pins both halves by name.
-      #
-      # EVERY fixture is replayed, both tiers. `pinned/` is what CREDITS
-      # coverage — it is never pruned — while `auto/` accumulates generations
-      # so today's source is proved against every world a pattern has passed
-      # through, not just one. Committing a fixture is the whole of adding one;
-      # there is no list here of what gets replayed.
-      #
-      # This job only ever READS the tree. Capturing (`--capture-changed`) and
-      # promoting (`--pin`) are commands someone runs and commits, deliberately
-      # not CI steps: a gate that wrote its own evidence would be grading its
-      # own homework.
-      - name: 🔁 Replay every committed vintage under today's source
+      # The plan heads a step of its own, where a reader of a running job
+      # finds it: GitHub folds away the top of a step thousands of lines
+      # long, which is what the lane's step becomes. The lane's step packs
+      # the same plan again from the same tree and manifest, and names it in
+      # one line. The arguments are a list of words, and splitting them is
+      # the point.
+      - name: 🗺️ Plan the lane
         timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo pattern-vintage --
-          deno task pattern-vintage
-
-      # The gate's safety argument is that `--update` can only ADD a baseline.
-      # `rm` is not `--update`, and one deleted file hides easily in a diff full
-      # of recorded JSON — so deleting a baseline without retiring its pattern
-      # is refused here.
-      - name: 🔎 Check pattern baselines are append-only
-        if: ${{ !cancelled() }}
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-baselines-append-only --
-          deno task check-baselines-append-only
-          origin/${{ github.base_ref || 'main' }}
-
-      - name: 🔎 Check test-identity aliases are append-only
-        if: ${{ !cancelled() }}
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task run-recorded gate repo check-test-aliases --
-          deno task check-test-aliases
-          origin/${{ github.base_ref || 'main' }}
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-vintage
-          job: Pattern Update State and Baseline Integrity
-
-  test:
-    name: "Test (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-        total: [8]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 📦 Install Linux FUSE test dependencies
-        uses: ./.github/actions/apt-install
-        with:
-          packages: pkg-config gcc libfuse3-dev fuse3
-          cache-key: cfc-pattern-check
-
-      # For deno-web-test browser tests
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
         run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
+          # shellcheck disable=SC2086
+          deno run -A tasks/ci-lane.ts $LANE_ARGS --dry-run
 
-      - name: 🧪 Run parallel workspace tests
-        timeout-minutes: *work-timeout
-        run: deno task test
-        env:
-          DENO_COVERAGE_DIR: coverage/raw/workspace-${{ matrix.shard }}
-          TEST_DISABLED_PACKAGES: runner
-          TEST_SHARD: "${{ matrix.shard }}/${{ matrix.total }}"
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/workspace-${{ matrix.shard }} coverage/lcov/workspace-${{ matrix.shard }}.lcov
-
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-workspace-${{ matrix.shard }}
-          # The second path is the record of the packages this shard selected
-          # and never started, which the coverage gate reads to decide which
-          # groups this run can speak for. A shard that started everything it
-          # selected writes no such file; both paths sit in one directory, so
-          # the artifact's layout is the same either way.
-          path: |
-            coverage/lcov/workspace-${{ matrix.shard }}.lcov
-            coverage/lcov/unlaunched-members.txt
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: test-${{ matrix.shard }}
-          job: Test (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-
-  runner-test:
-    name: "Runner Tests (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-        total: [8]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧪 Run runner tests
-        timeout-minutes: *work-timeout
-        working-directory: packages/runner
-        env:
-          DENO_COVERAGE_DIR: ../../coverage/raw/runner-${{ matrix.shard }}
+      - name: 🧮 Resolve what the lanes' binaries are built from
+        id: binary-cache-key
         run: |
-          TEST_FILES=$(deno run --allow-read ../../tasks/select-runner-test-files.ts ${{ matrix.shard }}/${{ matrix.total }})
-          if [ -z "$TEST_FILES" ]; then
-            echo "::error::No runner test files selected for shard ${{ matrix.shard }}/${{ matrix.total }}"
+          key=$(deno run --allow-read --allow-run=git tasks/binary-cache-key.ts)
+          # An empty key would name every build alike, and a lane would then
+          # run a binary built from other sources.
+          if [ -z "$key" ]; then
+            echo "::error::tasks/binary-cache-key.ts printed no key."
             exit 1
           fi
-          printf 'Runner test shard ${{ matrix.shard }}/${{ matrix.total }} files:\n'
-          printf '  %s\n' $TEST_FILES
-          mkdir -p ../../test-results
-          # --no-check: the Check job type-checks packages/runner
-          # (tasks/check.sh). The first --preload runs the fake clock before
-          # every test module, the same as the package test task; without it
-          # the global `clock` the converted tests use is undefined. See
-          # test/clock-preload.ts. The second captures the file each test
-          # registers from, which is what gives the shipped records their
-          # file metadata; it writes that map into the spool, so the spool
-          # is in the write list beside the temporary directories, or the
-          # preload finds nowhere to put it and declines to install.
-          # These permissions mirror the `test` task in
-          # packages/runner/deno.jsonc; a test that needs a new one needs it
-          # in both places, because this shard runs deno test directly.
-          ENV=test deno test --shuffle=$(deno task -q test-seed) \
-            --no-check \
-            --preload=test/clock-preload.ts \
-            --preload=../../packages/test-support/src/records/preload.ts \
-            --junit-path=../../test-results/runner-${{ matrix.shard }}.xml \
-            --allow-ffi \
-            --allow-env \
-            --allow-net=127.0.0.1 \
-            --allow-read \
-            --allow-write=/tmp,/var/folders,$CF_TEST_RECORDS_DIR \
-            --allow-run=git,deno,"$(deno eval "console.log(Deno.execPath())")" \
-            $TEST_FILES
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/runner-${{ matrix.shard }} coverage/lcov/runner-${{ matrix.shard }}.lcov
+      - name: 🧮 Resolve the compiler fingerprint
+        id: compile-cache-key
+        uses: ./.github/actions/compile-cache-key
 
-      - name: 📤 Upload coverage report
-        if: always()
+      # A lane uses a binary it finds here without asking what it was built
+      # from, so each key is exact and has no restore prefix: it names every
+      # source a binary is built from and every variable its build is given.
+      # A lane that finds nothing builds what it needs in place. Each binary
+      # is kept under a key of its own, because a lane builds only the ones
+      # it needs, and one entry holding both would keep whichever the first
+      # lane to save happened to build.
+      - name: ♻️ Restore/save the lanes' default-posture Toolshed binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ci-cache/binaries/toolshed-baked-default
+          key: lane-binary-toolshed-baked-default-${{ steps.binary-cache-key.outputs.key }}
+
+      - name: ♻️ Restore/save the lanes' opposite-posture Toolshed binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ci-cache/binaries/toolshed-baked-opposite
+          key: lane-binary-toolshed-baked-opposite-${{ steps.binary-cache-key.outputs.key }}
+
+      # A compiled pattern is reused only where its source is unchanged, so a
+      # cache left by another lane or an earlier commit costs nothing but the
+      # time to restore it. The key moves with the pattern sources, so that a
+      # lane restoring an older entry saves a fresher one; an entry an exact
+      # key hits is never saved again.
+      - name: ♻️ Restore/save the lanes' pattern compile byte cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ci-cache/compile
+          key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('packages/patterns/**', 'packages/generated-patterns/**') }}
+          restore-keys: |
+            cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
+
+      - name: 🧪 Run the lane
+        timeout-minutes: *work-timeout
+        # The token is what the `github-api` capability hands to the suites
+        # that declared it, so only this step holds it. The lane takes it out
+        # of its own environment before it starts anything, so no other child
+        # of the lane inherits it.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # A process in the lane that crashes natively leaves its core under
+        # the job's temporary directory, where the upload of what a failing
+        # lane left behind finds it. The arguments are a list of words, and
+        # splitting them is the point.
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-lane-cores"
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/ci-lane-cores/core.%e.%p"
+          # shellcheck disable=SC2086
+          deno run -A tasks/ci-lane.ts $LANE_ARGS --described
+
+      - name: 📋 Upload what a failing lane left behind
+        if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-profile-runner-${{ matrix.shard }}
-          path: coverage/lcov/runner-${{ matrix.shard }}.lcov
-          retention-days: 90
-          if-no-files-found: error
+          name: lane-failure-${{ github.job }}-${{ matrix.lane }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-lane-*
+          retention-days: 14
+          if-no-files-found: ignore
 
+      # The whole of what the lane converted, rather than its reports alone:
+      # a measured set the lane saw fail is marked by a file beside its
+      # report, and the file saying whether the compile cache was restored
+      # sits beside the reports. A re-run of the lane replaces what the
+      # attempt before it uploaded, so Status reads each lane once.
+      #
+      # An artifact is rooted at the directory its paths share, and the
+      # readers find a set's report by the layout under the coverage
+      # directory, so the paths name that directory and leave out the raw
+      # profiles below it rather than naming the reports' own directory.
+      - name: 📤 Upload the lane's coverage reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lane-coverage-${{ github.job }}-${{ matrix.lane }}
+          path: |
+            coverage/
+            !coverage/raw/
+          overwrite: true
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # The lane has already gathered every batch's records into its spool and
+      # marked each with its suite's variant, so this carries no variant and
+      # no JUnit specification of its own.
       - name: 📤 Ship test records
         if: always()
         uses: ./.github/actions/test-records-ship
         with:
-          artifact: runner-test-${{ matrix.shard }}
-          job: Runner Tests (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-          junit: >-
-            kind=unit,scope=runner,prefix=packages/runner,glob=test-results/runner-${{ matrix.shard }}.xml
+          artifact: ${{ github.job }}-${{ matrix.lane }}
+          job: ${{ env.LANE_JOB }}
+
+  # ---------------------------------------------------------------------------
+  # After the lanes. Status reads what every lane of the run produced, so it is
+  # the one job that waits for them all, and the checks over the whole run's
+  # records and coverage are its steps rather than jobs of their own.
+  # ---------------------------------------------------------------------------
+
+  status:
+    name: "Status"
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'push')
+    needs:
+      - plan-full
+      - tests
+    runs-on: ubuntu-latest
+    timeout-minutes: *job-timeout
+    # The coverage gate reads the pull request's description as it stands,
+    # which is where an acceptance is written.
+    permissions:
+      contents: read
+      pull-requests: read
+    # The coverage report writes the run's coverage figures into this spool as
+    # measurements, which the shipping step sends to the record store.
+    env:
+      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # The coverage gate diffs against the merge base, and asks git which
+        # of the baselines' commits the branch contains. A checkout too
+        # shallow to answer would report every set as having no baseline.
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 🦕 Setup Deno
+        uses: ./.github/actions/deno-setup
+
+      - name: 🔍 Verify lock file & install dependencies
+        uses: ./.github/actions/deno-install
+
+      - name: 📥 Download the lanes' coverage reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: lane-coverage-*
+          path: lane-coverage
+          merge-multiple: false
+          digest-mismatch: error
+
+      - name: 📥 Download the lanes' test records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test-records-*
+          path: test-records-artifacts
+          merge-multiple: false
+          digest-mismatch: error
+
+      # The store half of the test-topology drift guard. The tree half, a
+      # repository gate the lanes run, fails a surface in the working tree
+      # that no suite claims; this fails one that is registered and whose
+      # records do not map back to the topology, which would leave those tests
+      # running in the full run and never selectable on a pull request. It
+      # judges a tree by the records that tree produced, so it reads this
+      # run's records and holds them to this run's commit. No lane can run it:
+      # a lane's records have not shipped when its gates run. It is handed the
+      # directory rather than a list of files, so a run whose records it cannot
+      # find fails rather than checking nothing.
+      - name: 🔎 Check the topology against this run's records
+        if: ${{ !cancelled() }}
+        timeout-minutes: *work-timeout
+        run: >-
+          deno task check-test-topology --commit "$GITHUB_SHA"
+          --records test-records-artifacts
+
+      # Coverage measured through a failing run says nothing about whether the
+      # change was tested, so a run whose tests did not pass is reported
+      # rather than gated. The description is read as it stands rather than
+      # from the event, since a re-run repeats the event it was started by,
+      # and an acceptance written after the push is what a re-run is for.
+      - name: 🔎 Hold the measured sets to their baselines
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        timeout-minutes: *work-timeout
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')
+          args=(--base "origin/$BASE_REF" --reports lane-coverage
+            --body "$body" --comment coverage-comment.json --pr "$PR_NUMBER")
+          if [[ "$(jq -r '.tests.result' <<< "$JOB_RESULTS")" != success ]]; then
+            args+=(--tests-failed)
+          fi
+          deno run -A tasks/coverage-gate.ts "${args[@]}"
+
+      # A fork's pull request gets a read-only token here, so the gate writes
+      # the comment it wants posted to an artifact, and the Pull Request
+      # Comments workflow posts it from the base repository's context.
+      - name: 📤 Upload coverage comment
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-comment
+          path: coverage-comment.json
+          overwrite: true
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # What the full run measured: the repository-wide figure, which is a
+      # trend, and each measured set's figure, which is the baseline a pull
+      # request is held to. Nothing here fails the run.
+      - name: 📊 Report the run's coverage
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        timeout-minutes: *work-timeout
+        run: deno run -A tasks/coverage-report.ts --reports lane-coverage
+
+      # The run's coverage measurements, for the dashboard's trend and the
+      # test-selection publisher, which read them from the record store, and
+      # for the run report, which reads them from this run's artifacts. Only
+      # a push ships them, because every reader takes a figure from a push to
+      # main alone. This job runs no test, so it ships nothing else.
+      - name: 📤 Ship test records
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: ./.github/actions/test-records-ship
+        with:
+          artifact: coverage
+          job: Status
+
+      # Skipped is success for every job but the lanes: a run whose lanes
+      # were skipped would otherwise pass having run no test at all, so that
+      # is asserted rather than left to the conditions on the lanes.
+      - name: 🔎 Verify the run's jobs
+        if: always()
+        timeout-minutes: *work-timeout
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failures=$(jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key): \(.value.result)"
+          ' <<< "$JOB_RESULTS")
+          if [[ -n "$failures" ]]; then
+            printf 'Unsuccessful jobs:\n%s\n' "$failures"
+            exit 1
+          fi
+          if [[ "$(jq -r '.tests.result' <<< "$JOB_RESULTS")" != success ]]; then
+            echo "The lanes did not pass."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The release. A push to main builds the binaries it ships while the lanes
+  # run, and attests and deploys them only once every test has passed. A pull
+  # request builds nothing here: the `binaries` suites compile each binary the
+  # way this does, as a test that it still compiles.
+  # ---------------------------------------------------------------------------
 
   build-toolshed:
     name: "Build Binary (toolshed)"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     steps:
@@ -667,42 +516,11 @@ jobs:
           path: ./dist/toolshed
           if-no-files-found: error
 
-  # The posture opposite the first-party default must be baked into its own
-  # browser shell. The stable role is resolved from the same constant as the
-  # product default, so changing that constant swaps the two CI arms together.
-  build-toolshed-opposite:
-    name: "Build Binary (toolshed, opposite server-execution shell)"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve opposite server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env opposite >> "$GITHUB_ENV"
-
-      - name: 🏗️ Build toolshed binary (opposite shell)
-        timeout-minutes: *work-timeout
-        run: deno task build-binaries toolshed
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-
-      - name: 📤 Upload toolshed binary (opposite shell)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: binary-toolshed-opposite
-          path: ./dist/toolshed
-          if-no-files-found: error
-
+  # The `cf` binary a push releases. Only the Toolshed binary embeds a
+  # shell, so this build has none of the endpoint checks that one makes.
   build-cf:
     name: "Build Binary (cf)"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     steps:
@@ -726,1413 +544,21 @@ jobs:
           path: ./dist/cf
           if-no-files-found: error
 
-  generated-patterns-integration-test:
-    name: "Generated Patterns Integration Tests (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
-        total: [2]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧮 Resolve the compiler fingerprint
-        id: compile-cache-key
-        uses: ./.github/actions/compile-cache-key
-
-      - name: ♻️ Restore/save generated pattern compile byte cache
-        id: compile-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.compile-cache/generated-patterns-${{ matrix.shard }}.json
-          key: cc-generated-patterns-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/generated-patterns/**/*.ts', 'tasks/select-generated-pattern-files.ts') }}
-          restore-keys: |
-            cc-generated-patterns-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
-
-      - name: 🧾 Record compile cache state for the Coverage Check
-        uses: ./.github/actions/record-compile-cache-state
-        with:
-          family: generated-patterns
-          shard: ${{ matrix.shard }}
-          cache-file: ${{ github.workspace }}/.compile-cache/generated-patterns-${{ matrix.shard }}.json
-          exact-hit: ${{ steps.compile-cache.outputs.cache-hit }}
-
-      - name: 🧪 Run generated patterns integration tests
-        timeout-minutes: *work-timeout
-        working-directory: packages/generated-patterns
-        env:
-          CF_COMPILE_CACHE_FILE: ${{ github.workspace }}/.compile-cache/generated-patterns-${{ matrix.shard }}.json
-          DENO_COVERAGE_DIR: ../../coverage/raw/generated-patterns-${{ matrix.shard }}
-        run: |
-          TEST_FILES=$(deno run --allow-read ../../tasks/select-generated-pattern-files.ts ${{ matrix.shard }}/${{ matrix.total }})
-          if [ -z "$TEST_FILES" ]; then
-            echo "::error::No generated pattern files selected for shard ${{ matrix.shard }}/${{ matrix.total }}"
-            exit 1
-          fi
-          printf 'Generated patterns shard ${{ matrix.shard }}/${{ matrix.total }} files:\n'
-          printf '  %s\n' $TEST_FILES
-          mkdir -p ../../test-results
-          LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --trace-leaks -A --parallel \
-            --junit-path=../../test-results/generated-patterns-${{ matrix.shard }}.xml \
-            $TEST_FILES
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/generated-patterns-${{ matrix.shard }} coverage/lcov/generated-patterns-${{ matrix.shard }}.lcov
-
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-generated-patterns-${{ matrix.shard }}
-          path: coverage/lcov/generated-patterns-${{ matrix.shard }}.lcov
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-generated-patterns-${{ matrix.shard }}
-          path: test-results/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: generated-patterns-${{ matrix.shard }}
-          job: >-
-            Generated Patterns Integration Tests
-            (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-          junit: >-
-            kind=integration,scope=generated-patterns,prefix=packages/generated-patterns,glob=test-results/generated-patterns-${{ matrix.shard }}.xml
-
-  # ---------------------------------------------------------------------------
-  # Tier 1 – Need built binaries
-  # ---------------------------------------------------------------------------
-
-  package-integration-test:
-    name: "Package Integration Tests (${{ matrix.suite_name }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed"]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite_name: runner
-            package_dir: packages/runner
-            junit_name: runner
-            step_name: runner integration tests
-            headless: false
-          - suite_name: runtime-client
-            package_dir: packages/runtime-client
-            junit_name: runtime-client
-            step_name: runtime-client integration tests
-            headless: false
-          - suite_name: shell
-            package_dir: packages/shell
-            junit_name: shell
-            step_name: shell integration tests
-            headless: true
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env default >> "$GITHUB_ENV"
-
-      - name: 📥 Download toolshed binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing
-        env:
-          TOOLSHED_PORT: 8000
-        run: |
-          chmod +x ./common-binaries/toolshed
-          # --background spawns the server, waits until it has bound its port,
-          # then returns, so the test steps never race a not-yet-listening
-          # server. The server logs to --log-file, which the launcher prints on
-          # success and dumps if the server exits before binding.
-          # This lane leaves the flag unset and follows the first-party default.
-          CFTS_AI_GATEWAY_URL="" \
-          CFTS_AI_LLM_ANTHROPIC_API_KEY=fake \
-          ./common-binaries/toolshed --port="$TOOLSHED_PORT" \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      # For Astral
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
-        run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
-
-      - name: ✅ Verify the default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        env:
-          TOOLSHED_PORT: 8000
-        run: deno run --allow-net tasks/server-execution-ci-command.ts probe default "http://localhost:${TOOLSHED_PORT}"
-
-      - name: 🧪 Run ${{ matrix.step_name }}
-        timeout-minutes: *work-timeout
-        working-directory: ${{ matrix.package_dir }}
-        env:
-          DENO_COVERAGE_DIR: ../../coverage/raw/package-${{ matrix.suite_name }}
-          HEADLESS_ENABLED: ${{ matrix.headless }}
-          JUNIT_NAME: ${{ matrix.junit_name }}
-          TOOLSHED_PORT: 8000
-        run: |
-          mkdir -p ../../test-results
-          if [ "$HEADLESS_ENABLED" = "true" ]; then
-            export HEADLESS=1
-          fi
-          SX_ON_IGNORE=""
-          if [ "$SERVER_EXECUTION_ENABLED" = "true" ]; then
-            # The skip registry belongs to the ON arm, whichever stable role
-            # currently carries it.
-            SX_ON_IGNORE=$(deno run --allow-read ../../tasks/server-execution-on-skips.ts ${{ matrix.suite_name }})
-          else
-            echo "Server execution is OFF; the ON-arm skip registry does not apply."
-          fi
-          API_URL="http://localhost:${TOOLSHED_PORT}/" \
-          INTEGRATION_TEST_FLAGS="--junit-path=../../test-results/${JUNIT_NAME}.xml ${SX_ON_IGNORE}" \
-          deno task integration
-
-      - name: 📋 Upload toolshed log on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: toolshed-log-package-integration-${{ matrix.junit_name }}
-          path: ${{ runner.temp }}/toolshed.log
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/package-${{ matrix.suite_name }} coverage/lcov/package-${{ matrix.suite_name }}.lcov
-
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-package-${{ matrix.suite_name }}
-          path: coverage/lcov/package-${{ matrix.suite_name }}.lcov
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-package-integration-${{ matrix.suite_name }}
-          path: test-results/${{ matrix.junit_name }}.xml
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: package-integration-${{ matrix.suite_name }}
-          job: Package Integration Tests (${{ matrix.suite_name }})
-          junit: >-
-            kind=integration,scope=${{ matrix.suite_name }},prefix=${{ matrix.package_dir }},glob=test-results/${{ matrix.junit_name }}.xml
-  # The opposite role runs the same suites with an explicit inverse of the
-  # first-party default in the server, test processes, and baked browser shell.
-  package-integration-test-server-execution-opposite:
-    name: "Package Integration Tests / opposite server-execution (${{ matrix.suite_name }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed-opposite"]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite_name: runner
-            package_dir: packages/runner
-            junit_name: runner-server-execution-opposite
-            step_name: runner integration tests
-            headless: false
-          - suite_name: runtime-client
-            package_dir: packages/runtime-client
-            junit_name: runtime-client-server-execution-opposite
-            step_name: runtime-client integration tests
-            headless: false
-          - suite_name: shell
-            package_dir: packages/shell
-            junit_name: shell-server-execution-opposite
-            step_name: shell integration tests
-            headless: true
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve opposite server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env opposite >> "$GITHUB_ENV"
-
-      - name: 📥 Download toolshed binary (opposite shell)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed-opposite
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing (opposite posture)
-        env:
-          TOOLSHED_PORT: 8000
-        run: |
-          chmod +x ./common-binaries/toolshed
-          # --background spawns the server, waits until it has bound its port,
-          # then returns, so the test steps never race a not-yet-listening
-          # server. The server logs to --log-file, which the launcher prints on
-          # success and dumps if the server exits before binding.
-          CFTS_AI_GATEWAY_URL="" \
-          CFTS_AI_LLM_ANTHROPIC_API_KEY=fake \
-          ./common-binaries/toolshed --port="$TOOLSHED_PORT" \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      - name: ✅ Verify the opposite server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        env:
-          TOOLSHED_PORT: 8000
-        run: deno run --allow-net tasks/server-execution-ci-command.ts probe opposite "http://localhost:${TOOLSHED_PORT}"
-
-      # For Astral
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
-        run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
-
-      - name: 🧪 Run ${{ matrix.step_name }} (opposite posture)
-        timeout-minutes: *work-timeout
-        working-directory: ${{ matrix.package_dir }}
-        env:
-          HEADLESS_ENABLED: ${{ matrix.headless }}
-          JUNIT_NAME: ${{ matrix.junit_name }}
-          TOOLSHED_PORT: 8000
-        run: |
-          mkdir -p ../../test-results
-          if [ "$HEADLESS_ENABLED" = "true" ]; then
-            export HEADLESS=1
-          fi
-          SX_ON_IGNORE=""
-          if [ "$SERVER_EXECUTION_ENABLED" = "true" ]; then
-            SX_ON_IGNORE=$(deno run --allow-read ../../tasks/server-execution-on-skips.ts ${{ matrix.suite_name }})
-          else
-            echo "Server execution is OFF; the ON-arm skip registry does not apply."
-          fi
-          API_URL="http://localhost:${TOOLSHED_PORT}/" \
-          INTEGRATION_TEST_FLAGS="--junit-path=../../test-results/${JUNIT_NAME}.xml ${SX_ON_IGNORE}" \
-          deno task integration
-
-      - name: 📋 Upload toolshed log on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: toolshed-log-package-integration-${{ matrix.junit_name }}
-          path: ${{ runner.temp }}/toolshed.log
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-package-integration-${{ matrix.junit_name }}
-          path: test-results/${{ matrix.junit_name }}.xml
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: package-integration-server-execution-opposite-${{ matrix.suite_name }}
-          job: >-
-            Package Integration Tests / opposite server-execution
-            (${{ matrix.suite_name }})
-          junit: >-
-            kind=integration,scope=${{ matrix.suite_name }},prefix=${{ matrix.package_dir }},glob=test-results/${{ matrix.junit_name }}.xml
-
-  cli-integration-test:
-    name: "CLI Integration Tests (${{ matrix.suite_name }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *cli-job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed", "build-cf"]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite_name: core-piece-values
-            core_section: piece-values
-            timing_name: core-piece-values
-            toolshed_port: 8000
-            install_fuse_deps: false
-            run_acl: false
-            run_fuse: false
-          - suite_name: core-piece-call
-            core_section: piece-call
-            timing_name: core-piece-call
-            toolshed_port: 8002
-            install_fuse_deps: false
-            run_acl: false
-            run_fuse: false
-          - suite_name: core-piece-links-acl-fuse
-            core_section: piece-links
-            timing_name: core-piece-links
-            toolshed_port: 8001
-            install_fuse_deps: true
-            run_acl: true
-            run_fuse: true
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env default >> "$GITHUB_ENV"
-
-      - name: 📥 Download toolshed binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed
-          path: common-binaries
-
-      - name: 📥 Download cf binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-cf
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-          TOOLSHED_URL: http://localhost:${{ matrix.toolshed_port }}
-        run: |
-          chmod +x ./common-binaries/cf
-          chmod +x ./common-binaries/toolshed
-          # Set tools to path
-          # Integration script needs `cf`
-          echo "${{ github.workspace }}/common-binaries" >> $GITHUB_PATH
-          # --background waits until the server has bound its port before it
-          # returns, so the test steps never race a not-yet-listening server.
-          CFTS_AI_GATEWAY_URL="" MEMORY_URL="$TOOLSHED_URL" API_URL="$TOOLSHED_URL" \
-            ./common-binaries/toolshed --port="$TOOLSHED_PORT" \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      # The server probe verifies the default server and baked shell. The
-      # client check also verifies that `cf` adopts the published arm rather
-      # than silently creating a mixed posture.
-      - name: ✅ Verify the default server-execution posture and cf adoption
-        timeout-minutes: *posture-probe-timeout
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-        run: |
-          deno run --allow-net tasks/server-execution-ci-command.ts probe default "http://localhost:${TOOLSHED_PORT}"
-          META=$(curl -fsS "http://localhost:${TOOLSHED_PORT}/api/meta")
-          SERVER_ARM=$(echo "$META" | jq -r 'if .experimental.serverExecution == null then "unpublished" else (.experimental.serverExecution | tostring) end')
-          CLIENT_ARM="${EXPERIMENTAL_SERVER_EXECUTION:-$SERVER_ARM}"
-          if [ "$SERVER_ARM" != "$SERVER_EXECUTION_ENABLED" ]; then
-            echo "::error::the toolshed publishes serverExecution=$SERVER_ARM; the resolved default is $SERVER_EXECUTION_ENABLED"
-            exit 1
-          fi
-          if [ "$CLIENT_ARM" != "$SERVER_ARM" ]; then
-            echo "::error::MIXED posture in the CLI lane: cf resolves serverExecution=$CLIENT_ARM (an explicit EXPERIMENTAL_SERVER_EXECUTION overrides the deployment's posture) while the toolshed publishes $SERVER_ARM; a mixed run is never a valid arm exercise"
-            exit 1
-          fi
-          echo "cf resolves serverExecution=$CLIENT_ARM against a toolshed publishing $SERVER_ARM with a matching posture."
-
-      - name: 📦 Install CLI integration dependencies
-        uses: ./.github/actions/apt-install
-        with:
-          packages: ${{ matrix.install_fuse_deps && 'jq fuse3 libfuse3-dev' || 'jq' }}
-          cache-key: cli-integration
-
-      - name: 🧪 Run CLI integration suite
-        timeout-minutes: *cli-work-timeout
-        working-directory: packages/cli
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-          CF_CLI_INTEGRATION_SECTION: ${{ matrix.core_section }}
-          CF_CLI_INTEGRATION_TIMINGS: "1"
-          CF_CLI_INTEGRATION_TIMINGS_FILE: "../../test-results/cli-${{ matrix.timing_name }}-cf-timings.log"
-        run: |
-          mkdir -p ../../test-results
-          : > "$CF_CLI_INTEGRATION_TIMINGS_FILE"
-          API_URL="http://localhost:${TOOLSHED_PORT}" ./integration/integration.sh
-
-      # Space ACL grant/revoke against a real server. Needs the toolshed's
-      # default MEMORY_ACL_MODE=enforce, so it deliberately sets no override.
-      - name: 🧪 Run CLI ACL integration suite
-        if: ${{ !cancelled() && matrix.run_acl }}
-        timeout-minutes: *cli-work-timeout
-        working-directory: packages/cli
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-        run: |
-          API_URL="http://localhost:${TOOLSHED_PORT}" ./integration/acl.sh
-
-      - name: 🔧 Enable FUSE device access
-        if: ${{ !cancelled() && matrix.run_fuse }}
-        run: sudo chmod 666 /dev/fuse
-
-      # Deno-based integration tests against the same toolshed. Type checking
-      # of the CLI package is done by `deno task check`, so this run skips it.
-      # The prebuilt `cf` binary is on PATH, so the tests exercise it rather
-      # than the source-tree CLI task.
-      - name: 🧪 Run CLI deno integration tests
-        if: ${{ matrix.suite_name == 'core-piece-values' }}
-        timeout-minutes: *cli-work-timeout
-        working-directory: packages/cli
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-        run: |
-          mkdir -p ../../test-results
-          API_URL="http://localhost:${TOOLSHED_PORT}" deno test --shuffle=$(deno task -q test-seed) --no-check \
-            --junit-path=../../test-results/cli-piece-integration.xml \
-            --allow-net --allow-ffi --allow-read --allow-write --allow-env \
-            --allow-run test/piece-integration.test.ts
-
-      - name: 🧪 Run CLI FUSE integration suite
-        id: fuse-suite
-        if: ${{ !cancelled() && matrix.run_fuse }}
-        timeout-minutes: *cli-fuse-work-timeout
-        working-directory: packages/cli
-        env:
-          TOOLSHED_PORT: ${{ matrix.toolshed_port }}
-          FUSE_DEEP_ENTITY_PROBE: "0"
-          # The section of fuse-exec.sh's dispatch table this leg runs, which
-          # `all` makes every phase of it. packages/cli/test/fuse-sections.test.ts
-          # reads this line and holds it to naming an arm the script defines and
-          # to covering every selectable phase between the sections named here.
-          CF_FUSE_INTEGRATION_SECTION: all
-          # Single source for the outer step bound: 'timeout' enforces it, and the
-          # script's waits give up a few minutes before it (see
-          # FUSE_EXEC_OVERALL_TIMEOUT_SECONDS in integration/fuse-exec.sh) so a
-          # wedge is reported with diagnostics rather than truncated at cancel.
-          FUSE_STEP_TIMEOUT_SECONDS: "480"
-        run: |
-          set +e
-          API_URL="http://localhost:${TOOLSHED_PORT}" \
-            FUSE_EXEC_OVERALL_TIMEOUT_SECONDS="${FUSE_STEP_TIMEOUT_SECONDS}" \
-            timeout "${FUSE_STEP_TIMEOUT_SECONDS}" ./integration/fuse-exec.sh
-          rc=$?
-          set -e
-          if [ "$rc" -eq 124 ]; then
-            echo "::error::FUSE integration timed out after ${FUSE_STEP_TIMEOUT_SECONDS} seconds"
-          fi
-          exit "$rc"
-
-      - name: 📋 FUSE daemon log (on failure)
-        if: ${{ failure() && steps.fuse-suite.outcome == 'failure' }}
-        # `cf fuse mount --background` writes its log to /tmp/cf-fuse-<mountpoint>.log
-        # (see packages/cli/commands/fuse.ts), not ~/.cf/fuse — the old path always
-        # printed "No daemon log found", hiding the real daemon error. The mountpoint
-        # is an mktemp dir, so glob all fuse daemon logs.
-        run: |
-          shopt -s nullglob
-          logs=(/tmp/cf-fuse-*.log)
-          if [ ${#logs[@]} -eq 0 ]; then
-            echo "No FUSE daemon log found at /tmp/cf-fuse-*.log"
-          else
-            for f in "${logs[@]}"; do
-              echo "===== ${f} ====="
-              cat "${f}"
-            done
-          fi
-
-      - name: 📤 Upload CLI integration timing data
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-cli-${{ matrix.timing_name }}
-          path: test-results/cli-${{ matrix.timing_name }}-cf-timings.log
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: cli-${{ matrix.suite_name }}
-          job: CLI Integration Tests (${{ matrix.suite_name }})
-          junit: >-
-            kind=integration,scope=cli,prefix=packages/cli,glob=test-results/cli-piece-integration.xml
-
-  pattern-integration-test:
-    name: "Pattern Integration Tests (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed"]
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        total: [10]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env default >> "$GITHUB_ENV"
-
-      - name: 🧮 Resolve the compiler fingerprint
-        id: compile-cache-key
-        uses: ./.github/actions/compile-cache-key
-
-      # Cross-run compile cache: persist the per-shard compiled-module-byte cache
-      # so unchanged patterns reuse last run's emitted bytes (skip the
-      # type-check + transform + emit). The fingerprint resolved above rolls the
-      # key whenever anything that shapes emitted bytes or cached coverage spans
-      # changes, so it rolls even where module identity and the runtime-version
-      # tag are untouched. The pattern sources, the integration harness, and the
-      # shard selector roll it as well; `restore-keys` still seeds from the most
-      # recent prior cache. The total shard count and selector source separate
-      # cache namespaces when the file assignment topology changes. Hash both
-      # TypeScript extensions. An exact actions/cache entry is immutable; newly
-      # compiled bytes are saved under a rotated key.
-      - name: ♻️ Restore/save compile byte cache
-        id: compile-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json
-          key: cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
-          restore-keys: |
-            cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
-
-      - name: 🧾 Record compile cache state for the Coverage Check
-        uses: ./.github/actions/record-compile-cache-state
-        with:
-          family: pattern-integration
-          shard: ${{ matrix.shard }}
-          cache-file: ${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json
-          exact-hit: ${{ steps.compile-cache.outputs.cache-hit }}
-
-      - name: 📥 Download toolshed binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing
-        run: |
-          chmod +x ./common-binaries/toolshed
-          # --background waits until the server has bound its port before it
-          # returns, so the test steps never race a not-yet-listening server.
-          CFTS_AI_GATEWAY_URL="" \
-          CFTS_AI_LLM_ANTHROPIC_API_KEY=fake \
-          ./common-binaries/toolshed \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      # For Astral
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
-        run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
-
-      - name: ✅ Verify the default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run --allow-net tasks/server-execution-ci-command.ts probe default http://localhost:8000
-
-      - name: 🧩 Run end-to-end patterns integration tests
-        timeout-minutes: *work-timeout
-        working-directory: packages/patterns
-        run: |
-          # Command substitution (not a process substitution) so a selector
-          # failure fails this step under `bash -e` instead of reading as an
-          # empty list that runs ZERO test files and exits green. The
-          # selector throws on an empty selection (every shard carries the
-          # internally-sharded files), so an empty result here is only ever
-          # a failure — reject it loudly as the backstop. A legitimate empty
-          # case can occur only after filtering whichever role carries ON.
-          SELECTED_FILES=$(deno run --allow-read ../../tasks/select-pattern-integration-files.ts ${{ matrix.shard }}/${{ matrix.total }})
-          if [ -z "$SELECTED_FILES" ]; then
-            echo "::error::select-pattern-integration-files.ts selected no files for shard ${{ matrix.shard }}/${{ matrix.total }}"
-            exit 1
-          fi
-          mapfile -t SHARD_FILES <<< "$SELECTED_FILES"
-          printf 'Pattern integration shard ${{ matrix.shard }}/${{ matrix.total }} files:\n'
-          printf '  %s\n' "${SHARD_FILES[@]}"
-          if [ "$SERVER_EXECUTION_ENABLED" = "true" ]; then
-            # `--ignore` does not bind to explicit file arguments, so the ON
-            # registry filters this shard before Deno receives it.
-            FILTERED_FILES=$(deno run --allow-read ../../tasks/server-execution-on-skips.ts patterns --filter "${SHARD_FILES[@]}")
-            if [ -z "$FILTERED_FILES" ]; then
-              echo "Every file of this shard is skip-listed for the ON arm; nothing to run."
-              exit 0
-            fi
-            mapfile -t TEST_FILES <<< "$FILTERED_FILES"
-          else
-            echo "Server execution is OFF; the ON-arm skip registry does not apply."
-            TEST_FILES=("${SHARD_FILES[@]}")
-          fi
-          mkdir -p ../../test-results
-          # Authored-pattern instrumentation is sound only in the OFF arm's
-          # single-compiler world. V8 runtime coverage remains on the default.
-          if [ "$SERVER_EXECUTION_ENABLED" = "false" ]; then
-            export CF_PATTERN_COVERAGE_DIR="${{ github.workspace }}/coverage/lcov/pattern-runtime/pattern-integration-${{ matrix.shard }}"
-          fi
-          # --no-check: the Check job type-checks packages/patterns/integration
-          # (tasks/check.sh).
-          HEADLESS=1 \
-          API_URL=http://localhost:8000/ \
-          PATTERN_INTEGRATION_SHARD="${{ matrix.shard }}/${{ matrix.total }}" \
-          CF_COMPILE_CACHE_FILE="${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json" \
-          DENO_COVERAGE_DIR=../../coverage/raw/pattern-integration-${{ matrix.shard }} \
-          deno test --shuffle=$(deno task -q test-seed) --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
-            --junit-path=../../test-results/patterns-${{ matrix.shard }}.xml \
-            "${TEST_FILES[@]}"
-
-      - name: 📋 Upload toolshed log on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: toolshed-log-pattern-integration-${{ matrix.shard }}
-          path: ${{ runner.temp }}/toolshed.log
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/pattern-integration-${{ matrix.shard }} coverage/lcov/pattern-integration-${{ matrix.shard }}.lcov
-
-      # The whole directory: the V8 report plus the authored-pattern LCOV the
-      # harness wrote under pattern-runtime/. coverage-check joins every .lcov in
-      # the artifact, so both streams reach the gate.
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-pattern-integration-${{ matrix.shard }}
-          path: coverage/lcov/
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-pattern-integration-${{ matrix.shard }}
-          path: test-results/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-integration-${{ matrix.shard }}
-          job: >-
-            Pattern Integration Tests
-            (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-          junit: >-
-            kind=integration,scope=patterns,prefix=packages/patterns,glob=test-results/patterns-${{ matrix.shard }}.xml
-  # The opposite role runs the same shards with an explicit inverse of the
-  # first-party default in the server, tests, and baked browser shell.
-  pattern-integration-test-server-execution-opposite:
-    name: "Pattern Integration Tests / opposite server-execution (${{ matrix.shard }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed-opposite"]
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        total: [10]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve opposite server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env opposite >> "$GITHUB_ENV"
-
-      - name: 🧮 Resolve the compiler fingerprint
-        id: compile-cache-key
-        uses: ./.github/actions/compile-cache-key
-
-      # Read-only seed from the default lane's compile byte cache (same key
-      # family): compiled module bytes are a function of sources, not of the
-      # runtime flag, so reuse is sound; only the default lane saves. The key
-      # mirrors the default lane's, including the total shard count and
-      # selector source, so the seed follows its shard topology.
-      - name: ♻️ Restore compile byte cache (read-only)
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json
-          key: cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'tasks/select-pattern-integration-files.ts', 'tasks/weighted-shards.ts') }}
-          restore-keys: |
-            cc-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.shard }}-
-
-      - name: 📥 Download toolshed binary (opposite shell)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed-opposite
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing (opposite posture)
-        run: |
-          chmod +x ./common-binaries/toolshed
-          # --background waits until the server has bound its port before it
-          # returns, so the test steps never race a not-yet-listening server.
-          CFTS_AI_GATEWAY_URL="" \
-          CFTS_AI_LLM_ANTHROPIC_API_KEY=fake \
-          ./common-binaries/toolshed \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      - name: ✅ Verify the opposite server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run --allow-net tasks/server-execution-ci-command.ts probe opposite http://localhost:8000
-
-      # For Astral
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
-        run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
-
-      - name: 🧩 Run end-to-end patterns integration tests (opposite posture)
-        timeout-minutes: *work-timeout
-        working-directory: packages/patterns
-        run: |
-          # Command substitution (not a process substitution) so a selector
-          # failure fails this step under `bash -e` instead of reading as an
-          # empty list that runs ZERO test files and exits green. The
-          # selector throws on an empty selection (every shard carries the
-          # internally-sharded files), so an empty result here is only ever
-          # a failure — reject it loudly as the backstop.
-          SELECTED_FILES=$(deno run --allow-read ../../tasks/select-pattern-integration-files.ts ${{ matrix.shard }}/${{ matrix.total }})
-          if [ -z "$SELECTED_FILES" ]; then
-            echo "::error::select-pattern-integration-files.ts selected no files for shard ${{ matrix.shard }}/${{ matrix.total }}"
-            exit 1
-          fi
-          mapfile -t SHARD_FILES <<< "$SELECTED_FILES"
-          printf 'Pattern integration shard ${{ matrix.shard }}/${{ matrix.total }} files:\n'
-          printf '  %s\n' "${SHARD_FILES[@]}"
-          if [ "$SERVER_EXECUTION_ENABLED" = "true" ]; then
-            FILTERED_FILES=$(deno run --allow-read ../../tasks/server-execution-on-skips.ts patterns --filter "${SHARD_FILES[@]}")
-            if [ -z "$FILTERED_FILES" ]; then
-              echo "Every file of this shard is skip-listed for the ON arm; nothing to run."
-              exit 0
-            fi
-            mapfile -t TEST_FILES <<< "$FILTERED_FILES"
-          else
-            echo "Server execution is OFF; the ON-arm skip registry does not apply."
-            TEST_FILES=("${SHARD_FILES[@]}")
-          fi
-          mkdir -p ../../test-results
-          if [ "$SERVER_EXECUTION_ENABLED" = "false" ]; then
-            export CF_PATTERN_COVERAGE_DIR="${{ github.workspace }}/coverage/lcov/pattern-runtime/pattern-integration-${{ matrix.shard }}"
-          fi
-          # --no-check: the Check job type-checks packages/patterns/integration
-          # (tasks/check.sh).
-          HEADLESS=1 \
-          API_URL=http://localhost:8000/ \
-          PATTERN_INTEGRATION_SHARD="${{ matrix.shard }}/${{ matrix.total }}" \
-          CF_COMPILE_CACHE_FILE="${{ github.workspace }}/.compile-cache/pattern-integration-${{ matrix.shard }}.json" \
-          deno test --shuffle=$(deno task -q test-seed) --no-check --v8-flags=--max-old-space-size=4096 --trace-leaks -A \
-            --junit-path=../../test-results/patterns-server-execution-opposite-${{ matrix.shard }}.xml \
-            "${TEST_FILES[@]}"
-
-      # If this role carries OFF, the harness writes authored-pattern LCOV
-      # under pattern-runtime/. The coverage gate globs every profile artifact.
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-pattern-integration-opposite-${{ matrix.shard }}
-          path: coverage/lcov/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📋 Upload toolshed log on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: toolshed-log-pattern-integration-server-execution-opposite-${{ matrix.shard }}
-          path: ${{ runner.temp }}/toolshed.log
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-pattern-integration-server-execution-opposite-${{ matrix.shard }}
-          path: test-results/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-integration-server-execution-opposite-${{ matrix.shard }}
-          job: >-
-            Pattern Integration Tests / opposite server-execution
-            (${{ matrix.shard }}/${{ matrix.total }})
-          shard: ${{ matrix.shard }}/${{ matrix.total }}
-          junit: >-
-            kind=integration,scope=patterns,prefix=packages/patterns,glob=test-results/patterns-server-execution-opposite-${{ matrix.shard }}.xml
-
-  pattern-reload-integration-test:
-    name: "Pattern Reload Integration Tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      # For Astral
-      # https://github.com/lino-levan/astral/blob/f5ef833b2c5bde3783564a6b925073d5d46bb4b8/README.md#no-usable-sandbox-with-user-namespace-cloning-enabled
-      - name: 🛡️ Disable AppArmor restriction for browser tests
-        shell: bash
-        run: |
-          sysctl_path=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -e "$sysctl_path" ]]; then
-            printf '0\n' | sudo tee "$sysctl_path" >/dev/null
-          else
-            echo "AppArmor unprivileged-userns sysctl is unavailable; no change required."
-          fi
-
-      # Both kinds of coverage — see the note on pattern-integration-test above.
-      - name: 🧩 Run pattern reload integration tests
-        timeout-minutes: *work-timeout
-        run: |
-          mkdir -p test-results
-          HEADLESS=1 \
-          CF_PATTERN_COVERAGE_DIR="${{ github.workspace }}/coverage/lcov/pattern-runtime/pattern-reload" \
-          DENO_COVERAGE_DIR=coverage/raw/pattern-reload \
-          deno task integration --junit-dir=test-results patterns-reload
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/pattern-reload coverage/lcov/pattern-reload.lcov
-
-      # The whole directory — see the note on pattern-integration-test above.
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-pattern-reload
-          path: coverage/lcov/
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-pattern-reload-integration
-          path: test-results/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-reload
-          job: Pattern Reload Integration Tests
-          junit: >-
-            kind=integration,scope=patterns,prefix=packages/patterns,glob=test-results/patterns-reload.xml
-
-  pattern-unit-test:
-    name: "Pattern Unit Tests (${{ matrix.chunk }}/${{ matrix.total }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-cf"]
-    strategy:
-      matrix:
-        chunk: [1, 2, 3, 4]
-        total: [4]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧮 Resolve the compiler fingerprint
-        id: compile-cache-key
-        uses: ./.github/actions/compile-cache-key
-
-      - name: ♻️ Restore/save pattern unit compile byte cache
-        id: compile-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.compile-cache/pattern-unit-coverage-${{ matrix.chunk }}.json
-          key: cc-pattern-unit-coverage-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.chunk }}-${{ hashFiles('packages/patterns/**/*.ts', 'packages/patterns/**/*.tsx', 'packages/connectors/agents/debug-view/**/*.ts', 'packages/connectors/agents/debug-view/**/*.tsx', 'packages/connectors/github/activity-view/**/*.ts', 'packages/connectors/github/activity-view/**/*.tsx', 'packages/connectors/pattern-sources.ts', 'tasks/integration.ts', 'tasks/pattern-files.ts') }}
-          restore-keys: |
-            cc-pattern-unit-coverage-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ matrix.total }}-${{ matrix.chunk }}-
-
-      - name: 🧾 Record compile cache state for the Coverage Check
-        uses: ./.github/actions/record-compile-cache-state
-        with:
-          family: pattern-unit
-          shard: ${{ matrix.chunk }}
-          cache-file: ${{ github.workspace }}/.compile-cache/pattern-unit-coverage-${{ matrix.chunk }}.json
-          exact-hit: ${{ steps.compile-cache.outputs.cache-hit }}
-
-      - name: 📥 Download cf binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-cf
-          path: common-binaries
-
-      - name: 🧪 Run pattern unit tests
-        timeout-minutes: *work-timeout
-        run: |
-          chmod +x ./common-binaries/cf
-          mkdir -p test-results .compile-cache coverage/lcov/pattern-runtime/pattern-unit-${{ matrix.chunk }}
-          DENO_COVERAGE_DIR=coverage/raw/pattern-unit-${{ matrix.chunk }} \
-          CF_PATTERN_COVERAGE_DIR=coverage/lcov/pattern-runtime/pattern-unit-${{ matrix.chunk }} \
-          CF_COMPILE_CACHE_FILE="${{ github.workspace }}/.compile-cache/pattern-unit-coverage-${{ matrix.chunk }}.json" \
-          CF_BINARY=./common-binaries/cf \
-          deno task integration --junit-dir=test-results pattern-tests ${{ matrix.chunk }}/${{ matrix.total }}
-
-      - name: 🧾 Write coverage report
-        if: always()
-        run: deno run --allow-read --allow-write --allow-run tasks/write-coverage-lcov.ts coverage/raw/pattern-unit-${{ matrix.chunk }} coverage/lcov/pattern-unit-${{ matrix.chunk }}.lcov
-
-      - name: 📤 Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-profile-pattern-unit-${{ matrix.chunk }}
-          path: coverage/lcov/
-          retention-days: 90
-          if-no-files-found: error
-
-      - name: 📤 Upload test timing data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timing-pattern-unit-${{ matrix.chunk }}
-          path: test-results/
-          retention-days: 90
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: pattern-unit-${{ matrix.chunk }}
-          job: Pattern Unit Tests (${{ matrix.chunk }}/${{ matrix.total }})
-          shard: ${{ matrix.chunk }}/${{ matrix.total }}
-
-  # These gates exercise production construction paths with the flag unset:
-  # the toolshed binary and cf-harness's fabric-session factory. Their
-  # expectations follow the same first-party default constant.
-  deployed-topology-gate:
-    name: "Deployed Topology Posture Gates"
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    needs: ["build-toolshed"]
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 🧭 Resolve default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        run: deno run tasks/server-execution-ci-command.ts env default >> "$GITHUB_ENV"
-
-      - name: 📥 Download toolshed binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: binary-toolshed
-          path: common-binaries
-
-      - name: 🔌 Start Toolshed server for testing
-        env:
-          TOOLSHED_PORT: 8000
-        run: |
-          chmod +x ./common-binaries/toolshed
-          # --background waits until the server has bound its port before it
-          # returns. The flag stays unset so the gates exercise the default.
-          CFTS_AI_GATEWAY_URL="" \
-          CFTS_AI_LLM_ANTHROPIC_API_KEY=fake \
-          ./common-binaries/toolshed --port="$TOOLSHED_PORT" \
-            --background --log-file="$RUNNER_TEMP/toolshed.log"
-
-      - name: ✅ Verify the default server-execution posture
-        timeout-minutes: *posture-probe-timeout
-        env:
-          TOOLSHED_PORT: 8000
-        run: deno run --allow-net tasks/server-execution-ci-command.ts probe default "http://localhost:${TOOLSHED_PORT}"
-
-      - name: 🧪 Run cf-harness posture gate
-        timeout-minutes: *work-timeout
-        working-directory: packages/cf-harness
-        env:
-          API_URL: http://localhost:8000
-        run: |
-          mkdir -p ../../test-results
-          deno test --shuffle=$(deno task -q test-seed) --no-check \
-            --junit-path=../../test-results/cf-harness-posture-gate.xml \
-            -A \
-            integration/fabric-session-posture-gate.test.ts
-
-      - name: 📋 Upload toolshed log on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: toolshed-log-deployed-topology-gate
-          path: ${{ runner.temp }}/toolshed.log
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: 📤 Ship test records
-        if: always()
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: deployed-topology-gate
-          job: Deployed Topology Posture Gates
-          junit: >-
-            kind=integration,scope=cf-harness,prefix=packages/cf-harness,glob=test-results/cf-harness-posture-gate.xml
-
-  # ---------------------------------------------------------------------------
-  # Tier 2 – Post-test gates and deployments
-  # ---------------------------------------------------------------------------
-
-  coverage-check:
-    name: "Coverage Check"
-    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && github.ref_name == 'main')
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    needs:
-      - check
-      - test
-      - build-toolshed
-      - build-cf
-      - package-integration-test
-      - cli-integration-test
-      - pattern-integration-test
-      # Whichever pattern lane resolves OFF carries authored-pattern coverage.
-      - pattern-integration-test-server-execution-opposite
-      - pattern-reload-integration-test
-      - pattern-unit-test
-      - generated-patterns-integration-test
-      - runner-test
-    permissions:
-      contents: read
-      actions: read
-      # Read-only: fork PRs get a read-only token here regardless, so the gate
-      # only writes the comment to an artifact. The coverage-comment workflow
-      # posts it from the base-repo context with a write token.
-      pull-requests: read
-    # The check writes the run's coverage figures into this spool as
-    # measurements, which the last step ships to the record store.
-    env:
-      CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 📥 Download coverage reports
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: coverage-profile-*
-          path: coverage-artifacts
-          merge-multiple: false
-          skip-decompress: false
-          digest-mismatch: error
-
-      # The gate reads the coverage artifacts of every test job in this run, so
-      # no lane can be asked to run it and this job writes no test records:
-      # what it ships is the run's coverage measurements alone.
-      # `docs/specs/test-records.md` under "Recording" holds the criterion.
-      - name: 📊 Run coverage check
-        timeout-minutes: *work-timeout
-        env:
-          COVERAGE_ARTIFACTS_DIR: coverage-artifacts
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: >-
-          deno run --allow-net --allow-env --allow-read --allow-run
-          --allow-write tasks/coverage-check.ts
-
-      - name: 📤 Upload coverage regression comment
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-comment
-          path: coverage-comment.json
-          retention-days: 7
-          if-no-files-found: ignore
-
-      # The per-run coverage baseline (this run's coverage-debt metrics and
-      # compile cache states). Named perf-metrics for historical continuity —
-      # the coverage ratchet reads recent main runs' artifacts by this name, so
-      # keeping it avoids a baseline migration.
-      - name: 📤 Upload coverage baseline
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: perf-metrics
-          path: perf-metrics.json
-          retention-days: 90
-          if-no-files-found: ignore
-
-      # The run's coverage measurements, for the dashboard's trend and the
-      # test-selection publisher, which read it from the record store, and
-      # for the run report, which reads it from this run's artifacts. Only a
-      # push ships one, because every reader takes a figure from a push to
-      # main alone.
-      - name: 📤 Ship test records
-        if: always() && github.event_name == 'push'
-        uses: ./.github/actions/test-records-ship
-        with:
-          artifact: coverage
-          job: Coverage Check
-
-  # The store half of the test-topology drift guard. The tree half fails a
-  # surface in the working tree that no suite claims; this fails one that is
-  # registered and whose records do not map back to the topology, which
-  # would leave those tests running in the full run and never selectable on
-  # a pull request. It judges a tree by the records that tree produced, so
-  # it waits for every job that ships them and holds them to this run's
-  # commit. A gate inside a lane could not do it: a lane's records have not
-  # shipped when its gates run.
-  #
-  # It runs on a pull request as well as on the default branch, because the
-  # change that introduces this drift is the change to a suite, a runner,
-  # or a test's name, and that change has a run of its own. What reaches
-  # the default branch is then the pair of changes that were each claimed
-  # separately and are not together, which no single pull request can see.
-  test-topology-store-check:
-    name: "Test Topology Store Check"
-    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && github.ref_name == 'main')
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    needs:
-      - check
-      - cfcheck
-      - pattern-compat
-      - pattern-vintage
-      - test
-      - runner-test
-      - generated-patterns-integration-test
-      - package-integration-test
-      - package-integration-test-server-execution-opposite
-      - cli-integration-test
-      - pattern-integration-test
-      - pattern-integration-test-server-execution-opposite
-      - pattern-reload-integration-test
-      - pattern-unit-test
-      - deployed-topology-gate
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
-
-      - name: 📥 Download test records
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: test-records-*
-          path: test-records-artifacts
-          merge-multiple: false
-          digest-mismatch: error
-
-      # The guard reads the record artifacts of every job in this run, so no
-      # lane can be asked to run it and this job writes no test records.
-      # `docs/specs/test-records.md` under "Recording" holds the criterion.
-      # It is handed the directory rather than a list of files, so a run
-      # whose artifacts it cannot find fails rather than checking nothing.
-      - name: 🔎 Check the topology against this run's records
-        timeout-minutes: *work-timeout
-        run: >-
-          deno task check-test-topology --commit "$GITHUB_SHA"
-          --records test-records-artifacts
-
-  status:
-    name: "Status"
-    if: ${{ always() && github.event_name == 'pull_request' }}
-    needs:
-      - check
-      - cfcheck
-      - pattern-compat
-      - pattern-vintage
-      - test
-      - runner-test
-      - build-toolshed
-      - build-toolshed-opposite
-      - build-cf
-      - generated-patterns-integration-test
-      - package-integration-test
-      - package-integration-test-server-execution-opposite
-      - cli-integration-test
-      - pattern-integration-test
-      - pattern-integration-test-server-execution-opposite
-      - pattern-reload-integration-test
-      - pattern-unit-test
-      - deployed-topology-gate
-      - coverage-check
-      - test-topology-store-check
-    permissions: {}
-    runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
-    steps:
-      - name: 🔎 Verify pull request jobs
-        timeout-minutes: *work-timeout
-        env:
-          JOB_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          failures=$(jq -r '
-            to_entries[]
-            | select(.value.result != "success")
-            | "\(.key): \(.value.result)"
-          ' <<< "$JOB_RESULTS")
-
-          if [[ -n "$failures" ]]; then
-            printf 'Unsuccessful pull request jobs:\n%s\n' "$failures"
-            exit 1
-          fi
-
   attest-binaries:
     name: "Attest and Upload Binaries"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
-    # A release artifact must not outlive a failed pattern-migration gate.
-    # Production deploys consume this artifact without rerunning those gates.
-    # The deployed-topology gate exercises the binaries this job attests at
-    # the first-party default, so a binary that fails it must not deploy.
-    needs:
-      [
-        "test",
-        "check",
-        "pattern-compat",
-        "pattern-vintage",
-        "build-toolshed",
-        "build-cf",
-        "runner-test",
-        "pattern-integration-test",
-        "pattern-reload-integration-test",
-        "pattern-unit-test",
-        "package-integration-test",
-        "cli-integration-test",
-        "generated-patterns-integration-test",
-        "deployed-topology-gate",
-      ]
+    # A release artifact must not outlive a failing test, the
+    # `pattern-compat`, `pattern-vintage` and `deployed-topology` suites among
+    # them.
+    # Production deploys consume this artifact without rerunning anything, so
+    # this waits for the whole of the full run as well as for the builds.
+    # The full run's servers are built by the lanes from the same sources and
+    # the same build task, without the commit and the shell endpoints this
+    # job's binaries carry; what these binaries add is checked by the steps
+    # that build them.
+    needs: ["build-toolshed", "build-cf", "tests"]
     environment: ci
     permissions:
       id-token: write
@@ -2158,7 +584,7 @@ jobs:
       - name: 🦕 Setup Deno
         uses: ./.github/actions/deno-setup
 
-      # Merge every job's LCOV report into one line-coverage file with
+      # Merge every lane's LCOV reports into one line-coverage file with
       # repository-relative paths, so IDE users can download a single artifact
       # covering the whole repository. Uploaded to Cloud Storage below alongside
       # the signed binaries. Best-effort: a coverage problem must not block
@@ -2167,7 +593,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: coverage-profile-*
+          pattern: lane-coverage-*
           path: coverage-artifacts
 
       - name: 🧬 Combine coverage LCOV
@@ -2348,16 +774,7 @@ jobs:
   deploy-shell-staging:
     name: "Deploy Shell to Staging"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs:
-      [
-        "test",
-        "check",
-        "pattern-integration-test",
-        "pattern-reload-integration-test",
-        "pattern-unit-test",
-        "package-integration-test",
-        "cli-integration-test",
-      ]
+    needs: ["tests"]
     runs-on: ubuntu-latest
     environment: ci
     steps:

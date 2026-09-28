@@ -40,6 +40,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 export type { JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
@@ -267,6 +268,12 @@ export enum RequestType {
    * error rather than a `false`.
    */
   RegisterSpaceHost = "runtime:registerSpaceHost",
+
+  /**
+   * Routes one space's storage to a named host as `RegisterSpaceHost` does,
+   * and returns the reason along with a refusal.
+   */
+  RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -512,7 +519,9 @@ export enum NotificationType {
 
   /**
    * Reports an error that surfaced with no request to fail: a renderer error,
-   * or one raised by a pattern between requests.
+   * one raised by a pattern between requests, or the boot-time health check
+   * finding a host unreachable after `initialize` was answered, which carries
+   * {@link RuntimeErrorCode.HostUnreachable}.
    */
   ErrorReport = "callback:error",
 
@@ -615,6 +624,15 @@ export enum RuntimeErrorCode {
    * rather than a retry.
    */
   CompilerStackLoadFailed = "compiler-stack-load-failed",
+
+  /**
+   * The boot-time health check found the backend, or one of the space hosts,
+   * unreachable. The worker is running regardless and its storage reconnects
+   * by itself, so the client's remedy is to wait or to say so, not to retry
+   * the initialization. Posted once, to the clients connected when the check
+   * answers; a client that attaches later is not told.
+   */
+  HostUnreachable = "host-unreachable",
 }
 
 /**
@@ -923,6 +941,17 @@ export type InitializationData = {
    * the next runtime rather than live. Off by default.
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Hold the {@link RequestType.Initialize} reply until the backend's health
+   * check has answered, and refuse the initialization when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, the
+   * check runs alongside, and a host it cannot reach is reported as a
+   * {@link NotificationType.ErrorReport} carrying
+   * {@link RuntimeErrorCode.HostUnreachable} while the memory client keeps
+   * reconnecting on its own.
+   */
+  awaitHealth?: boolean;
 };
 
 /**
@@ -1227,6 +1256,14 @@ export type CustodySealPrepareRequest = BaseRequest & {
 
   /** The actor's source policy, in the actor's home space. */
   allowedSources: CellRef;
+
+  /**
+   * The room's cell that receives the link to the instance's box, in the
+   * room space. The seal writes the link itself, in the transaction that
+   * writes the entry, so the room's release witness covers which box the
+   * room reads.
+   */
+  box?: CellRef;
 };
 
 /** A principal the room space's access list lets read the room. */
@@ -1267,6 +1304,13 @@ export type CustodySealPreview = {
   /** The actor's `Context` and `Resource` sources the value draws on. */
   sources: CfcAtom[];
 
+  /**
+   * Whether every release rule of the room's policy requires the seal's input
+   * witness. When `false`, a member's own code can learn the actor's entry
+   * one answer at a time, and the confirmation says so.
+   */
+  witnessedRelease: boolean;
+
   /** The exact value that enters custody. */
   stance: JSONValue;
 };
@@ -1275,6 +1319,22 @@ export type CustodySealPreview = {
 export type CustodySealCommitRequest = BaseRequest & {
   type: RequestType.CustodySealCommit;
   id: string;
+};
+
+/**
+ * What a committed custody seal wrote, answered to the trusted host. The
+ * entry's blinded key is not part of it: the host hands the box to the
+ * pattern, and nothing a pattern can read says which entry is the actor's.
+ */
+export type CustodySealCommitResponse = {
+  /** The actor-private receipt, in the actor's home space. */
+  receipt: CellRef;
+
+  /** The instance's box, in the room space: what the room's projector reads. */
+  box: CellRef;
+
+  /** The instance the entry was sealed into: the digest of the terms. */
+  instance: string;
 };
 
 /** The {@link RequestType.CustodySealCancel} request. */
@@ -1646,6 +1706,25 @@ export type ResolveSpaceNameRequest = BaseRequest & {
  */
 export type RegisterSpaceHostRequest = BaseRequest & {
   type: RequestType.RegisterSpaceHost;
+
+  /**
+   * The space to route.
+   */
+  space: DID;
+
+  /**
+   * The origin its storage should resolve against.
+   */
+  host: string;
+};
+
+/**
+ * Record a host hint for a space under the rules and the ordering contract of
+ * {@link RegisterSpaceHostRequest}. The worker returns the registration, which
+ * carries the reason for a refusal.
+ */
+export type RegisterSpaceHostDetailedRequest = BaseRequest & {
+  type: RequestType.RegisterSpaceHostDetailed;
 
   /**
    * The space to route.
@@ -3047,6 +3126,7 @@ export type IPCClientRequest =
   | RuntimeSyncedRequest
   | ResolveSpaceNameRequest
   | RegisterSpaceHostRequest
+  | RegisterSpaceHostDetailedRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -3119,6 +3199,14 @@ export type BooleanResponse = {
    * The verdict.
    */
   value: boolean;
+};
+
+/** The outcome of a space host registration. */
+export type SpaceHostRegistrationResponse = {
+  /**
+   * Whether the hint was accepted, and the reason when it was not.
+   */
+  registration: SpaceHostRegistration;
 };
 
 /**
@@ -3640,12 +3728,14 @@ export type RemoteResponse =
   | EmptyResponse
   | NullResponse
   | BooleanResponse
+  | SpaceHostRegistrationResponse
   | CellValueResponse
   | CellGetResponse
   | CellResponse
   | CfcLabelViewResponse
   | SnapshotSharePreview
   | CustodySealPreview
+  | CustodySealCommitResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3877,7 +3967,7 @@ export type Commands = {
   };
   [RequestType.CustodySealCommit]: {
     request: CustodySealCommitRequest;
-    response: CellResponse;
+    response: CustodySealCommitResponse;
   };
   [RequestType.CustodySealCancel]: {
     request: CustodySealCancelRequest;
@@ -3939,6 +4029,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHost]: {
     request: RegisterSpaceHostRequest;
     response: BooleanResponse;
+  };
+  [RequestType.RegisterSpaceHostDetailed]: {
+    request: RegisterSpaceHostDetailedRequest;
+    response: SpaceHostRegistrationResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

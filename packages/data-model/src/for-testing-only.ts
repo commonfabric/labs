@@ -1,7 +1,7 @@
 /**
  * What this package offers to tests alone. There are two kinds of thing here:
  * examples of every concrete class, and internals of the package that a test
- * reaches directly: steps it calls, and a count it reads.
+ * reaches directly: steps it calls, and counts it reads.
  *
  * The examples are of every concrete `FabricPrimitive` and `FabricInstance`
  * class, for a test that ranges over the classes to take its values from, so
@@ -46,6 +46,7 @@ import {
 } from "@/fabric-primitives";
 import { getFrozenObjectHashCacheHits } from "./value-hash/caching.ts";
 import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
+import { getContainersHashed } from "./value-hash/ValueHasher.ts";
 
 /** At least two makers of one kind of value. */
 type Makers<Value> = readonly [() => Value, () => Value, ...(() => Value)[]];
@@ -247,6 +248,18 @@ export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
  */
 export const getFrozenObjectHashCacheHitsForTestingOnly: () => number =
   getFrozenObjectHashCacheHits;
+
+/**
+ * `getContainersHashed()` from `value-hash/ValueHasher.ts`, which counts the
+ * arrays and plain objects fed to a hasher.
+ *
+ * It is here because a hash is the same however much work went into it, so
+ * nothing on the package's public surface says how wide a value was hashed. A
+ * test that holds some code to hashing only part of a value — or none of it —
+ * reads the count before and after.
+ */
+export const getContainersHashedForTestingOnly: () => number =
+  getContainersHashed;
 
 /**
  * Helper for `FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY`, which calls every

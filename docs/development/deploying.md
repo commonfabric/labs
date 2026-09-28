@@ -38,12 +38,14 @@ repository-settings change, and the job has to be updated in the same change.
 
 ## One commit, one set of artifacts
 
-The `attest-binaries` job in `.github/workflows/deno.yml` builds the binaries,
-signs them, packs them into `labs-<commit>.tar.gz`, writes that tarball's
-SHA-256 into `labs-<commit>.hash.txt`, and copies both objects into the
-`commontools-build-artifacts` bucket. A deploy is given a commit rather than a
-build, so those two objects are the whole of what a commit means to a host. The
-host downloads them, checks the tarball against the checksum, and unpacks it.
+The `build-toolshed` and `build-cf` jobs in `.github/workflows/deno.yml` build
+the binaries. Once every lane of the full run has passed, the `attest-binaries`
+job signs them, packs them into `labs-<commit>.tar.gz`, writes that
+tarball's SHA-256 into `labs-<commit>.hash.txt`, and copies both objects into
+the `commontools-build-artifacts` bucket. A deploy is given a commit rather than
+a build, so those two objects are the whole of what a commit means to a host.
+The host downloads them, checks the tarball against the checksum, and unpacks
+it.
 
 Building one commit twice does not produce the same tarball. The binaries are
 compiled again, and `tar` records the modification time of every file it packs.

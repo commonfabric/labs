@@ -202,10 +202,10 @@ defends against us: nobody checks a 40-character commit by eye, so a commit
 that is not the release it claims to be would pass review on the strength of
 the comment beside it.
 
-`deno task check-action-pins`, a step in the `check` job, holds both. It asks
-GitHub which commit the named release points at and fails when a step names no
-commit, carries no release comment, or names a commit that release does not
-point at.
+`deno task check-action-pins`, a gate of the `repo-gates` suite in the test
+topology, holds both. It asks GitHub which commit the named release points at
+and fails when a step names no commit, carries no release comment, or names a
+commit that release does not point at.
 
 The comment names the release itself, `# v4.2.0` and not `# v4`. A publisher
 moves `v4` onto each release, so a comment naming one says only which major
@@ -249,7 +249,7 @@ The runtime compiles patterns itself, using the TypeScript compiler API at
 runtime. Seven runtime and build packages (`js-compiler`, `ts-transformers`,
 `schema-generator`, `runner`, `cli`, `static`, `deno-web-test`) import
 `npm:typescript`. The `api` package imports it for the type-profiling harness,
-`tasks` imports it for the coverage gate, which compiles a source file to find
+`tasks` imports it for the coverage metric, which compiles a source file to find
 out whether it holds any executable code, and `patterns` imports it for the
 Topics browser-measurement helper, which parses authored and compiled sources
 to find a lift's declaration. All ten workspace members pin the same version in
@@ -563,11 +563,9 @@ fetch-shaped value. Write the signature out instead. `HarnessFetch` in
 `packages/runner/src/runtime.ts` are the package-level contracts. They hold
 whichever version resolves and whichever compiler checks them.
 
-Two things make this class of breakage easy to miss. `deno task check` does not
-cover every package: `cf-harness` is type checked only by its own test task, so
-its type errors surface in a test shard rather than the Check job. And CI pins
-Deno 2.9.4 while `tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check
-and CI can disagree about what type checks.
+This class of breakage is easy to miss because CI pins Deno 2.9.4 while
+`tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check and CI can
+disagree about what type checks.
 
 ### Astral
 

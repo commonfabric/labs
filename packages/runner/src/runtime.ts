@@ -1,5 +1,6 @@
 import {
   cloneIfNecessary,
+  deepFreeze,
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
@@ -103,7 +104,7 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { waveRunContextOf } from "./executor/wave.ts";
+import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -134,6 +135,7 @@ import {
 import {
   type PieceSourceTransition,
   Runner,
+  type RunnerRunOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -150,7 +152,11 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "./space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
   type EventIntentOutcome,
@@ -158,7 +164,11 @@ import {
   stampSpeculationRunContext,
 } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
-import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
+import {
+  type CfcInstrumentationHooks,
+  ExtendedStorageTransaction,
+  setCfcTrustSnapshot,
+} from "./storage/extended-storage-transaction.ts";
 import type {
   ACL,
   ChangeGroup,
@@ -518,7 +528,9 @@ export type ServerRunInfo = {
    * protocol.md §2b): the compile-cache / program-materialization
    * writeback into a piece's OWN space, riding the carriage of the
    * provisioning or demanding run that triggered it — the served mirror
-   * of the client committing the program under the user's own session.
+   * of the client committing the program under the user's own session —
+   * and the `agent` effect's index entry in the requester's home space,
+   * riding the carriage of the run that staged the request.
    * The wave's conflict machinery still treats the contribution as
    * bookkeeping (rebase-or-drop; the writeback's own retry re-issues);
    * only the accept gate and the foreign batch's delegated admission
@@ -526,10 +538,7 @@ export type ServerRunInfo = {
    * bookkeeping, protocol.md §1's "The SpaceServer's own writes") and
    * never derived by the stamper — the caller attributes the trigger,
    * or the foreign write stays refused (fail-closed). */
-  delegated?: {
-    acting: { user: string; session?: string };
-    capabilityRef: string;
-  };
+  delegated?: DelegatedCarriage;
 };
 
 /**
@@ -1336,6 +1345,17 @@ export class Runtime {
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
+
+  /**
+   * The hooks every transaction `edit()` opens reports its CFC work through.
+   * Built once, in the constructor, after `cfcPrefixProvenanceStats`, which
+   * decides whether the prefix-provenance counter is among them. Each hook
+   * reads the runtime's fields when it is called rather than when it was
+   * built, and a hook that acts on a transaction is handed it, so one frozen
+   * object serves them all.
+   */
+  readonly #cfcInstrumentation: CfcInstrumentationHooks;
+
   readonly #policyManifests = new Map<string, PolicyArtifactManifestV1>();
   readonly #policyManifestSpaces = new Map<string, Set<MemorySpace>>();
 
@@ -1838,8 +1858,15 @@ export class Runtime {
       this.#trustRevision = this.cfcTrustConfig === undefined
         ? this.id
         : `${this.id}/trust:${this.cfcTrustConfig.digest}`;
+      // The principal and the revision are both fixed for the runtime's
+      // lifetime, so one frozen snapshot serves every transaction. Handing
+      // each the same object is what lets `edit()` attach it without
+      // freezing a copy per transaction.
+      const ambientTrustSnapshot = deepFreeze(
+        this.trustSnapshotForPrincipal(actingPrincipal),
+      );
       this.trustSnapshotProvider = options.trustSnapshotProvider ??
-        (() => this.trustSnapshotForPrincipal(actingPrincipal));
+        (() => ambientTrustSnapshot);
       this.userIdentityDID = options.storageManager.as.did() as DID;
       this.moduleRegistry = new ModuleRegistry(this);
       this.patternManager = new PatternManager(this);
@@ -1860,6 +1887,7 @@ export class Runtime {
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
+      this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not
       // be able to mutate it (per-sink array or the map) after construction to
       // change what egresses are allowed (review on #3993).
@@ -2105,10 +2133,11 @@ export class Runtime {
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
    * completed — including the reactive cascade its result writeback triggers.
-   * This is the "wait for everything, including async builtin I/O" companion to
-   * `idle()` (which intentionally returns before that I/O so handlers don't
-   * block on the network). Bounded: a builtin whose result re-triggers more
-   * async work converges in a few rounds.
+   * Re-checked until all of those hold at once, because each can restart the
+   * others. This is the "wait for everything, including async builtin I/O"
+   * companion to `idle()` (which intentionally returns before that I/O so
+   * handlers don't block on the network). Bounded: a builtin whose result
+   * re-triggers more async work converges in a few rounds.
    */
   async settled(maxRounds = 50): Promise<void> {
     for (let round = 0; round < maxRounds; round++) {
@@ -2119,6 +2148,9 @@ export class Runtime {
       // rechecks scheduler work whenever pending commits drain.
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      // Work queued while storage synced is work the barrier above has
+      // stopped watching.
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       if (this.#pendingAsyncWork.size === 0) return;
       await Promise.allSettled([...this.#pendingAsyncWork.keys()]);
     }
@@ -2162,6 +2194,7 @@ export class Runtime {
     while (!signal?.aborted) {
       await this.scheduler.idleWithPendingCommits();
       await this.storageManager.synced();
+      if (!this.scheduler.isIdleWithPendingCommits()) continue;
       const relevant = [...this.#pendingAsyncWork]
         .filter(([, key]) => key === undefined || key === ownerKey)
         .map(([promise]) => promise);
@@ -2446,7 +2479,40 @@ export class Runtime {
     if (debugActionId) {
       (tx as { debugActionId?: string }).debugActionId = debugActionId;
     }
-    const wrapped = new ExtendedStorageTransaction(tx, {
+    const wrapped = new ExtendedStorageTransaction(
+      tx,
+      this.#cfcInstrumentation,
+    );
+    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
+    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
+    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
+    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
+    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
+    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
+    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
+    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
+    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
+    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
+    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
+    wrapped.setCfcModuleDelegations(
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+    setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
+    wrapped.configureSealDestination(
+      this.#transactionSealDestination ?? this.#speculationDestination(),
+    );
+    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    this.#transactions.add(wrapped);
+    return wrapped;
+  }
+
+  /**
+   * Helper for the constructor, which builds the hooks `edit()` hands every
+   * transaction.
+   */
+  #buildCfcInstrumentation(): CfcInstrumentationHooks {
+    const hooks: CfcInstrumentationHooks = {
       checkReadCeiling: (readingTx, address, options) => {
         const carried = waveRunContextOf(readingTx)?.readCeiling;
         const ceiling = carried === undefined
@@ -2545,29 +2611,8 @@ export class Runtime {
           },
         }
         : {}),
-    });
-    wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
-    wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
-    wrapped.setCfcWriteFloorMode(this.cfcWriteFloor);
-    wrapped.setCfcTriggerReadGating(this.cfcTriggerReadGating);
-    wrapped.setCfcDecomposedEnvelopes(this.cfcDecomposedEnvelopes);
-    wrapped.setCfcContentAddressedLabels(this.cfcContentAddressedLabels);
-    wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
-    wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
-    wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
-    wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
-    wrapped.setCfcTrustConfig(this.cfcTrustConfig);
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
-    wrapped.setCfcTrustSnapshot(this.trustSnapshotProvider());
-    wrapped.configureSealDestination(
-      this.#transactionSealDestination ?? this.#speculationDestination(),
-    );
-    wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
-    this.#transactions.add(wrapped);
-    return wrapped;
+    };
+    return Object.freeze(hooks);
   }
 
   /**
@@ -2754,11 +2799,11 @@ export class Runtime {
    * trust-config change invalidates per-run prepared digests exactly as
    * it does ambient ones. On a runtime constructed with a CUSTOM
    * `trustSnapshotProvider` this still composes the RUNTIME's revision,
-   * not the provider's. The DEFAULT provider routes every ordinary
-   * edit() transaction through this method; the run stamper is the
-   * ADDITIONAL serving-path caller, and a serving runtime refuses a
-   * custom provider at construction, so the two composition paths can
-   * never disagree on a serving runtime.
+   * not the provider's. The DEFAULT provider's one snapshot, which
+   * every ordinary edit() transaction gets, is composed here; the run
+   * stamper is the ADDITIONAL serving-path caller, and a serving runtime
+   * refuses a custom provider at construction, so the two composition
+   * paths can never disagree on a serving runtime.
    */
   trustSnapshotForPrincipal(principal: string): TrustSnapshot {
     return {
@@ -2795,6 +2840,23 @@ export class Runtime {
     ) {
       stampSpeculationRunContext(tx, info);
     }
+  }
+
+  /**
+   * The delegated carriage a bookkeeping write into `space` is stamped with
+   * ({@link ServerRunInfo.delegated}): `carriage` when `space` is not the
+   * space this runtime serves, and none otherwise, since a write into the
+   * served space, and every write off the serving posture, is the runtime's
+   * own.
+   */
+  delegationForWriteTo(
+    space: MemorySpace,
+    carriage: ServerRunInfo["delegated"],
+  ): Pick<ServerRunInfo, "delegated"> {
+    const served = this.storageManager.servingHomeSpace;
+    return carriage !== undefined && served !== undefined && space !== served
+      ? { delegated: carriage }
+      : {};
   }
 
   /**
@@ -4297,20 +4359,29 @@ export class Runtime {
     patternFactory: NodeFactory<T, R>,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     pattern: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
     tx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
+    options?: RunnerRunOptions,
   ): Cell<R> {
-    return this.runner.run<T, R>(tx, patternOrModule, argument, resultCell);
+    return this.runner.run<T, R>(
+      tx,
+      patternOrModule,
+      argument,
+      resultCell,
+      options,
+    );
   }
 
   /** Runs a pattern after synchronizing its stored dependencies. */
@@ -4372,9 +4443,50 @@ export class Runtime {
    * storage accepted or confirmed the hint.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    let route: URL;
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    const accept = storage.registerSpaceHost !== undefined
+      ? storage.registerSpaceHost(space, normalized)
+      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
+    if (accept === undefined) return false; // manager has no remote resolution
+    if (accept) this.#dynamicHosts.set(space, normalized);
+    return accept;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * says why when storage refuses it. A storage manager that gives only a
+   * verdict has its refusal reported as `unspecified`, and one that takes no
+   * hints at all as `no-remote-resolution`.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
+    const normalized = this.#normalizedSpaceHost(space, host);
+    const storage = this.storageManager;
+    let registration: SpaceHostRegistration;
+    if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
+    } else if (storage.registerSpaceHost !== undefined) {
+      registration = storage.registerSpaceHost(space, normalized)
+        ? { accepted: true }
+        : { accepted: false, reason: "unspecified" };
+    } else {
+      registration = { accepted: false, reason: "no-remote-resolution" };
+    }
+    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
+    return registration;
+  }
+
+  /**
+   * Returns the normalized origin of `host`. A host that is not an HTTP or
+   * HTTPS origin throws an error naming `space`, with the validation error as
+   * its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): string {
     try {
-      route = normalizeSpaceHost(host);
+      return normalizeSpaceHost(host).toString();
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
@@ -4382,11 +4494,6 @@ export class Runtime {
         { cause },
       );
     }
-    const normalized = route.toString();
-    const accept = this.storageManager.registerSpaceHost?.(space, normalized);
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
   }
 
   /**

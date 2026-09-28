@@ -8,6 +8,7 @@ import type { Cell } from "../src/cell.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const ADMIT_MODULE = "nested-link-admit-module";
 const ADMIT_FILE = "/patterns/admission.tsx";
@@ -160,7 +161,7 @@ describe("cfc-nested-link-policy-applicability", () => {
     schema: JSONSchema | "none" = panelSchema,
   ): Promise<string | undefined> => {
     const tx = rt.edit();
-    tx.setCfcImplementationIdentity(identity);
+    setCfcImplementationIdentity(tx, identity);
     if (schema === "none") {
       rt.getCell(signer.did(), panelId, undefined, tx).key("addedByProfile")
         .set(profile.withTx(tx));

@@ -18,6 +18,7 @@ const cells = {
   allowedSources: ref("sources"),
 };
 const receipt = ref("receipt");
+const box = ref("box", "did:key:room");
 
 describe("custody-seal", () => {
   it("prepares a preview and commits only its opaque confirmation id", async () => {
@@ -31,6 +32,7 @@ describe("custody-seal", () => {
       instance: "instance",
       policy: { type: "https://commonfabric.org/cfc/atom/Policy" },
       sources: [],
+      witnessedRelease: true,
       stance: { choice: "sushi" },
     };
     const conn = {
@@ -41,7 +43,7 @@ describe("custody-seal", () => {
           request.type === RequestType.CustodySealPrepare
             ? preview
             : request.type === RequestType.CustodySealCommit
-            ? { cell: receipt }
+            ? { receipt, box, instance: "instance" }
             : undefined,
         );
       },
@@ -53,8 +55,11 @@ describe("custody-seal", () => {
     expect(await client.prepareCustodySeal(cells)).toEqual(preview);
     await client.cancelCustodySeal("cancelled");
     const sealed = await client.commitCustodySeal(preview.id);
-    expect(sealed).toBeInstanceOf(CellHandle);
-    expect(sealed.ref()).toEqual(receipt);
+    expect(sealed.receipt).toBeInstanceOf(CellHandle);
+    expect(sealed.receipt.ref()).toEqual(receipt);
+    expect(sealed.box).toBeInstanceOf(CellHandle);
+    expect(sealed.box.ref()).toEqual(box);
+    expect(sealed.instance).toBe("instance");
     expect(requests).toEqual([
       { type: RequestType.CustodySealPrepare, ...cells },
       { type: RequestType.CustodySealCancel, id: "cancelled" },
