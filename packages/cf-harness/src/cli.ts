@@ -386,6 +386,11 @@ export interface RunCfHarnessCliDependencies {
   readTextFile?: (path: string) => Promise<string>;
   /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
   pathExists?: (path: string) => Promise<boolean>;
+  /**
+   * The home the default runsc CFC policy is looked up under, for an embedder
+   * that clears `HOME` from `env` (the Loom local host); `env.HOME` otherwise.
+   */
+  sandboxHomeDir?: string;
   writeTextFile?: (path: string, text: string) => Promise<void>;
   readRunArtifacts?: typeof readHarnessRunArtifacts;
   createPromptLoop?: (
@@ -1312,7 +1317,12 @@ export const parseCfHarnessCliArgs = async (
   argv: readonly string[],
   deps: Pick<
     RunCfHarnessCliDependencies,
-    "cwd" | "env" | "readTextFile" | "pathExists" | "providerSettingsStore"
+    | "cwd"
+    | "env"
+    | "readTextFile"
+    | "pathExists"
+    | "sandboxHomeDir"
+    | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1769,7 +1779,13 @@ export const parseCfHarnessCliArgs = async (
         ? { sandboxCfcPolicy: args["sandbox-cfc-policy"] }
         : {}),
     },
-    deps.pathExists,
+    {
+      cwd,
+      ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
+      ...(deps.sandboxHomeDir !== undefined
+        ? { homeDir: deps.sandboxHomeDir }
+        : {}),
+    },
   );
   const explicitCfcMode = typeof args["cfc-enforcement-mode"] === "string"
     ? args["cfc-enforcement-mode"]

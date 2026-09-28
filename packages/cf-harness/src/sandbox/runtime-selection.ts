@@ -15,7 +15,7 @@
  * runsc directly.
  */
 
-import { join } from "@std/path";
+import { isAbsolute, join, resolve } from "@std/path";
 import type { RunscNetworkMode } from "./runsc.ts";
 
 export type SandboxRuntimeKind = "docker" | "runsc";
@@ -32,7 +32,8 @@ export interface SandboxRuntimeSelection {
 /**
  * Values a caller received explicitly (a flag), which win over the
  * environment. A present value takes part even when it is empty: an empty
- * runtime is refused, and an empty rootfs or policy means "none".
+ * runtime is refused, and an empty rootfs or policy means "none" (for the
+ * policy that includes the default under HOME).
  */
 export interface ExplicitSandboxRuntimeSelection {
   sandboxRuntime?: string;
@@ -55,19 +56,43 @@ const nonEmpty = (input: string | undefined): string | undefined => {
 const regularFileExists = (path: string): Promise<boolean> =>
   Deno.stat(path).then((info) => info.isFile).catch(() => false);
 
+export interface SandboxRuntimeSelectionOptions {
+  /**
+   * The home the default CFC policy is looked up under. An entrypoint that
+   * clears `HOME` from the environment it hands on (the Loom local host does)
+   * names the real one here; otherwise `env.HOME` is used.
+   */
+  homeDir?: string;
+  /** Relative rootfs and policy paths resolve against this, as other path flags do. */
+  cwd?: string;
+  /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
+  pathExists?: (path: string) => Promise<boolean>;
+}
+
 /**
  * Derives the runtime selection from explicit values and the environment.
  *
+ * Nothing is returned beyond the runtime kind unless the runtime is runsc:
+ * the companions describe that runtime alone, and a docker run (or one that
+ * names no runtime) must hand on exactly what it handed on before this
+ * module existed.
+ *
  * The default CFC policy is the one the docker path's installer puts under
  * HOME, so both runtimes label the same files the same way. It is looked up
- * only for the runsc runtime, only when nothing named one, and only taken
+ * only for the runsc runtime, only when nothing named one (an explicit empty
+ * value means "none" and is not overridden by the default), and only taken
  * when it is there.
  */
 export const resolveSandboxRuntimeSelection = async (
   env: Record<string, string | undefined>,
   explicit: ExplicitSandboxRuntimeSelection = {},
-  pathExists: (path: string) => Promise<boolean> = regularFileExists,
+  options: SandboxRuntimeSelectionOptions = {},
 ): Promise<SandboxRuntimeSelection> => {
+  const pathExists = options.pathExists ?? regularFileExists;
+  const atCwd = (path: string | undefined): string | undefined =>
+    path === undefined || options.cwd === undefined || isAbsolute(path)
+      ? path
+      : resolve(options.cwd, path);
   const rawRuntime = explicit.sandboxRuntime !== undefined
     ? explicit.sandboxRuntime.trim()
     : nonEmpty(env[SANDBOX_RUNTIME_ENV]);
@@ -78,27 +103,33 @@ export const resolveSandboxRuntimeSelection = async (
     throw new Error("sandbox runtime must be one of docker, runsc");
   }
   const sandboxRuntimeKind = rawRuntime as SandboxRuntimeKind | undefined;
-  const rawRootfs = explicit.sandboxRootfs !== undefined
-    ? explicit.sandboxRootfs.trim()
-    : nonEmpty(env[SANDBOX_ROOTFS_ENV]);
-  const sandboxRootfs = rawRootfs === "" ? undefined : rawRootfs;
-  const rawPolicy = explicit.sandboxCfcPolicy !== undefined
-    ? explicit.sandboxCfcPolicy.trim()
-    : nonEmpty(env[RUNSC_CFC_POLICY_ENV]);
-  const explicitPolicy = rawPolicy === "" ? undefined : rawPolicy;
-  const home = nonEmpty(env.HOME);
+  if (sandboxRuntimeKind !== "runsc") {
+    return sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {};
+  }
+  const sandboxRootfs = atCwd(
+    explicit.sandboxRootfs !== undefined
+      ? nonEmpty(explicit.sandboxRootfs)
+      : nonEmpty(env[SANDBOX_ROOTFS_ENV]),
+  );
+  const policyNamed = explicit.sandboxCfcPolicy !== undefined;
+  const namedPolicy = atCwd(
+    policyNamed
+      ? nonEmpty(explicit.sandboxCfcPolicy)
+      : nonEmpty(env[RUNSC_CFC_POLICY_ENV]),
+  );
+  const home = nonEmpty(options.homeDir) ?? nonEmpty(env.HOME);
   const defaultPolicy = home !== undefined
     ? join(home, ".local", "share", "runsc-cfc", "cfc-policy.json")
     : undefined;
-  const sandboxCfcPolicy = explicitPolicy ??
-    (sandboxRuntimeKind === "runsc" && defaultPolicy !== undefined &&
+  const sandboxCfcPolicy = namedPolicy ??
+    (!policyNamed && defaultPolicy !== undefined &&
         await pathExists(defaultPolicy)
       ? defaultPolicy
       : undefined);
   const sandboxRunscBinary = nonEmpty(env[RUNSC_BINARY_ENV]);
   const rawNetwork = nonEmpty(env[SANDBOX_NETWORK_MODE_ENV]);
   if (
-    sandboxRuntimeKind === "runsc" && rawNetwork !== undefined &&
+    rawNetwork !== undefined &&
     rawNetwork !== "none" && rawNetwork !== "bridge" && rawNetwork !== "host"
   ) {
     // The docker path refuses this value when it builds its sandbox; the
@@ -118,7 +149,7 @@ export const resolveSandboxRuntimeSelection = async (
       ? "sandbox"
       : undefined;
   return {
-    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
+    sandboxRuntimeKind,
     ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
     ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
     ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),

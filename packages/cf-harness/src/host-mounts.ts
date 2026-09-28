@@ -188,6 +188,7 @@ export const resolveInteractiveProvisioning = async (
   },
   cwd: string,
   env: Record<string, string | undefined>,
+  options: { homeDir?: string } = {},
 ): Promise<
   {
     additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
@@ -202,7 +203,10 @@ export const resolveInteractiveProvisioning = async (
   const mounts = hostMountsToAdditionalMounts(
     await parseHostMountSpecs(parsed.hostMountSpecs, cwd),
   );
-  const runtime = await resolveSandboxRuntimeSelection(env);
+  const runtime = await resolveSandboxRuntimeSelection(env, {}, {
+    cwd,
+    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+  });
   return {
     ...runtime,
     ...(mounts.length > 0 ? { additionalMounts: mounts } : {}),

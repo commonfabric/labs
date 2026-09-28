@@ -682,3 +682,41 @@ Deno.test("local Loom interactive host selects the sandbox runtime its environme
     "sandbox runtime must be one of docker, runsc",
   );
 });
+
+Deno.test("local Loom interactive host finds the default CFC policy under the real home", async () => {
+  // This host clears HOME from what it hands on, and the selection used to
+  // look for the default policy under that cleared value: a runsc run from
+  // Loom with no policy named ran without --cfc while the same machine's
+  // stdio and batch entrypoints found the file.
+  const harnessHome = await Deno.makeTempDir();
+  const home = await Deno.makeTempDir();
+  try {
+    const policy = join(home, ".local", "share", "runsc-cfc", "cfc-policy.json");
+    await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
+      recursive: true,
+    });
+    await Deno.writeTextFile(policy, "{}");
+    const seen: RunHarnessInteractiveChatStdioOptions[] = [];
+    const host = await createLoomLocalCfHarnessHost({
+      harnessHome,
+      env: {
+        HOME: home,
+        CF_HARNESS_GATEWAY_BASE_URL: "https://gateway.example/",
+        CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      },
+      credentialStore: new InMemoryHarnessCredentialStore(),
+      providerSettingsStore: configured("openai-compatible-gateway"),
+      fetchFn: () => Promise.reject(new Error("must not request")),
+      interactiveStdioRunner: (options) => {
+        seen.push(options);
+        return Promise.resolve();
+      },
+    });
+    await host.runInteractive([]);
+    assertEquals(seen[0].basePromptLoopOptions?.sandboxCfcPolicy, policy);
+  } finally {
+    await Deno.remove(home, { recursive: true });
+    await Deno.remove(harnessHome, { recursive: true });
+  }
+});
