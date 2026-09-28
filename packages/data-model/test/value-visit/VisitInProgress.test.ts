@@ -1576,6 +1576,7 @@ describe("VisitInProgress", () => {
 
             expect(result).toBeInstanceOf(FabricLink);
             expect(result).not.toBe(link);
+            expect(Object.isFrozen(result)).toBe(false);
           });
         });
       });

@@ -2,7 +2,11 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { isUnsafeObjectKey } from "@commonfabric/utils/types";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 
-import { codecOf, NonterminalCodec, NullLiveEnvironment } from "@/codec-common";
+import {
+  codecOf,
+  NonterminalCodec,
+  NULL_LIVE_ENVIRONMENT,
+} from "@/codec-common";
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
@@ -59,12 +63,6 @@ type MainVisitResult<PlusType, ResultType> = Exclude<
 export type VisitInProgressConfig =
   | { mode: "visit" }
   | { mode: "map"; freeze: boolean };
-
-/**
- * `NullLiveEnvironment` with `shouldDeepFreeze === false`, used for processing
- * `FabricInstance`s during structural-map operations.
- */
-const FABRIC_INSTANCE_MAP_ENVIRONMENT = new NullLiveEnvironment(false);
 
 /**
  * State of a visit currently in progress, along with most of the visit
@@ -443,7 +441,7 @@ export class VisitInProgress<
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
     const codec = codecOf(instance);
-    const state = codec.encode(instance, FABRIC_INSTANCE_MAP_ENVIRONMENT);
+    const state = codec.encode(instance, NULL_LIVE_ENVIRONMENT);
 
     this.#stack.push(instance);
 
@@ -882,12 +880,12 @@ export class VisitInProgress<
     }
 
     try {
-      const result = resultCodec.decode(
+      return resultCodec.decode(
         codecTag,
         resultState,
-        FABRIC_INSTANCE_MAP_ENVIRONMENT,
+        NULL_LIVE_ENVIRONMENT,
+        !this.#freezeMappedContainers,
       ) as FabricInstancePlus<ResultType>;
-      return this.#freezeMappedContainers ? Object.freeze(result) : result;
     } catch (cause) {
       throw new Error(
         debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
