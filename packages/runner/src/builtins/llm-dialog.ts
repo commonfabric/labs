@@ -200,6 +200,9 @@ type SerializeForLLMObservationParams = {
 
 function normalizeInputSchema(schemaLike: unknown): JSONSchema {
   let inputSchema: any = schemaLike;
+  // `false` is the argument schema of a pattern that takes no argument, which
+  // the runner runs with no input. Its object form accepts only `{}`, which is
+  // the one call such a tool takes.
   if (isBoolean(inputSchema)) inputSchema = objectSchemaOfBoolean(inputSchema);
   if (!isObjectNotArray(inputSchema)) inputSchema = { type: "object" };
   const stripped = stripInjectedResult(inputSchema);
