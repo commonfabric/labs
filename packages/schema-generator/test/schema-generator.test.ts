@@ -4295,11 +4295,19 @@ interface HasImage {
       type Root = {
         field: Confidential<string, readonly [PolicyOf<unknown>]>;
         maybe: Confidential<string, readonly [PolicyOf<unknown>]> | undefined;
+        nullable:
+          | Confidential<string, readonly [PolicyOf<unknown>]>
+          | null
+          | undefined;
         count: number;
       };
       interface Members {
         annotated: Confidential<string, readonly [PolicyOf<typeof rules>]>;
         labeled: Confidential<string, readonly ["x"]>;
+        nullable: Confidential<string, readonly [PolicyOf<typeof rules>]> | null;
+        orUndefined:
+          | Confidential<string, readonly [PolicyOf<typeof rules>]>
+          | undefined;
       }
     `;
 
@@ -4380,6 +4388,28 @@ interface HasImage {
         { type: "undefined" },
         { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
       ]);
+    });
+
+    it("reads a node as its annotation's members beside `undefined` where its type adds `undefined` to them", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("nullable")!.type,
+      }), "nullable");
+
+      expect(schema.anyOf).toMatchObject([
+        { type: ["null", "undefined"] },
+        { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
+      ]);
+    });
+
+    it("reads a node as its annotation's members other than `undefined` where its type has none", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("orUndefined")!.type,
+      }));
+
+      expect(schema).toMatchObject({
+        type: "string",
+        ifc: { confidentiality: [MODULE_POLICY] },
+      });
     });
 
     it("reads a node by its type where its annotation spells another", async () => {

@@ -1034,6 +1034,60 @@ export default pattern<{ secret: MaybeSecret }>(
       });
     });
 
+    describe("an optional member whose annotation writes a union", () => {
+      // The member's `?` adds `undefined` to the type its annotation denotes,
+      // which the reader of an optional property may also take out again.
+
+      /** The capture schema of `secret`, declared as `declaration`, read whole. */
+      const optionalCapture = (declaration: string) =>
+        captured({
+          "/main.tsx":
+            `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string; b: string; }
+interface Other { a: string; c: number; }
+export default pattern<{ ${declaration} }>(
+  ({ secret }) => ({ out: computed(() => JSON.stringify(secret)) }),
+);`,
+        }, "secret");
+
+      it("reads the policy of a nullable value", async () => {
+        expect(
+          await optionalCapture(
+            "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | null",
+          ),
+        ).toMatchObject({
+          anyOf: [
+            { type: ["null", "undefined"] },
+            { ifc: { confidentiality: [policy] } },
+          ],
+        });
+      });
+
+      it("reads the policy of each labeled value the union holds", async () => {
+        expect(
+          await optionalCapture(
+            "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | Confidential<Other, [PolicyOf<typeof rules>]>",
+          ),
+        ).toMatchObject({
+          anyOf: [
+            { type: "undefined" },
+            { ifc: { confidentiality: [policy] } },
+            { ifc: { confidentiality: [policy] } },
+          ],
+        });
+      });
+
+      it("reads the policy of a value whose annotation writes `undefined`", async () => {
+        expect(
+          await optionalCapture(
+            "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | undefined",
+          ),
+        ).toMatchObject({ ifc: { confidentiality: [policy] } });
+      });
+    });
+
     it("reads the policy of another pattern's result member", async () => {
       expect(
         await captured({

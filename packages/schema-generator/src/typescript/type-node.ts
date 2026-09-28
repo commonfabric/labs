@@ -125,6 +125,25 @@ export function readAuthoredTypeNode(
 }
 
 /**
+ * Returns the member nodes of the union `node` writes, read through
+ * parentheses and aliases ({@link readAuthoredTypeNode}), each member that
+ * writes a union read for its own members in turn. Returns `[node]` for a node
+ * that writes no union, and for a union already read on the way to it.
+ */
+export function readUnionMemberNodes(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+  visited = new Set<ts.TypeNode>(),
+): ts.TypeNode[] {
+  const written = readAuthoredTypeNode(node, checker);
+  if (!ts.isUnionTypeNode(written) || visited.has(written)) return [node];
+  visited.add(written);
+  return written.types.flatMap((member) =>
+    readUnionMemberNodes(member, checker, visited)
+  );
+}
+
+/**
  * Returns the annotation written on `member`'s declaration when it denotes
  * exactly `type`, the member's type where it is read, apart from the
  * `undefined` that an optional member's `?` adds. Returns `undefined` for a
@@ -174,7 +193,7 @@ export function denotesSameType(a: ts.Type, b: ts.Type): boolean {
 }
 
 /** Whether `a` and `b` are unions of the same types once `undefined` is set aside. */
-function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
+export function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
   const parts = (type: ts.Type) =>
     new Set(
       (type.isUnion() ? type.types : [type]).filter((part) =>

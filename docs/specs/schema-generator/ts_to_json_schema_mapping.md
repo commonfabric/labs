@@ -1216,16 +1216,28 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural
   type of the value it names, from which no reader can tell the binding, so
-  the node is read as the annotation spells the type at hand: as the
-  annotation where it denotes that type, and as the annotation beside
-  `undefined` where the type adds only the `undefined` of an optional
-  member's `?` (`#spelling` in `schema-generator.ts`). An annotation denotes
-  a type that is its own, or a union of the same members, since a union
-  written through an alias is a type apart from the same union written out
-  (`denotesSameType` in `src/typescript/type-node.ts`, which
-  `readMemberAnnotation` also compares by). The node's own hints still apply.
-  Where the annotation spells neither, the node is read as any print is, by
-  the type at hand.
+  the node is read as the annotation spells the type at hand (`#spelling` in
+  `schema-generator.ts`):
+  - Where the annotation denotes that type, the node is read as the
+    annotation. An annotation denotes a type that is its own, or a union of
+    the same members, since a union written through an alias is a type apart
+    from the same union written out (`denotesSameType` in
+    `src/typescript/type-node.ts`, which `readMemberAnnotation` also compares
+    by).
+  - Where the two differ only by the `undefined` of an optional member's `?`,
+    which a reader may add to the annotation's type or take out of it, the
+    node is read as the members the annotation writes other than
+    `undefined`, beside `undefined` where the type at hand holds it. The
+    members are those of the union the annotation writes, read through
+    parentheses and aliases without type parameters (`readUnionMemberNodes`
+    in `src/typescript/type-node.ts`), so each member of the type is read at
+    the node that writes it. One node that stands for several members, as
+    `Confidential<A | B, …>` does, pairs with none of them, and they are
+    read by their types.
+  - Where the annotation spells neither, the node is read as any print is,
+    by the type at hand.
+
+  The node's own hints still apply.
 
 ## 14. Options
 

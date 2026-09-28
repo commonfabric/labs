@@ -6,6 +6,8 @@ import {
   denotesSameType,
   readAuthoredTypeNode,
   readAuthoredTypeNodeOnce,
+  readUnionMemberNodes,
+  sameBesidesUndefined,
   unwrapTypeParentheses,
 } from "../../src/typescript/type-node.ts";
 import { createTestProgram, createTestProgramFromFiles } from "../utils.ts";
@@ -19,6 +21,17 @@ function aliasedNode(sourceFile: ts.SourceFile, name: string): ts.TypeNode {
   );
   if (!declaration) throw new Error(`No type alias \`${name}\``);
   return declaration.type;
+}
+
+/** The types of the aliases `names` in `source`. */
+async function aliasedTypes(
+  source: string,
+  ...names: string[]
+): Promise<ts.Type[]> {
+  const { sourceFile, checker } = await createTestProgram(source);
+  return names.map((name) =>
+    checker.getTypeFromTypeNode(aliasedNode(sourceFile, name))
+  );
 }
 
 /** The node inside `node`'s parentheses, which it must have. */
@@ -176,14 +189,6 @@ describe("type-node", () => {
   });
 
   describe("denotesSameType()", () => {
-    /** The types of the aliases `names` in `source`. */
-    const aliasedTypes = async (source: string, ...names: string[]) => {
-      const { sourceFile, checker } = await createTestProgram(source);
-      return names.map((name) =>
-        checker.getTypeFromTypeNode(aliasedNode(sourceFile, name))
-      );
-    };
-
     it("returns `true` for unions of the same members written through two aliases", async () => {
       const [maybe, optional] = await aliasedTypes(
         "type A = { a: string }; type MaybeA = A | undefined; type OrA = undefined | A;",
@@ -213,6 +218,64 @@ describe("type-node", () => {
       );
 
       expect(denotesSameType(maybe!, member!)).toBe(false);
+    });
+  });
+
+  describe("sameBesidesUndefined()", () => {
+    it("returns `true` for unions that differ only by `undefined`", async () => {
+      const [nullable, optional] = await aliasedTypes(
+        "type A = { a: string }; type N = A | null; type O = A | null | undefined;",
+        "N",
+        "O",
+      );
+
+      expect(sameBesidesUndefined(nullable!, optional!)).toBe(true);
+    });
+
+    it("returns `false` for unions that differ by a member other than `undefined`", async () => {
+      const [nullable, member] = await aliasedTypes(
+        "type A = { a: string }; type N = A | null; type B = A | undefined;",
+        "N",
+        "B",
+      );
+
+      expect(sameBesidesUndefined(nullable!, member!)).toBe(false);
+    });
+  });
+
+  describe("readUnionMemberNodes()", () => {
+    /** The text of each member node `readUnionMemberNodes()` returns for `P`. */
+    const memberTexts = async (source: string) => {
+      const { sourceFile, checker } = await createTestProgram(source);
+      return readUnionMemberNodes(aliasedNode(sourceFile, "P"), checker).map(
+        (member) => member.getText(sourceFile),
+      );
+    };
+
+    it("returns the members of a union written through an alias", async () => {
+      expect(
+        await memberTexts("type U = string | (number); type P = U;"),
+      ).toEqual(["string", "(number)"]);
+    });
+
+    it("returns the members of each member that writes a union", async () => {
+      expect(
+        await memberTexts(
+          "type U = string | number; type P = (U) | boolean;",
+        ),
+      ).toEqual(["string", "number", "boolean"]);
+    });
+
+    it("returns a node that writes no union as its only member", async () => {
+      expect(await memberTexts("type P = string;")).toEqual(["string"]);
+    });
+
+    it("returns a union already read on the way to it as a single member", async () => {
+      expect(
+        await memberTexts(
+          "type A = B | null; type B = A | undefined; type P = A;",
+        ),
+      ).toEqual(["A", "undefined", "null"]);
     });
   });
 });
