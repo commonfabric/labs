@@ -5,6 +5,7 @@
  */
 
 export { refuseFabricInstance } from "@commonfabric/data-model";
+export { canCarryFabricInstanceWhole } from "./whole-instance.ts";
 export {
   isStoredArgumentSchemaRefusal,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
