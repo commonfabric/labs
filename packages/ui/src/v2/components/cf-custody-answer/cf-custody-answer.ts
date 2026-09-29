@@ -28,26 +28,36 @@ const isExpectedRefusal = (error: unknown): boolean =>
   error instanceof Error &&
   EXPECTED_REFUSALS.some((refusal) => error.message.includes(refusal));
 
+/**
+ * What the seal publishes: a string of at most 1,024 characters, a number, or
+ * a boolean.
+ */
+type CustodyAnswer = string | number | boolean;
+
+const isCustodyAnswer = (value: JSONValue): value is CustodyAnswer =>
+  typeof value === "string" || typeof value === "number" ||
+  typeof value === "boolean";
+
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /**
  * Publishes a custody room's answer once and shows it. A room binds it as
  * `<cf-custody-answer $terms={terms} $policy={policy} $output={choice} />`,
- * where `output` is the room's projected answer. Each time the projected
- * answer changes, the component asks the worker to publish it; the seal
- * publishes it once, only when every rule of the room's policy requires the
- * seal's witness and releases only to the seal, a rule releases it to the
- * seal, and every seat has
- * sealed, and refuses every later request. Before the room has terms it asks
- * nothing. A failure other than those refusals is shown as an alert, and the
- * next change asks again. The component shows what the seal
- * published, read by the worker from the slot the seal derives from the
- * room's terms and policy and verified to be the seal's own write, never a
- * value the room holds. That is the slot of the instance the bound `terms`
- * digest to, under the policy the bound `policy` cell names. The slot is
- * create-only and the seal's alone to write, so the answer published for an
- * instance never changes. Which instance the component shows is not held
+ * where `output` is the room's projected answer. Each time the projected answer
+ * changes, the component asks the worker to publish it; the seal publishes it
+ * once, only when every rule of the room's policy requires the seal's witness
+ * and releases only to the seal, a rule releases it to the seal, and every seat
+ * has sealed, and refuses every later request. Before the room has terms it
+ * asks nothing. A failure other than those refusals is shown as an alert, and
+ * the next change asks again. The component shows, as text, what the seal
+ * published, which is a string, a number or a boolean; any other value is shown
+ * as an alert, not as the answer. It is read by the worker from the slot the
+ * seal derives from the room's terms and policy and verified to be the seal's
+ * own write, never a value the room holds. That is the slot of the instance the
+ * bound `terms` digest to, under the policy the bound `policy` cell names. The
+ * slot is create-only and the seal's alone to write, so the answer published
+ * for an instance never changes. Which instance the component shows is not held
  * against a room member's own code: its bindings are pattern data the room
  * space's members can write, so a member's code can point them at another
  * instance's terms, or at terms whose slot is empty. A writer claim on the
@@ -78,7 +88,7 @@ export class CFCustodyAnswer extends BaseElement {
 
   #unsubscribe: (() => void) | undefined;
   #published = false;
-  #answer: JSONValue | undefined;
+  #answer: CustodyAnswer | undefined;
   #inFlight: Promise<void> | undefined;
   #again = false;
   #generation = 0;
@@ -88,7 +98,7 @@ export class CFCustodyAnswer extends BaseElement {
   get accessForTestingOnly(): {
     publish(): Promise<void>;
     readonly published: boolean;
-    readonly answer: JSONValue | undefined;
+    readonly answer: CustodyAnswer | undefined;
     readonly error: string;
   } {
     // deno-lint-ignore no-this-alias
@@ -126,6 +136,10 @@ export class CFCustodyAnswer extends BaseElement {
   }
 
   override disconnectedCallback(): void {
+    // A request still out when the element leaves belongs to it no more:
+    // what it returns is dropped, and a request queued behind it never runs.
+    this.#generation++;
+    this.#again = false;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     super.disconnectedCallback();
@@ -146,23 +160,34 @@ export class CFCustodyAnswer extends BaseElement {
   #subscribe(): void {
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
-    const { output, terms } = this;
-    if (!output || !terms || !this.isConnected) return;
-    // New terms are a new instance, with an answer of its own to publish and
-    // show.
-    const cancelTerms = terms.subscribe(() => {
+    const { output, terms, policy } = this;
+    if (!output || !terms || !policy || !this.isConnected) return;
+    // New terms are a new instance, and a new policy names another instance's
+    // slot: either has an answer of its own to publish and show. Subscribing
+    // delivers each cell's current value at once, which is where this binding
+    // starts, so it starts over once for all of them.
+    const startOver = () => {
       this.#generation++;
       this.#published = false;
       this.#answer = undefined;
       this.#error = "";
       this.requestUpdate();
+    };
+    startOver();
+    let subscribing = true;
+    const onBinding = () => {
+      if (!subscribing) startOver();
       void this.#publish();
-    });
+    };
+    const cancelTerms = terms.subscribe(onBinding);
+    const cancelPolicy = policy.subscribe(onBinding);
     const cancelOutput = output.subscribe(() => {
       void this.#publish();
     });
+    subscribing = false;
     this.#unsubscribe = () => {
       cancelTerms();
+      cancelPolicy();
       cancelOutput();
     };
   }
@@ -213,13 +238,22 @@ export class CFCustodyAnswer extends BaseElement {
       // the slot says which. Anything else is said.
       if (!isExpectedRefusal(refused)) error = messageOf(refused);
     }
+    // Rebound or detached meanwhile: this request's instance is not the one
+    // shown any more.
+    if (generation !== this.#generation) return;
     // Shown from the slot itself, whoever published it.
-    let answer: JSONValue | undefined;
+    let answer: CustodyAnswer | undefined;
     try {
-      answer = await runtime.readCustodyAnswer({
+      const read = await runtime.readCustodyAnswer({
         terms: terms.ref(),
         policy: policy.ref(),
       });
+      if (read !== undefined && !isCustodyAnswer(read)) {
+        throw new Error(
+          "Custody answer refuses an answer that is not a scalar",
+        );
+      }
+      answer = read;
       // Published, by this request or another member's: whatever this
       // request met on the way no longer matters.
       if (answer !== undefined) error = "";

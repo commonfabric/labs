@@ -302,7 +302,10 @@ describe("cf-custody-answer", () => {
     const slot: { answer?: unknown } = {};
     const state = setup([() => {
       slot.answer = { choice: "tacos" };
-      return Promise.resolve({ instance: "instance", answer: slot.answer });
+      return Promise.resolve({
+        instance: "instance",
+        answer: { choice: "tacos" },
+      });
     }], slot);
     await state.element.accessForTestingOnly.publish();
     const shown = renderedText(state.element);
