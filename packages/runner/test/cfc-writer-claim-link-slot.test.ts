@@ -189,7 +189,8 @@ describe("a claimed slot holding a link", () => {
     expect(
       (after.schema as { additionalProperties?: unknown }).additionalProperties,
     ).toEqual(
-      (before.schema as { additionalProperties?: unknown }).additionalProperties,
+      (before.schema as { additionalProperties?: unknown })
+        .additionalProperties,
     );
 
     // The slot is still the seal's alone.
