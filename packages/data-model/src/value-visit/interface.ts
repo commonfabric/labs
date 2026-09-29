@@ -50,6 +50,16 @@ export type MapToEntryForm<ResultType> = {
 };
 
 /**
+ * An `omit` form. This is used by a `visiting*()` method to indicate to the
+ * engine that the array element or plain object entry about to be visited is to
+ * be omitted from the mapped result. In the case of an array, this leaves a hole
+ * (as opposed to "compacting" the array).
+ */
+export type OmitForm = {
+  readonly type: "omit";
+};
+
+/**
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
@@ -91,6 +101,16 @@ export type ReplaceEntryForm<PlusType> = {
   readonly key: string;
   readonly value: FabricValuePlus<PlusType>;
 };
+
+/**
+ * Standard instance of `OmitForm`.
+ *
+ * The `DO_` prefix is intended to make it clear at use sites that it is telling
+ * the visitor engine to "do" something.
+ */
+export const DO_OMIT: OmitForm = Object.freeze(
+  { type: "omit" } as const,
+);
 
 /**
  * Standard instance of `RecurseForm` for recursing over keys and values. This
@@ -162,8 +182,8 @@ export type VisitResult<PlusType, ResultType> =
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from value-only `visiting*()` calls (container iteration
- * pre-visit methods).
+ * Possible results from `visitingFabricArrayElement()`, and the forms the other
+ * `visiting*()` result types are described in terms of.
  *
  * A `mapTo` settles the sub-value's position without visiting it: in a
  * structural-map operation its `value` is placed there as given, and in a plain
@@ -171,35 +191,42 @@ export type VisitResult<PlusType, ResultType> =
  * place of the sub-value, exactly as if `visitValue()` had returned that
  * `replace`. Either way, in a structural-map operation the position is then
  * reported to the matching `mapped*()` method, as any other is, unless the
- * visit of a replacement ended the walk with a `mainResult`. `undefined` visits
- * the sub-value itself.
+ * visit of a replacement ended the walk with a `mainResult`. An `omit` leaves
+ * the position out of a structural-map operation's result without visiting it,
+ * and is reported to no `mapped*()` method, there being no result to report; in
+ * a plain visit the position is simply not visited. `undefined` visits the
+ * sub-value itself.
  */
 export type VisitingResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
   | MapToForm<ResultType>
+  | OmitForm
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from value-free `visiting*()` calls (container iteration
- * pre-visit methods).
+ * Possible results from `visitingFabricArrayGap()`.
  */
 export type VisitingGapResult<PlusType, ResultType> =
   BaselineVisitorMethodResult<ResultType>;
 
 /**
- * Possible results from entry-bearing `visiting*()` calls (container iteration
- * pre-visit methods).
- *
- * These mean what they do in a `VisitingResult`, for a whole entry. A `mapTo`
- * places its `value` under its `key` without visiting either half of the
- * entry, and its `key` is held to the rules a visited key's result is, among
- * them that it may not be a key already mapped. A `replace` visits its `key`
- * and `value` in place of the entry's own, the key only when the `recurse` that
- * caused the iteration asked for keys to be visited.
+ * Possible results from `visitingFabricInstanceState()`. See `VisitingResult`
+ * for additional details about the forms it covers.
+ */
+export type VisitingStateResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
+  | ReplaceForm<PlusType>;
+
+/**
+ * Possible results from `visitingFabricPlainObjectEntry()`. See
+ * `VisitingResult` for additional details about the forms it covers;
+ * `MapToEntryForm` parallels `MapToForm`.
  */
 export type VisitingEntryResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
   | MapToEntryForm<ResultType>
+  | OmitForm
   | ReplaceEntryForm<PlusType>;
 
 //
@@ -382,7 +409,7 @@ export interface ValueVisitor<
   visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitingResult<PlusType, ResultType>;
+  ): VisitingStateResult<PlusType, ResultType>;
 
   /**
    * Indicates that `FabricPlainObject` entry is about to be visited. This

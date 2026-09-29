@@ -34,6 +34,7 @@ import {
   type VisitingEntryResult,
   type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -504,7 +505,7 @@ export abstract class DefaultValueVisitor<
   override visitingFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
-  ): VisitingResult<PlusType, ResultType> {
+  ): VisitingStateResult<PlusType, ResultType> {
     return undefined;
   }
 

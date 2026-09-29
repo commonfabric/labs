@@ -14,6 +14,7 @@ import {
   type VisitingEntryResult,
   type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -78,7 +79,7 @@ export abstract class BaseValueVisitor<
   abstract visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitingResult<PlusType, ResultType>;
+  ): VisitingStateResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricPlainObjectEntry(

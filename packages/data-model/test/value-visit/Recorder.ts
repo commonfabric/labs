@@ -23,6 +23,7 @@ import {
   type VisitingEntryResult,
   type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "@/value-visit";
 
@@ -114,7 +115,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   onVisitingFabricInstanceState?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ) => VisitingResult<unknown, unknown>;
+  ) => VisitingStateResult<unknown, unknown>;
   onVisitingFabricPlainObjectEntry?: (
     key: unknown,
     value: unknown,
@@ -286,7 +287,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override visitingFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): VisitingResult<unknown, unknown> {
+  ): VisitingStateResult<unknown, unknown> {
     this.events.push(["visitingFabricInstanceState", instance, state]);
     return this.onVisitingFabricInstanceState
       ? this.onVisitingFabricInstanceState(instance, state)

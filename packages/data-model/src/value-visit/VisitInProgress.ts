@@ -30,6 +30,7 @@ import {
   type MainResultForm,
   type MapToEntryForm,
   type MapToForm,
+  type OmitForm,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -363,6 +364,13 @@ export class VisitInProgress<
           element,
         );
 
+        if (visitingResult?.type === "omit") {
+          // Nothing is visited, placed, or reported. A mapped result keeps a
+          // hole here, which is a difference from the original.
+          anyChanges = true;
+          continue;
+        }
+
         const elemResult = this.#resolveVisitingResult(element, visitingResult);
 
         switch (elemResult?.type) {
@@ -530,6 +538,13 @@ export class VisitInProgress<
           key,
           value,
         );
+
+        if (visitingResult?.type === "omit") {
+          // Nothing is visited, placed, or reported. A mapped result lacks the
+          // entry, which is a difference from the original.
+          anyChanges = true;
+          continue;
+        }
 
         const entryResult = this.#resolveVisitingEntryResult(
           key,
@@ -848,13 +863,17 @@ export class VisitInProgress<
    * A `mapTo` settles the entry without visiting either half of it, a `replace`
    * visits its key and value in place of the entry's own, and `undefined`
    * visits the entry's own. A key is visited only when `doKeys`. A final key
-   * which `mapResult` already holds is refused before the value is visited.
+   * which `mapResult` already holds is refused before the value is visited. An
+   * `omit` is the caller's to act on, before this is called.
    */
   #resolveVisitingEntryResult(
     key: string,
     value: FabricValuePlus<PlusType>,
     doKeys: boolean,
-    visitingResult: VisitingEntryResult<PlusType, ResultType>,
+    visitingResult: Exclude<
+      VisitingEntryResult<PlusType, ResultType>,
+      OmitForm
+    >,
     mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined,
   ): MainResultForm<ResultType> | MapToEntryForm<ResultType> | undefined {
     let settled: MapToEntryForm<ResultType> | undefined;
@@ -958,11 +977,12 @@ export class VisitInProgress<
    * returning the sub-value's result as `#handleMappingAsAppropriate()` would.
    * A `mainResult` is returned as-is. A `mapTo` settles the position without
    * visiting it, and a `replace` visits its replacement in the original's
-   * place. `undefined` visits the original.
+   * place. `undefined` visits the original. An `omit` is the caller's to act
+   * on, before this is called.
    */
   #resolveVisitingResult(
     original: FabricValuePlus<PlusType>,
-    visitingResult: VisitingResult<PlusType, ResultType>,
+    visitingResult: Exclude<VisitingResult<PlusType, ResultType>, OmitForm>,
   ): MainVisitResult<PlusType, ResultType> {
     switch (visitingResult?.type) {
       case "mainResult": {
