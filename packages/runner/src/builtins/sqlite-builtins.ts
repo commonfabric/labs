@@ -1746,9 +1746,21 @@ export function sqliteQuery(
             // nothing. It holds at every scope (CFC spec §8.17.6, rule 1):
             // a scope limits who can read a result, and says nothing about
             // what that reader's code derives from it and writes elsewhere.
+            //
+            // Which rows' labels join it turns on the scope. A shared result
+            // takes every row's, the withheld ones included, since the
+            // count of the rows it kept tells any reader of the space about
+            // the rows it dropped. A session-scoped result is filtered for
+            // its one reader under that reader's own ceiling, which is the
+            // release its contract declares, so it takes the labels of the
+            // rows it holds: the stored references are derived from those
+            // rows' content, and the labels of the rows it dropped would
+            // withhold the result from the reader it was filtered for.
             const shapeConfidentiality = joinCfcObservedConfidentiality([
               staticConfidentialityOf(labelSchema),
-              ...rowLabels.labels.map((label) => label?.confidentiality),
+              ...(scope === "session" ? perRow : rowLabels.labels).map((
+                label,
+              ) => label?.confidentiality),
               requestLabel,
             ]);
             const rowWriteSchema = needsEntryRowSchema

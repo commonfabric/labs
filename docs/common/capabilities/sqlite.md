@@ -286,16 +286,17 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path. The query document labels `result` membership with the join of every
-source-row label, including rows skipped by the query contract, and with the
-label of the query's own statement and parameters, and labels the `withheld`
-count with that same join. Which row sits at each position of `result` carries
-the parameters' label and the labels of the rows the result holds. This holds
-for a result of any scope, a session-scoped one included. A reader outside the
-join therefore cannot observe the array's membership, length, or withheld
-count, and code that reads any of them, or reads a row through `result`,
-carries the join into what it writes. An addressed row's payload retains only
-that row's own labels. `cf cell get-label <cell>
+path. The query document labels `result` membership with the join of the
+source rows' labels and the label of the query's own statement and parameters,
+and labels the `withheld` count with that same join. A shared result joins
+every source row's label, including rows skipped by the query contract; a
+session-scoped result joins the labels of the rows it holds. Which row sits at
+a position of `result` carries the parameters' label and that row's label. A
+reader outside the join therefore cannot observe the array's membership,
+length, or withheld count, and code that reads any of them carries the join
+into what it writes: a row count of a query over labeled columns carries the
+columns' labels. An addressed row's payload retains only that row's own
+labels. `cf cell get-label <cell>
 <path>/result/<i>/<col>` follows the links the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.

@@ -786,9 +786,9 @@ the request, recorded at issue and supplied by the settle.
 
 | Observation | Label | Carried by |
 | --- | --- | --- |
-| `/result` membership, order, length | `S` joined with every row's label, withheld rows included | declared `observes: "enumerate"` entry at `/result` |
+| `/result` membership, order, length | `S` joined with the rows' labels | declared `observes: "enumerate"` entry at `/result` |
 | `/withheld` | the same | declared entry at `/withheld` |
-| which reference sits at a `/result` slot | `S` joined with the labels of the rows the result holds | declared `observes: "followRef"` entry at `/result/*` |
+| which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
 | `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
@@ -798,16 +798,33 @@ All of it holds at every scope. A session-scoped result is materialized per
 reader, which limits who can read it and does not label what that reader's
 code derives from it and writes elsewhere.
 
-The slot entry is a declared `followRef` entry because that is the class
-every reader of a reference consumes: a standalone probe of a slot,
+Which rows' labels the membership takes turns on the scope. A shared result
+takes every row's, the rows its contract skipped included: the count of the
+rows it kept tells any reader of the space about the rows it dropped. A
+session-scoped result is filtered for its one reader under that reader's own
+ceiling, so it takes the labels of the rows it holds. The labels of the rows
+it dropped would withhold the result from the reader it was filtered for.
+
+The membership carries the rows' labels, and not `S` alone, because the
+stored array holds the row references as values and a row document's id is
+derived from the row's content. A reader of the array holds every id without
+having probed a slot. The runner has one class for membership and count, so
+the length carries the same label: a value derived from the row count of a
+result over labeled columns carries the columns' labels, at every scope.
+
+The slot entry for `S` is a declared `followRef` entry because that is the
+class every reader of a reference consumes: a standalone probe of a slot,
 `equals()` on a slot, the list's references taken as handles or read raw, and
 a dereference, which consumes the entry through the probe of the slot it
 follows ([`cfc-observation-classes.md`](../cfc-observation-classes.md) §6.1,
-[`cfc-template-population.md`](../cfc-template-population.md) §6). One entry
-covers every slot, so its label is the join over the rows the result holds:
-at least each slot's own label, and more than it where rows of one result
-carry different row labels. Each declaration grows by clause and never
-shrinks, as the control paths' do.
+[`cfc-template-population.md`](../cfc-template-population.md) §6). `S` is
+one label for the whole result, so one entry covers every slot, and it grows
+by clause and never shrinks, as the control paths' declarations do. A row's
+label differs from slot to slot, and the link written at a slot carries the
+labels of the document it names, replaced whenever the slot is written. Rows
+of one result under different row labels therefore keep their own: a reader
+of one row through the result does not pick up another row's label at the
+slot.
 
 `S` is not joined into a row. A reader who reaches a row through the result
 consumes `S` at the slot and the row's label at the row. A reader holding a

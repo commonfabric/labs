@@ -1506,17 +1506,18 @@ are stamped the file-correspondence rules are retired.
 `sqliteQuery` implements §8.17.6 as
 [`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md) describes ("Where a
 query's selection inputs are labeled"). Three points where the text and the
-runner differ:
+runner differ, or where the text leaves a choice open:
 
-**SC-49 [clarify] One label for every slot of a result — §8.17.6 rule 1.**
-`open`. Rule 1 puts the member's payload label on the reference identity at
-the member's slot. The runner declares one `followRef` entry for all slots of
-a result, carrying `S` joined with the payload labels of every member the
-result holds. That is at least each slot's label. It exceeds it where members
-of one result carry different labels, and a declaration only grows, so it
-also keeps the labels of members earlier selections held. Proposed edit: say
-that a label covering several slots MUST be at least the join of what each
-would carry, and that such a covering label conforms.
+**SC-49 [clarify] Count and membership under one class — §8.17.6 rule 1.**
+`open`. Rule 1 puts `S` and the membership labels on a result's membership,
+order and count, and puts a member's payload label on the reference identity
+at its slot. The runner stores a result as an array of references and has
+one class, `enumerate`, for membership and count
+([`cfc-observation-classes.md`](./cfc-observation-classes.md) §4). A read of
+the array yields every reference, so the `enumerate` entry carries the
+members' payload labels as well, and a count carries them with it. Proposed
+edit: say that a runtime whose count observation cannot be separated from an
+observation of the references over-taints the count, and that this conforms.
 
 **SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
 item.** `open`. The item requires that untrusted code obtain a member
