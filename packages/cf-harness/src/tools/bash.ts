@@ -147,7 +147,13 @@ export const bashToolDescriptorForRuntime = (
     ? bashToolDescriptorWithSessions
     : bashToolDescriptor;
 
-/** A refusal over `session`: nothing ran, so nothing about the run moved. */
+/**
+ * A refusal over `session`. The command did not run, so `cwd` is the working
+ * directory the run already had and the refusal leaves it there. Whether the
+ * run holds an invocation record for the call depends on who refuses: the
+ * tool refuses before it makes one, and the runtime can only refuse a call
+ * that was handed to it, which is after.
+ */
 const sessionRefusal = (
   outputId: BashToolOutput["outputId"],
   cwd: string,
@@ -203,9 +209,10 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         cwd: commandCwd,
       };
     }
-    // Both refusals over `session` come BEFORE the invocation context
-    // below, which updates and persists run state: a command that never ran
-    // must not leave a record that it was prepared.
+    // The tool's own refusals over `session`, made from the input and the
+    // runtime's description alone. They come BEFORE the invocation context
+    // below, which appends to run state and persists it: a call that was
+    // never handed to the runtime leaves no record that it was prepared.
     if (input.session !== undefined) {
       if (context.sandbox.describe().sessions !== true) {
         // Said rather than silently dropped: a runtime without sessions would
@@ -284,6 +291,14 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         // The runtime has sessions but not for this call (an enforcing
         // mode, a session that ended, too many sessions): recoverable, and
         // the message tells the model which.
+        //
+        // This refusal is the runtime's, so it arrives after the invocation
+        // record above was made, and the record stays. It says the call was
+        // prepared and handed to the runtime, which is what happened, and
+        // it is the record that accounts for this output. Whether a session
+        // is there is known by starting it, and a session that ended is
+        // reported once, so there is nothing to ask the runtime beforehand.
+        // Nothing ran, so the working directory is the one the run had.
         return sessionRefusal(
           outputId,
           context.currentDir,

@@ -3617,8 +3617,10 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
     }
   }
   const context = createContext(new RefusingSessions());
+  const contexts = countInvocationContexts(context);
   const output = await bashTool.invoke(context, {
     command: "echo hi",
+    cwd: "repo",
     session: "build",
   });
   assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
@@ -3626,6 +3628,12 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
     String(output.stderr),
     "sessions need observe mode here",
   );
+  // The call was handed to the runtime, so the run holds the record it was
+  // prepared with. Nothing ran, so the working directory is the one the run
+  // had and not the one the call asked for.
+  assertEquals(contexts.created, 1);
+  assertEquals(output.cwd, "/workspace");
+  assertEquals(context.currentDir, "/workspace");
 });
 
 class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {
