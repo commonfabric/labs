@@ -6,6 +6,7 @@ import {
   CFC_RUNTIME_SUBJECT,
   cfcAtom,
 } from "@commonfabric/api/cfc";
+import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import {
   type CfcConfClause,
@@ -16,6 +17,12 @@ import {
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,
 } from "../src/cfc/exchange-eval.ts";
+import {
+  type CfcGrantCandidate,
+  cfcGrantCandidateOf,
+  type CfcGrantWriteInput,
+  createRuntimeCfcGrantSource,
+} from "../src/cfc/grants.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
 import {
@@ -30,6 +37,9 @@ import {
 } from "../src/cfc/render-ceiling.ts";
 import { SINK_CLASSES, sinkClassOf } from "../src/cfc/sink-inventory.ts";
 import type { SpaceMembershipProvider } from "../src/cfc/space-membership.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // Epic H3b (docs/history/plans/cfc-future-work-implementation.md §7): the display-sink
 // render ceiling resolves §15.2 principal shapes via exchange rules
@@ -1167,6 +1177,264 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
         }],
         integrity: [],
       })).toThrow(/must target THIS_POLICY/);
+    });
+  });
+});
+
+const grantSigner = await Identity.fromPassphrase("runner-cfc-render-grants");
+
+describe("CFC render resolver — grants at the display boundary", () => {
+  // A module rule guarded on a grant record (spec §4.3.5) fires at display
+  // when the grant it names is written through the trusted writer, and at no
+  // other time. The grant lives in the owner's identity space; the policy's
+  // subject is that space, so the rule binds the owner from `THIS_POLICY` and
+  // the reader from the grant's audience. The owner writes; the viewer, whose
+  // ceiling every case fits against, acts.
+
+  const OWNER = grantSigner.did();
+  const VIEWER = "did:key:z6MkViewerOfTheOwnersAnswer";
+  const userViewer = cfcAtom.user(VIEWER);
+  const viewerCeiling = [userViewer, cfcAtom.personalSpace(VIEWER)];
+  const ANSWER = "of:answer-q7";
+  const OTHER_ANSWER = "of:answer-q8";
+
+  const shareManifest = buildCfcPolicyArtifactManifest({
+    formatVersion: 1,
+    moduleIdentity: "sha256:share-grant-module",
+    symbol: "shareGrantRules",
+    template: {
+      templateVersion: 1,
+      exchangeRules: [{
+        name: "releaseToGrantee",
+        preCondition: {
+          confidentiality: [{ thisPolicy: true }],
+          integrity: [],
+        },
+        guard: {
+          policyState: [{
+            kind: "ShareGrant",
+            owner: { thisPolicyField: "subject" },
+            resource: ANSWER,
+            audience: {
+              type: CFC_ATOM_TYPE.User,
+              subject: { var: "$grantee" },
+            },
+          }],
+        },
+        postCondition: {
+          confidentiality: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$grantee" },
+          }],
+          integrity: [],
+        },
+      }],
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    },
+  });
+  const shareRefFor = (subject: string) =>
+    cfcAtom.modulePolicyRef(
+      shareManifest.manifest.moduleIdentity,
+      shareManifest.manifest.symbol,
+      shareManifest.policyDigest,
+      subject,
+    );
+  const shareRef = shareRefFor(OWNER);
+  const released = normalizeClause({ anyOf: [shareRef, userViewer] });
+  const answerCandidate = cfcGrantCandidateOf({
+    kind: "ShareGrant",
+    fields: { owner: OWNER, resource: ANSWER },
+  })!;
+
+  const withRuntime = async (
+    body: (runtime: Runtime) => void | Promise<void>,
+  ): Promise<void> => {
+    const storageManager = StorageManager.emulate({ as: grantSigner });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      await body(runtime);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  /** Writes the owner's grant through the trusted policy-writer path. */
+  const writeGrant = async (
+    runtime: Runtime,
+    overrides: Partial<CfcGrantWriteInput> = {},
+  ): Promise<void> => {
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: "cfc-grant-writer",
+    });
+    tx.writeCfcGrant({
+      kind: "ShareGrant",
+      owner: OWNER,
+      resource: ANSWER,
+      audience: [userViewer],
+      grantedAt: 1000,
+      ...overrides,
+    });
+    expect((await tx.commit()).ok).toBeDefined();
+    await runtime.idle();
+  };
+
+  /** Resolves the owner's `PolicyOf` label as the viewer, through `source`. */
+  const resolveAsViewer = (
+    runtime: Runtime,
+    { label = [shareRef], consulted }: {
+      label?: CfcConfClause[];
+      consulted?: (candidate: CfcGrantCandidate) => void;
+    } = {},
+  ) =>
+    createRenderConfidentialityResolver({
+      actingPrincipal: VIEWER,
+      modulePolicyResolver: () => shareManifest,
+      grantSource: createRuntimeCfcGrantSource(runtime),
+    })({ confidentiality: label }, { grant: consulted });
+
+  describe("releasing", () => {
+    it("adds `User(viewer)` to the owner's clause when the owner's grant names the viewer, which then fits the ceiling", async () => {
+      await withRuntime(async (runtime) => {
+        await writeGrant(runtime);
+        const resolved = resolveAsViewer(runtime);
+        expect(resolved).toEqual([released]);
+        expect(atomsOutsideCeiling(resolved, viewerCeiling)).toEqual([]);
+      });
+    });
+
+    it("reports the candidate it consulted, whether or not the grant is there", async () => {
+      await withRuntime(async (runtime) => {
+        const consulted: CfcGrantCandidate[] = [];
+        resolveAsViewer(runtime, {
+          consulted: (candidate) => consulted.push(candidate),
+        });
+        expect(consulted).toEqual([answerCandidate]);
+        await writeGrant(runtime);
+        consulted.length = 0;
+        resolveAsViewer(runtime, {
+          consulted: (candidate) => consulted.push(candidate),
+        });
+        expect(consulted).toEqual([answerCandidate]);
+      });
+    });
+  });
+
+  describe("not releasing", () => {
+    it("keeps the clause sealed without a grant", async () => {
+      await withRuntime((runtime) => {
+        const resolved = resolveAsViewer(runtime);
+        expect(resolved).toEqual([shareRef]);
+        expect(atomsOutsideCeiling(resolved, viewerCeiling)).toEqual([
+          shareRef,
+        ]);
+      });
+    });
+
+    it("keeps the clause sealed once the grant is revoked", async () => {
+      await withRuntime(async (runtime) => {
+        await writeGrant(runtime, { revoked: { at: 2000, by: OWNER } });
+        expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+      });
+    });
+
+    it("keeps the clause sealed under a grant for another resource", async () => {
+      await withRuntime(async (runtime) => {
+        await writeGrant(runtime, { resource: OTHER_ANSWER });
+        expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+      });
+    });
+
+    it("keeps a policy whose subject is another owner sealed by this owner's grant", async () => {
+      // The rule binds its owner from the policy's subject; the grant at that
+      // owner's address is what it reads, and this owner wrote none there.
+      await withRuntime(async (runtime) => {
+        await writeGrant(runtime);
+        const other = shareRefFor("did:key:z6MkAnotherOwnerOfAnAnswer");
+        expect(resolveAsViewer(runtime, { label: [other] })).toEqual([other]);
+      });
+    });
+
+    it("keeps the clause sealed under a document at the grant's address that is not a grant", async () => {
+      // Written past the trusted writer, straight into storage: the shape is
+      // a grant's, but its fields do not re-derive the address it sits at.
+      await withRuntime(async (runtime) => {
+        const tx = runtime.storageManager.edit();
+        tx.write({
+          space: answerCandidate.space as never,
+          id: answerCandidate.id,
+          type: "application/json",
+          path: ["value"],
+        }, {
+          version: 1,
+          space: OWNER,
+          kind: "ShareGrant",
+          owner: OWNER,
+          resource: OTHER_ANSWER,
+          audience: [userViewer],
+          grantedAt: 1000,
+        } as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await runtime.idle();
+        expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+      });
+    });
+
+    it("keeps the clause sealed under a single-use grant, since a render is an observing site", async () => {
+      await withRuntime(async (runtime) => {
+        await writeGrant(runtime, { singleUse: true });
+        expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+      });
+    });
+
+    it("releases to the grant's audience and to nobody else", async () => {
+      // A grant to a third party fires the rule for that party; what it adds
+      // sits outside the viewer's ceiling.
+      await withRuntime(async (runtime) => {
+        const third = "did:key:z6MkThirdPartyTheGrantNames";
+        await writeGrant(runtime, { audience: [cfcAtom.user(third)] });
+        const resolved = resolveAsViewer(runtime);
+        const toThird = normalizeClause({
+          anyOf: [shareRef, cfcAtom.user(third)],
+        });
+        expect(resolved).toEqual([toThird]);
+        expect(atomsOutsideCeiling(resolved, viewerCeiling)).toEqual([
+          toThird,
+        ]);
+      });
+    });
+  });
+
+  describe("the change feed", () => {
+    it("signals a grant written after the first evaluation, and its revocation after that", async () => {
+      await withRuntime(async (runtime) => {
+        const source = createRuntimeCfcGrantSource(runtime);
+        const resolve = createRenderConfidentialityResolver({
+          actingPrincipal: VIEWER,
+          modulePolicyResolver: () => shareManifest,
+          grantSource: source,
+        });
+        let changes = 0;
+        const cancel = source.subscribe(answerCandidate, () => changes++);
+        try {
+          expect(resolve({ confidentiality: [shareRef] })).toEqual([shareRef]);
+          expect(changes).toBe(0);
+          await writeGrant(runtime);
+          expect(changes).toBe(1);
+          expect(resolve({ confidentiality: [shareRef] })).toEqual([released]);
+          await writeGrant(runtime, { revoked: { at: 2000, by: OWNER } });
+          expect(changes).toBe(2);
+          expect(resolve({ confidentiality: [shareRef] })).toEqual([shareRef]);
+        } finally {
+          cancel();
+        }
+      });
     });
   });
 });

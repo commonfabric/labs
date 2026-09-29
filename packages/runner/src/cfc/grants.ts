@@ -8,6 +8,9 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { URI } from "@commonfabric/memory/interface";
 import { getCommitPreconditionsConfig } from "@commonfabric/memory/v2";
+import type { Cancel } from "../cancel.ts";
+import type { Cell } from "../cell.ts";
+import type { Runtime } from "../runtime.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -726,17 +729,51 @@ const resolveSingleUseGrant = (
 };
 
 /**
+ * The document a `policyState` guard's point query names: one address in the
+ * grant's governing space, read whether or not a document is there.
+ */
+export type CfcGrantCandidate = {
+  readonly space: string;
+  readonly id: URI;
+};
+
+/**
+ * The candidate `query` names, or `undefined` for a query no document can
+ * answer. The address is computed from the query's `kind` and bound fields,
+ * the §4.9.3 discipline: a candidate is named by the label under evaluation
+ * and the boundary's bindings, never enumerated. `owner`, a bound DID, fixes
+ * the governing space — the owner's identity space (module doc) — and
+ * `resource` completes the release scope. A query that leaves either unbound,
+ * or binds a `space` other than the owner's, names nothing. Rules that leave
+ * `resource` free (the §13.4.4 shape at a site that binds it from the
+ * evaluation context) arrive with the share-UI build-order item. Throws when
+ * a bound field cannot be digested; each caller decides what that means for
+ * its site.
+ */
+export const cfcGrantCandidateOf = (
+  query: CfcGrantResolverQuery,
+): CfcGrantCandidate | undefined => {
+  const owner = query.fields.owner;
+  const resource = query.fields.resource;
+  if (!isDID(owner) || resource === undefined || resource === null) {
+    return undefined;
+  }
+  const space = query.fields.space ?? owner;
+  if (space !== owner) return undefined;
+  return {
+    space,
+    id: cfcGrantDocId({ space, kind: query.kind, owner, resource }),
+  };
+};
+
+/**
  * The runner-side grant resolver for boundary evaluation sites that hold a
  * transaction (the sink egress gate and the input-requirement gate in
  * prepare.ts). All I/O lives here — the evaluator stays pure:
  *
- * - Candidate address: computed from `(kind + bound fields)` — `owner` (a
- *   bound DID) fixes the governing space (module doc), `resource` completes
- *   the release scope. A query with either unresolved returns nothing: the
- *   guard's variables must be bound from the label under evaluation (the
- *   §4.9.3 label-carried discovery), never enumerated. Rules that leave
- *   `resource` free (the §13.4.4 shape at a site that binds it from the
- *   evaluation context) arrive with the share-UI build-order item.
+ * - Candidate address: {@link cfcGrantCandidateOf}, so this site and the
+ *   display boundary's {@link CfcGrantSource} name the same document for
+ *   the same query.
  * - Point read at the derived address, under `internalVerifierRead` metadata
  *   (the `readStoredCfcMetadata` idiom) so grant lookups never enter the
  *   consumed set or PC (design §2.3 soundness condition 2).
@@ -772,22 +809,15 @@ export const createTxCfcGrantResolver = (
   const now = opts.now ?? Date.now;
   const memo = new Map<string, readonly CfcAtom[]>();
   return (query: CfcGrantResolverQuery): readonly CfcAtom[] => {
-    const owner = query.fields.owner;
-    const resource = query.fields.resource;
-    if (!isDID(owner) || resource === undefined || resource === null) {
-      return [];
-    }
-    // v1 governing space == owner's identity space (module doc). An explicit
-    // bound `space` field must agree; anything else fails closed.
-    const space = query.fields.space ?? owner;
-    if (space !== owner) return [];
     let facts: readonly CfcAtom[] = [];
     try {
       // Inside the catch so a bound field the hasher cannot digest fails the
       // GUARD closed rather than throwing out of the resolver (the
       // evaluator's own catch is the backstop, but the resolver stays
       // self-contained — cubic P2 on #4627).
-      const id = cfcGrantDocId({ space, kind: query.kind, owner, resource });
+      const candidate = cfcGrantCandidateOf(query);
+      if (candidate === undefined) return [];
+      const { space, id } = candidate;
       // Consumption context in the key: a single-use grant resolves in a
       // consuming query but not an observing one, so a mixed-context resolver
       // (hand-built; the prepare gates are single-context per instance) must
@@ -837,5 +867,114 @@ export const createTxCfcGrantResolver = (
       return [];
     }
     return facts;
+  };
+};
+
+/**
+ * The grant lookup for a boundary that reads a label without committing, such
+ * as the display boundary, with a change feed for the documents it reads. Its
+ * evaluation site is observing (spec §4.3.5): a single-use grant resolves
+ * nothing here, since a grant consumed by looking at it would be spent by
+ * rendering.
+ */
+export interface CfcGrantSource {
+  /**
+   * The facts of the verified, live grant `query` names, one per audience
+   * entry, read from the local replica; none when the query names no
+   * document, or the document is absent, malformed, revoked, expired or
+   * single-use, and the guard then stays unsatisfied. Synchronous: a document
+   * not yet synced resolves nothing while its load is kicked off. `consulted`
+   * hears the candidate the query names, whether or not a document was there,
+   * so the caller can watch it: a candidate is named by the rule and its
+   * bindings, so nothing the label alone says can name one.
+   */
+  resolve(
+    query: CfcGrantResolverQuery,
+    consulted?: (candidate: CfcGrantCandidate) => void,
+  ): readonly CfcAtom[];
+
+  /**
+   * Calls `onChange` when `candidate`'s document later syncs or changes,
+   * never at subscribe time. Returns a cancel.
+   */
+  subscribe(candidate: CfcGrantCandidate, onChange: () => void): Cancel;
+}
+
+/**
+ * A runtime-backed {@link CfcGrantSource}. Each lookup reads the document at
+ * the candidate address from the local replica through `Cell.get()`, a
+ * synchronous read that kicks off the document's load when it has not synced,
+ * and verifies what it finds the way the transaction-bound resolver does:
+ * shape, re-derived address, audience, then lifecycle. Deliberately not
+ * memoized: a grant is an authority record revoked in place, and a kept
+ * answer would keep releasing after the revocation, so every evaluation reads
+ * the replica again. The document is small, and `Cell.get()`'s
+ * per-transaction read cache amortizes repeated reads within one synchronous
+ * pass. One `Cell` per candidate serves both reads and subscriptions, so the
+ * two observe the same reactive state. The clock defaults to the runner's
+ * wall clock.
+ */
+export const createRuntimeCfcGrantSource = (
+  runtime: Pick<Runtime, "getCellFromLink">,
+  now: () => number = Date.now,
+): CfcGrantSource => {
+  const cells = new Map<string, Cell<unknown>>();
+  const cellFor = ({ space, id }: CfcGrantCandidate): Cell<unknown> => {
+    const key = JSON.stringify([space, id]);
+    let cell = cells.get(key);
+    if (cell === undefined) {
+      cell = runtime.getCellFromLink<unknown>({
+        id,
+        path: [],
+        space: space as MemorySpace,
+      });
+      cells.set(key, cell);
+    }
+    return cell;
+  };
+  return {
+    resolve(query, consulted) {
+      let candidate: CfcGrantCandidate | undefined;
+      try {
+        candidate = cfcGrantCandidateOf(query);
+      } catch {
+        // A bound field the hasher cannot digest names no document.
+        return [];
+      }
+      if (candidate === undefined) return [];
+      consulted?.(candidate);
+      let value: unknown;
+      try {
+        value = cellFor(candidate).get();
+      } catch {
+        // A replica that cannot be read releases nothing (§4.9.3).
+        return [];
+      }
+      if (value === undefined) return [];
+      const grant = verifyCfcGrantDocument(
+        candidate.space,
+        candidate.id,
+        value as FabricValue,
+      );
+      if (
+        grant === undefined || !cfcGrantIsLive(grant, now()) ||
+        grant.singleUse === true
+      ) {
+        return [];
+      }
+      return expandCfcGrantFacts(grant);
+    },
+    subscribe(candidate, onChange) {
+      // `Cell.sink` runs its action once synchronously at subscribe time;
+      // skip that fire so `onChange` signals change only.
+      let primed = false;
+      return cellFor(candidate).sink(() => {
+        if (!primed) {
+          primed = true;
+          return;
+        }
+        onChange();
+      });
+    },
   };
 };

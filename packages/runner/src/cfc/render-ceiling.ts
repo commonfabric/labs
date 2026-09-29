@@ -10,9 +10,10 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
-  type CfcGrantResolver,
   evaluateExchangeRules,
+  type ExchangeEvalContext,
 } from "./exchange-eval.ts";
+import type { CfcGrantCandidate, CfcGrantSource } from "./grants.ts";
 import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
@@ -169,14 +170,16 @@ export type RenderConfidentialityResolverConfig = {
   readonly membershipProvider?: SpaceMembershipProvider;
 
   /**
-   * Grant lookup for `policyState`-guarded render rules (§8.12.7 route 2a).
-   * The standard SpaceReaderAccess rule carries no policyState guard, so this
-   * stays inert until display-boundary rules consume grants (the ShareGrant
-   * end-to-end build-order item) — threaded now for parity with the sink
-   * gate, which resolves grants through the same context field. Fail closed
-   * when absent, exactly like `trustResolver`.
+   * Grant lookup for a `policyState`-guarded rule (spec §4.3.5), whether a
+   * deployment record's or a module policy's: the `resolve` half of a
+   * {@link CfcGrantSource}, reading the local replica without a transaction,
+   * since a render commits nothing. Each candidate it names is reported to
+   * the resolver's caller through {@link RenderConsulted}, so the caller can
+   * watch it. A render is an observing site, so a single-use grant never
+   * resolves here. Absent, every policyState guard is unsatisfied (fail
+   * closed), exactly like `trustResolver`.
    */
-  readonly grantResolver?: CfcGrantResolver;
+  readonly grantSource?: Pick<CfcGrantSource, "resolve">;
 
   /**
    * Manifest lookup for a label that selects a module policy (`PolicyOf<...>`,
@@ -271,14 +274,31 @@ export type RenderLabelInput = {
 };
 
 /**
+ * What a render evaluation read beyond the label, reported as it reads it so
+ * the caller can watch for change. The manifests and spaces a label names are
+ * the caller's to derive from the label; a grant candidate is named by a rule
+ * and the bindings its guards established, so only the evaluation can say
+ * which documents it consulted.
+ */
+export type RenderConsulted = {
+  /**
+   * Hears each grant candidate a `policyState` guard named, once per
+   * evaluation, whether or not a document was there.
+   */
+  readonly grant?: (candidate: CfcGrantCandidate) => void;
+};
+
+/**
  * Resolves one rendered cell's confidentiality label at the display boundary.
  * Returns the exchange-rewritten confidentiality clause set; the reconciler
  * fits it against the ceiling. Fuel exhaustion returns the ORIGINAL label
  * (fail closed, invariant 6 — it will not have gained the resolving
  * alternative, so it stays outside the ceiling and renders blocked).
+ * `consulted` hears what the evaluation read beyond the label.
  */
 export type RenderConfidentialityResolver = (
   label: RenderLabelInput,
+  consulted?: RenderConsulted,
 ) => readonly CfcConfClause[];
 
 /** `HasRole(principal, space, reader)` facts for a principal's reader spaces. */
@@ -305,7 +325,26 @@ export const createRenderConfidentialityResolver = (
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
   const modulePolicyResolver = config.modulePolicyResolver;
-  return (label) => {
+  const grantSource = config.grantSource;
+  /**
+   * The grant resolver for one evaluation, reporting each candidate to
+   * `hear` the first time a pass names it: the fixpoint re-queries a guard
+   * on every pass, and the caller is owed one report per document.
+   */
+  const grantResolverFor = (
+    hear: RenderConsulted["grant"],
+  ): ExchangeEvalContext["grantResolver"] => {
+    if (grantSource === undefined) return undefined;
+    const heard = new Set<string>();
+    return (query) =>
+      grantSource.resolve(query, (candidate) => {
+        const key = JSON.stringify([candidate.space, candidate.id]);
+        if (hear === undefined || heard.has(key)) return;
+        heard.add(key);
+        hear(candidate);
+      });
+  };
+  return (label, consulted) => {
     if (label.confidentiality.length === 0) {
       return label.confidentiality as readonly CfcConfClause[];
     }
@@ -336,9 +375,7 @@ export const createRenderConfidentialityResolver = (
         boundary,
         trustResolver,
         actingPrincipal,
-        // §8.12.7 route 2a grant lookups at the display boundary (H3b) —
-        // see the config field's doc; absent fails closed.
-        grantResolver: config.grantResolver,
+        grantResolver: grantResolverFor(consulted?.grant),
         // Consulted only for a label that selects a module policy.
         modulePolicyResolver: modulePolicyResolver === undefined
           ? undefined
