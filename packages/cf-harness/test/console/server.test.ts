@@ -4,9 +4,11 @@ import { join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
+  consoleDataDirectories,
   consoleHealthRows,
   consoleSandboxBanner,
   ConsoleServer,
+  consoleStartupBanner,
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   resolveConsoleConfig,
@@ -825,6 +827,78 @@ describe("console/server", () => {
         "  rootfs:     /store/images/kitchensink",
         "  policy:     /store/policy.json",
       ]);
+    });
+
+    it("returns the sidecar directories among those created only for a console on Docker", async () => {
+      // Strict: `toEqual` would pass a list carrying an `undefined` entry.
+      expect(
+        consoleDataDirectories(
+          await resolveConsoleConfig(ARGS, {}, "/console"),
+        ),
+      ).toStrictEqual([
+        "/console/.cf-harness-console/workspace",
+        "/console/.cf-harness-console/runs",
+        "/console/.cf-harness-console/cfc/results",
+        "/console/.cf-harness-console/cfc/invocation-context",
+      ]);
+      expect(
+        consoleDataDirectories(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        ),
+      ).toStrictEqual([
+        "/console/.cf-harness-console/workspace",
+        "/console/.cf-harness-console/runs",
+      ]);
+    });
+
+    it("returns a startup banner naming the sidecar directories for a console on Docker", async () => {
+      const banner = consoleStartupBanner(
+        await resolveConsoleConfig(
+          [
+            ...ARGS,
+            "--pattern-index-url",
+            "https://index.test/api",
+            "--skills-registry-url",
+            "https://skills.test",
+          ],
+          {},
+          "/console",
+        ),
+      );
+
+      expect(banner.slice(0, 5)).toEqual([
+        "\n  cf-harness console: http://127.0.0.1:8100",
+        "  space:      console-test",
+        "  fabric:     http://localhost:8000",
+        "  index:      https://index.test/api",
+        "  skills:     https://skills.test",
+      ]);
+      expect(banner.slice(-4)).toEqual([
+        "  results:    /console/.cf-harness-console/cfc/results",
+        "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
+        "  workspace:  /console/.cf-harness-console/workspace",
+        "  artifacts:  /console/.cf-harness-console/runs\n",
+      ]);
+    });
+
+    it("returns a startup banner naming the runsc driver, and no sidecar directory, for a console on the runsc runtime", async () => {
+      const banner = consoleStartupBanner(
+        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+      );
+
+      expect(banner.slice(3, 5)).toEqual([
+        "  index:      (not configured)",
+        "  skills:     (not configured)",
+      ]);
+      expect(banner.slice(-6)).toEqual([
+        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  runsc:      /store/bin/runsc",
+        "  rootfs:     /store/images/kitchensink",
+        "  policy:     /store/policy.json",
+        "  workspace:  /console/.cf-harness-console/workspace",
+        "  artifacts:  /console/.cf-harness-console/runs\n",
+      ]);
+      expect(banner.some((line) => line.startsWith("  results:"))).toBe(false);
     });
 
     it("reports the runsc runtime's rows, and no Docker row, for a console on the runsc runtime", async () => {

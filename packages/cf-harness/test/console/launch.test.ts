@@ -945,6 +945,66 @@ describe("launch", () => {
       ]));
     });
 
+    it("prints the harness's own defaults for a runsc console that names no binary, rootfs or policy", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(
+          plan.resolved.filter(({ name }) =>
+            ["runsc", "rootfs", "cfc policy"].includes(name)
+          ),
+        ).toEqual([
+          {
+            name: "runsc",
+            value: "`runsc`, looked for on `PATH`",
+            source: "harness default",
+          },
+          {
+            name: "rootfs",
+            value: "(the driver's default)",
+            source: "harness default",
+          },
+          {
+            name: "cfc policy",
+            value: "(none: `runsc` runs without `--cfc`)",
+            source: "harness default",
+          },
+        ]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("attributes a CFC policy found under `HOME` to the harness default, not to the environment", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const policy = `${home}/.local/share/runsc-cfc/cfc-policy.json`;
+        await Deno.mkdir(`${home}/.local/share/runsc-cfc`, {
+          recursive: true,
+        });
+        await Deno.writeTextFile(policy, "{}");
+
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(plan.resolved).toContainEqual({
+          name: "cfc policy",
+          value: policy,
+          source: "harness default",
+        });
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
     it("reads the Docker runtime table for a console the environment puts on Docker", async () => {
       let reads = 0;
       const { plan } = await prepareConsoleLaunch(

@@ -196,6 +196,58 @@ describe("health-probes", () => {
       });
     });
 
+    it("returns the runtime row unknown, not failed, when the configured CFC policy could not be looked at", async () => {
+      const rows = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        examine({
+          "/store/policy.json": { found: "unreadable", reason: "EACCES" },
+        }),
+      ).read();
+
+      expect(rows[1]).toMatchObject({
+        id: "sandbox.runtime",
+        state: "unknown",
+        value: "not verified",
+        reason: "EACCES",
+      });
+      expect(rows[1].remedy).toBeUndefined();
+    });
+
+    it("returns both rows unknown when the observation itself throws", async () => {
+      // `ConsoleHealth` reports a probe whose read rejects through the
+      // probe's own unavailable rows: a failure to look is not a failure of
+      // the runtime.
+      const health = new ConsoleHealth([], [
+        consoleRunscHealthProbe(() => config("/store/policy.json"), () => {
+          throw new Error("examining failed");
+        }),
+      ]);
+
+      await health.refresh();
+
+      const rows = health.snapshot().rows;
+      expect(rows.map(({ id, state, value, reason }) => ({
+        id,
+        state,
+        value,
+        reason,
+      }))).toEqual([
+        {
+          id: "sandbox.runsc",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
+        {
+          id: "sandbox.runtime",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
+      ]);
+      expect(rows.every((row) => row.checkedAt !== null)).toBe(true);
+    });
+
     it("returns the runtime row failed with the driver's reason when the configuration is refused", async () => {
       const rows = await consoleRunscHealthProbe(() => {
         throw new Error("runsc sandbox needs a rootfs");
@@ -215,6 +267,19 @@ describe("health-probes", () => {
   });
 
   describe("readConsolePath()", () => {
+    it("returns unreadable, carrying the error, for a look that fails other than as not found", () => {
+      const denied = new Deno.errors.PermissionDenied(
+        "Permission denied (os error 13): stat '/store/bin/runsc'",
+      );
+
+      expect(readConsolePath("/store/bin/runsc", () => {
+        throw denied;
+      })).toEqual({ found: "unreadable", reason: String(denied) });
+      expect(readConsolePath("/store/bin/runsc", () => {
+        throw new Deno.errors.NotFound("not there");
+      })).toEqual({ found: "absent" });
+    });
+
     it("returns what is at each path, and absent only for a path that is not there", async () => {
       const dir = await Deno.makeTempDir({ prefix: "cf-harness-path-" });
       try {
@@ -254,9 +319,11 @@ describe("health-probes", () => {
           await Deno.writeTextFile(join(locked, "runsc"), "");
           await Deno.chmod(locked, 0o000);
 
-          expect(readConsolePath(join(locked, "runsc")).found).toBe(
-            "unreadable",
-          );
+          const reading = readConsolePath(join(locked, "runsc"));
+          expect(reading.found).toBe("unreadable");
+          expect(
+            reading.found === "unreadable" ? reading.reason : "",
+          ).toContain(join(locked, "runsc"));
         } finally {
           await Deno.chmod(locked, 0o700);
           await Deno.remove(dir, { recursive: true });

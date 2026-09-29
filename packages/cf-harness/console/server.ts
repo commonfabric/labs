@@ -2220,6 +2220,48 @@ export const consoleSandboxBanner = (
     ];
 
 /**
+ * The directories the server creates before it serves: the workspace, the
+ * artifact root, and the Docker driver's two sidecar transports where that
+ * driver is selected. A console on the direct runsc driver creates no sidecar
+ * directory, because nothing would read one.
+ */
+export const consoleDataDirectories = (
+  config: Pick<
+    ConsoleConfig,
+    | "workspace"
+    | "artifactRoot"
+    | "cfcResultDir"
+    | "cfcInvocationContextDir"
+  >,
+): readonly string[] => [
+  config.workspace,
+  config.artifactRoot,
+  ...(config.cfcResultDir !== undefined ? [config.cfcResultDir] : []),
+  ...(config.cfcInvocationContextDir !== undefined
+    ? [config.cfcInvocationContextDir]
+    : []),
+];
+
+/**
+ * What the server prints once it is listening: its address, the fabric it
+ * runs against, the index and registry, the posture, what a turn's sandbox
+ * depends on ({@link consoleSandboxBanner}), and where its state lives.
+ */
+export const consoleStartupBanner = (
+  config: ConsoleConfig,
+): readonly string[] => [
+  `\n  cf-harness console: http://${HOSTNAME}:${config.port}`,
+  `  space:      ${config.fabricSession.space}`,
+  `  fabric:     ${config.fabricSession.apiUrl}`,
+  `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
+  `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
+  ...harnessFabricSessionPostureBanner(config.fabricSession),
+  ...consoleSandboxBanner(config),
+  `  workspace:  ${config.workspace}`,
+  `  artifacts:  ${config.artifactRoot}\n`,
+];
+
+/**
  * Builds the service and starts serving. The fabric session and the pattern
  * index reach the engine as resolved configuration on the base prompt-loop
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
@@ -2234,17 +2276,8 @@ export const startConsoleServer = async (
   launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
   const config = await resolveConsoleConfig(args, env, cwd);
-  for (
-    const directory of [
-      config.workspace,
-      config.artifactRoot,
-      config.cfcResultDir,
-      config.cfcInvocationContextDir,
-    ]
-  ) {
-    if (directory !== undefined) {
-      await Deno.mkdir(directory, { recursive: true });
-    }
+  for (const directory of consoleDataDirectories(config)) {
+    await Deno.mkdir(directory, { recursive: true });
   }
   const modelOptions = await resolveModelOptions(config, env);
   const sessionStore = config.sessionDbPath === undefined
@@ -2281,25 +2314,9 @@ export const startConsoleServer = async (
     hostname: HOSTNAME,
     port: config.port,
     onListen: () => {
-      console.log(`\n  cf-harness console: http://${HOSTNAME}:${config.port}`);
-      console.log(`  space:      ${config.fabricSession.space}`);
-      console.log(`  fabric:     ${config.fabricSession.apiUrl}`);
-      console.log(
-        `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
-      );
-      console.log(
-        `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
-      );
-      for (
-        const line of harnessFabricSessionPostureBanner(config.fabricSession)
-      ) {
+      for (const line of consoleStartupBanner(config)) {
         console.log(line);
       }
-      for (const line of consoleSandboxBanner(config)) {
-        console.log(line);
-      }
-      console.log(`  workspace:  ${config.workspace}`);
-      console.log(`  artifacts:  ${config.artifactRoot}\n`);
     },
     onError: (error) => {
       console.error(error instanceof Error ? error.message : String(error));

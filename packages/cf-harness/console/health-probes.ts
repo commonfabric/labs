@@ -91,19 +91,20 @@ export type ConsolePathReading =
   | { found: "unreadable"; reason: string };
 
 /**
- * Looks at one host path without following it anywhere else. Only a path that
- * is not there reads as absent; any other failure to look is unreadable,
- * which leaves the fact it would have established unknown.
+ * Looks at one host path. Only a path that is not there reads as absent; any
+ * other failure to look is unreadable, which leaves the fact it would have
+ * established unknown. `stat` replaces `Deno.statSync`.
  */
-export const readConsolePath = (path: string): ConsolePathReading => {
+export const readConsolePath = (
+  path: string,
+  stat: (path: string) => Deno.FileInfo = Deno.statSync,
+): ConsolePathReading => {
   let info: Deno.FileInfo;
   try {
-    info = Deno.statSync(path);
+    info = stat(path);
   } catch (error) {
-    return error instanceof Deno.errors.NotFound ? { found: "absent" } : {
-      found: "unreadable",
-      reason: error instanceof Error ? error.message : String(error),
-    };
+    if (error instanceof Deno.errors.NotFound) return { found: "absent" };
+    return { found: "unreadable", reason: String(error) };
   }
   return info.isFile
     ? { found: "file", executable: ((info.mode ?? 0) & 0o111) !== 0 }
