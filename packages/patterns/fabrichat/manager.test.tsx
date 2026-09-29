@@ -6,8 +6,9 @@
  * DELIBERATELY NOT COVERED HERE: creating a room. A room is created in a space
  * of its own with `inSpace()`, a cross-space commit whose closure replication
  * is unavailable in the pattern-unit lane, which fails a test file on the
- * error that logs. `packages/runner/test/fabrichat-manager.test.ts` covers
- * creating, finding, forgetting, and re-finding rooms in the runner lane,
+ * error that logs. `../integration/fabrichat-manager.test.ts` covers
+ * creating, finding, forgetting, and re-finding rooms with a runtime of its
+ * own,
  * where cross-space commits work.
  */
 import { assert, pattern, TESTS } from "commonfabric";
