@@ -61,6 +61,35 @@ describe("CFC atom patterns", () => {
         .toBeNull();
     });
 
+    it("returns `null` where `$actingUser` would take its value from the atom", () => {
+      expect(matchAtomPattern({ var: "$actingUser" }, "did:key:alice"))
+        .toBeNull();
+      expect(
+        matchAtomPattern(
+          { type: CFC_ATOM_TYPE.User, subject: { var: "$actingUser" } },
+          userA,
+        ),
+      ).toBeNull();
+    });
+
+    it("unifies `$actingUser` against a binding the caller supplies", () => {
+      const bound = { "$actingUser": "did:key:alice" };
+      expect(
+        matchAtomPattern(
+          { type: CFC_ATOM_TYPE.User, subject: { var: "$actingUser" } },
+          userA,
+          bound,
+        ),
+      ).toEqual(bound);
+      expect(
+        matchAtomPattern(
+          { type: CFC_ATOM_TYPE.User, subject: { var: "$actingUser" } },
+          userB,
+          bound,
+        ),
+      ).toBeNull();
+    });
+
     it("record patterns constrain named fields only (subset semantics)", () => {
       // The pattern names type+space; principal/role are unconstrained.
       const pattern = { type: CFC_ATOM_TYPE.HasRole, space: "space:x" };

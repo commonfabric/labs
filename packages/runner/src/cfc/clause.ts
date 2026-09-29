@@ -75,10 +75,9 @@ export const clausesEqual = (
 
 /**
  * Whether a value is a DID naming both of its parts: `isDID` alone admits
- * `did:` and `did:key`, which name no principal for the rewrite below to
- * restate.
+ * `did:` and `did:key`, which name no principal.
  */
-const isCompleteDID = (value: unknown): boolean => {
+export const isCompleteDID = (value: unknown): value is string => {
   const parsed = parseDID(value);
   return parsed !== undefined && parsed.method !== "" && parsed.id !== "";
 };

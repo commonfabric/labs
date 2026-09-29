@@ -78,8 +78,9 @@
  * | cfcLabelMetadataProtection | core-pinned `"enforce"` (inv-12 Stage 1)         |
  * | cfcDeclaredMonotonicity    | core-pinned `"observe"` (WP5 §8.12.1; `enforce`  |
  * |                            | once per-principal mints move to `derived`)      |
- * | cfcPolicyRecords           | core-default (none declared) — flip in           |
- * |                            | coreOptions when a first-party rollout begins    |
+ * | cfcPolicyRecords           | core-default (none declared); delta on           |
+ * |                            | browserWorker (the host declares its deployment  |
+ * |                            | policy records through InitializationData)       |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
  * |                            | deployment (value-level provenance Stage 0)      |
  * | cfcTrustConfig             | core-default (none declared); delta on           |
@@ -151,6 +152,7 @@ import {
   type CfcConfClause,
   type CfcEnforcementMode,
   type CfcFlowLabelsMode,
+  type CfcPolicyRecordInput,
   type CfcReadOnExceed,
   type CfcTrustConfigInput,
   type CfcWriteFloorMode,
@@ -501,7 +503,7 @@ function coreOptions(params: CoreParams): RuntimeOptions {
     // cfcReadOnExceed are not among them: they ride the constructor defaults
     // (off / none) until a first-party rollout begins, except where a preset
     // adds a delta after these core options (browserWorker passes the host's
-    // cfcTrustConfig and read ceiling). A caller that opts
+    // cfcPolicyRecords, cfcTrustConfig and read ceiling). A caller that opts
     // into `cfcPosture` gets the named bundle's values over the pins, for
     // this one runtime.
     ...presetCfcOptions({
@@ -631,6 +633,13 @@ export interface BrowserWorkerPresetParams extends CoreParams {
    * such as a default profile trusting a reviewed policy digest.
    */
   cfcTrustConfig?: CfcTrustConfigInput;
+
+  /**
+   * The deployment policy records, from `InitializationData`: the host
+   * decides which exchange rules its runtimes evaluate at every boundary,
+   * display included, such as an owner-self display release.
+   */
+  cfcPolicyRecords?: readonly CfcPolicyRecordInput[];
 
   trustSnapshotProvider?: () => TrustSnapshot | undefined;
   telemetry?: RuntimeTelemetry;
@@ -807,6 +816,9 @@ export const runtimePresets = {
       ...readCeilingOptions(params),
       ...(params.cfcTrustConfig !== undefined
         ? { cfcTrustConfig: params.cfcTrustConfig }
+        : {}),
+      ...(params.cfcPolicyRecords !== undefined
+        ? { cfcPolicyRecords: params.cfcPolicyRecords }
         : {}),
       ...(params.trustSnapshotProvider !== undefined
         ? { trustSnapshotProvider: params.trustSnapshotProvider }

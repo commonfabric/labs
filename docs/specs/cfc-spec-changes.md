@@ -1508,3 +1508,63 @@ for: a module of the program a release installs (SC-47), or the verified
 writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
 one-time authenticated migration of legacy claims, and that once stored claims
 are stamped the file-correspondence rules are retired.
+
+## From the acting-user and display-boundary build (2026-09-26)
+
+**SC-49 [normative] `$actingUser` in rule data, and deployment records at the
+display boundary — §4.9.2 + §8.10.6.** `open`. Two runtime behaviors the
+spec implies without spelling out.
+
+`$actingUser`. §4.9.2 says labels and exchange rules may reference
+`$actingUser`, which the runtime substitutes with the DID from the acting
+context; §4.4.5's evaluator takes the acting user as an argument, and §5.4.2
+and §13.2.1 use the variable in rule data. The evaluator implements this by
+starting every rule match with `$actingUser` bound to the trusted acting
+principal, and the matcher never binds the variable from a matched atom, so a
+reader is never learned from the label (cf. §8.10.3; §8.17.3 states the same
+discipline for placeholder principals in declared ceilings). No binding is
+supplied when the acting principal is absent, not a complete DID, or the
+runtime's own subject (the default subject of an ownerless `Resource`, stored
+credentials among them), and a rule naming `$actingUser` is then inert. Module
+rules keep their integrity or policy-state guard (§4.3.6).
+
+Deployment records at display. §8.10.6 says ordinary exchange-rule evaluation
+runs before the display ceiling's fit, as at any boundary, and that admitting
+more needs authored policy or verified authority. The render resolver
+evaluates the deployment snapshot, the records the commit and sink gates
+evaluate, beside the standard render rule and the module policies a label
+selects. The runtime validates and freezes the records when it is built;
+attesting them with the rest of the deployment configuration is the
+deployment's obligation (§4.4.1, §9.2.1), and a browser-worker host supplies
+them from the page as `InitializationData.cfcPolicyRecords`, part of the
+security context an attach is compared against. What a record adds must still
+fit the host's render ceiling, which names the acting user's identity atoms and
+the allow-listed caveat kinds, so no record makes a display render for anyone
+but the acting user (§8.10.5.2).
+
+A deployment that lets an owner see their own resources at display authors
+that release as a record: `Resource{ subject: $actingUser }` gains
+`User($actingUser)`, guarded on `BoundaryContext{ key: sinkClass, value:
+display }`. The record is the deployment's release judgment under §8.10.6;
+the standard render rules release no `Resource`.
+
+Open points. (a) §4.9.2 does not say whether its substitution applies at
+boundaries other than display, or to every source of rules; the runtime binds
+`$actingUser` at every boundary that names an acting principal, for the
+standard rules, deployment records and module manifests alike. (b) §5.3.2's
+owner-self allowance and invariant 3 are written for a standard-profile rule;
+the spec does not say whether an owner-self release authored as a deployment
+record is that rule or authored policy under §8.10.6. The runtime refuses no
+unguarded deployment record. (c) §8.10.6's example list names no owner-self
+form. (d) §5.3.2 does not say what satisfies "attested deployment"; the
+runtime leaves attesting its configuration, the records included, to the
+deployment.
+
+Proposed edit: in §4.9.2, state that the evaluator supplies `$actingUser`
+before matching and never binds it from a label; in §8.10.6, state that the
+deployment's policy records are among the records evaluated before the fit.
+Implemented in `packages/runner/src/cfc/exchange-eval.ts`
+(`actingUserBindings`), `packages/runner/src/cfc/atom-pattern.ts`
+(`ACTING_USER_VAR`), `packages/runner/src/cfc/render-ceiling.ts`
+(`policySnapshot`) and `packages/runtime-client/src/protocol/types.ts`
+(`InitializationData.cfcPolicyRecords`).

@@ -781,4 +781,133 @@ describe("render-audience", () => {
       expect(text).not.toContain("Carried note");
     });
   });
+
+  describe("deployment policy rendering", () => {
+    // The host's deployment policy records reach the worker's runtime, and the
+    // render resolver the processor builds from it evaluates them at display.
+    // The record is the owner-self display release a deployment authors.
+
+    const ownerSelfDisplay = [{
+      id: "owner-self-display",
+      rules: [{
+        id: "resource-owner-self-display",
+        appliesTo: {
+          type: CFC_ATOM_TYPE.Resource,
+          subject: { var: "$actingUser" },
+        },
+        preCondition: {
+          boundary: [{
+            type: CFC_ATOM_TYPE.BoundaryContext,
+            key: "sinkClass",
+            value: "display",
+          }],
+        },
+        post: {
+          addAlternatives: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$actingUser" },
+          }],
+        },
+      }],
+    }];
+
+    /** Renders the owner's own message for the owner and returns the text. */
+    async function renderOwnMessage(
+      cfcPolicyRecords: typeof ownerSelfDisplay | undefined,
+    ): Promise<string[]> {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const options = {
+        ...createRuntimeClientOptions({
+          session,
+          apiUrl: new URL("http://localhost/"),
+          cfcRenderCeiling: true,
+        }),
+        ...(cfcPolicyRecords === undefined ? {} : { cfcPolicyRecords }),
+      };
+      await using runtime = createWorkerRuntime(options);
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, session.space);
+      const message = runtime.getCell<WorkerRenderNode>(
+        session.space,
+        "owner-message",
+        undefined,
+        seed,
+      );
+      seedStoredEnvelope(seed, {
+        space: session.space,
+        id: message.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Owner's message",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [
+                  cfcAtom.user(identity.did()),
+                  cfcAtom.resource("message", identity.did()),
+                ],
+              },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          undefined,
+        ),
+        membershipProvider: membership,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [message],
+      });
+      try {
+        await runtime.idle();
+        reconciler.flush();
+        return emittedText(ops);
+      } finally {
+        cancel();
+      }
+    }
+
+    it("renders the owner's own `Resource`-labeled value under the host's owner-self record", async () => {
+      const text = await renderOwnMessage(ownerSelfDisplay);
+      expect(text).toContain("Owner's message");
+      expect(text).not.toContain("Content hidden by policy");
+    });
+
+    it("hides the same value when the host supplies no record", async () => {
+      const text = await renderOwnMessage(undefined);
+      expect(text).toContain("Content hidden by policy");
+      expect(text).not.toContain("Owner's message");
+    });
+  });
 });

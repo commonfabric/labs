@@ -160,6 +160,7 @@ export {
 } from "./clause.ts";
 export type { AtomPattern, AtomPatternBindings } from "./atom-pattern.ts";
 export {
+  ACTING_USER_VAR,
   atomEntails,
   instantiateAtomPattern,
   isAtomVarPlaceholder,

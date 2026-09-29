@@ -37,6 +37,7 @@ weeks later.
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
 | 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 | 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
+| 10 | Deployment policy records | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/render-audience.test.ts` — `deployment policy rendering`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `runner/test/cfc-render-ceiling.test.ts` — `deployment policy at the display boundary` |
 
 ---
 
@@ -491,6 +492,64 @@ a receipt with no entry, which is how the actor's home space records a seal
 that did not commit. As with snapshot
 sharing, an embedder exposing this transport to untrusted content delegates the
 actor's consent. `cf-custody-seal` is the component that drives it.
+
+---
+
+## 10. Deployment policy records
+
+A host declares the exchange rules its worker runtime evaluates with
+`RuntimeClientOptions.cfcPolicyRecords`, which reaches the worker as
+`InitializationData.cfcPolicyRecords` and the runtime as
+`RuntimeOptions.cfcPolicyRecords`. The runtime validates and freezes them into
+its policy snapshot when it is built, refusing to start on a malformed record,
+and evaluates that snapshot at every boundary: the commit and sink gates, and
+the display boundary before the render ceiling's fit. A rule's `$actingUser`
+is the acting principal, which for display is the render audience. What a
+record adds at display must still fit the host's render ceiling: the acting
+user's identity atoms and the allow-listed caveat kinds. Attesting the records
+with the rest of the deployment's configuration is the deployment's
+obligation; the runtime validates them and does not attest them. The records
+are part of the runtime's security context, compared
+by the digest of the snapshot the runner builds from them, so an attach
+asserting another set is refused and key order is not posture.
+
+An owner seeing their own `Resource`-labeled values is a release the
+deployment authors, not one labs ships. This record adds `User` naming the
+acting user to a `Resource` whose subject is the acting user, at display
+sinks only:
+
+```json
+{
+  "id": "owner-self-display",
+  "rules": [{
+    "id": "resource-owner-self-display",
+    "appliesTo": {
+      "type": "https://commonfabric.org/cfc/atom/Resource",
+      "subject": { "var": "$actingUser" }
+    },
+    "preCondition": {
+      "boundary": [{
+        "type": "https://commonfabric.org/cfc/atom/BoundaryContext",
+        "key": "sinkClass",
+        "value": "display"
+      }]
+    },
+    "post": {
+      "addAlternatives": [{
+        "type": "https://commonfabric.org/cfc/atom/User",
+        "subject": { "var": "$actingUser" }
+      }]
+    }
+  }]
+}
+```
+
+It carries no integrity guard. It is the deployment's release judgment under
+spec §8.10.6; how it relates to the owner-self allowance of §5.3.2 and to
+invariant 3 is among the open points of
+[SC-49](../specs/cfc-spec-changes.md). It leaves `class` and `scope`
+unconstrained; a deployment that means to release fewer classes names them in
+`appliesTo`.
 
 ---
 

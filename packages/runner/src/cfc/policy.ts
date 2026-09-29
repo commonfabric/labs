@@ -966,12 +966,33 @@ export const buildCfcPolicySnapshot = (
       selection: recordSelection,
     });
   }
-  const snapshot: PolicySnapshot = {
-    records,
-    digest: hashStringOf({
-      version: 1,
-      records: records.map((record) => record.digest),
-    }),
-  };
-  return deepFreeze(snapshot);
+  return deepFreeze(snapshotOf(records));
 };
+
+/**
+ * Helper for the snapshot builders, which pairs `records` with the digest
+ * covering every one of them.
+ */
+const snapshotOf = (records: readonly PolicyRecord[]): PolicySnapshot => ({
+  records,
+  digest: hashStringOf({
+    version: 1,
+    records: records.map((record) => record.digest),
+  }),
+});
+
+/**
+ * Returns one snapshot holding the records of every snapshot in `snapshots`,
+ * in order, skipping `undefined`, for a boundary that evaluates several
+ * validated record sets to one fixpoint. The records are the ones already
+ * validated and frozen; nothing is revalidated. Two record sets may use the
+ * same record id, which `buildCfcPolicySnapshot` refuses within one set;
+ * both records are evaluated, and only diagnostics that name a record by id
+ * become ambiguous.
+ */
+export const joinCfcPolicySnapshots = (
+  snapshots: readonly (PolicySnapshot | undefined)[],
+): PolicySnapshot =>
+  deepFreeze(
+    snapshotOf(snapshots.flatMap((snapshot) => snapshot?.records ?? [])),
+  );

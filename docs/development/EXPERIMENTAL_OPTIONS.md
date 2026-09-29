@@ -1422,18 +1422,22 @@ the per-epic implementation notes).
   runtime. Display sinks admit the acting user's identity and personal-space
   atoms plus allow-listed influence-class caveat kinds. Before the fit check,
   the worker resolves shared `Space` labels through verified reader membership,
-  and runs the exchange rules of any module policy (`PolicyOf`) a label
-  selects, reading that policy's manifest from the space the label is stored
-  in and verifying its digest; a delegate's access to the session workspace
-  requires its own membership evidence. Confidentiality the ceiling does not
-  satisfy stays blocked, and author-supplied render-boundary declassification
-  is denied.
+  evaluates the deployment's policy records (`cfcPolicyRecords`, which a host
+  supplies through `InitializationData`), and runs the exchange rules of any
+  module policy (`PolicyOf`) a label selects, reading that policy's manifest
+  from the space the label is stored in and verifying its digest; a delegate's
+  access to the session workspace requires its own membership evidence.
+  Confidentiality the ceiling does not satisfy stays blocked, and
+  author-supplied render-boundary declassification is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
   `cfcRenderCeiling` localStorage key records. The end state is to remove the
   toggle and make the ceiling unconditional.
-- **Status on 2026-09-23.** Exchange resolution is implemented, including
-  module policies. Where reader membership is required, missing or unsynced
+- **Status on 2026-09-26.** Exchange resolution is implemented, including
+  module policies and the deployment's policy records, so a deployment-authored
+  owner-self release renders the acting user's own `Resource`-labeled values to
+  them and leaves another subject's blocked.
+  Where reader membership is required, missing or unsynced
   ACL evidence keeps the content blocked; a reader grant admits it and a
   revocation blocks it again. A module policy whose manifest is missing, has
   not synced, or fails verification keeps its content blocked until a

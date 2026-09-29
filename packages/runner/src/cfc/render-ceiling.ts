@@ -17,6 +17,7 @@ import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
   isExactModulePolicyRef,
+  joinCfcPolicySnapshots,
   type PolicySnapshot,
 } from "./policy.ts";
 import type { RenderModulePolicyResolver } from "./policy-resolver.ts";
@@ -35,11 +36,15 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  * resolved confidentiality for the reconciler to fit (clause-subsumption,
  * §8.10.3) against the host's `maxConfidentiality`.
  *
- * Resolution runs RUNNER-side (this module) exactly as B5's sink gate does
- * (`evaluateGatedConfidentiality` in prepare.ts), differing only in the
- * boundary class: this mints `sinkClass:"display"` where the network sink
- * mints `sinkClass:"network"`. The reconciler consumes the resolved label; it
- * never runs the evaluator itself.
+ * Resolution runs RUNNER-side (this module) as B5's sink gate does
+ * (`evaluateGatedConfidentiality` in prepare.ts): the same evaluator, acting
+ * principal and deployment policy records. It differs in three things: the
+ * boundary class, since this mints `sinkClass:"display"` where a sink gate
+ * mints its sink's class; `STANDARD_RENDER_EXCHANGE_RULES`, which this
+ * evaluates beside the deployment's records; and the switch, since this runs
+ * wherever the render ceiling is on, whatever the `cfcPolicyEvaluation` dial
+ * says. The reconciler consumes the resolved label; it never runs the
+ * evaluator itself.
  */
 
 /** The display sink class — the render sibling of B5's `"network"` class. */
@@ -50,21 +55,31 @@ export const RENDER_SINK_NAME = "render";
 
 /**
  * The display boundary context minted for every render evaluation: the sink
- * name plus its class. `sinkClass:"display"` scopes the standard render
- * exchange rules (and any deployment rule guarded on the display class).
+ * name plus its class. `sinkClass:"display"` is what the standard render
+ * exchange rules guard on, and what a deployment record guards on to act at
+ * display sinks alone.
  */
 const renderDisplayBoundary = (): readonly CfcAtom[] => [
   cfcAtom.boundaryContext("sink", RENDER_SINK_NAME),
   cfcAtom.boundaryContext("sinkClass", RENDER_DISPLAY_SINK_CLASS),
 ];
 
+/** The boundary guard confining a rule to display sinks. */
+const DISPLAY_SINK_CLASS_GUARD = {
+  type: CFC_ATOM_TYPE.BoundaryContext,
+  key: "sinkClass",
+  value: RENDER_DISPLAY_SINK_CLASS,
+};
+
 /**
- * The standard render exchange rule set (spec §4.3.3 SpaceReaderAccess, scoped
- * to the display boundary). `Space($s)` confidentiality plus a verified
- * `HasRole($p, $s, reader)` membership fact — under a display boundary — adds
- * a `User($p)` alternative, so a display audience holding that role fits the
- * `User(actingUser)` ceiling. `PersonalSpace(actingUser)` needs no rule: the
- * §8.10.6 ceiling admits it by exact match (the acting user is its owner).
+ * The standard render exchange rule set: §4.3.3's `SpaceReaderAccess`, scoped
+ * to the display boundary. A `Space($s)` alternative plus a verified
+ * `HasRole($p, $s, reader)` membership fact adds a `User($p)` alternative, so
+ * a display audience holding that role fits the `User(actingUser)` ceiling.
+ * `PersonalSpace(actingUser)` needs no rule, since the §8.10.6 ceiling admits
+ * it by exact match. Any other release at display, an owner seeing their own
+ * `Resource` atoms among them, is the deployment's to author as a policy
+ * record (`RenderConfidentialityResolverConfig.policySnapshot`).
  */
 export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
   id: "space-reader-access-display",
@@ -76,26 +91,39 @@ export const STANDARD_RENDER_EXCHANGE_RULES: readonly ExchangeRule[] = [{
       space: { var: "$s" },
       role: "reader",
     }],
-    boundary: [{
-      type: CFC_ATOM_TYPE.BoundaryContext,
-      key: "sinkClass",
-      value: RENDER_DISPLAY_SINK_CLASS,
-    }],
+    boundary: [DISPLAY_SINK_CLASS_GUARD],
   },
   post: {
     addAlternatives: [{ type: CFC_ATOM_TYPE.User, subject: { var: "$p" } }],
   },
 }];
 
-/** Built once — the standard render rules are static deployment-independent. */
+/** The standard render rules as a snapshot, built once: they are static. */
 const STANDARD_RENDER_SNAPSHOT: PolicySnapshot = buildCfcPolicySnapshot([{
   id: "cfc-standard-render",
   rules: STANDARD_RENDER_EXCHANGE_RULES,
 }])!;
 
 export type RenderConfidentialityResolverConfig = {
-  /** The display audience — the acting user whose HasRole facts are minted. */
+  /**
+   * The display audience: the acting user whose `HasRole` facts are minted,
+   * and the evaluator's `$actingUser`. Absent, neither is supplied.
+   */
   readonly actingPrincipal?: string;
+
+  /**
+   * The deployment's policy records (`Runtime.cfcPolicySnapshot`), which the
+   * render boundary evaluates beside the standard render rules and the module
+   * policies a label selects, before the ceiling fit (§8.10.6). They are the
+   * records every other boundary evaluates, validated and frozen when the
+   * runtime is built; attesting them with the rest of its configuration is
+   * the deployment's obligation (§4.4.1, §9.2.1). A record acts here only
+   * where its guards admit a display boundary, and what it adds must still fit
+   * the host's ceiling: the acting user's identity atoms and the allow-listed
+   * caveat kinds. Absent, only the standard render rules and module policies
+   * run.
+   */
+  readonly policySnapshot?: PolicySnapshot;
 
   /**
    * Deployment trust config (B3), for any render rule with a `Concept`-valued
@@ -270,6 +298,10 @@ export const createRenderConfidentialityResolver = (
   const boundary = renderDisplayBoundary();
   const trustResolver = createTrustResolver(config.trustConfig);
   const actingPrincipal = config.actingPrincipal;
+  const policy = joinCfcPolicySnapshots([
+    STANDARD_RENDER_SNAPSHOT,
+    config.policySnapshot,
+  ]);
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
   const modulePolicyResolver = config.modulePolicyResolver;
@@ -298,7 +330,7 @@ export const createRenderConfidentialityResolver = (
         confidentiality: [...label.confidentiality],
         integrity: [...(label.integrity ?? [])],
       },
-      STANDARD_RENDER_SNAPSHOT,
+      policy,
       {
         integrity: mintReaderRoleFacts(actingPrincipal, [...memberSpaces]),
         boundary,

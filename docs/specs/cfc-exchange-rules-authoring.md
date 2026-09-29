@@ -30,7 +30,7 @@ use their separate exact-manifest resolver and never enter that snapshot.
 
 ## Last Updated
 
-2026-07-11
+2026-09-26
 
 ## Motivation
 
@@ -164,8 +164,12 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   fields are compile errors.
 - Lowering rejects a general-surface rule unless it has a `pre.integrity`
   pattern or `guard.policyState` grant guard. Boundary-only authoring remains
-  extensions-gated. If the owner-self case is approved, it ships as a narrow
-  trusted standard-profile rule rather than a generic authoring exemption.
+  extensions-gated. Owner-self access is not an authoring exemption: a
+  deployment authors an owner-self display release as a deployment policy
+  record (`RuntimeOptions.cfcPolicyRecords`), which the display boundary
+  evaluates (SC-49). `v("$actingUser")` in an authored rule is the acting
+  principal, which the evaluator binds before matching and never reads off the
+  label (spec §4.9.2); the rule still needs its guard.
 
 ### 2a. Raising, direct
 
@@ -267,9 +271,9 @@ rules are generic and grant-guarded, and the user's editable defaults are
 //    construction, never a release to anyone else.
 { "id": "concept-owner-access",
   "appliesTo": { "type": ".../atom/Context",
-    "concept": HEALTH, "subject": "$actingUser" },
+    "concept": HEALTH, "subject": { "var": "$actingUser" } },
   "post": { "addAlternatives": [
-    { "type": ".../atom/User", "subject": "$actingUser" }] } }
+    { "type": ".../atom/User", "subject": { "var": "$actingUser" } }] } }
 
 // 2. Standing default — one rule serves every user-edited default.
 { "id": "concept-standing-grant",

@@ -10,6 +10,10 @@
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { clausesEqual } from "@commonfabric/runner/cfc/clause";
 import {
+  buildCfcPolicySnapshot,
+  type CfcPolicyRecordInput,
+} from "@commonfabric/runner/cfc/policy";
+import {
   buildCfcTrustConfig,
   type CfcTrustConfigInput,
 } from "@commonfabric/runner/cfc/trust";
@@ -71,6 +75,7 @@ const SECURITY_CONTEXT_FIELDS: Record<
   apiUrl: true,
   cfcEnforcementMode: true,
   cfcFlowLabels: true,
+  cfcPolicyRecords: true,
   cfcReadMaxConfidentiality: true,
   cfcReadOnExceed: true,
   cfcTrustConfig: true,
@@ -136,6 +141,32 @@ function trustConfigsEqual(
 }
 
 /**
+ * Deployment policy records compare by the digest of the snapshot the runner
+ * builds from them (`buildCfcPolicySnapshot`), which is what a runtime holds
+ * and evaluates. Key order is spelling, not posture, and so is a record or
+ * rule field left at its default or written out. Inside a pattern a key
+ * written as `undefined` is an absence requirement and part of the digest.
+ * The order of records and of their rules is kept, as the runner's digest
+ * keeps it. A record set the runner refuses to build is one no runtime booted
+ * with, so it agrees with nothing. Imported through the `cfc/policy` subpath
+ * for the reason given at {@link readCeilingsEqual}.
+ */
+function policyRecordsEqual(
+  left: readonly CfcPolicyRecordInput[] | undefined,
+  right: readonly CfcPolicyRecordInput[] | undefined,
+): boolean {
+  const digestOf = (records: readonly CfcPolicyRecordInput[] | undefined) => {
+    try {
+      return { digest: buildCfcPolicySnapshot(records)?.digest };
+    } catch {
+      return undefined;
+    }
+  };
+  const [a, b] = [digestOf(left), digestOf(right)];
+  return a !== undefined && b !== undefined && a.digest === b.digest;
+}
+
+/**
  * The fields on which `asserted` and `running` disagree, in a fixed order, or
  * an empty list where they agree throughout.
  *
@@ -156,6 +187,8 @@ export function securityContextDifferences(
       ? !readCeilingsEqual(asserted[field], running[field])
       : field === "cfcTrustConfig"
       ? !trustConfigsEqual(asserted[field], running[field])
+      : field === "cfcPolicyRecords"
+      ? !policyRecordsEqual(asserted[field], running[field])
       : !deepEqual(asserted[field], running[field])
   );
 }

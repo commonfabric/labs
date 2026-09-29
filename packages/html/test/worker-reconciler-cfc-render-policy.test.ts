@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/runner";
 import {
   buildCfcPolicyArtifactManifest,
+  buildCfcPolicySnapshot,
   createRenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -3331,6 +3332,135 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         } finally {
           cancel();
         }
+      },
+    );
+
+    await t.step(
+      "a deployment's owner-self record renders the acting user's own Resource and nothing else",
+      async () => {
+        // The resolver evaluates the deployment's policy records at display.
+        // The two values carry the same label except for the subject of their
+        // `Resource` clause, and the same value renders without the record
+        // only as blocked.
+
+        const otherSubject = "did:key:z6MkAnotherSubjectOfThisMessage";
+        const ownerSelfDisplay = buildCfcPolicySnapshot([{
+          id: "owner-self-display",
+          rules: [{
+            id: "resource-owner-self-display",
+            appliesTo: {
+              type: CFC_ATOM_TYPE.Resource,
+              subject: { var: "$actingUser" },
+            },
+            preCondition: {
+              boundary: [{
+                type: CFC_ATOM_TYPE.BoundaryContext,
+                key: "sinkClass",
+                value: "display",
+              }],
+            },
+            post: {
+              addAlternatives: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { var: "$actingUser" },
+              }],
+            },
+          }],
+        }]);
+        const seedTx = runtime.edit();
+        const seedLabeled = (
+          id: string,
+          value: string,
+          confidentiality: CfcAtom[],
+        ) => {
+          const cell = runtime.getCell<string>(
+            signer.did(),
+            id,
+            undefined,
+            seedTx,
+          );
+          const link = cell.getAsNormalizedFullLink();
+          writeSeedEnvelopeDoc(seedTx, signer.did());
+          seedStoredEnvelope(seedTx, {
+            space: signer.did(),
+            id: link.id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{ path: [], label: { confidentiality } }],
+              },
+            },
+          });
+          return cell;
+        };
+        const ownMessage = seedLabeled(
+          "cfc-owner-self-own-message",
+          "Owner's own message",
+          [
+            cfcAtom.user(signer.did()),
+            cfcAtom.resource("message", signer.did()),
+          ],
+        );
+        const otherMessage = seedLabeled(
+          "cfc-owner-self-other-message",
+          "Another subject's message",
+          [
+            cfcAtom.user(signer.did()),
+            cfcAtom.resource("message", otherSubject),
+          ],
+        );
+        assertEquals((await seedTx.commit()).ok !== undefined, true);
+
+        const renderWith = async (
+          policySnapshot: typeof ownerSelfDisplay | undefined,
+        ) => {
+          const collector = createOpsCollector();
+          const reconciler = new WorkerReconciler({
+            onOps: collector.onOps,
+            renderConfidentialityCeiling: {
+              atoms: [
+                cfcAtom.user(signer.did()),
+                cfcAtom.personalSpace(signer.did()),
+              ],
+              caveatKinds: [],
+            },
+            resolveRenderConfidentiality: createRenderConfidentialityResolver({
+              actingPrincipal: signer.did(),
+              memberSpaces: [signer.did()],
+              policySnapshot,
+            }),
+          });
+          const cancel = reconciler.mount({
+            type: "vnode",
+            name: "div",
+            props: {},
+            children: [ownMessage as never, otherMessage as never],
+          });
+          try {
+            await t.settle();
+            return collector.getOpsOfType("create-text").map((op) => op.text);
+          } finally {
+            cancel();
+          }
+        };
+
+        const withRecord = await renderWith(ownerSelfDisplay);
+        assertEquals(withRecord.includes("Owner's own message"), true);
+        assertEquals(withRecord.includes("Another subject's message"), false);
+        assertEquals(withRecord.includes("Content hidden by policy"), true);
+        const withoutRecord = await renderWith(undefined);
+        assertEquals(withoutRecord.includes("Owner's own message"), false);
+        assertEquals(
+          withoutRecord.includes("Another subject's message"),
+          false,
+        );
+        assertEquals(withoutRecord.includes("Content hidden by policy"), true);
       },
     );
 
