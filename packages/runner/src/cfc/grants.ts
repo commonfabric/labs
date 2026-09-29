@@ -903,11 +903,10 @@ export interface CfcGrantSource {
  * shape, re-derived address, audience, then lifecycle. Deliberately not
  * memoized: a grant is an authority record revoked in place, and a kept
  * answer would keep releasing after the revocation, so every evaluation reads
- * the replica again. The document is small, and `Cell.get()`'s
- * per-transaction read cache amortizes repeated reads within one synchronous
- * pass. One `Cell` per candidate serves both reads and subscriptions, so the
- * two observe the same reactive state. The clock defaults to the runner's
- * wall clock.
+ * the replica again, and the cell holds no transaction, so nothing caches the
+ * read between two lookups either; the document is small. One `Cell` per
+ * candidate serves both reads and subscriptions. The clock defaults to the
+ * runner's wall clock.
  */
 export const createRuntimeCfcGrantSource = (
   runtime: Pick<Runtime, "getCellFromLink">,

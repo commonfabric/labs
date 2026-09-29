@@ -1653,7 +1653,15 @@ export class WorkerReconciler {
    * rule and the bindings its guards established, which the label alone
    * cannot say, so unlike the ACLs and manifests `#watchCellMembership`
    * derives from the label these are watched as the fit reads them.
-   * `undefined` without a grant source, so the fit reports nothing.
+   *
+   * The subscription is what makes the grant a dependency of the render at
+   * all. The fit runs inside the rendered cell's `sink()` callback, and a
+   * sink runs its callback under a child transaction of its own, so a read
+   * made there registers nothing on the sink: the callback is responsible
+   * for sinking any cell it wants to stay updated on. A grant document read
+   * during the fit is such a read, and without this watch a grant written
+   * afterward would leave the rendered cell where it was. `undefined`
+   * without a grant source, so the fit reports nothing.
    */
   #grantConsultation(
     watched: Set<string>,
