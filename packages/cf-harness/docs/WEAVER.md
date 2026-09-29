@@ -45,14 +45,15 @@ works at all, so they are worth knowing by name:
   toolshed reads `MEMORY_DIR` as; the console reads that variable as a directory
   to walk, so it is given the plain path. A `file://` URL there walks nothing
   and the console reads another store's cells as this space's.
-- **The `runsc-cfc` sidecar directories**, which are not loom's at all: the
-  Docker runtime registration names them in `--cfc-result-dir` and
-  `--cfc-invocation-context-dir`, and `docker info` reports what the running
-  daemon actually loaded. The harness asks only that they are named, so a
-  console pointed anywhere else starts cleanly and denies every observation of
-  the run. Fix a wrong one where the runtime is registered, then restart Docker
-  so the daemon reloads it — an edited `daemon.json` it has not read is not what
-  `docker info` reports, and the registration in force is the one that counts.
+- **The `runsc-cfc` sidecar directories**, on the Docker driver, which are not
+  loom's at all: the Docker runtime registration names them in
+  `--cfc-result-dir` and `--cfc-invocation-context-dir`, and `docker info`
+  reports what the running daemon actually loaded. The harness asks only that
+  they are named, so a console pointed anywhere else starts cleanly and denies
+  every observation of the run. Fix a wrong one where the runtime is registered,
+  then restart Docker so the daemon reloads it — an edited `daemon.json` it has
+  not read is not what `docker info` reports, and the registration in force is
+  the one that counts.
 
 The rest — the identity key at `defaults.identity`, the space at
 `defaults.local_space`, and the toolshed URL at `defaults.server_urls.toolshed`
@@ -88,11 +89,14 @@ deno task --cwd packages/cf-harness console:launch --instance <instance>
 
 It resolves the identity, the space and the toolshed URL from the instance's
 `pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. It prints
-every value beside the record that decided it, and serves on 8135 — the port
-Weaver's harness console setting and loom's proxy both address. Read the
-printout before opening Weaver: a value that is wrong names where to fix it, and
-those are three different places.
+directories from the `runsc-cfc` registration `docker info` reports. A console
+whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
+which Loom hands an instance on its native runtime) needs no sidecar directory
+and reads no Docker registration; the printout names its `runsc` binary, rootfs
+and CFC policy instead. It prints every value beside the record that decided it,
+and serves on 8135 — the port Weaver's harness console setting and loom's proxy
+both address. Read the printout before opening Weaver: a value that is wrong
+names where to fix it, and those are three different places.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -113,11 +117,12 @@ deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 
-**A console that cannot start does not take the fabric down.** It needs Docker
-and a connected model provider, and when either is missing the flag reports it
-in the script's output and in `packages/cf-harness/local-dev-console.log`, and
-the shell and toolshed keep running. That is the shape to expect: the pair is
-the fabric, and the console is a surface on it.
+**A console that cannot start does not take the fabric down.** It needs its
+sandbox runtime (Docker, unless the direct driver is selected) and a connected
+model provider, and when either is missing the flag reports it in the script's
+output and in `packages/cf-harness/local-dev-console.log`, and the shell and
+toolshed keep running. That is the shape to expect: the pair is the fabric, and
+the console is a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and
