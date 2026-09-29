@@ -1751,16 +1751,6 @@ export function sqliteQuery(
               ...rowLabels.labels.map((label) => label?.confidentiality),
               requestLabel,
             ]);
-            // Which reference sits at a slot is a function of the parameters
-            // too, and of the row: a row document's id is derived from its
-            // content, so a reader of the id learns what a reader of the row
-            // learns. One label covers every slot, the join over the rows
-            // the result holds, which is at least each slot's own.
-            const slotConfidentiality = joinCfcObservedConfidentiality([
-              staticConfidentialityOf(labelSchema),
-              ...perRow.map((label) => label?.confidentiality),
-              requestLabel,
-            ]);
             const rowWriteSchema = needsEntryRowSchema
               ? {
                 type: "object",
@@ -1822,12 +1812,19 @@ export function sqliteQuery(
                   priorShape,
                   shapeConfidentiality,
                 ]);
+                // Which reference sits at a slot is a function of the
+                // parameters too, so every slot declares the request's
+                // label. It is also a function of the row, whose content
+                // the row document's id is derived from. That part differs
+                // from slot to slot and is not declared here: the link
+                // written at a slot carries the labels of the document it
+                // names.
                 const slotIfcAtoms = joinCfcObservedConfidentiality([
                   declaredSlotConfidentiality(storedMetadata, [
                     ...base.path,
                     "result",
                   ]),
-                  slotConfidentiality,
+                  requestLabel,
                 ]);
                 if (shapeIfcAtoms.length > 0) {
                   // A shared array's length and membership reveal its rows even

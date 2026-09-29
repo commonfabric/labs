@@ -547,48 +547,80 @@ describe("sqlite-query-row-set-members", () => {
     });
   }
 
-  describe("a result of column-labeled rows under an unlabeled parameter", () => {
-    // A row document's id is derived from its content, so which reference
-    // sits at a slot is a function of the row: a reader learns it only under
-    // the row's own label.
+  for (const flowLabels of ["persist", "off"] as const) {
+    describe(`a result of column-labeled rows under an unlabeled parameter, flow labels ${flowLabels}`, () => {
+      // A row document's id is derived from its content, so which reference
+      // sits at a slot is a function of the row: a reader learns it only
+      // under the row's own label. Session scope, where the result declares
+      // nothing of its own unless the builtin does.
 
-    const labeledRows = async (cause: string) => {
-      const db = await seededDb();
-      const source = await parameterSource(cause);
-      const rows = await runQuery({
-        cause,
-        db,
-        sql: BODIES_SQL,
-        source,
-        scope: "space",
+      beforeEach(async () => {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+        makeRuntime(flowLabels);
       });
-      await settled(rows, 1);
-      return rows;
-    };
 
-    it("declares the row's label on the reference at each slot", async () => {
-      const rows = await labeledRows("labeled-declared");
+      const labeledRows = async (cause: string) => {
+        const db = await seededDb();
+        const source = await parameterSource(`${flowLabels}-${cause}`);
+        const rows = await runQuery({
+          cause: `${flowLabels}-${cause}`,
+          db,
+          sql: BODIES_SQL,
+          source,
+          scope: "session",
+        });
+        await settled(rows, 1);
+        return rows;
+      };
 
-      expect(
-        hasClause(declaredAt(rows, ["result", "*"], "followRef"), BODY_CLAUSE),
-      ).toBe(true);
-    });
+      it("carries the row's label on a probe of a slot", async () => {
+        const rows = await labeledRows("labeled-probe");
 
-    it("carries the row's label on a probe of a slot", async () => {
-      const rows = await labeledRows("labeled-probe");
-
-      expect(hasClause(probeSlot(rows, 0), BODY_CLAUSE)).toBe(true);
-    });
-
-    it("carries the row's label on the stored row references", async () => {
-      const rows = await labeledRows("labeled-raw");
-
-      const join = joinOf((tx) => {
-        rows.resolveAsCell().withTx(tx).key("result").getRaw();
+        expect(hasClause(probeSlot(rows, 0), BODY_CLAUSE)).toBe(true);
       });
-      expect(hasClause(join, BODY_CLAUSE)).toBe(true);
-    });
 
+      it("carries the row's label on a read of the stored result array", async () => {
+        // The array holds the row references as values, so a reader of it
+        // holds every row document's id without having probed a slot.
+        const rows = await labeledRows("labeled-array");
+        const link = rows.resolveAsCell().getAsNormalizedFullLink();
+
+        const join = joinOf((tx) => {
+          tx.read({
+            space,
+            scope: link.scope,
+            id: link.id,
+            type: "application/json",
+            path: ["value", ...link.path, "result"],
+          });
+        });
+        expect(hasClause(join, BODY_CLAUSE)).toBe(true);
+      });
+
+      it("carries the row's label on the stored row references", async () => {
+        const rows = await labeledRows("labeled-raw");
+
+        const join = joinOf((tx) => {
+          rows.resolveAsCell().withTx(tx).key("result").getRaw();
+        });
+        expect(hasClause(join, BODY_CLAUSE)).toBe(true);
+      });
+
+      it("carries the row's label on the row references taken as handles", async () => {
+        const rows = await labeledRows("labeled-handles");
+
+        const join = joinOf((tx) => {
+          const handles = rows.resolveAsCell().asSchema(HANDLES_SCHEMA)
+            .withTx(tx).key("result").get() as unknown as Cell<unknown>[];
+          handles.map((cell) => cell.getAsNormalizedFullLink().id);
+        });
+        expect(hasClause(join, BODY_CLAUSE)).toBe(true);
+      });
+    });
+  }
+
+  describe("a row document under a labeled parameter", () => {
     it("carries the row's label and nothing of `S` on the row's existence", async () => {
       const db = await seededDb();
       const source = await parameterSource("labeled-existence");
