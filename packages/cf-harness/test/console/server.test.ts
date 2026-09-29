@@ -24,6 +24,7 @@ import {
   bashToolDescriptorForRuntime,
 } from "../../src/tools/bash.ts";
 import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
+import { defaultDarwinRootfs } from "../../src/sandbox/runsc.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -648,24 +649,28 @@ describe("console/server", () => {
         runId: "console-turn",
         processRunner: inertRunner,
       });
-      return engine.sandbox.describe();
+      return {
+        description: engine.sandbox.describe(),
+        run: {
+          cfcEnforcementMode: engine.getRunState().cfcEnforcementMode,
+        },
+      };
     };
 
     it("builds the direct runsc driver from the runtime the environment selects", async () => {
-      const description = await turnSandbox(RUNSC_ENV);
+      const { description, run } = await turnSandbox(RUNSC_ENV);
 
       expect(description.kind).toBe("runsc-cfc");
       expect(description.sessions).toBe(true);
       expect(description.cfc?.image).toBe("/store/images/kitchensink");
       expect(description.cfc?.runtimeName).toBeUndefined();
       expect(description.cfc?.invocationContextTransport).toBe("fd");
-      const { inputSchema } = bashToolDescriptorForRuntime(description);
-      expect(
-        Object.keys(
-          (inputSchema as { properties?: Record<string, unknown> })
-            .properties ?? {},
-        ),
-      ).toContain("session");
+      // A console turn enforces, and no enforcing run can use a session, so
+      // the model is offered bash without one, as it is on Docker.
+      expect(run.cfcEnforcementMode).toBe("enforce-strict");
+      expect(bashToolDescriptorForRuntime(description, run)).toEqual(
+        bashToolDescriptor,
+      );
     });
 
     for (
@@ -675,7 +680,7 @@ describe("console/server", () => {
       ] as const
     ) {
       it(`builds the Docker driver, with its sidecar transports, when the environment ${name}`, async () => {
-        const description = await turnSandbox(env);
+        const { description, run } = await turnSandbox(env);
 
         expect(description).toEqual({
           kind: "docker-runsc-cfc",
@@ -700,7 +705,7 @@ describe("console/server", () => {
               "/console/.cf-harness-console/cfc/invocation-context",
           },
         });
-        expect(bashToolDescriptorForRuntime(description)).toEqual(
+        expect(bashToolDescriptorForRuntime(description, run)).toEqual(
           bashToolDescriptor,
         );
       });
@@ -737,15 +742,105 @@ describe("console/server", () => {
         ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
       ] as const
     ) {
-      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\``, async () => {
-        await expect(
-          resolveConsoleConfig([...ARGS, flag, "runsc"], {}, "/console"),
-        ).rejects.toThrow(variable);
-        await expect(
-          resolveConsoleConfig([...ARGS, `${flag}=runsc`], {}, "/console"),
-        ).rejects.toThrow(variable);
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\` in every spelling`, async () => {
+        for (
+          const spelling of [
+            [flag, "runsc"],
+            [`${flag}=runsc`],
+            [`${flag}=`],
+            [flag],
+            [flag, "runsc", flag, "docker"],
+          ]
+        ) {
+          await expect(
+            resolveConsoleConfig([...ARGS, ...spelling], {}, "/console"),
+          ).rejects.toThrow(variable);
+        }
       });
     }
+
+    it("resolves relative sandbox paths against the console's working directory", async () => {
+      const config = await resolveConsoleConfig(ARGS, {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_SANDBOX_ROOTFS: "images/kitchensink",
+        CF_HARNESS_RUNSC_CFC_POLICY: "policy/cfc.json",
+      }, "/console");
+
+      expect([config.sandboxRootfs, config.sandboxCfcPolicy]).toEqual([
+        "/console/images/kitchensink",
+        "/console/policy/cfc.json",
+      ]);
+    });
+
+    it("observes the driver's own default rootfs for a runsc console that names none", async () => {
+      // On macOS the driver finds the rootfs under the process's `HOME`; on
+      // any other platform a rootfs must be named, and the turn is refused.
+      const [, runtime, rootfs] = await (async () => {
+        const health = createConsoleHealth(
+          await resolveConsoleConfig(ARGS, {
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+            CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+          }, "/console"),
+          undefined,
+          undefined,
+          {},
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+        await health.refresh();
+        return health.snapshot().rows.filter((row) =>
+          row.id.startsWith("sandbox.")
+        );
+      })();
+
+      if (Deno.build.os === "darwin") {
+        const expected = defaultDarwinRootfs(Deno.env.get("HOME")!);
+        expect(rootfs.detail).toBe(expected);
+        expect(runtime.detail).toContain(`rootfs ${expected}`);
+      } else {
+        expect(runtime).toMatchObject({
+          state: "failed",
+          value: "configuration refused",
+        });
+        expect(runtime.reason).toContain("needs a rootfs");
+      }
+    });
+
+    it("observes the runsc configuration refused for a CFC policy inside a writable host mount", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "console-mount-" });
+      try {
+        const health = createConsoleHealth(
+          await resolveConsoleConfig([
+            ...ARGS,
+            "--host-mount",
+            `name=shared,source=${dir},target=/mnt/shared,mode=writable`,
+          ], {
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+            CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+            CF_HARNESS_RUNSC_CFC_POLICY: join(dir, "policy.json"),
+          }, "/console"),
+          undefined,
+          undefined,
+          {},
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+        await health.refresh();
+        const runtime = health.snapshot().rows.find((row) =>
+          row.id === "sandbox.runtime"
+        );
+
+        expect(runtime).toMatchObject({
+          state: "failed",
+          value: "configuration refused",
+        });
+        expect(runtime?.reason).toContain("writable mount");
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
 
     it("observes the runsc configuration, and asks Docker nothing, for a console on the runsc runtime", async () => {
       let dockerReads = 0;
@@ -772,6 +867,7 @@ describe("console/server", () => {
         { id: "config.sandbox", state: "ok", value: "runsc" },
         { id: "sandbox.runsc", state: "failed", value: "missing" },
         { id: "sandbox.runtime", state: "failed", value: "CFC policy missing" },
+        { id: "sandbox.rootfs", state: "failed", value: "missing" },
       ]);
     });
 
@@ -874,6 +970,25 @@ describe("console/server", () => {
         "  results:    /console/.cf-harness-console/cfc/results",
         "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
       ]);
+    });
+
+    it("returns a banner saying every turn is refused for a runsc console with no CFC policy", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      expect(consoleSandboxBanner(config).at(-1)).toBe(
+        "  policy:     (none: every turn is refused at enforce-strict)",
+      );
+      // Read off the mode, so a console whose turns only observe says so.
+      expect(
+        consoleSandboxBanner({
+          ...config,
+          cfcEnforcementModeOverride: "observe",
+        }).at(-1),
+      ).toBe("  policy:     (none: runsc runs without --cfc)");
     });
 
     it("returns the runsc binary, rootfs and policy as its banner for a console on the runsc runtime", async () => {
@@ -984,6 +1099,11 @@ describe("console/server", () => {
         {
           id: "sandbox.runtime",
           label: "Sandbox Runtime",
+          value: "not checked",
+        },
+        {
+          id: "sandbox.rootfs",
+          label: "Sandbox Rootfs",
           value: "not checked",
         },
       ]);

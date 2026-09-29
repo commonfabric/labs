@@ -4,9 +4,11 @@ import { Identity } from "@commonfabric/identity";
 import {
   type ConsolePathReading,
   consolePatternIndexHealthProbes,
+  type ConsolePolicyReading,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
   readConsolePath,
+  readConsolePolicy,
 } from "../../console/health-probes.ts";
 import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
@@ -97,25 +99,44 @@ describe("health-probes", () => {
         ...(policy !== undefined ? { cfcPolicyPath: policy } : {}),
       }) as RunscSandboxConfig;
 
-    /** Answers each path from `readings`, and an executable file otherwise. */
+    /**
+     * Answers each path from `readings`; otherwise the rootfs is a directory
+     * and every other path an executable file.
+     */
     const examine =
       (readings: Record<string, ConsolePathReading>) =>
       (path: string): ConsolePathReading =>
-        readings[path] ?? { found: "file", executable: true };
+        readings[path] ??
+          (path === "/store/images/kitchensink"
+            ? { found: "directory" }
+            : { found: "file", executable: true });
+
+    /** Answers each policy from `readings`, and a JSON object otherwise. */
+    const readPolicy =
+      (readings: Record<string, ConsolePolicyReading>) =>
+      (path: string): ConsolePolicyReading =>
+        readings[path] ?? { found: "policy" };
 
     const observe = async (
       resolve: () => RunscSandboxConfig,
       readings: Record<string, ConsolePathReading> = {},
       mode: CfcEnforcementMode = "enforce-strict",
+      policies: Record<string, ConsolePolicyReading> = {},
     ) =>
-      (await consoleRunscHealthProbe(resolve, mode, examine(readings)).read())
+      (await consoleRunscHealthProbe(
+        resolve,
+        mode,
+        examine(readings),
+        readPolicy(policies),
+      ).read())
         .map(({ id, state, value }) => ({ id, state, value }));
 
-    it("returns both rows ok for an executable binary and a present policy", async () => {
+    it("returns every row ok for an executable binary, a policy that parses and a rootfs directory", async () => {
       const rows = await consoleRunscHealthProbe(
         () => config("/store/policy.json"),
         "enforce-strict",
         examine({}),
+        readPolicy({}),
       ).read();
 
       expect(rows.map(({ id, state, value }) => ({ id, state, value })))
@@ -126,6 +147,7 @@ describe("health-probes", () => {
             state: "ok",
             value: "direct runsc driver, CFC policy configured",
           },
+          { id: "sandbox.rootfs", state: "ok", value: "present" },
         ]);
       expect(rows[0]).toMatchObject({
         label: "Runsc Binary",
@@ -137,6 +159,12 @@ describe("health-probes", () => {
         label: "Sandbox Runtime",
         detail:
           "runsc /store/bin/runsc; rootfs /store/images/kitchensink; CFC policy /store/policy.json",
+      });
+      expect(rows[2]).toMatchObject({
+        label: "Sandbox Rootfs",
+        group: "sandbox",
+        source: "runsc configuration",
+        detail: "/store/images/kitchensink",
       });
       expect(rows.every((row) => Number.isFinite(Date.parse(row.checkedAt!))))
         .toBe(true);
@@ -152,6 +180,11 @@ describe("health-probes", () => {
         ],
         [
           "a directory at the binary path",
+          { found: "directory" },
+          "not executable",
+        ],
+        [
+          "neither a file nor a directory at the binary path",
           { found: "other" },
           "not executable",
         ],
@@ -212,15 +245,153 @@ describe("health-probes", () => {
       expect(row.reason).toContain("untracked");
     });
 
-    it("returns the runtime row failed when the configured CFC policy is absent", async () => {
+    for (
+      const [what, reading, value, reason] of [
+        [
+          "absent",
+          { found: "absent" },
+          "CFC policy missing",
+          "Nothing exists at the configured CFC policy path.",
+        ],
+        [
+          "a directory",
+          { found: "directory" },
+          "CFC policy not a file",
+          "The configured CFC policy path is not a file.",
+        ],
+        [
+          "neither a file nor a directory",
+          { found: "other" },
+          "CFC policy not a file",
+          "The configured CFC policy path is not a file.",
+        ],
+      ] as const
+    ) {
+      it(`returns the runtime row failed when the configured CFC policy is ${what}`, async () => {
+        let reads = 0;
+        const [, row] = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({ "/store/policy.json": reading }),
+          () => {
+            reads += 1;
+            return { found: "policy" };
+          },
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value,
+          reason,
+        });
+        expect(row.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+        // A path that is not a file is not read.
+        expect(reads).toBe(0);
+      });
+    }
+
+    for (
+      const [what, reading, value] of [
+        [
+          "the console was refused permission to read it",
+          { found: "denied", reason: "PermissionDenied: read" },
+          "CFC policy unreadable",
+        ],
+        [
+          "it does not parse as a JSON object",
+          { found: "malformed", reason: "SyntaxError: Unexpected token" },
+          "CFC policy malformed",
+        ],
+      ] as const
+    ) {
+      it(`returns the runtime row failed, carrying the reason, when the configured CFC policy is a file and ${what}`, async () => {
+        const [, row] = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({}),
+          readPolicy({ "/store/policy.json": reading }),
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value,
+        });
+        expect(row.reason).toContain(reading.reason);
+        expect(typeof row.remedy).toBe("string");
+      });
+    }
+
+    it("returns the runtime row unknown, not failed, when reading the configured CFC policy failed other than by permission", async () => {
+      const [, row] = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        "enforce-strict",
+        examine({}),
+        readPolicy({
+          "/store/policy.json": { found: "unreadable", reason: "EIO" },
+        }),
+      ).read();
+
+      expect(row).toMatchObject({
+        id: "sandbox.runtime",
+        state: "unknown",
+        value: "not verified",
+        reason: "EIO",
+      });
+      expect(row.remedy).toBeUndefined();
+    });
+
+    for (
+      const [what, reading, value] of [
+        ["nothing at the rootfs path", { found: "absent" }, "missing"],
+        [
+          "a file at the rootfs path",
+          { found: "file", executable: false },
+          "not a directory",
+        ],
+        [
+          "neither a file nor a directory at the rootfs path",
+          { found: "other" },
+          "not a directory",
+        ],
+      ] as const
+    ) {
+      it(`returns the rootfs row failed and \`${value}\` for ${what}`, async () => {
+        const rows = await consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          examine({ "/store/images/kitchensink": reading }),
+          readPolicy({}),
+        ).read();
+
+        expect(rows[2]).toMatchObject({
+          id: "sandbox.rootfs",
+          state: "failed",
+          value,
+          detail: "/store/images/kitchensink",
+        });
+        expect(rows[2].remedy).toContain("CF_HARNESS_SANDBOX_ROOTFS");
+        // The other rows are not what a missing rootfs is reported by.
+        expect(rows.slice(0, 2).map(({ state }) => state)).toEqual([
+          "ok",
+          "ok",
+        ]);
+      });
+    }
+
+    it("returns the rootfs row unknown when the rootfs could not be looked at", async () => {
       expect(
         (await observe(() => config("/store/policy.json"), {
-          "/store/policy.json": { found: "absent" },
-        }))[1],
+          "/store/images/kitchensink": {
+            found: "unreadable",
+            reason: "EACCES",
+          },
+        }))[2],
       ).toEqual({
-        id: "sandbox.runtime",
-        state: "failed",
-        value: "CFC policy missing",
+        id: "sandbox.rootfs",
+        state: "unknown",
+        value: "not verified",
       });
     });
 
@@ -231,6 +402,7 @@ describe("health-probes", () => {
         examine({
           "/store/policy.json": { found: "unreadable", reason: "EACCES" },
         }),
+        readPolicy({}),
       ).read();
 
       expect(rows[1]).toMatchObject({
@@ -242,7 +414,7 @@ describe("health-probes", () => {
       expect(rows[1].remedy).toBeUndefined();
     });
 
-    it("returns both rows unknown when the observation itself throws", async () => {
+    it("returns every row unknown when the observation itself throws", async () => {
       // `ConsoleHealth` reports a probe whose read rejects through the
       // probe's own unavailable rows: a failure to look is not a failure of
       // the runtime.
@@ -277,6 +449,12 @@ describe("health-probes", () => {
           value: "not verified",
           reason: "The runsc configuration could not be examined.",
         },
+        {
+          id: "sandbox.rootfs",
+          state: "unknown",
+          value: "not verified",
+          reason: "The runsc configuration could not be examined.",
+        },
       ]);
       expect(rows.every((row) => row.checkedAt !== null)).toBe(true);
     });
@@ -298,8 +476,68 @@ describe("health-probes", () => {
             state: "failed",
             value: "configuration refused",
           },
+          { id: "sandbox.rootfs", state: "unknown", value: "not verified" },
         ]);
       expect(rows[1].reason).toBe("runsc sandbox needs a rootfs");
+    });
+  });
+
+  describe("readConsolePolicy()", () => {
+    it("returns what a policy file holds: a JSON object, or malformed", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "cf-harness-policy-" });
+      try {
+        const write = async (name: string, text: string) => {
+          await Deno.writeTextFile(join(dir, name), text);
+          return join(dir, name);
+        };
+
+        expect(
+          readConsolePolicy(
+            await write("ok.json", '{"path_labels":[],"sink_rules":[]}'),
+          ),
+        ).toEqual({ found: "policy" });
+        for (
+          const text of ["", "{", "[]", "null", '"policy"', "42"]
+        ) {
+          expect(
+            readConsolePolicy(await write("bad.json", text)).found,
+          ).toBe("malformed");
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns denied for a read refused by permission, and unreadable for any other failed read", () => {
+      const denied = new Deno.errors.PermissionDenied(
+        "Permission denied (os error 13): open '/store/policy.json'",
+      );
+
+      expect(readConsolePolicy("/store/policy.json", () => {
+        throw denied;
+      })).toEqual({ found: "denied", reason: String(denied) });
+      const gone = new Deno.errors.NotFound("gone between stat and read");
+      expect(readConsolePolicy("/store/policy.json", () => {
+        throw gone;
+      })).toEqual({ found: "unreadable", reason: String(gone) });
+    });
+
+    it({
+      name: "returns denied for a policy file whose mode forbids reading it",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        const dir = await Deno.makeTempDir({ prefix: "cf-harness-policy-" });
+        const policy = join(dir, "policy.json");
+        try {
+          await Deno.writeTextFile(policy, "{}");
+          await Deno.chmod(policy, 0o000);
+
+          expect(readConsolePolicy(policy).found).toBe("denied");
+        } finally {
+          await Deno.chmod(policy, 0o600);
+          await Deno.remove(dir, { recursive: true });
+        }
+      },
     });
   });
 
@@ -335,7 +573,7 @@ describe("health-probes", () => {
           found: "file",
           executable: false,
         });
-        expect(readConsolePath(dir)).toEqual({ found: "other" });
+        expect(readConsolePath(dir)).toEqual({ found: "directory" });
         expect(readConsolePath(join(dir, "missing"))).toEqual({
           found: "absent",
         });

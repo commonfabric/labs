@@ -136,9 +136,11 @@ import {
   CFC_RESULT_DIR_ENV,
 } from "../src/sandbox/docker-runsc.ts";
 import {
+  assertRunscCfcPolicyForMode,
   resolveRunscSandboxConfig,
   type RunscSandboxConfig,
 } from "../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {
   resolveSandboxRuntimeSelection,
   RUNSC_CFC_POLICY_ENV,
@@ -577,6 +579,28 @@ const BATCH_SANDBOX_FLAGS = [
 ] as const;
 
 /**
+ * Refuses the batch CLI's sandbox selection flags in any spelling, naming the
+ * variable to set instead. The console and its launcher select the sandbox
+ * from the environment alone: a flag one of them read and the other did not
+ * would leave the launch and the console describing two different sandboxes.
+ *
+ * @throws Error when `parsed` holds any of the three flags.
+ */
+export const refuseBatchSandboxFlags = (
+  parsed: Readonly<Record<string, unknown>>,
+): void => {
+  for (const [name, variable] of BATCH_SANDBOX_FLAGS) {
+    if (parsed[name] !== undefined) {
+      throw new Error(
+        `--${name} is a flag of the batch CLI; the console selects its ` +
+          `sandbox from the environment, as the interactive entrypoints do, ` +
+          `so set ${variable} instead`,
+      );
+    }
+  }
+};
+
+/**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
@@ -623,15 +647,7 @@ export const resolveConsoleConfig = async (
   const flag = (name: string): string | undefined =>
     typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
 
-  for (const [name, variable] of BATCH_SANDBOX_FLAGS) {
-    if (parsed[name] !== undefined) {
-      throw new Error(
-        `--${name} is a flag of the batch CLI; the console selects its ` +
-          `sandbox from the environment, as the interactive entrypoints do, ` +
-          `so set ${variable} instead`,
-      );
-    }
-  }
+  refuseBatchSandboxFlags(parsed);
   // The one derivation every entrypoint shares, over this server's own
   // environment. Nothing beyond the runtime kind is returned unless the
   // runtime is runsc, so a console that names no runtime hands the engine no
@@ -1222,6 +1238,31 @@ const resolveConsoleRunscConfig = (
 };
 
 /**
+ * The CFC enforcement mode every turn of this console runs at, resolved the
+ * way the engine resolves it from the options a turn is built from.
+ */
+export const consoleTurnEnforcementMode = (
+  config: ConsoleConfig,
+): CfcEnforcementMode =>
+  resolveCfcEnforcementMode(harnessSessionEngineOptions(config));
+
+/**
+ * Whether the engine refuses every turn at `mode` of a console on the direct
+ * runsc driver with no CFC policy, decided by the engine's own floor rather
+ * than a copy of it. Where it does not refuse, commands run untracked.
+ */
+export const runscWithoutPolicyRefusesTurns = (
+  mode: CfcEnforcementMode,
+): boolean => {
+  try {
+    assertRunscCfcPolicyForMode(mode, {});
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
@@ -1240,7 +1281,7 @@ export const createConsoleHealth = (
     config.sandboxRuntimeKind === "runsc"
       ? consoleRunscHealthProbe(
         () => resolveConsoleRunscConfig(config),
-        resolveCfcEnforcementMode(harnessSessionEngineOptions(config)),
+        consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
@@ -2200,15 +2241,7 @@ export const createConsoleInteractiveServiceOptions = (
  * unnamed rootfs is the driver's own default, when a turn resolves them.
  */
 export const consoleSandboxBanner = (
-  config: Pick<
-    ConsoleConfig,
-    | "cfcResultDir"
-    | "cfcInvocationContextDir"
-    | "sandboxRuntimeKind"
-    | "sandboxRunscBinary"
-    | "sandboxRootfs"
-    | "sandboxCfcPolicy"
-  >,
+  config: ConsoleConfig,
 ): readonly string[] =>
   config.sandboxRuntimeKind === "runsc"
     ? [
@@ -2216,7 +2249,12 @@ export const consoleSandboxBanner = (
       `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
       `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
       `  policy:     ${
-        config.sandboxCfcPolicy ?? "(none: runsc runs without --cfc)"
+        config.sandboxCfcPolicy ??
+          (runscWithoutPolicyRefusesTurns(consoleTurnEnforcementMode(config))
+            ? `(none: every turn is refused at ${
+              consoleTurnEnforcementMode(config)
+            })`
+            : "(none: runsc runs without --cfc)")
       }`,
     ]
     : [

@@ -70,7 +70,11 @@ import type {
   ConsoleObservedLaunchHealth,
   ConsoleResolvedValue,
 } from "./health.ts";
-import { startConsoleServer } from "./server.ts";
+import {
+  refuseBatchSandboxFlags,
+  runscWithoutPolicyRefusesTurns,
+  startConsoleServer,
+} from "./server.ts";
 
 export { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 
@@ -751,8 +755,12 @@ const runscResolvedValues = (
       : "harness default",
   }, {
     name: "cfc policy",
+    // The console takes no loop enforcement mode, so its turns run at the
+    // harness default.
     value: selection.sandboxCfcPolicy ??
-      "(none: `runsc` runs without `--cfc`)",
+      (runscWithoutPolicyRefusesTurns(DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE)
+        ? `(none: every turn is refused at \`${DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE}\`)`
+        : "(none: `runsc` runs without `--cfc`)"),
     source: sandbox.policyNamed
       ? inherited(RUNSC_CFC_POLICY_ENV)
       : "harness default",
@@ -901,6 +909,10 @@ export const prepareConsoleLaunch = async (
     ],
     "--": true,
   });
+  // Before anything is read: the launcher selects the sandbox from the
+  // environment, as the console does, and a selection flag it ignored would
+  // launch a console on a sandbox other than the one it was asked for.
+  refuseBatchSandboxFlags(parsed);
   // A flag present but empty is a value someone typed that did not survive
   // parsing — `--port -1` leaves `port` empty, because `-1` reads as a flag of
   // its own — so it is refused rather than falling through to the default the

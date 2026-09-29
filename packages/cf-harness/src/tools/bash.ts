@@ -1,6 +1,10 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { debugStr, toCompactDebugString } from "@commonfabric/data-model";
-import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+import type {
+  CfcEnforcementMode,
+  CfcLabelView,
+  CfcSandboxResult,
+} from "@commonfabric/runner/cfc";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import {
   BASH_COMMAND_DENIED_EXIT_CODE,
@@ -16,6 +20,7 @@ import { ProcessTimeoutError } from "../sandbox/process-runner.ts";
 import {
   SANDBOX_SESSION_NAME_PATTERN,
   type SandboxRuntimeDescription,
+  sandboxSessionsAllowedUnder,
   SandboxSessionUnavailableError,
   type SandboxSessionUnavailableReason,
 } from "../sandbox/types.ts";
@@ -155,11 +160,19 @@ const bashToolDescriptorWithSessions: HarnessToolDescriptor = {
   } satisfies JSONSchema,
 };
 
-/** The bash descriptor a run on this sandbox runtime offers the model. */
+/**
+ * The bash descriptor a run on this sandbox runtime offers the model. It
+ * takes `session` only where the run can use one: on a runtime with sessions,
+ * in a mode that allows them. Offered in an enforcing mode, every call that
+ * named a session would be refused, and the refusal would not reach the
+ * model either, since its output carries no CFC result.
+ */
 export const bashToolDescriptorForRuntime = (
   runtime: Pick<SandboxRuntimeDescription, "sessions">,
+  run: { cfcEnforcementMode: CfcEnforcementMode },
 ): HarnessToolDescriptor =>
-  runtime.sessions === true
+  runtime.sessions === true &&
+    sandboxSessionsAllowedUnder(run.cfcEnforcementMode)
     ? bashToolDescriptorWithSessions
     : bashToolDescriptor;
 

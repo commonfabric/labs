@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
@@ -971,7 +972,7 @@ describe("launch", () => {
           },
           {
             name: "cfc policy",
-            value: "(none: `runsc` runs without `--cfc`)",
+            value: "(none: every turn is refused at `enforce-strict`)",
             source: "harness default",
           },
         ]);
@@ -1025,14 +1026,74 @@ describe("launch", () => {
       expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
     });
 
-    it("throws naming the sidecar flag a console on the runsc runtime has no use for", async () => {
-      await expect(
-        prepareConsoleLaunch(
-          [...NAMED_ARGS, "--cfc-result-dir", "/elsewhere/results"],
-          RUNSC_ENV,
-          io(),
-        ),
-      ).rejects.toThrow("`--cfc-result-dir`");
+    for (const flag of ["--cfc-result-dir", "--cfc-invocation-context-dir"]) {
+      it(`throws naming \`${flag}\`, a sidecar flag a console on the runsc runtime has no use for`, async () => {
+        await expect(
+          prepareConsoleLaunch(
+            [...NAMED_ARGS, flag, "/elsewhere/sidecar"],
+            RUNSC_ENV,
+            io(),
+          ),
+        ).rejects.toThrow(`\`${flag}\``);
+      });
+    }
+
+    for (
+      const [flag, variable] of [
+        ["--sandbox-runtime", "CF_HARNESS_SANDBOX_RUNTIME"],
+        ["--sandbox-rootfs", "CF_HARNESS_SANDBOX_ROOTFS"],
+        ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
+      ] as const
+    ) {
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\`, in every spelling, before reading anything`, async () => {
+        for (
+          const spelling of [
+            [flag, "runsc"],
+            [`${flag}=runsc`],
+            [`${flag}=`],
+            [flag],
+            [flag, "runsc", flag, "docker"],
+          ]
+        ) {
+          let reads = 0;
+          await expect(
+            prepareConsoleLaunch(
+              [...NAMED_ARGS, ...spelling],
+              {},
+              io({
+                readDockerRuntimes: () => {
+                  reads += 1;
+                  return Promise.resolve({
+                    unreadable: "Docker is not running",
+                  });
+                },
+              }),
+            ),
+          ).rejects.toThrow(variable);
+          expect(reads).toBe(0);
+        }
+      });
+    }
+
+    it("resolves relative sandbox paths against the working directory it runs in", async () => {
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        {
+          CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+          CF_HARNESS_SANDBOX_ROOTFS: "images/kitchensink",
+          CF_HARNESS_RUNSC_CFC_POLICY: "policy/cfc.json",
+        },
+        io(),
+      );
+
+      expect(
+        plan.resolved.filter(({ name }) =>
+          ["rootfs", "cfc policy"].includes(name)
+        ).map(({ value }) => value),
+      ).toEqual([
+        join(Deno.cwd(), "images/kitchensink"),
+        join(Deno.cwd(), "policy/cfc.json"),
+      ]);
     });
 
     it("throws the shared derivation's refusal for a runtime it does not know", async () => {
