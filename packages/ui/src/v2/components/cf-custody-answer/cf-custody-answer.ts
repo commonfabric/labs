@@ -204,10 +204,11 @@ export class CFCustodyAnswer extends BaseElement {
     } finally {
       this.#inFlight = undefined;
     }
-    if (this.#again && !this.#published) {
-      this.#again = false;
-      await this.#publish();
-    }
+    // A request queued behind this one runs only if this one did not
+    // publish; either way the queue is empty now.
+    const queued = this.#again;
+    this.#again = false;
+    if (queued && !this.#published) await this.#publish();
   }
 
   async #request(): Promise<void> {
