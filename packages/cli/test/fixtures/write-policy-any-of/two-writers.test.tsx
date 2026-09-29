@@ -57,8 +57,9 @@ export default pattern(() => {
       // Each writer through the other's action.
       { action: edit({ board }), trustedUi: gesture(SEND) },
       { assertion: isSent },
-      { action: send({ board }), trustedUi: gesture(EDIT) },
       { action: edit({ board }), trustedUi: gesture(EDIT) },
+      { assertion: isEdited },
+      { action: send({ board }), trustedUi: gesture(EDIT) },
       { assertion: isEdited },
       // A writer with no gesture, and a writer the policy does not name.
       { action: send({ board }) },

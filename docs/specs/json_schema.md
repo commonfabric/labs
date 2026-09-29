@@ -64,8 +64,8 @@ nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
 `packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
 `writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
-`observes`, and `uiContract`. The compile-time side (CFC authoring aliases and UI helpers
-lowering to these keys) is specified in
+`observes`, and `uiContract`. The compile-time side (CFC authoring aliases and
+UI helpers lowering to these keys) is specified in
 `docs/specs/ts-transformer/cfc_authoring_contract.md` and
 `docs/specs/ts-transformer/cfc_ui_helper_contract.md`; the label semantics live
 in the CFC spec (specs repo, `cfc/`).

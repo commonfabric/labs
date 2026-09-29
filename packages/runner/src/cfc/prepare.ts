@@ -1326,12 +1326,10 @@ const writePolicyAlternatives = (
  * writer. A writer refusal where some alternative's gesture was satisfied is
  * offered to `deferWriterRefusal`, as a lone claim's is.
  *
- * An alternative's claim is stamped by its own writer's first write, so a
- * stored list holds unstamped claims for the writers that have not yet
- * written. Each claim is therefore read as its writer would stamp it
- * (`rebindWriteAuthorizedByClaims()`), which is how a candidate schema's
- * claims are read too: an unstamped claim admits exactly the writer whose
- * binding it names, and a stamped one admits the module it was stamped with.
+ * Each claim is read as the schema holds it, as a lone claim is. A stamped
+ * claim admits the module it was stamped with, and a stored claim with no
+ * stamp admits no writer, since nothing ties it to a module. A compile that
+ * knows module identities stamps every member where it lowers the list.
  */
 const writePolicyAnyOfReason = (
   tx: IExtendedStorageTransaction,
@@ -1358,7 +1356,7 @@ const writePolicyAnyOfReason = (
     const refusals = gestured.map((alternative) =>
       writeAuthorizedByReason(
         tx,
-        rebindWriteAuthorizedByClaims(alternative.writer, identity),
+        alternative.writer,
         path,
         target.space,
         identity,
@@ -11644,16 +11642,16 @@ export function* prepareBoundaryCommitSteps(
     // set, by a declared entry with an empty label, wherever no declared
     // entry at the position or above it already routes a write there.
     //
-    // Only `writeAuthorizedBy` is marked. A copy claim (`exactCopyOf`,
-    // `projection`) is verified when its target is written, and an unwritten
-    // target keeps no entry (cfc-projection.test.ts); an input floor and a
-    // UI contract gate what a write brings, which §8.15 does not make a
-    // property of an absent position. A claim on one branch of a union is
-    // not marked either: which branch a position takes is decided by the
-    // value written there, so a position holding nothing is on no branch —
-    // and an envelope persisted for it ahead of a value would meet every
-    // later writer of another branch with the merge's refusal of divergent
-    // branch ifc. A union every branch of which carries the claim is marked:
+    // Only a writer claim (`writeAuthorizedBy`, `writePolicyAnyOf`) is marked.
+    // A copy claim (`exactCopyOf`, `projection`) is verified when its target
+    // is written, and an unwritten target keeps no entry
+    // (cfc-projection.test.ts); an input floor and a UI contract gate what a
+    // write brings, which §8.15 does not make a property of an absent
+    // position. A claim on one branch of a union is not marked either: which
+    // branch a position takes is decided by the value written there, so a
+    // position holding nothing is on no branch — and an envelope persisted
+    // for it ahead of a value would meet every later writer of another branch
+    // with the merge's refusal of divergent branch ifc. A union every branch of which carries the claim is marked:
     // no value written there escapes it.
     //
     // The marker is what routes a writer's later write, so what already

@@ -264,9 +264,12 @@ Normative behavior:
    recorded for the write. Writer and gesture are of the same member, so one
    member's gesture never admits another's writer.
 4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
-   `writeAuthorizedBy` or `uiContract`, and refuses a later schema that adds,
-   drops, reorders, or changes a stored member. Each member's claim is stamped
-   by its own writer's first write, as a lone claim is.
+   `writeAuthorizedBy` or `uiContract`, whether one schema declares both or a
+   later schema declares one where the stored schema declares the other, and
+   refuses a later schema that adds, drops, reorders, or changes a stored
+   member. Each member's claim is stamped with its module identity where the
+   list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
+   stamp admits no writer, as a stored lone claim with none does.
 5. An `AuthoredByCurrentUser` label beside it requires every member to name a
    contract, so every write the position admits carries a reviewed gesture.
 

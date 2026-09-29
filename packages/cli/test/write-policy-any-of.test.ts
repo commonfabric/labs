@@ -18,6 +18,6 @@ describe("write-policy-any-of", () => {
     );
     const { code, stdout } = await cf(`test "${fixture}"`);
     expect(code).toBe(0);
-    expect(stdout.join("\n")).toMatch(/^6 passed, 0 failed \(/m);
+    expect(stdout.join("\n")).toMatch(/^7 passed, 0 failed \(/m);
   });
 });

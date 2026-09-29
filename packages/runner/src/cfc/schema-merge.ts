@@ -359,7 +359,7 @@ const mergeWritePolicyAnyOf = (
     const other = candidate[index];
     if (
       !isObjectNotArray(policy) || !isObjectNotArray(other) ||
-      !deepEqual(Object.keys(policy).sort(), Object.keys(other).sort()) ||
+      !sameKeys(policy, other) ||
       !deepEqual(policy.uiContract, other.uiContract)
     ) {
       throw unstable();
@@ -375,6 +375,13 @@ const mergeWritePolicyAnyOf = (
     if (writer === undefined) throw unstable();
     return { ...policy, writeAuthorizedBy: writer };
   });
+};
+
+/** Helper for `mergeWritePolicyAnyOf()`, which compares two key sets. */
+const sameKeys = (a: object, b: object): boolean => {
+  const keys = Object.keys(a);
+  const other = new Set(Object.keys(b));
+  return keys.length === other.size && keys.every((key) => other.has(key));
 };
 
 const mergeIfc = (
@@ -403,6 +410,19 @@ const mergeIfc = (
       adoptsStamp,
     );
     if (value !== undefined) merged[key] = value;
+  }
+  // Each side may name its writers in one shape while the other names them in
+  // the other, and the two do not combine: a position holding both is one
+  // the runtime refuses every write to.
+  if (
+    merged.writePolicyAnyOf !== undefined &&
+    (merged.writeAuthorizedBy !== undefined || merged.uiContract !== undefined)
+  ) {
+    throw new Error(
+      `writePolicyAnyOf cannot join writeAuthorizedBy or uiContract at ${
+        path || "/"
+      }`,
+    );
   }
   // `observes` is a scalar consumption class, not a set-like claim:
   // agreement keeps the class through the merge; any disagreement —

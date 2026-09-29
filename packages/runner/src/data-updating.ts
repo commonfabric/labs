@@ -246,12 +246,11 @@ onSchemaRegistryClear(() => {
 /**
  * Reports whether a writer claim in `schema` — a `writeAuthorizedBy` or a
  * `writePolicyAnyOf` — rooted at `basePath`, covers `targetPath` for every
- * value that can land there. The
- * claims are those {@link cfcSchemaEntries} finds, references resolved. A claim
- * inside an `anyOf` or `oneOf` branch is not counted, because it holds only
- * for the values that branch matches; a location protected only by such a
- * claim is therefore reported as uncovered. Exported for unit testing; not
- * part of the public surface.
+ * value that can land there. The claims are those {@link cfcSchemaEntries}
+ * finds, references resolved. A claim inside an `anyOf` or `oneOf` branch is
+ * not counted, because it holds only for the values that branch matches; a
+ * location protected only by such a claim is therefore reported as uncovered.
+ * Exported for unit testing; not part of the public surface.
  */
 export const writeAuthorizationCoversPath = (
   schema: JSONSchema | undefined,

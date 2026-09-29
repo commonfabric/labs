@@ -55,8 +55,9 @@ const SCHEMA: JSONSchemaObj = {
 
 /**
  * A runtime over an emulated store, and a way to write one protected cell as
- * a named writer, with or without a trusted event for a reviewed action, and
- * with or without initialization evidence.
+ * a named writer of a module (`MODULE` unless named), with or without a
+ * trusted event for a reviewed action, and with or without initialization
+ * evidence.
  */
 function fixture() {
   const storageManager = StorageManager.emulate({ as: signer });
@@ -71,6 +72,7 @@ function fixture() {
       action?: string,
       options: {
         schema?: JSONSchema;
+        module?: string;
         initialization?: "setup" | "default" | "seed";
         value?: string;
         recordedValue?: string;
@@ -85,7 +87,7 @@ function fixture() {
       });
       setCfcImplementationIdentity(tx, {
         kind: "verified",
-        moduleIdentity: MODULE,
+        moduleIdentity: options.module ?? MODULE,
         sourceFile: "/main.tsx",
         bindingPath: [writer],
       });
@@ -240,32 +242,58 @@ describe("cfc-write-policy-any-of", () => {
     });
   });
 
-  describe("stamping", () => {
-    const unstamped: JSONSchemaObj = {
-      type: "string",
-      ifc: {
-        writePolicyAnyOf: [
-          policy("send", "Send", true),
-          policy("edit", "Edit", true),
-        ],
-      },
-    };
-
-    it("admits each writer whose own alternative arrives unstamped", async () => {
+  describe("module identity", () => {
+    it("refuses a listed binding written from another module", async () => {
       await withFixture(async (f) => {
-        expect(await f.write("send", "Send", { schema: unstamped }))
-          .toBeUndefined();
-        expect(await f.write("edit", "Edit", { schema: unstamped }))
-          .toBeUndefined();
-        expect(await f.write("send", "Send", { schema: unstamped }))
-          .toBeUndefined();
+        expect(await f.write("send", "Send")).toBeUndefined();
+        expect(await f.write("edit", "Edit", { module: "other-module" }))
+          .toContain("writePolicyAnyOf failed");
+        expect(
+          await f.write("edit", "Edit", {
+            module: "other-module",
+            schema: { type: "string" },
+          }),
+        ).toContain("writePolicyAnyOf failed");
       });
     });
 
-    it("stamps no alternative for a writer none of them names", async () => {
-      await withFixture(async (f) => {
-        expect(await f.write("rogue", "Send", { schema: unstamped }))
-          .toContain("writePolicyAnyOf failed");
+    describe("members that arrive unstamped", () => {
+      const unstamped: JSONSchemaObj = {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [
+            policy("send", "Send", true),
+            policy("edit", "Edit", true),
+          ],
+        },
+      };
+
+      it("admits no second writer, as the stored member has no stamp", async () => {
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema: unstamped }))
+            .toBeUndefined();
+          expect(await f.write("edit", "Edit", { schema: unstamped }))
+            .toContain("writePolicyAnyOf failed");
+        });
+      });
+
+      it("admits no other module under an unstamped stored member", async () => {
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema: unstamped }))
+            .toBeUndefined();
+          for (const schema of [unstamped, { type: "string" } as const]) {
+            expect(
+              await f.write("edit", "Edit", { module: "other-module", schema }),
+            ).toContain("writePolicyAnyOf failed");
+          }
+        });
+      });
+
+      it("stamps no member for a writer none of them names", async () => {
+        await withFixture(async (f) => {
+          expect(await f.write("rogue", "Send", { schema: unstamped }))
+            .toContain("writePolicyAnyOf failed");
+        });
       });
     });
   });
@@ -345,7 +373,46 @@ describe("cfc-write-policy-any-of", () => {
     });
   });
 
+  describe("moving between a lone writer and a list", () => {
+    const lone: JSONSchemaObj = {
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: writerClaim("send"),
+        uiContract: contract("Send"),
+      },
+    };
+
+    it("refuses the move, and leaves the lone writer able to write", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send", { schema: lone })).toBeUndefined();
+        expect(await f.write("send", "Send")).toContain(
+          "writePolicyAnyOf cannot join",
+        );
+        expect(await f.write("send", "Send", { schema: lone })).toBeUndefined();
+      });
+    });
+
+    it("refuses the move back, and leaves the list's writers able to write", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        expect(await f.write("send", "Send", { schema: lone })).toContain(
+          "writePolicyAnyOf cannot join",
+        );
+        expect(await f.write("edit", "Edit")).toBeUndefined();
+      });
+    });
+  });
+
   describe("merging", () => {
+    it("throws when one side names a lone writer and the other a list", () => {
+      expect(() =>
+        mergeCfcSchemaEnvelopes(
+          { type: "string", ifc: { writeAuthorizedBy: writerClaim("send") } },
+          SCHEMA,
+        )
+      ).toThrow("writePolicyAnyOf cannot join");
+    });
+
     it("throws when a later schema adds an alternative", () => {
       expect(() =>
         mergeCfcSchemaEnvelopes(SCHEMA, {

@@ -312,6 +312,65 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  describe("a `writePolicyAnyOf` list", () => {
+    // Each member of the list is a writer claim beside its contract, and the
+    // list is compared member by member as a lone claim is: the recompile
+    // volatility normalized out of each writer, everything else held fixed.
+
+    const listResult = (
+      moduleIdentity: string,
+      editAction = "EditFlag",
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        flag: {
+          type: "boolean",
+          ifc: {
+            writePolicyAnyOf: [
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: { ...baselineIdentity, moduleIdentity },
+                },
+                uiContract: baselineUiContract,
+              },
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    ...baselineIdentity,
+                    path: ["editFlag"],
+                    moduleIdentity,
+                  },
+                },
+                uiContract: { ...baselineUiContract, action: editAction },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    it("accepts a recompile that only changes each member's moduleIdentity", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern({ type: "object" }, listResult("DCTZZ89BogydamlP301Qx")),
+        )
+      ).not.toThrow();
+    });
+
+    it("rejects a change to one member's action", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern(
+            { type: "object" },
+            listResult("UVJh2ChHuLkknYrVet0Iu", "RetitleFlag"),
+          ),
+        )
+      ).toThrow();
+    });
+  });
+
   // A floored path is authored to mint the atom it floors, because the write
   // floor tests the integrity of the value being written and a mint on the
   // entries below the path does not reach a floor declared on the path itself.
