@@ -967,13 +967,12 @@ policy requires the seal's witness and releases only to the seal, a rule
 releases the answer to the seal, and every seat has sealed, and refuses every
 later request. What the component shows is read by the host from the instance's
 answer slot and verified to be the seal's write: the slot of the instance the
-bound terms digest to, under the policy the bound policy cell names. Bind both
-to cells each `WriteAuthorizedBy` the one handler that writes it, which writes
-only while the cell is unwritten; otherwise a member's own code can repoint the
-component at another instance's slot or an empty one. That keeps them against
-other code, not against a member's own instance of the same pattern bound
-beneath them, since write authority is keyed by code, so the shown answer is
-only as fixed as the room's bindings. A failure other than those refusals (a
+bound terms digest to, under the policy the bound policy cell names. The
+published answer for an instance never changes, but which instance the component
+shows is only as fixed as its bindings, which a room member's own code can
+rewrite. Binding both to cells each `WriteAuthorizedBy` the one handler that
+writes it, which writes only while the cell is unwritten, refuses other code's
+writes to those cells and nothing more. A failure other than those refusals (a
 lost worker connection, a slot the seal did not write) is shown as an alert;
 before the room has terms it asks nothing. **Tag**: `<cf-custody-answer>`
 

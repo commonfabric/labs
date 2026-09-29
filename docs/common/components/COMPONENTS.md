@@ -1205,15 +1205,15 @@ every seat has sealed; it refuses every later request. The seal writes the
 answer into the instance's answer slot, labeled for the room's readers, and the
 component shows what that slot holds, read and verified by the host. The shown
 answer is the slot of the instance the bound `$terms` digest to, under the
-policy the bound `$policy` cell names, so once the answer is published it stays
-put only while the room keeps both as their first write left them; otherwise a
-member's own code can repoint the component at another instance's slot or an
-empty one. A writer claim whose writer refuses to overwrite keeps both against
-other code, through any schema. It does not keep them against a member's own
-instance of the room's pattern bound beneath them, because write authority is
-keyed by code rather than by piece (normative CFC §8.15.8); the spec says what
-that leaves open. The projection is released to the seal alone, so no member
-reads it.
+policy the bound `$policy` cell names. The slot is create-only and the seal's
+alone to write, so the answer published for an instance never changes. Which
+instance the component shows is not held against a room member's own code: the
+bindings are pattern data the room space's members can write, so a member's
+code can point them at another instance's terms, or at terms whose slot is
+empty. A writer claim on the room's cells does not close that in general,
+because write authority is keyed by code rather than by piece (normative CFC
+§8.15.8); the spec says what it would take. The projection is released to the
+seal alone, so no member reads it.
 
 The seal's refusals while an answer is not yet, or is already, published leave
 the component quiet, and it asks nothing before the room has terms. Any other

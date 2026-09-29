@@ -129,8 +129,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "6RfQKykwEI3tTzNWzZQmaregDUzaP7KnqgiIhlCIxXY",
-              "policyDigest": "pXrcSCOx8uafqs0frLGTfkGf5_tzNG5n-stWxvqG0MM",
+              "moduleIdentity": "IfTg3B3xLEbDEpPg1mPYQPWoJ7JTUAPUnwAcqqjE6iI",
+              "policyDigest": "hvZ85r9HttVyBIsm8etfhLy35-WVnaqId68IMbud0ng",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -142,7 +142,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/cfc-exchange-rules/custody-answer-room.tsx",
-              "moduleIdentity": "6RfQKykwEI3tTzNWzZQmaregDUzaP7KnqgiIhlCIxXY",
+              "moduleIdentity": "IfTg3B3xLEbDEpPg1mPYQPWoJ7JTUAPUnwAcqqjE6iI",
               "path": [
                 "propose"
               ]
@@ -157,7 +157,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/cfc-exchange-rules/custody-answer-room.tsx",
-              "moduleIdentity": "6RfQKykwEI3tTzNWzZQmaregDUzaP7KnqgiIhlCIxXY",
+              "moduleIdentity": "IfTg3B3xLEbDEpPg1mPYQPWoJ7JTUAPUnwAcqqjE6iI",
               "path": [
                 "propose"
               ]
@@ -385,8 +385,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "6RfQKykwEI3tTzNWzZQmaregDUzaP7KnqgiIhlCIxXY",
-              "policyDigest": "pXrcSCOx8uafqs0frLGTfkGf5_tzNG5n-stWxvqG0MM",
+              "moduleIdentity": "IfTg3B3xLEbDEpPg1mPYQPWoJ7JTUAPUnwAcqqjE6iI",
+              "policyDigest": "hvZ85r9HttVyBIsm8etfhLy35-WVnaqId68IMbud0ng",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true

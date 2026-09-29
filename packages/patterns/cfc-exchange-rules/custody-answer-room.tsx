@@ -48,41 +48,38 @@
  * once every seat has sealed and the rule releases it to the seal. The seal
  * declassifies it once into the instance's answer slot, which the room's
  * readers can read, and the component shows what the slot holds, verified to
- * be the seal's write. Whatever later points the projector at other input
- * does not move what the room's readers are shown; moving `terms` or
- * `policy` does.
+ * be the seal's write. The slot is create-only and the seal's alone to
+ * write, so the answer published for an instance never changes, whatever
+ * later points the projector at other input and whoever writes what.
  *
- * The slot shown is the one of the instance `terms` digest to, under the
- * policy `policy` names, so the room keeps both as their first write left
- * them: each carries a writer claim naming `propose`, and `propose` writes
- * each only while it reads as unwritten. Otherwise a member's own code could
- * repoint the component at another instance's slot, such as that of a
- * one-seat room the member sealed alone, or at an empty one. The claim
- * refuses a write by any other code, through any schema, and the room's
- * `propose` run again over the terms it wrote writes nothing.
+ * Which instance the room shows is not held against a member's own code. The
+ * component shows the slot of the instance its bound `terms` digest to, under
+ * the policy its bound `policy` names, and those bindings sit in the room's
+ * result document and UI, which the room space's members can write and no
+ * writer claim covers. A member's code can point them at another instance's
+ * terms, such as those of a one-seat room the member sealed and published
+ * alone, whose answer the room then shows as its own, or at terms whose slot
+ * is empty.
  *
- * That is not write-once against this pattern's own code run elsewhere.
- * Write authority is keyed by code, not by piece (normative CFC §8.15.8), so
- * a member's own instance of this pattern, its `terms` bound beneath the
- * room's `terms`, runs a `propose` the claim authorizes, and that guard reads
- * its own binding as unwritten. Once it has written there, the room's terms
- * no longer read as terms, and the room's own `propose` rewrites them too. A
- * member who updates the room's source to a successor that imports these
- * rules, and so declares the same policy, runs a `propose` of its own that
- * inherits this one's authority. Closing either needs a write-once or
- * create-only primitive, or write authority bound to a piece, which is an
- * open question for the CFC spec. `docs/specs/cfc-custody-seal.md` says what
- * else this does not cover.
+ * `terms` and `policy` are write-once here as defense in depth: each carries a
+ * writer claim naming `propose`, and `propose` writes each only while it reads
+ * as unwritten. That refuses a write to the room's argument document by any
+ * other code, through any schema, and nothing more. Write authority is keyed
+ * by code, not by piece (normative CFC §8.15.8), so a member's own instance of
+ * this pattern bound beneath these cells runs an authorized `propose`, and a
+ * source update's successor inherits this one's authority.
+ * `docs/specs/cfc-custody-seal.md` says what closing this would take, and
+ * what else the room does not cover.
  *
  * Whoever runs `propose` first writes the terms, and anyone who can write in
  * the room space can run it, with seats of their choosing, before the room's
  * own proposal does. The room does not guard against that: it records no
  * creator to check the sender against, and a guard requiring the sender to
  * hold a seat would admit any sender that seats itself. What that costs is
- * the room, not a member's consent. The
- * seal's confirmation shows every seat, and a member seals only under terms
- * that seat them, so terms the members did not agree to leave the room with
- * no answer, and the remedy is another room.
+ * the room, not a member's consent. The seal's confirmation shows every seat,
+ * and a member seals only under terms that seat them, so terms the members
+ * did not agree to leave the room with no answer, and the remedy is another
+ * room.
  */
 
 import {
@@ -233,17 +230,17 @@ export interface CustodyTerms {
 }
 
 /**
- * The room's terms, which only `propose` writes, and only while it reads them
- * as unwritten. The host shows the slot of the instance the terms digest to, so
- * terms rewritten after the answer is published would have the room show
- * another instance's slot, or an empty one.
+ * The room's terms, which only the code of `propose` may write, and which it
+ * writes only while it reads them as unwritten. The host shows the slot of the
+ * instance the terms digest to, so terms rewritten after the answer is
+ * published would have the room show another instance's slot, or an empty one.
  */
 export type ProposedTerms = WriteAuthorizedBy<CustodyTerms, typeof propose>;
 
 /**
- * The room's policy cell, which only `propose` writes, and only while it reads
- * it as unwritten, for the same reason: the host reads the slot under the policy
- * this cell names.
+ * The room's policy cell, which only the code of `propose` may write, and
+ * which it writes only while it reads it as unwritten, for the same reason: the
+ * host reads the slot under the policy this cell names.
  */
 export type DeclaredPolicy = WriteAuthorizedBy<Sealed<boolean>, typeof propose>;
 
@@ -300,7 +297,8 @@ export interface CustodyAnswerRoomOutput {
  * unwritten. Each guard reads the cell it writes and nothing else, so the
  * room's own stream, run again, finds what the first proposal wrote and
  * writes nothing. An instance of this pattern bound elsewhere reads its own
- * binding instead; the doc comment at the top says what that leaves open.
+ * binding instead; the doc comment at the top says what the claims leave
+ * open.
  */
 const propose = handler<
   { seats: unknown[] },

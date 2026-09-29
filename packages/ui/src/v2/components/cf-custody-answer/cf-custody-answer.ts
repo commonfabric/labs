@@ -45,13 +45,14 @@ const messageOf = (error: unknown): string =>
  * published, read by the worker from the slot the seal derives from the
  * room's terms and policy and verified to be the seal's own write, never a
  * value the room holds. That is the slot of the instance the bound `terms`
- * digest to, under the policy the bound `policy` cell names, so once the
- * answer is published what it shows stays put only while the room keeps both
- * as their first write left them; otherwise a member's own code can repoint
- * the component at another instance's slot or an empty one. A writer claim
- * whose writer refuses to overwrite keeps both against other code. It does not
- * keep them against a member's own instance of the room's pattern bound
- * beneath them: write authority is keyed by code (normative CFC §8.15.8).
+ * digest to, under the policy the bound `policy` cell names. The slot is
+ * create-only and the seal's alone to write, so the answer published for an
+ * instance never changes. Which instance the component shows is not held
+ * against a room member's own code: its bindings are pattern data the room
+ * space's members can write, so a member's code can point them at another
+ * instance's terms, or at terms whose slot is empty. A writer claim on the
+ * room's cells does not close that in general, as write authority is keyed by
+ * code (normative CFC §8.15.8).
  *
  * @element cf-custody-answer
  * @fires cf-published - The answer is published or found published;

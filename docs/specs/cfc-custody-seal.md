@@ -344,53 +344,53 @@ and publishing refuse a slot without that stamp: anyone who can compute `D` can
 compute the slot's address and write there first, which blocks publication but
 shows nothing. A host shows the slot's value through `readCustodyAnswer`, never
 a link a room holds, which the room's members could point anywhere. A later
-publication is refused, so once the answer is published, whatever later points
-the projector at other input does not move what the room shows; moving the
-room's bindings does, as below. The slot holds per instance: new terms are a
+publication is refused, so the answer published for an instance never changes,
+whatever later points the projector at other input; which instance a room shows
+is another matter, below. The slot holds per instance: new terms are a
 new instance, with new consents, a slot of its own and an answer of its own.
 `cf-custody-answer` follows the room's terms, so it shows the answer of the
 instance the terms name.
 
 The shown answer is the slot of the instance the bound `terms` digest to, under
-the policy the bound `policy` cell names; a room must make both write-once from
-their first write (a writer claim whose writer refuses to overwrite), or a
-member's own code can repoint the component at another instance's slot or an
-empty one. The slot need not be empty: a member who seals a one-seat room of
-the same pattern alone and publishes its answer can write that room's terms
-into the room, and the room then shows the member's answer as its own.
-`custody-answer-room.tsx` declares both cells `WriteAuthorizedBy` its
-`propose`, which writes each only while it reads as unwritten and reads
-nothing but the cell it writes, so the room's own `propose` run again over the
-terms it wrote writes nothing. A writer claim on `T | null` sits on the `T`
-branch alone and does not refuse a write of `null`, so the room's terms are
-absent until proposed rather than `null`. The runtime stores a writer claim
-with the document from the piece's creation
-([#8212](https://github.com/commonfabric/labs/pull/8212)), so the claim also
-refuses other code's write into a slot that is still absent, and a write
-through a link whose schema declares no claim.
+the policy the bound `policy` cell names. What that guarantees depends on who is
+writing:
 
-That makes the bindings write-once against other code, not against the room's
-own code run elsewhere. Write authority is keyed by code, not by piece
-(normative CFC §8.15.8), and two paths open to any member who can write in the
-room space run an authorized writer:
+- **Against everyone, the published answer.** The slot is create-only and the
+  seal's alone to write, so the answer published for an instance never
+  changes.
+- **Not against a member's own code, which instance a room shows.** A room's
+  bindings are pattern data in the room space, which its members can write.
+  The component's `$terms` and `$policy` sit in the room's result document and
+  its UI tree, and no writer claim covers either, so a member's code can write
+  there a link to another instance's terms: those of a one-seat room of the
+  same pattern the member sealed and published alone, whose answer the room
+  then shows as its own, or terms whose slot is empty. A writer claim does not
+  close this in general either. Write authority is keyed by code, not by piece
+  (normative CFC §8.15.8), so a member's own instance of the room's pattern,
+  bound beneath the room's cells, runs an authorized writer; and a source
+  update registers its successor as the predecessor's delegate
+  ([SC-45](cfc-spec-changes.md)), so the successor's writer satisfies the
+  claim.
 
-- **A member's own instance of the room's pattern,** its `terms` bound beneath
-  the room's `terms` (at `terms.seats`, say). Its `propose` is the claim's
-  writer, and its guard reads its own binding, which is unwritten or not
-  shaped like terms, so it writes there. The room's terms then no longer
-  validate, the room's own `propose` reads them as unwritten, and running it
-  with the member's seat alone has the room show the member's one-seat answer.
-  `packages/patterns/integration/cfc-custody-projector.test.ts` pins this as a
-  known residual.
-- **A source update to a successor that imports the room's rules,** and so
-  declares the same policy and passes the compatibility check. The update
-  registers the successor as the predecessor's delegate
-  ([SC-45](cfc-spec-changes.md)), so the successor's own `propose`, guarded or
-  not, satisfies the claim. An in-place edit of the room's module is refused
-  instead, because the room's policy names that module.
+`custody-answer-room.tsx` keeps its argument `terms` and `policy` write-once as
+defense in depth. Each is `WriteAuthorizedBy` its `propose`, which writes each
+only while it reads as unwritten and reads nothing but the cell it writes, and
+the runtime stores the claim with the document from the piece's creation
+([#8212](https://github.com/commonfabric/labs/pull/8212)). That refuses a write
+to the room's argument document by any other code, through any schema, and
+nothing more. A writer claim on `T | null` sits on the `T` branch alone and
+does not refuse a write of `null`, so the room's terms are absent until
+proposed rather than `null`. The pattern's integration test,
+`packages/patterns/integration/cfc-custody-projector.test.ts`, pins a link
+written into the room's result document, and the room's own pattern bound
+beneath its terms, as known residuals.
 
-Closing either needs a write-once or create-only primitive for a claimed slot,
-or write authority bound to a piece. That is an open question for the CFC spec.
+Holding which instance a room shows against its members needs a binding they
+cannot rewrite: a write-once or create-only primitive for it, or write
+authority bound to a piece. That is an open question for the CFC spec. A
+cheaper mitigation, suggested and not built: the component could show the
+seats and question of the terms it resolved, beside the answer, so that a room
+pointed at another instance shows that instance's seats.
 
 The seal writes a room's box link only into a document that exists: an absent
 document could be the address of a custody document the seal has yet to
@@ -426,11 +426,6 @@ of it.
   the sealed values, and a modified client can read them, forge the builtin
   identity, or seal twice under different keys. One entry per actor is honest
   runtime enforcement, as the writer policy is.
-- **Replacing the whole box with a primitive.** Pattern code can write a
-  primitive over the root of a document whose writer claim is on that root,
-  and the runtime does not refuse the write. Such a write empties the box of
-  the seal's witness, so a later release has no witness to rely on: this is
-  denial of service, not laundering.
 - **A runtime read ceiling that withholds `P`.** The seal refuses to run on a
   runtime whose ceiling withholds the anchor. The room's releasing code needs
   to read the same labels on every member's runtime.
