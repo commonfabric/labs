@@ -1524,17 +1524,13 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Ends the run as `completed` for `terminalReason`, persisted. A run has
-   * one outcome and its driver writes it once, and the labels its space
-   * holds for the cells it touched land in that same write; see
-   * `#withCellLabels()`.
-   *
-   * @throws Error when the run already has its outcome.
-   */
-  /**
-   * Release what the sandbox keeps alive between calls (runsc sessions).
-   * Every terminal transition calls it; a runtime without sessions has
-   * nothing to do, and a second call is harmless.
+   * Releases what the sandbox keeps alive between calls, where the runtime is
+   * this engine's to close: the direct runsc runtime's sessions, and any of
+   * its containers still in flight. Every terminal transition calls this
+   * before it writes the outcome. It does nothing for a runtime this engine
+   * was handed without ownership, for a runtime with nothing to release, and
+   * on a second call. A close that throws is logged, and the run still ends
+   * with the outcome it was given.
    */
   async #closeSandbox(): Promise<void> {
     if (this.#sandboxClosed || !this.#ownsSandbox) {
@@ -1552,6 +1548,14 @@ export class CfHarnessEngine {
     }
   }
 
+  /**
+   * Ends the run as `completed` for `terminalReason`, persisted. A run has
+   * one outcome and its driver writes it once, and the labels its space
+   * holds for the cells it touched land in that same write; see
+   * `#withCellLabels()`.
+   *
+   * @throws Error when the run already has its outcome.
+   */
   async completeRun(
     terminalReason: HarnessRunTerminalReason,
   ): Promise<HarnessRunState> {
