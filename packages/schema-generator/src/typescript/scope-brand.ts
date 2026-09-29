@@ -1,14 +1,15 @@
 /**
  * Recognizes the brand a scope wrapper leaves on the type it resolves to.
- * `PerUser<T>` is `T & { readonly [SCOPE_BRAND]?: "user" }` (`Scoped` in
- * `packages/api/index.ts`), so a resolved type carries its scope in that
+ * `PerUser<T>` is `T & { readonly [SCOPE_BRAND]?: "user" }` for a `T` that is
+ * not `null` or `undefined`, and `T` itself for one that is (`Scoped` in
+ * `packages/api/index.ts`). So a resolved type carries its scope in that
  * member however the wrapper was reached: written in place, or through any
- * chain of aliases, whose outermost alias is all the checker reports.
+ * chain of aliases. `Scoped` is a conditional type, and the checker reports no
+ * alias for the type it resolves to, so the brand is what names the wrapper.
  *
- * The transformer reads a wrapper this way where it holds only a resolved type.
- * Schema generation recognizes a wrapper by name instead
- * (`ts_to_json_schema_mapping.md` §10), so `Scoped<T, S>` written directly is
- * read as a scope wrapper by neither.
+ * The transformer reads a wrapper this way where it holds only a resolved type,
+ * and schema generation where no node or alias names the wrapper
+ * (`ts_to_json_schema_mapping.md` §10).
  */
 
 import type { SchemaScope } from "@commonfabric/api";
@@ -52,8 +53,9 @@ export interface ScopeBrand {
 /**
  * The scope wrapper `type` resolves to, or `undefined` for a type that carries
  * no `commonfabric` `SCOPE_BRAND`. A wrapper around a union resolves to a union
- * of branded members, which is read as one wrapper when every member carries
- * the same scope.
+ * of branded members, beside any `null` or `undefined` it holds, which carry no
+ * brand. It is read as one wrapper when every other member carries the same
+ * scope.
  */
 export function getScopeBrand(
   type: ts.Type,
@@ -66,6 +68,10 @@ export function getScopeBrand(
   const payload: (readonly ts.Type[])[] = [];
   let scope: SchemaScope | undefined;
   for (const member of type.types) {
+    if ((member.flags & NULLISH) !== 0) {
+      payload.push([member]);
+      continue;
+    }
     const brand = brandOfIntersection(member, checker);
     if (!brand || (scope !== undefined && brand.scope !== scope)) {
       return undefined;
@@ -75,6 +81,32 @@ export function getScopeBrand(
   }
   return scope === undefined ? undefined : { scope, payload };
 }
+
+/**
+ * The type `type`, which the scope wrapper `brand` resolves to, holds: each
+ * alternative of its payload, the one member it has where it has one, and
+ * otherwise the branded member itself, whose other members the checker cannot
+ * intersect again without the brand. A reader takes a brand still held there
+ * as no part of the value (`GenerationContext.scopeBrandRead`).
+ */
+export function scopePayloadType(
+  type: ts.Type,
+  brand: ScopeBrand,
+  checker: ts.TypeChecker,
+): ts.Type {
+  const branded = type.isUnion() ? type.types : [type];
+  const alternatives = brand.payload.map((members, index) =>
+    members.length === 1 ? members[0]! : branded[index]!
+  );
+  if (alternatives.length === 1) return alternatives[0]!;
+  const getUnionType = (checker as ts.TypeChecker & {
+    getUnionType?: (types: readonly ts.Type[]) => ts.Type;
+  }).getUnionType;
+  return getUnionType?.(alternatives) ?? type;
+}
+
+/** The flags of a member `Scoped` keeps outside the brand. */
+const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
 
 /**
  * Helper for `getScopeBrand()`, which returns the scope an intersection's

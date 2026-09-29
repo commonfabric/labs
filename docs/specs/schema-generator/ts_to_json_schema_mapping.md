@@ -812,7 +812,9 @@ Default paths of §7:
     is an alternative of its own, in the order written. Its members are
     otherwise read by their types: `boolean` stands for `true` and `false`,
     `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
-    §10's.
+    §10's, whichever way its node is read: beside only `null` or `undefined`
+    the union is itself the wrapper, and beside any other value its scope
+    lands in a branch and throws.
 - The checker can also collapse several written CFC alternatives into a
   single semantic member. Each remains an alternative of its own, including
   `Confidential<A, [PolicyOf<typeof readers>]> |
@@ -851,17 +853,24 @@ Default paths of §7:
 
 ## 10. Scope Wrappers
 
-`PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: optional
-`SCOPE_BRAND`-typed intersections, `packages/api/index.ts`) lower to a
-`scope` key with values `"space" | "user" | "session" | "any"`
+`PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: `Scoped<T, S>`, an
+optional `SCOPE_BRAND`-typed intersection for a `T` other than `null` or
+`undefined`, which it keeps outside the brand, `packages/api/index.ts`) lower
+to a `scope` key with values `"space" | "user" | "session" | "any"`
 (`SCOPE_WRAPPER_SCOPES`, `common-fabric-formatter.ts`). Detection is by
-node name or aliasSymbol name, and otherwise by following the aliasSymbol's
-declaration down a chain of aliases, each the whole body of the one before, to
-a scope wrapper (`scopeOfAliasChain`). The checker reports the outermost alias
-as a type's aliasSymbol, so `type Rec = PerUser<Inner>` reads as `Rec`, and
-only the chain finds the wrapper. The chain ends at a wrapper's name, so
-`Scoped<T, S>`, the type the four are declared with, is not read as one
-written directly. The payload of a wrapper found that way is
+node name or aliasSymbol name, by following a chain of aliases, each the whole
+body of the one before, to a scope wrapper (`scopeOfAliasChain`, and from a
+reference node its declaration's chain, a synthetic reference's name resolved
+in the module's scope), and otherwise by the brand the type carries
+(`getScopeBrand`, `src/typescript/scope-brand.ts`). `Scoped` is a conditional
+type, and the checker reports no aliasSymbol for the type it resolves to, so a
+type with no node or alias to name its wrapper is read by its brand, as is
+`Scoped<T, S>` written directly. The payload of a wrapper read by its brand is
+its branded members with the brand taken off, each alternative a member
+intersected with the brand read as that member, and one the checker cannot
+intersect again without the brand read as the branded member itself, whose
+brand the read passes over (`scopePayloadType`,
+`GenerationContext.scopeBrandRead`). The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
@@ -921,17 +930,23 @@ declared value. Tested: scope-wrappers.test.ts, and
 end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
 `scoped-interface-schema.test.ts` (local, exported, and imported interfaces).
 
-A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
-member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
+A scope wrapper **as a union member beside another value throws** (`A scope
+wrapper cannot be a member of a union.`; tested, scope-wrappers.test.ts), as
+in `PerUser<string> | number`. The runtime reads a
 slot's scope from that slot's own schema — its top level, or the definition a
 `$ref` there names (`ContextualFlowControl.getSchemaScopeCap`) — and from no
 compound branch, so a declaration that lands in an
 `anyOf` branch is invisible to the write path: no narrowing redirect is
 written, the value lands on the shared space row, and every principal reads
 the same instance. Write the union inside the wrapper
-(`PerUser<string | undefined>` → `{ type: ["string", "undefined"], scope:
-"user" }`) or make the property optional (`draft?: PerUser<string>` →
-`{ type: "string", scope: "user" }`) — both keep the scope at the top level.
+(`PerUser<string | number>`) to keep the scope at the top level. Beside
+`null` or `undefined` alone, a wrapper is one type with the wrapper around
+them, since `Scoped` keeps them outside the brand, and scopes the whole slot as
+that does: `PerUser<string> | undefined` and `PerUser<string | undefined>` →
+`{ type: ["string", "undefined"], scope: "user" }`, and `PerUser<boolean> |
+null` → `{ anyOf: [{ type: "boolean" }, { type: "null" }], scope: "user" }`.
+An optional property keeps the scope at the top level too
+(`draft?: PerUser<string>` → `{ type: "string", scope: "user" }`).
 
 Two detection points enforce this, because a wrapper around a cell loses its
 scope before the schema is built. `formatWrapperUnion`
@@ -1509,7 +1524,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` without object target/default | `DeepDefault must be unioned with an object type …` | `union-formatter.ts` |
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
-| Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

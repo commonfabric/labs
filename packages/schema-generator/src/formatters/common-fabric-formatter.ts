@@ -60,7 +60,9 @@ import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
   getScopeBrand,
   SCOPE_WRAPPER_FOR_SCOPE,
+  type ScopeBrand,
   scopeForWrapperName,
+  scopePayloadType,
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
@@ -755,16 +757,30 @@ export function scopeOfAliasChain(
 }
 
 /**
- * Whether `type` is a scope wrapper, reached through its alias chain
- * (`scopeOfAliasChain()`), around a cell. It caps the cell's handle and is
- * itself a wrapper, so a cycle through it is found at the cell's value, not
- * at the wrapper, and the capped handle is written inline at each reference.
+ * The scope of the scope wrapper `type` is: the one its alias chain reaches
+ * (`scopeOfAliasChain()`), and otherwise the one its brand declares
+ * (`getScopeBrand()`), since the checker reports no alias for the type it
+ * resolves `Scoped` to.
+ */
+export function scopeOfScopeWrapper(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined {
+  return scopeOfAliasChain(type, checker) ??
+    getScopeBrand(type, checker)?.scope;
+}
+
+/**
+ * Whether `type` is a scope wrapper (`scopeOfScopeWrapper()`) around a cell.
+ * It caps the cell's handle and is itself a wrapper, so a cycle through it is
+ * found at the cell's value, not at the wrapper, and the capped handle is
+ * written inline at each reference.
  */
 export function scopesCellHandle(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): boolean {
-  return scopeOfAliasChain(type, checker) !== undefined &&
+  return scopeOfScopeWrapper(type, checker) !== undefined &&
     (getScopeBrand(type, checker)?.payload.some((members) =>
       members.some((member) =>
         getCellWrapperInfo(member, checker) !== undefined
@@ -803,6 +819,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (scopeOfAliasChain(type, context.typeChecker) !== undefined) {
+      return true;
+    }
+
+    if (this.#scopeBrand(type, context) !== undefined) {
       return true;
     }
 
@@ -955,6 +975,16 @@ export class CommonFabricFormatter implements TypeFormatter {
       return (this.#labelsOf(view.metadata, context) ?? []).reduce<
         MutableJSONSchema
       >((labelled, label) => withIfcLabels(labelled, label), shape);
+    }
+
+    // A scope wrapper that no alias names: the checker reports none for a
+    // resolved `Scoped`, so its brand names it.
+    const brand = this.#scopeBrand(type, context);
+    if (brand) {
+      return this.#applyScopeWrapperSemantics(
+        this.#formatScopePayload(type, brand, context),
+        brand.scope,
+      );
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1335,6 +1365,9 @@ export class CommonFabricFormatter implements TypeFormatter {
       scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
         ? typeWithAlias?.aliasTypeArguments?.[0]
         : undefined;
+    const brand = type && !resolvedInner
+      ? this.#scopeBrand(type, context)
+      : undefined;
     const usableResolvedInner = resolvedInner &&
         !this.#isUnusableInnerType(resolvedInner)
       ? resolvedInner
@@ -1369,6 +1402,8 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           undefined,
         );
+      } else if (type && brand) {
+        innerSchema = this.#formatScopePayload(type, brand, context);
       } else {
         for (const node of uninterpreted) {
           context.uninterpretedTypeNodes?.push(node);
@@ -1377,6 +1412,39 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return this.#applyScopeWrapperSemantics(innerSchema, scope);
+  }
+
+  /**
+   * The scope brand `type` carries (`getScopeBrand()`), or `undefined` where a
+   * scope wrapper reading it has taken the brand off
+   * (`GenerationContext.scopeBrandRead`).
+   */
+  #scopeBrand(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ScopeBrand | undefined {
+    return context.scopeBrandRead?.has(type)
+      ? undefined
+      : getScopeBrand(type, context.typeChecker);
+  }
+
+  /**
+   * The schema of the payload the scope wrapper `type` holds, with its `brand`
+   * taken off.
+   */
+  #formatScopePayload(
+    type: ts.Type,
+    brand: ScopeBrand,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    return this.#schemaGenerator.formatChildType(
+      scopePayloadType(type, brand, context.typeChecker),
+      {
+        ...context,
+        scopeBrandRead: new Set([type, ...(type.isUnion() ? type.types : [])]),
+      },
+      undefined,
+    );
   }
 
   #applyScopeWrapperSemantics(
@@ -2440,7 +2508,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (reference && ts.isTypeReferenceNode(reference)) {
       const declaration = this.#getTypeAliasDeclarationForSymbol(
-        context.typeChecker.getSymbolAtLocation(reference.typeName),
+        this.#schemaGenerator.resolveReferenceSymbol(reference, context),
         context,
       );
       if (declaration && !terminals.has(declaration.name.text)) {

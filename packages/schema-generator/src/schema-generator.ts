@@ -24,7 +24,7 @@ import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
   resolveScopeWrapperNode,
-  scopeOfAliasChain,
+  scopeOfScopeWrapper,
   scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
@@ -1516,6 +1516,31 @@ export class SchemaGenerator {
   }
 
   /**
+   * The symbol `reference`'s name denotes, an import followed to what it
+   * imports: bound through the node where the checker can bind it, and
+   * otherwise, for a synthetic reference, resolved in the scope of the module
+   * the schema is generated for.
+   */
+  resolveReferenceSymbol(
+    reference: ts.TypeReferenceNode,
+    context: GenerationContext,
+  ): ts.Symbol | undefined {
+    const checker = context.typeChecker;
+    if (ts.isIdentifier(reference.typeName)) {
+      return this.#resolveTypeName(
+        reference,
+        reference.typeName,
+        checker,
+        context,
+      );
+    }
+    const symbol = checker.getSymbolAtLocation(reference.typeName);
+    return symbol && symbol.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(symbol)
+      : symbol;
+  }
+
+  /**
    * `type` as the formatters after `CommonFabricFormatter` read it: for a type
    * that formatter claims for the labels it adds, whose value is the type as
    * the checker builds it (`Readonly<Sec<X>>`). Called within the type's own
@@ -1838,8 +1863,7 @@ export class SchemaGenerator {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const checker = context.typeChecker;
-    const aliasScope = scopeOfAliasChain(type, checker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const key =
       (aliasScope === undefined
         ? getNamedTypeKey(type, context.typeNode)
@@ -2164,7 +2188,7 @@ export class SchemaGenerator {
     // schema, the only place the write path reads it. A recursive one is
     // written once under `$defs` without its scope, and each reference to it
     // carries the scope instead.
-    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const isScopeWrapperAlias = aliasScope !== undefined;
     // One around a cell caps the handle and is itself a wrapper: it is not a
     // cycle's entry, so a cycle through it is found at the cell's value and
@@ -2448,9 +2472,12 @@ export class SchemaGenerator {
    * `type`, is read whole, as one alternative for all of them
    * (`pairUnionMemberNodes()`): where it is a CFC alias the CFC formatter
    * reads, whose labels the node alone can spell. A wrapper, such as
-   * `Default<T, V>` or a cell, is not, nor is a scope wrapper, since each has
-   * rules of its own for its place in a union: §7's for `Default`, and
-   * `scope-placement.ts`'s for a scope.
+   * `Default<T, V>` or a cell, is not, since each has rules of its own for its
+   * place in a union, as §7 gives `Default`'s. A scope wrapper needs no rule
+   * here. Beside only `null` or `undefined`, the union is itself the wrapper,
+   * which the CFC formatter reads before this. Beside any other value, its
+   * scope lands in an `anyOf` branch, which `scope-placement.ts` refuses
+   * however the node is read.
    */
   #readsWhole(
     type: ts.Type,
@@ -2461,9 +2488,7 @@ export class SchemaGenerator {
       ...context,
       typeNode: node,
     }) &&
-      detectWrapperViaNode(node, context.typeChecker) === undefined &&
-      resolveScopeWrapperNode(node) === undefined &&
-      scopeOfAliasChain(type, context.typeChecker) === undefined;
+      detectWrapperViaNode(node, context.typeChecker) === undefined;
   }
 
   /**

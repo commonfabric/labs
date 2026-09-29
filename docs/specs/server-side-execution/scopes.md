@@ -355,7 +355,7 @@ here: **a declared scope must be VISIBLE TO THE WRITE PATH on the slot's
 own schema** — its top level, or the definition a `$ref` there names.
 `ContextualFlowControl.getSchemaScope
 Cap` reads those and no compound branch, so a scope declared inside an
-`anyOf`/`oneOf` branch (`PerUser<T> | undefined` spelled with the union
+`anyOf`/`oneOf` branch (`PerUser<T> | number` spelled with the union
 OUTSIDE the wrapper) is invisible to the write side — `declaredCellScope`
 and `foldDeclaredScopeIntoLinkSchema` miss it while the READ side folds
 it in (`schemaScopeForLinkAtDepth` in `link-resolution.ts`; the

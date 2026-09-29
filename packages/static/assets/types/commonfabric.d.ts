@@ -1080,9 +1080,15 @@ export type AsCellEntry =
   };
 
 export declare const SCOPE_BRAND: unique symbol;
-export type Scoped<T, Scope extends SchemaScope> = T & {
-  readonly [SCOPE_BRAND]?: Scope;
-};
+/**
+ * `T` in the scope `Scope`: `T` branded with the scope, except for `null` and
+ * `undefined`, which are kept outside the brand, since intersecting either
+ * with it would leave nothing. So `PerUser<string | undefined>` holds
+ * `undefined`, and is one type with `PerUser<string> | undefined`.
+ */
+export type Scoped<T, Scope extends SchemaScope> = T extends null | undefined
+  ? T
+  : T & { readonly [SCOPE_BRAND]?: Scope };
 export type PerSpace<T> = Scoped<T, "space">;
 export type PerUser<T> = Scoped<T, "user">;
 export type PerSession<T> = Scoped<T, "session">;

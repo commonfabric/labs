@@ -74,12 +74,12 @@ const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
 export const scopeInsideUnionError = (scope: string): Error =>
   new Error(
     `A scope wrapper cannot be a member of a union. ` +
-      `\`PerUser<T> | undefined\` puts \`scope: "${scope}"\` inside an ` +
+      `\`PerUser<T> | number\` puts \`scope: "${scope}"\` inside an ` +
       `\`anyOf\` branch, where the write path does not look for it, so the ` +
       `slot stores one shared space-scoped value instead of one per ` +
       `principal. Put the union inside the wrapper ` +
-      `(\`PerUser<T | undefined>\`) or make the property optional ` +
-      `(\`prop?: PerUser<T>\`).`,
+      `(\`PerUser<T | number>\`). Beside \`null\` or \`undefined\` alone, ` +
+      `a wrapper scopes the whole slot.`,
   );
 
 const walkSlot = (schema: MutableJSONSchema): void => {

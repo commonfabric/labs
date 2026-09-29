@@ -228,6 +228,13 @@ export interface GenerationContext {
   labelsOnly?: boolean;
 
   /**
+   * Types whose scope brand the scope wrapper reading them has taken off, read
+   * here as its payload (`scopePayloadType()`): the type the brand was read
+   * from, and each member of it as a union.
+   */
+  scopeBrandRead?: ReadonlySet<ts.Type>;
+
+  /**
    * Type parameters read as their arguments, for a node read from the
    * declaration that is written in them (`BoundTypeParameters`).
    */

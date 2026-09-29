@@ -32,7 +32,7 @@ interface SchemaRoot {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | undefined;
+  draft: PerUser<string> | number;
 }
 `,
       "SchemaRoot",
@@ -46,7 +46,23 @@ interface SchemaRoot {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<Cell<string>> | undefined;
+  draft: PerUser<Cell<string>> | number;
+}
+`,
+      "SchemaRoot",
+    );
+
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("throws for a scope wrapper over a union that is a union member", async () => {
+    // `PerUser<boolean>` distributes into `true` and `false`, each carrying
+    // the brand, beside `number`.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      `
+interface SchemaRoot {
+  draft: PerUser<boolean> | number;
 }
 `,
       "SchemaRoot",
@@ -60,7 +76,7 @@ interface SchemaRoot {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
 interface SchemaRoot {
-  draft: PerUser<string> | null;
+  draft: PerUser<string> | { other: string };
 }
 `,
       "SchemaRoot",
@@ -68,6 +84,55 @@ interface SchemaRoot {
 
     expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
       .toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  describe("a scope wrapper beside only `null` or `undefined`", () => {
+    // `Scoped` keeps `null` and `undefined` outside the brand, so the wrapper
+    // beside them is one type with the wrapper around them, and scopes the
+    // whole slot as that does.
+
+    /** The schema of `SchemaRoot`'s `draft`, declared as `declaration`. */
+    const draftSchema = async (declaration: string) => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `type Draft = PerUser<Cell<string>>;
+interface SchemaRoot { draft: ${declaration}; }`,
+        "SchemaRoot",
+      );
+      return (new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+      ) as JSONSchemaObj).properties?.draft;
+    };
+
+    it("scopes the slot of a value beside `undefined`", async () => {
+      expect(await draftSchema("PerUser<string> | undefined")).toEqual({
+        type: ["string", "undefined"],
+        scope: "user",
+      });
+    });
+
+    it("scopes the slot of a value beside `null`", async () => {
+      expect(await draftSchema("PerUser<string> | null")).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        scope: "user",
+      });
+    });
+
+    for (
+      const [spelled, inside] of [
+        ["PerUser<boolean> | null", "PerUser<boolean | null>"],
+        [
+          "PerUser<Cell<string>> | undefined",
+          "PerUser<Cell<string> | undefined>",
+        ],
+        ["Draft | undefined", "PerUser<Cell<string> | undefined>"],
+      ] as const
+    ) {
+      it(`reads \`${spelled}\` as \`${inside}\``, async () => {
+        expect(await draftSchema(spelled)).toEqual(await draftSchema(inside));
+      });
+    }
   });
 
   it("throws for a scope inside a cell that is a union member", async () => {
@@ -474,7 +539,7 @@ interface SchemaRoot { head: Node<{ a: string }>; }
       const { type, checker, typeNode } = await getTypeFromCode(
         `
 type Draft = PerUser<Cell<string>>;
-interface SchemaRoot { draft: Draft | undefined; }
+interface SchemaRoot { draft: Draft | number; }
 `,
         "SchemaRoot",
       );
