@@ -265,6 +265,9 @@ export type {
   StoredCfcEnvelope,
 } from "./prepare.ts";
 export {
+  addCfcDenialListener,
+  type CfcDenial,
+  type CfcDenialListener,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "./denial-report.ts";

@@ -56,6 +56,10 @@ export function createTestCommand(
       { conflicts: ["cfc-enforcement-mode", "cfc-flow-labels"] },
     )
     .option(
+      "--cfc-denials",
+      "Print each CFC denial, with the reasons and inputs behind it, as it happens.",
+    )
+    .option(
       "--verbose",
       "Show detailed execution logs.",
     )
@@ -204,6 +208,7 @@ export function createTestCommand(
           : options.cfcFlowLabels === "derive"
           ? "observe"
           : options.cfcFlowLabels,
+        cfcDenials: options.cfcDenials,
         noIdempotencyCheck: options.idempotencyCheck === false,
         root,
         dataFilePaths: options.datafile?.map((path: string) =>

@@ -20,12 +20,35 @@
  * summary is announced once and the repeats are its count: `code` is the
  * message key, and `commonfabric.logger["cfc"].countsByKey` carries the
  * per-kind totals.
+ *
+ * A diagnostic tool the user asked for — `cf test --cfc-denials` — registers
+ * a listener to be told of every denial, repeats included, with its inputs.
  */
 
 import { getLogger } from "@commonfabric/utils/logger";
 
 const logger = getLogger("cfc");
 const announced = new Set<string>();
+const listeners = new Set<CfcDenialListener>();
+
+/** One denial, as {@link reportCfcDenial} was told of it. */
+export type CfcDenial = {
+  /** The kind of decision, which is also its message key. */
+  readonly code: string;
+
+  /** A fixed sentence naming the kind of decision. */
+  readonly summary: string;
+
+  /** The labels, the ceiling, and the dials behind the decision. */
+  readonly inputs: Record<string, unknown>;
+};
+
+/**
+ * Something told of every denial. Its `inputs` can name a confidentiality
+ * label that the party the gate turned away was not cleared to see, so only a
+ * diagnostic tool the user asked for registers one.
+ */
+export type CfcDenialListener = (denial: CfcDenial) => void;
 
 /** Say that a gate blocked something. */
 export const reportCfcDenial = (
@@ -37,7 +60,26 @@ export const reportCfcDenial = (
     announced.add(code);
     logger.warn(code, summary);
   }
-  logger.debug(code, () => [summary, inputs()]);
+  // The inputs are built at most once, and only where something takes them.
+  let built: Record<string, unknown> | undefined;
+  const builtInputs = () => built ??= inputs();
+  for (const listener of listeners) {
+    listener({ code, summary, inputs: builtInputs() });
+  }
+  logger.debug(code, () => [summary, builtInputs()]);
+};
+
+/**
+ * Tells `listener` of every denial from now on, until the returned function
+ * is called.
+ */
+export const addCfcDenialListener = (
+  listener: CfcDenialListener,
+): () => void => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 };
 
 /** Forget which codes have been announced; the next of each announces again. */

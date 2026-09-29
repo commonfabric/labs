@@ -63,8 +63,8 @@ confidentiality label, and the literal-text one has no cell to read a label
 from at all. A write denial's inputs carry the prepare reasons, and a prepare
 reason may name the confidentiality atoms it refused over, rendered as JSON —
 the sink-ceiling and writer-fit reasons both do. So the inputs go only to
-debug, and they are passed as a function so a gate builds them only where
-something prints them.
+debug and to a denial listener (below), and they are passed as a function so a
+gate builds them only where something takes them.
 
 Where a label is read, `labelSource` says where from: `stored` for the cell's
 own label, `schema` for the information-flow constraint the gate falls back to,
@@ -113,7 +113,18 @@ next denial of each announces again.
 
 That is the default, and it is the whole of it: which kind of decision, and
 that it happened. For the reasons, the labels, and the dials behind it, raise
-the `cfc` logger to debug and reproduce; the inputs ride the same key.
+the `cfc` logger to debug and reproduce; the inputs ride the same key. In a
+pattern test, `cf test --cfc-denials` prints every denial with its inputs, laid
+out for reading, without raising any logger.
+
+## Listening for denials
+
+`addCfcDenialListener()` registers a function that is told of every denial from
+then on — repeats included, with the inputs built — and returns the function
+that unregisters it. It is how `cf test --cfc-denials` prints them. A listener
+sees exactly what debug does, labels included, so only a diagnostic tool the
+user asked for registers one. Registration is per module instance, so it
+reaches the gates running in the same process or worker and no others.
 
 ## Adding a denial
 
@@ -126,7 +137,7 @@ fixed sentence: text chosen by the kind of decision, never assembled from a
 reason, a label, a value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
-only debug. Nothing derived from them may reach the surface the denial
+only debug and a denial listener. Nothing derived from them may reach the surface the denial
 produced.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which

@@ -3,6 +3,8 @@ import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import {
+  addCfcDenialListener,
+  type CfcDenial,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "../../src/cfc/denial-report.ts";
@@ -118,6 +120,48 @@ describe("denial-report", () => {
         reportCfcDenial("write-policy-gate", SUMMARY, () => ({}));
       }, { debug: true });
       expect(occurrences(written, SUMMARY)).toBe(3);
+    });
+  });
+
+  describe("addCfcDenialListener()", () => {
+    it("tells the listener of every denial, repeats included, with its inputs", () => {
+      const told: CfcDenial[] = [];
+      const stop = addCfcDenialListener((denial) => told.push(denial));
+      try {
+        said(() => {
+          reportCfcDenial("write-policy-gate", SUMMARY, () => ({ n: 1 }));
+          reportCfcDenial("write-policy-gate", SUMMARY, () => ({ n: 2 }));
+        });
+      } finally {
+        stop();
+      }
+      expect(told).toEqual([
+        { code: "write-policy-gate", summary: SUMMARY, inputs: { n: 1 } },
+        { code: "write-policy-gate", summary: SUMMARY, inputs: { n: 2 } },
+      ]);
+    });
+
+    it("builds the inputs once for a listener and the debug log together", () => {
+      let built = 0;
+      const stop = addCfcDenialListener(() => {});
+      try {
+        said(() => {
+          reportCfcDenial("write-policy-gate", SUMMARY, () => {
+            built += 1;
+            return {};
+          });
+        }, { debug: true });
+      } finally {
+        stop();
+      }
+      expect(built).toBe(1);
+    });
+
+    it("tells the listener of nothing once the returned function is called", () => {
+      const told: CfcDenial[] = [];
+      addCfcDenialListener((denial) => told.push(denial))();
+      said(() => reportCfcDenial("write-policy-gate", SUMMARY, () => ({})));
+      expect(told).toEqual([]);
     });
   });
 

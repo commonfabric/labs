@@ -57,6 +57,7 @@ import {
 import { defer } from "@commonfabric/utils/defer";
 
 import { assertionOutcome } from "./assert-record.ts";
+import { printCfcDenials } from "./cfc-denials.ts";
 import {
   flushDefaultModuleByteCache,
   getDefaultModuleByteCache,
@@ -375,6 +376,13 @@ const handlers: Record<
         : {}),
     }));
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
+    if (args.cfcDenials === true) {
+      // This worker runs one participant for its whole life, so nothing stops
+      // the printing.
+      printCfcDenials((line) =>
+        console.log(`    [${String(args.participant)}] ${line}`)
+      );
+    }
     // Channel 1: capture pattern-code console.error / console.warn calls.
     runtime.scheduler.onConsole(
       (({ method, args }) => {
