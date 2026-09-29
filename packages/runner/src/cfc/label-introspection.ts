@@ -9,7 +9,10 @@ import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { canonicalizeLogicalPath } from "./canonical.ts";
+import {
+  canonicalizeDocumentPath,
+  canonicalizeLogicalPath,
+} from "./canonical.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
@@ -151,9 +154,12 @@ export type ConfLabelQueryEvaluation = {
 /**
  * Parse the application-facing payload pointer of §4.6.4.1 into the canonical
  * entry path. `/body` addresses the payload label stored at the `/value/body`
- * envelope entry, whose labelMap path is the canonical (value-stripped)
- * `["body"]`; an explicit `/value` prefix is accepted as the envelope
- * spelling of the same path (mirroring `canonicalizeLogicalPath`).
+ * envelope entry, whose labelMap path is the logical `["body"]`; an explicit
+ * `/value` prefix is accepted as the envelope spelling of the same path, so the
+ * pointer is read as a document path (`canonicalizeDocumentPath`). A payload
+ * field literally named `value` at the root is consequently reached only
+ * through that envelope spelling: `/value/x` names payload `x`, and
+ * `/value/value/x` names payload `value.x`.
  *
  * Returns `undefined` — the caller collapses to `notAvailable` — for the
  * envelope metadata subtree (`/cfc/...`): labels attached to label metadata
@@ -171,7 +177,7 @@ export const parseConfLabelTargetPath = (
   } catch {
     return undefined;
   }
-  const canonical = canonicalizeLogicalPath(segments);
+  const canonical = canonicalizeDocumentPath(segments);
   if (canonical[0] === "cfc") {
     return undefined;
   }

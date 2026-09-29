@@ -31,6 +31,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { CellScope } from "../builder/types.ts";
 import {
   type AttemptedWrite,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
   CFC_ENFORCING_STRICTNESS,
@@ -1173,7 +1174,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path) as string[],
+        path: canonicalizeDocumentPath(read.path) as string[],
       }));
     }
   }
@@ -2437,7 +2438,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       consumedReads.push(deepFreeze({
         ...bare,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path),
+        path: canonicalizeDocumentPath(read.path),
         ...(raw !== undefined ? { journalIndex: rankByRaw.get(raw)! } : {}),
       }));
     }
@@ -2448,7 +2449,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
-          path: canonicalizeLogicalPath(address.path),
+          path: canonicalizeDocumentPath(address.path),
         }),
     );
 
@@ -2458,7 +2459,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         writes.push(deepFreeze({
           ...write.address,
           scope: normalizeCellScope(write.address.scope),
-          path: canonicalizeLogicalPath(write.address.path),
+          path: canonicalizeDocumentPath(write.address.path),
         }));
       }
     }

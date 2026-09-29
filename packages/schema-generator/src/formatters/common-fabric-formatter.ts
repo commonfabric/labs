@@ -12,7 +12,12 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
-import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import type {
+  BoundTypeArgument,
+  BoundTypeParameters,
+  GenerationContext,
+  TypeFormatter,
+} from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
   detectWrapperViaNode,
@@ -33,8 +38,11 @@ import {
 } from "../typescript/literal-value.ts";
 import {
   entityNameRight,
-  readAuthoredTypeNode,
+  holdsFreeTypeParameter,
+  holdsTypeParameter,
   readMemberAnnotation,
+  readThroughIdentityAliases,
+  typeParameterOfReference,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
@@ -45,8 +53,11 @@ import {
   isCellBrand,
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
+import { hasDefaultMarker } from "../typescript/default-brand.ts";
+import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
+  getScopeBrand,
   SCOPE_WRAPPER_FOR_SCOPE,
   scopeForWrapperName,
 } from "../typescript/scope-brand.ts";
@@ -121,19 +132,41 @@ type ResolvedAliasChain = {
    * are the reference's own.
    */
   readonly aliasArgNodes?: readonly (ts.TypeNode | undefined)[];
-  /**
-   * The parameters, along the chain to `aliasName`, that an argument node was
-   * substituted for.
-   */
-  readonly substituted?: readonly ts.TypeParameterDeclaration[];
   /** The parameters along the chain given a type and no node. */
   readonly parameterTypes?: ParameterTypes;
   /**
-   * The type a chain entered from its type, with no argument nodes,
-   * instantiates. It holds the innermost payload with every argument in
+   * The payload, `aliasName`'s first argument, as the last alias along the
+   * chain writes it, with the bindings of that alias's parameters it is read
+   * under. Absent for a canonical alias reached by its own name, whose payload
+   * is the reference's own argument.
+   */
+  readonly payload?: WrittenArgument;
+  /**
+   * The type the chain instantiates, where the reference being formatted has
+   * one. It holds the innermost payload with every argument in
    * (`cfcPayloadOf()`).
    */
   readonly instantiated?: ts.Type;
+  /**
+   * Set where the chain is entered with its arguments as their author wrote
+   * them, whose syntax can say what `instantiated` does not.
+   */
+  readonly argumentsWritten?: true;
+};
+
+/**
+ * A type argument as written, with the bindings of the parameters of the
+ * declaration it is written in, absent where it is written under none.
+ */
+type WrittenArgument = {
+  readonly node: ts.TypeNode;
+  readonly bound?: BoundTypeParameters;
+};
+
+/** A reference's type arguments as written, and the bindings they are under. */
+type WrittenArguments = {
+  readonly nodes: readonly ts.TypeNode[];
+  readonly bound?: BoundTypeParameters;
 };
 
 /**
@@ -312,24 +345,6 @@ const substituteTypeNode = (
 };
 
 /**
- * Whether `node` holds a reference the checker binds to a type parameter, or,
- * given `parameters`, to one of those.
- */
-const holdsTypeParameter = (
-  node: ts.Node,
-  checker: ts.TypeChecker,
-  parameters?: readonly ts.TypeParameterDeclaration[],
-): boolean =>
-  (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) &&
-    (checker.getSymbolAtLocation(node.typeName)?.declarations?.some(
-      (declaration) =>
-        ts.isTypeParameterDeclaration(declaration) &&
-        (parameters === undefined || parameters.includes(declaration)),
-    ) ?? false)) ||
-  (ts.forEachChild(node, (child) =>
-    holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
-
-/**
  * The one branch of the conditional type `body` that is not `never`, reached
  * through nested conditionals and parentheses, when it is a reference. The
  * checker resolves `body` to that branch or to `never`, so an alias it
@@ -363,7 +378,7 @@ const soleConditionalBranch = (
     }
     unreadable.push(
       ...parameters.filter((parameter) =>
-        holdsTypeParameter(bare.checkType, checker, [parameter])
+        holdsTypeParameter(bare.checkType, checker, new Set([parameter]))
       ),
     );
     collectInferred(bare.extendsType);
@@ -378,12 +393,41 @@ const soleConditionalBranch = (
 };
 
 /**
+ * The member a CFC metadata carrier holds (`Cfc` in `packages/api/cfc.ts`).
+ * It is a phantom: no value holds it.
+ */
+export const CFC_CARRIER_PROPERTY = "__ct_cfc__";
+
+/**
+ * The default-library aliases that map an object's members, which fold a
+ * labelled operand's carrier into the object they build as one more member.
+ */
+const MEMBER_MAPPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
+  "Readonly",
+  "Partial",
+  "Required",
+  "Pick",
+  "Omit",
+]);
+
+/**
+ * The member-mapping aliases that leave a primitive as it is, as TypeScript's
+ * homomorphic mapped types do: `Readonly<string>` is `string`.
+ */
+const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
+  "Readonly",
+  "Partial",
+  "Required",
+]);
+
+/**
  * The `__ct_cfc__` member of `member` when that is all `member` holds: a CFC
  * metadata carrier, which a CFC alias intersects its payload with.
  */
 const cfcCarrierProperty = (member: ts.Type): ts.Symbol | undefined => {
   const properties = member.getProperties();
-  return properties.length === 1 && properties[0]!.name === "__ct_cfc__"
+  return properties.length === 1 &&
+      properties[0]!.name === CFC_CARRIER_PROPERTY
     ? properties[0]
     : undefined;
 };
@@ -442,6 +486,78 @@ const readInFull = (value: unknown): boolean =>
     (Array.isArray(value) ? value : Object.values(value)).every(readInFull));
 
 /**
+ * Whether `node` uses a type parameter where no reading of it under bindings
+ * reaches: in an indexed access, a conditional type, `keyof`, a mapped type,
+ * or a template literal type, each of which the checker settles only once it
+ * instantiates the parameter.
+ */
+const usesParameterUnreachably = (
+  node: ts.Node,
+  checker: ts.TypeChecker,
+): boolean =>
+  ((ts.isIndexedAccessTypeNode(node) || ts.isConditionalTypeNode(node) ||
+    ts.isMappedTypeNode(node) || ts.isTemplateLiteralTypeNode(node) ||
+    (ts.isTypeOperatorNode(node) &&
+      node.operator === ts.SyntaxKind.KeyOfKeyword)) &&
+    holdsFreeTypeParameter(node, checker)) ||
+  (ts.forEachChild(
+    node,
+    (child) => usesParameterUnreachably(child, checker) || undefined,
+  ) ?? false);
+
+/**
+ * The payload of `type`, a scope wrapper's instantiation, or `undefined` where
+ * it cannot be told apart. A scope wrapper intersects its payload with its
+ * brand, so the payload is the one member besides the brand; a payload that
+ * is itself an intersection, or a union, which the brand distributes over,
+ * has no one member.
+ */
+const scopePayloadOf = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  const payload = getScopeBrand(type, checker)?.payload;
+  return payload?.length === 1 && payload[0]!.length === 1
+    ? payload[0]![0]
+    : undefined;
+};
+
+/**
+ * The type the payload of a chain named `aliasName` at its end is read at,
+ * where `instantiated` is the type the chain instantiates, less the
+ * `undefined` an optional member's `?` adds: its payload, a scope wrapper's
+ * (`scopePayloadOf()`) or a CFC alias's (`cfcPayloadOf()`). A payload that is
+ * itself a CFC alias, `payloadIsCfcAlias`, is read at a CFC alias's whole
+ * instantiation, whose payload, every carrier taken off, is that alias's own,
+ * while its labels are read from its own arguments. A scope wrapper's brand
+ * cannot be taken off such an intersection, so inside one it is read at none.
+ */
+const instantiatedPayloadOf = (
+  aliasName: string,
+  instantiated: ts.Type,
+  payloadIsCfcAlias: boolean,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  const defined = definedPart(instantiated);
+  if (scopeForWrapperName(aliasName) !== undefined) {
+    return payloadIsCfcAlias ? undefined : scopePayloadOf(defined, checker);
+  }
+  return payloadIsCfcAlias ? defined : cfcPayloadOf(defined);
+};
+
+/**
+ * `type` less the `undefined` among its members, where one other member
+ * remains, and `type` itself otherwise.
+ */
+const definedPart = (type: ts.Type): ts.Type => {
+  if (!type.isUnion()) return type;
+  const defined = type.types.filter((member) =>
+    (member.flags & ts.TypeFlags.Undefined) === 0
+  );
+  return defined.length === 1 ? defined[0]! : type;
+};
+
+/**
  * The type `parameterTypes` gives `node` when `node` is a bare reference to one
  * of its parameters.
  */
@@ -451,15 +567,7 @@ const boundParameterType = (
   parameterTypes: ParameterTypes,
 ): ts.Type | undefined => {
   if (parameterTypes.size === 0) return undefined;
-  const bare = unwrapTypeParentheses(node);
-  if (
-    !ts.isTypeReferenceNode(bare) || !ts.isIdentifier(bare.typeName) ||
-    bare.typeArguments?.length
-  ) {
-    return undefined;
-  }
-  const parameter = checker.getSymbolAtLocation(bare.typeName)?.declarations
-    ?.find(ts.isTypeParameterDeclaration);
+  const parameter = typeParameterOfReference(node, checker);
   return parameter && parameterTypes.get(parameter);
 };
 
@@ -574,6 +682,24 @@ export function scopeOfAliasChain(
 }
 
 /**
+ * Whether `type` is a scope wrapper, reached through its alias chain
+ * (`scopeOfAliasChain()`), around a cell. It caps the cell's handle and is
+ * itself a wrapper, so a cycle through it is found at the cell's value, not
+ * at the wrapper, and the capped handle is written inline at each reference.
+ */
+export function scopesCellHandle(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return scopeOfAliasChain(type, checker) !== undefined &&
+    (getScopeBrand(type, checker)?.payload.some((members) =>
+      members.some((member) =>
+        getCellWrapperInfo(member, checker) !== undefined
+      )
+    ) ?? false);
+}
+
+/**
  * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>,
  * Default<T,V>), scope wrappers, and CFC aliases.
  *
@@ -624,6 +750,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (cfcCarriedParts(type, context.typeChecker)) {
+      return true;
+    }
+
+    if (this.#libraryView(type, context)) {
       return true;
     }
 
@@ -702,9 +832,15 @@ export class CommonFabricFormatter implements TypeFormatter {
       SCOPE_WRAPPER_NAMES,
     );
     if (resolvedScopeAlias) {
-      return this.#applyScopeWrapperSemantics(
-        this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
-        scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+      return this.#readChain(
+        type,
+        context,
+        resolvedScopeAlias,
+        () =>
+          this.#applyScopeWrapperSemantics(
+            this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
+            scopeForWrapperName(resolvedScopeAlias.aliasName)!,
+          ),
       );
     }
 
@@ -714,7 +850,36 @@ export class CommonFabricFormatter implements TypeFormatter {
       CFC_ALIAS_NAMES,
     );
     if (resolvedCfcAlias) {
-      return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
+      return this.#readChain(
+        type,
+        context,
+        resolvedCfcAlias,
+        () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
+      );
+    }
+
+    // A default-library alias mapping a labelled type's members builds its
+    // type from the operand's, carrier and all, as TypeScript builds any
+    // mapped type: over an object it folds the carrier into the object as one
+    // more member, which `Pick` may leave out, and over a primitive it builds
+    // an object of the primitive's methods. So the value is that type as the
+    // formatters after this one read it, or, where `Readonly`, `Partial` and
+    // `Required` leave a primitive as it is, the primitive; and its labels
+    // are the operand's, read from its carriers in full or not at all.
+    const view = this.#libraryView(type, context);
+    if (view) {
+      const shape = view.primitive
+        ? this.#schemaGenerator.formatChildType(
+          view.payload,
+          context,
+          undefined,
+        )
+        : this.#schemaGenerator.formatStructure(type, context);
+      // The structure may carry the same labels, from the carrier folded into
+      // it; labelling it again with them changes nothing.
+      return (this.#labelsOf(view.metadata, context) ?? []).reduce<
+        MutableJSONSchema
+      >((labelled, label) => withIfcLabels(labelled, label), shape);
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1257,10 +1422,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
+    // Under bindings, the value is read at the cell's value in the position's
+    // instantiation (`GenerationContext.instantiatedAs`).
+    const instantiatedCell = context.instantiatedAs &&
+      getCellWrapperInfo(context.instantiatedAs, context.typeChecker);
     const innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
       childContext,
       shouldPassTypeNode ? innerTypeNode : undefined,
+      instantiatedCell &&
+        (instantiatedCell.typeRef.typeArguments ??
+          context.typeChecker.getTypeArguments(instantiatedCell.typeRef))[0],
     );
 
     // Stream<T>: can also reflect inner Cell-ness
@@ -1559,11 +1731,20 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
 
-    // Generate schema for the value type
+    // Generate schema for the value type, under bindings at the member of the
+    // position's instantiation that carries no default brand
+    // (`GenerationContext.instantiatedAs`).
+    const instantiatedAs = context.instantiatedAs;
+    const unbranded = instantiatedAs?.isUnion()
+      ? instantiatedAs.types.filter((member) =>
+        !hasDefaultMarker(member, context.typeChecker)
+      )
+      : undefined;
     const valueSchema = this.#schemaGenerator.formatChildType(
       valueType,
       context,
       valueTypeNode,
+      unbranded?.length === 1 ? unbranded[0] : undefined,
     );
 
     // Extract default value from the default type node (this can handle complex literals)
@@ -1608,6 +1789,151 @@ export class CommonFabricFormatter implements TypeFormatter {
     return valueSchema;
   }
 
+  /**
+   * The labels `carrier`, a CFC metadata carrier an object holds as one of its
+   * members, attaches: one per metadata type, an intersection holding one per
+   * label that was folded into it (`#labelsOf()`).
+   */
+  labelsCarriedBy(
+    carrier: ts.Symbol,
+    context: GenerationContext,
+  ): Record<string, unknown>[] | undefined {
+    const checker = context.typeChecker;
+    const value = memberValueType(
+      carrier,
+      checker.getTypeOfSymbol(carrier),
+      checker,
+    );
+    return this.#labelsOf(
+      value.isIntersection() ? value.types : [value],
+      context,
+    );
+  }
+
+  /**
+   * The labels each of `metadata`, a carrier's metadata type, spells, or
+   * `undefined` where any is not read in full. Read in part, a policy could
+   * claim what its author never wrote together, so it is read in full or not
+   * at all, as the carriers of an intersection are.
+   */
+  #labelsOf(
+    metadata: readonly ts.Type[],
+    context: GenerationContext,
+  ): Record<string, unknown>[] | undefined {
+    const labels = metadata.map((part) =>
+      this.#extractLiteralLikeValue(part, undefined, context)
+    );
+    return labels.every((label) =>
+        isObjectOrArray(label) && !Array.isArray(label) && readInFull(label)
+      )
+      ? labels as Record<string, unknown>[]
+      : undefined;
+  }
+
+  /**
+   * Where `type` is a default-library alias mapping a labelled type's members
+   * (`Readonly<Sec<X>>`), the operand's payload and carriers' metadata, and
+   * whether the value is that payload: a primitive, which `Readonly`,
+   * `Partial` and `Required` leave as it is; `undefined` for any other type.
+   * A labelled operand is an intersection holding carriers, or such an alias
+   * in turn. The checker reports the outermost alias, and a `Pick` or an
+   * `Omit` over literal keys builds an object that a user's alias of it
+   * names, so an alias whose whole body is a reference to one of these is
+   * followed to it, its operand the type the reference writes.
+   */
+  #libraryView(
+    type: ts.Type,
+    context: GenerationContext,
+  ):
+    | { payload: ts.Type; metadata: readonly ts.Type[]; primitive: boolean }
+    | undefined {
+    const checker = context.typeChecker;
+    const { aliasSymbol, aliasTypeArguments } = type as TypeWithInternals;
+    const library = (symbol: ts.Symbol) =>
+      MEMBER_MAPPING_LIBRARY_ALIASES.has(symbol.name) &&
+      !!symbol.declarations?.length &&
+      symbol.declarations.every((declaration) =>
+        isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+      );
+    let name = aliasSymbol && library(aliasSymbol)
+      ? aliasSymbol.name
+      : undefined;
+    let operand = name === undefined ? undefined : aliasTypeArguments?.[0];
+    if (name === undefined && aliasSymbol) {
+      const body = resolveAliasedSymbol(aliasSymbol, checker).declarations
+        ?.find(ts.isTypeAliasDeclaration)?.type;
+      const reference = body && unwrapTypeParentheses(body);
+      const named = reference && ts.isTypeReferenceNode(reference) &&
+        checker.getSymbolAtLocation(reference.typeName);
+      const written = named && reference.typeArguments?.[0];
+      const declared = named && resolveAliasedSymbol(named, checker);
+      if (written && declared && library(declared)) {
+        name = declared.name;
+        operand = checker.getTypeFromTypeNode(written);
+      }
+    }
+    if (name === undefined || !operand) return undefined;
+    const carried = cfcCarriedParts(operand, checker);
+    const inner = carried
+      ? {
+        ...carried,
+        primitive: (carried.payload.flags & ts.TypeFlags.Object) === 0,
+      }
+      : this.#libraryView(operand, context);
+    return inner && {
+      ...inner,
+      primitive: inner.primitive && PRIMITIVE_KEEPING_LIBRARY_ALIASES.has(name),
+    };
+  }
+
+  /**
+   * `read`, the reading of `resolved`, entered from the written reference the
+   * context reads, where it has one, and tracked as a chain reading
+   * (`SchemaGenerator.readAliasChain()`) so a recursion through that reference
+   * is found. Its instantiation is passed on to settle one by where it is
+   * known: at a position the reading carries one for
+   * (`GenerationContext.instantiatedAs`), and for a reference read under no
+   * bindings, whose type is concrete; a declaration read under bindings with
+   * none carried has only its own unbound parameters. A scope around a cell
+   * settles none: its cycle is found at the cell's value, which keeps the
+   * handle it caps at each reference (`scopesCellHandle()`). A chain reached
+   * with no written reference is tracked by the alias it is reached by, which
+   * bounds its nesting and settles nothing.
+   */
+  #readChain(
+    type: ts.Type,
+    context: GenerationContext,
+    resolved: ResolvedAliasChain,
+    read: () => MutableJSONSchema,
+  ): MutableJSONSchema {
+    const checker = context.typeChecker;
+    const reference = context.typeNode &&
+      readThroughIdentityAliases(context.typeNode, checker);
+    if (!reference || !ts.isTypeReferenceNode(reference)) {
+      const alias = (type as TypeWithInternals).aliasSymbol;
+      return alias
+        ? this.#schemaGenerator.readAliasChain(
+          type,
+          context,
+          alias,
+          undefined,
+          read,
+        )
+        : read();
+    }
+    const instantiated = scopesCellHandle(type, checker)
+      ? undefined
+      : context.instantiatedAs ??
+        (context.boundTypeParameters ? undefined : resolved.instantiated);
+    return this.#schemaGenerator.readAliasChain(
+      type,
+      context,
+      reference,
+      instantiated,
+      read,
+    );
+  }
+
   #formatResolvedCfcAlias(
     resolved: ResolvedAliasChain,
     context: GenerationContext,
@@ -1619,8 +1945,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolved.aliasName,
       resolved.aliasArgs,
       context,
-      resolved.aliasArgNodes ??
-        this.#referenceArgumentNodes(resolved.aliasName, context),
+      this.#withBoundArgumentsWritten(
+        resolved.aliasArgNodes ??
+          this.#referenceArgumentNodes(resolved.aliasName, context),
+        context,
+      ),
       resolved.parameterTypes ?? NO_PARAMETER_TYPES,
     );
     if (ifc === undefined) {
@@ -1628,6 +1957,54 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return withIfcLabels(baseSchema, ifc);
+  }
+
+  /**
+   * `nodes`, a reference's arguments read under `context`, with each bare
+   * reference to a parameter the context binds replaced by the argument
+   * written for it, where that argument names no parameter of its own, so
+   * that what only its syntax says, such as the binding a `typeof` names, is
+   * there for a label to read. One that does name one stays the parameter,
+   * which the label reader follows under its bindings.
+   */
+  #withBoundArgumentsWritten(
+    nodes: readonly (ts.TypeNode | undefined)[] | undefined,
+    context: GenerationContext,
+  ): readonly (ts.TypeNode | undefined)[] | undefined {
+    if (!context.boundTypeParameters || !nodes) return nodes;
+    return nodes.map((node) => {
+      const argument = node && this.#boundArgumentAt(node, context)?.argument;
+      return argument?.node && !argument.bound ? argument.node : node;
+    });
+  }
+
+  /**
+   * The argument `typeNode` reads as, where it is a bare reference to a
+   * parameter the context binds, with the context to read it in: the
+   * bindings of the place the argument is written in place of the
+   * context's.
+   */
+  #boundArgumentAt(
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+  ):
+    | {
+      readonly argument: BoundTypeArgument;
+      readonly context: GenerationContext;
+    }
+    | undefined {
+    const bound = context.boundTypeParameters;
+    const parameter = bound &&
+      typeParameterOfReference(typeNode, context.typeChecker);
+    const argument = parameter && bound?.arguments.get(parameter);
+    if (!argument) return undefined;
+    const { boundTypeParameters: _, ...outer } = context;
+    return {
+      argument,
+      context: argument.bound
+        ? { ...outer, boundTypeParameters: argument.bound }
+        : outer,
+    };
   }
 
   /** The schema of the payload, the first argument, of a resolved alias. */
@@ -1639,155 +2016,136 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (!baseType) {
       throw new Error(`${resolved.aliasName}<T> requires type argument`);
     }
-
+    if (resolved.payload) {
+      return this.#formatWrittenPayload(resolved, resolved.payload, context);
+    }
     // A canonical alias reached by its own name resolves no argument nodes; the
     // reference's own arguments are its nodes, the payload's as much as the
     // labels'. Read from its type alone, a generic alias in the payload has no
     // argument to bind, and a `typeof` binding nested in it is lost unless a
-    // member's annotation still names it.
-    const reachedByName = resolved.aliasArgNodes === undefined;
+    // member's annotation still names it. An authored node is formatted as the
+    // type it is, so a named type in the payload stays a reference to its
+    // definition.
     const argNodes = resolved.aliasArgNodes ??
       this.#referenceArgumentNodes(resolved.aliasName, context);
-    const parameterTypes = resolved.parameterTypes ?? NO_PARAMETER_TYPES;
-    const baseTypeNode = argNodes?.[0];
-    // A payload still referring to a parameter that substitution had an
-    // argument for but did not reach would be read with that parameter
-    // unbound, so it is a guess.
-    const unsubstituted = baseTypeNode !== undefined &&
-      resolved.substituted !== undefined &&
-      holdsTypeParameter(
-        baseTypeNode,
+    const payloadNode = argNodes?.[0];
+    // Read under bindings, the payload is read at the payload of the alias's
+    // instantiation (`GenerationContext.instantiatedAs`).
+    const instantiatedPayload = context.instantiatedAs &&
+      instantiatedPayloadOf(
+        resolved.aliasName,
+        context.instantiatedAs,
+        payloadNode !== undefined &&
+          this.#refersToCfcAlias(payloadNode, context),
         context.typeChecker,
-        resolved.substituted,
       );
-    if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
-    return unsubstituted
-      ? true
-      : baseTypeNode === undefined
-      ? this.#schemaGenerator.formatChildType(baseType, context, undefined)
-      : reachedByName
-      // An authored node, formatted as the type it is, so a named type in the
-      // payload stays a reference to its definition.
-      ? this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
-      : this.#formatCfcAliasTypeNode(
-        baseTypeNode,
-        context,
-        parameterTypes,
-        resolved.instantiated,
-      ) ??
-        this.#formatDeclaredPayload(
-          baseType,
-          baseTypeNode,
-          context,
-          parameterTypes,
-          resolved.instantiated,
-        );
-  }
-
-  /**
-   * Helper for {@link #formatResolvedAliasPayload}, which formats a payload node
-   * that is not itself a CFC alias. A node holding a parameter that has only a
-   * type, such as `T[]`, is read from `instantiated`, the type the chain
-   * instantiates, which holds the payload with that parameter's argument in.
-   * Where that payload cannot be told apart, the declaration is read with each
-   * such parameter bound to its argument's type
-   * (`GenerationContext.boundTypeParameters`), and a use the binding cannot
-   * reach, such as `T["name"]`, is reported as not fully read.
-   */
-  #formatDeclaredPayload(
-    baseType: ts.Type,
-    baseTypeNode: ts.TypeNode,
-    context: GenerationContext,
-    parameterTypes: ParameterTypes,
-    instantiated: ts.Type | undefined,
-  ): MutableJSONSchema {
-    if (
-      holdsTypeParameter(baseTypeNode, context.typeChecker, [
-        ...parameterTypes.keys(),
-      ])
-    ) {
-      const payload = instantiated && cfcPayloadOf(instantiated);
-      if (payload) {
-        return this.#schemaGenerator.formatChildType(
-          payload,
-          context,
-          undefined,
-        );
-      }
-      // Otherwise the declaration is read with each parameter bound to its
-      // argument's type, as the checker instantiates it.
-      return this.#schemaGenerator.formatChildType(
-        baseType,
-        {
-          ...context,
-          boundTypeParameters: {
-            types: parameterTypes,
-            declaredNode: baseTypeNode,
-          },
-        },
-        baseTypeNode,
-      );
-    }
     return this.#schemaGenerator.formatChildType(
       baseType,
       context,
-      baseTypeNode,
+      payloadNode,
+      instantiatedPayload,
     );
   }
 
-  #formatCfcAliasTypeNode(
-    typeNode: ts.TypeNode,
+  /**
+   * Helper for {@link #formatResolvedAliasPayload}: `payload`, the payload as
+   * the last alias along `resolved`'s chain writes it. One holding a
+   * parameter of that alias is read from that declaration with each
+   * parameter bound to its argument (`GenerationContext.boundTypeParameters`),
+   * so every reference in it stays one the checker resolves, and a parameter
+   * reads its argument as written where it is. The type the chain
+   * instantiates is read instead, where it holds the payload apart
+   * (`cfcPayloadOf()`) and the payload is no CFC alias of its own, whose
+   * labels that type holds merged with the chain's: for a chain entered from
+   * its type, whose arguments have no syntax to read, and for a payload using
+   * a parameter where no reading under bindings reaches it
+   * (`usesParameterUnreachably()`).
+   */
+  #formatWrittenPayload(
+    resolved: ResolvedAliasChain,
+    payload: WrittenArgument,
     context: GenerationContext,
-    parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
-    instantiated?: ts.Type,
-  ): MutableJSONSchema | undefined {
-    if (
-      ts.isParenthesizedTypeNode(typeNode) || ts.isTypeOperatorNode(typeNode)
-    ) {
-      return this.#formatCfcAliasTypeNode(
-        typeNode.type,
+  ): MutableJSONSchema {
+    const checker = context.typeChecker;
+    const { boundTypeParameters: _, ...outer } = context;
+    const type = this.#writtenArgumentType(payload.node, context);
+    if (!holdsFreeTypeParameter(payload.node, checker)) {
+      return this.#schemaGenerator.formatChildType(type, outer, payload.node);
+    }
+    const payloadIsCfcAlias = this.#refersToCfcAlias(payload.node, context);
+    const instantiatedPayload = resolved.instantiated &&
+      instantiatedPayloadOf(
+        resolved.aliasName,
+        resolved.instantiated,
+        payloadIsCfcAlias,
+        checker,
+      );
+    const readsInstantiation = !payloadIsCfcAlias &&
+      (!resolved.argumentsWritten ||
+        usesParameterUnreachably(payload.node, checker));
+    if (readsInstantiation && instantiatedPayload) {
+      return this.#schemaGenerator.formatChildType(
+        instantiatedPayload,
         context,
-        parameterTypes,
-        instantiated,
+        undefined,
       );
     }
-    if (!ts.isTypeReferenceNode(typeNode)) {
-      return undefined;
-    }
+    // A parameter left unbound, its argument not read, is reported as a
+    // use no binding reaches. The payload the chain instantiates, where it
+    // holds one apart, identifies the reading
+    // (`GenerationContext.instantiatedAs`).
+    return this.#schemaGenerator.formatChildType(
+      type,
+      {
+        ...outer,
+        boundTypeParameters: payload.bound ??
+          { arguments: new Map(), declaredNode: payload.node },
+      },
+      payload.node,
+      instantiatedPayload,
+    );
+  }
 
-    const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
-      context.typeChecker.getSymbolAtLocation(typeNode.typeName),
+  /**
+   * Whether `node`, through parentheses, refers to a CFC alias, by its own
+   * name or down a chain of aliases.
+   */
+  #refersToCfcAlias(node: ts.TypeNode, context: GenerationContext): boolean {
+    const reference = unwrapTypeParentheses(node);
+    if (!ts.isTypeReferenceNode(reference)) return false;
+    const declaration = this.#getTypeAliasDeclarationForSymbol(
+      context.typeChecker.getSymbolAtLocation(reference.typeName),
       context,
     );
-    if (!aliasDeclaration) {
-      return undefined;
-    }
+    return declaration !== undefined &&
+      this.#resolveAliasChainFromDeclaration(
+          CFC_ALIAS_NAMES,
+          declaration,
+          undefined,
+          reference.typeArguments ?? [],
+          context,
+          new Set([declaration]),
+          undefined,
+        ) !== undefined;
+  }
 
-    // An argument that is a parameter with a type and no node is that type.
-    const aliasArgs = typeNode.typeArguments?.map((argNode) =>
-      boundParameterType(argNode, context.typeChecker, parameterTypes)
-    );
-    const aliasArgNodes = typeNode.typeArguments?.map((argNode, index) =>
-      aliasArgs?.[index] ? undefined : argNode
-    );
-    const resolved = this.#resolveAliasChainFromDeclaration(
-      CFC_ALIAS_NAMES,
-      aliasDeclaration,
-      aliasArgs,
-      aliasArgNodes,
-      { ...context, typeNode },
-      new Set([aliasDeclaration]),
-      [],
-      parameterTypes,
-    );
-    // A nested alias's payload is the chain's innermost payload, so the
-    // instantiated type holds it too.
-    return resolved
-      ? this.#formatResolvedCfcAlias(
-        instantiated ? { ...resolved, instantiated } : resolved,
-        context,
-      )
-      : undefined;
+  /**
+   * The type `node`, a type argument as written, denotes: the type it was
+   * printed from, where the transformer printed it, and the checker's reading
+   * of it otherwise, which is `any` for a node the checker cannot resolve.
+   */
+  #writtenArgumentType(
+    node: ts.TypeNode,
+    context: GenerationContext,
+  ): ts.Type {
+    const known = context.printedFrom?.(node) ??
+      context.typeRegistry?.get(node);
+    if (known) return known;
+    try {
+      return context.typeChecker.getTypeFromTypeNode(node);
+    } catch {
+      return context.typeChecker.getAnyType();
+    }
   }
 
   /**
@@ -1804,7 +2162,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // still carries the outer reference's arguments. Start a user alias's
     // substitution from its authored declaration so those pairs agree.
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (reference && ts.isTypeReferenceNode(reference)) {
       const declaration = this.#getTypeAliasDeclarationForSymbol(
         context.typeChecker.getSymbolAtLocation(reference.typeName),
@@ -1819,8 +2177,11 @@ export class CommonFabricFormatter implements TypeFormatter {
           nodes,
           context,
           new Set([declaration]),
+          this.#writtenUnderContext(nodes, context),
         );
-        if (resolved) return resolved;
+        if (resolved) {
+          return this.#enteredWith(resolved, nodes, typeWithAlias, context);
+        }
       }
       // Reduced, a policy's type can lose its name: `Confidential<string |
       // null, L>` is `string & carrier`, since `null & carrier` is nothing, and
@@ -1833,6 +2194,8 @@ export class CommonFabricFormatter implements TypeFormatter {
         declaration && terminals.has(declaration.name.text) &&
         !typeWithAlias.aliasSymbol
       ) {
+        // Reached by its own name, the policy reads its payload from the
+        // reference's argument, as written.
         const resolved = this.#resolveAliasChainFromDeclaration(
           terminals,
           declaration,
@@ -1840,6 +2203,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           reference.typeArguments ?? [],
           context,
           new Set([declaration]),
+          undefined,
         );
         const payload = resolved?.aliasArgs[0];
         if (payload && (payload.flags & ts.TypeFlags.Never) === 0) {
@@ -1874,12 +2238,94 @@ export class CommonFabricFormatter implements TypeFormatter {
       aliasArgNodes,
       context,
       new Set([aliasDeclaration]),
+      aliasArgNodes && this.#writtenUnderContext(aliasArgNodes, context),
     );
-    return resolved && !aliasArgNodes
-      ? { ...resolved, instantiated: typeWithAlias }
-      : resolved;
+    return resolved &&
+      this.#enteredWith(resolved, aliasArgNodes, typeWithAlias, context);
   }
 
+  /**
+   * `resolved`, a chain entered from a reference of type `typeWithAlias` with
+   * `nodes` for its arguments, holding the type it instantiates, and whether
+   * its arguments are read as written: they are unless there are none, or one
+   * names a type parameter the context does not bind, as a member of a
+   * generic declaration does once the checker has instantiated it, whose
+   * argument the instantiated type holds instead.
+   */
+  #enteredWith(
+    resolved: ResolvedAliasChain,
+    nodes: readonly ts.TypeNode[] | undefined,
+    typeWithAlias: ts.Type,
+    context: GenerationContext,
+  ): ResolvedAliasChain {
+    const argumentsWritten = nodes !== undefined &&
+      !nodes.some((node) =>
+        holdsFreeTypeParameter(
+          node,
+          context.typeChecker,
+          context.boundTypeParameters?.arguments,
+        )
+      );
+    // Under bindings, the position's own instantiation is the chain's
+    // (`GenerationContext.instantiatedAs`): `typeWithAlias` is the type the
+    // declaration is written in, its parameters unbound.
+    const instantiated = context.instantiatedAs ?? typeWithAlias;
+    return argumentsWritten
+      ? { ...resolved, instantiated, argumentsWritten }
+      : { ...resolved, instantiated };
+  }
+
+  /**
+   * The argument `node`, a type argument written under `bound`, binds its
+   * parameter to, or `undefined` where it names a type parameter `bound` does
+   * not bind: one of a generic declaration whose member the checker has
+   * instantiated, whose argument is in the instantiated type and not here. A
+   * bare reference to a parameter `bound` binds is that parameter's argument,
+   * and a node holding none of its parameters is read under no bindings, so
+   * that an alias reached again inside its own payload with the same
+   * arguments is read under the same bindings, which is how its recursion is
+   * found.
+   */
+  #bindWrittenArgument(
+    node: ts.TypeNode,
+    bound: BoundTypeParameters | undefined,
+    context: GenerationContext,
+  ): BoundTypeArgument | undefined {
+    const checker = context.typeChecker;
+    if (holdsFreeTypeParameter(node, checker, bound?.arguments)) {
+      return undefined;
+    }
+    const parameter = bound && typeParameterOfReference(node, checker);
+    const forwarded = parameter && bound?.arguments.get(parameter);
+    if (forwarded) return forwarded;
+    const type = this.#writtenArgumentType(node, context);
+    return bound && holdsTypeParameter(node, checker, bound.arguments)
+      ? { type, node, bound }
+      : { type, node };
+  }
+
+  /**
+   * `nodes`, type arguments written where `context` reads, under the bindings
+   * it reads them with.
+   */
+  #writtenUnderContext(
+    nodes: readonly ts.TypeNode[],
+    context: GenerationContext,
+  ): WrittenArguments {
+    const bound = context.boundTypeParameters;
+    return bound ? { nodes, bound } : { nodes };
+  }
+
+  /**
+   * Follows the chain of aliases from `aliasDeclaration`, reached with
+   * `aliasArgs` and `aliasArgNodes`, to the alias among `terminals` it ends at.
+   * Each alias's arguments are substituted into its body, by node where they
+   * have one and by type where they do not, for the labels to read. Along the
+   * way, `written` holds the arguments of the reference being followed as
+   * their author wrote them, so that the payload is read from the last
+   * declaration with its parameters bound to those (`#formatWrittenPayload()`)
+   * rather than from a substituted node.
+   */
   #resolveAliasChainFromDeclaration(
     terminals: ReadonlySet<string>,
     aliasDeclaration: ts.TypeAliasDeclaration,
@@ -1887,7 +2333,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
     context: GenerationContext,
     visited: Set<ts.TypeAliasDeclaration>,
-    substituted: readonly ts.TypeParameterDeclaration[] = [],
+    written: WrittenArguments | undefined,
     parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
   ): ResolvedAliasChain | undefined {
     const aliasName = aliasDeclaration.name.text;
@@ -1895,6 +2341,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       // A chain that reaches `Projection` stops: the type it is written in is
       // read as the checker resolves it.
       if (!lowersFromSyntax(aliasName)) return undefined;
+      const payload = written?.nodes[0];
       return {
         aliasName,
         // Alias chains substitute syntax until they reach a terminal. Only its
@@ -1911,8 +2358,14 @@ export class CommonFabricFormatter implements TypeFormatter {
             type !== undefined
           ),
         ...(aliasArgNodes ? { aliasArgNodes } : {}),
-        ...(substituted.length > 0 ? { substituted } : {}),
         ...(parameterTypes.size > 0 ? { parameterTypes } : {}),
+        ...(payload
+          ? {
+            payload: written?.bound
+              ? { node: payload, bound: written.bound }
+              : { node: payload },
+          }
+          : {}),
       };
     }
 
@@ -1935,8 +2388,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const paramNodeMap = new Map<string, ts.TypeNode>();
-    const substitutedHere: ts.TypeParameterDeclaration[] = [];
     const typedHere = new Map(parameterTypes);
+    // Each parameter bound to its argument as written, under the bindings of
+    // the place it is written, or to its type where it has no node.
+    const boundHere = new Map<
+      ts.TypeParameterDeclaration,
+      BoundTypeArgument
+    >();
     for (let i = 0; i < (aliasDeclaration.typeParameters?.length ?? 0); i++) {
       const parameter = aliasDeclaration.typeParameters?.[i];
       const paramName = parameter?.name.text;
@@ -1952,13 +2410,27 @@ export class CommonFabricFormatter implements TypeFormatter {
       const actualArg = aliasArgs?.[i];
       if (parameter && paramName && actualArgNode) {
         paramNodeMap.set(paramName, actualArgNode);
-        substitutedHere.push(parameter);
       } else if (parameter && actualArg) {
         // An argument with a type and no node: a reference to its parameter
         // in the nodes below reads as that type, never as the declaration's
         // own reference with the parameter unbound.
         typedHere.set(parameter, actualArg);
       }
+      const writtenArg = written?.nodes[i];
+      const argument = !parameter
+        ? undefined
+        : writtenArg
+        ? this.#bindWrittenArgument(writtenArg, written?.bound, context)
+        : parameter.default && written && leftOut
+        ? this.#bindWrittenArgument(
+          parameter.default,
+          boundHere.size > 0
+            ? { arguments: new Map(boundHere), declaredNode: parameter.default }
+            : undefined,
+          context,
+        )
+        : actualArg && { type: actualArg };
+      if (parameter && argument) boundHere.set(parameter, argument);
     }
 
     const resolvedArgs: (ts.Type | undefined)[] = [];
@@ -1975,6 +2447,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     visited.add(targetDeclaration);
+    const writtenHere = aliased.typeArguments ?? [];
     return this.#resolveAliasChainFromDeclaration(
       terminals,
       targetDeclaration,
@@ -1982,7 +2455,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolvedArgNodes,
       context,
       visited,
-      [...substituted, ...substitutedHere],
+      boundHere.size > 0
+        ? {
+          nodes: writtenHere,
+          bound: { arguments: boundHere, declaredNode: aliased },
+        }
+        : { nodes: writtenHere },
       typedHere,
     );
   }
@@ -2265,7 +2743,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): boolean {
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (
       !reference || !ts.isTypeReferenceNode(reference) ||
       this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
@@ -2329,7 +2807,7 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): readonly (ts.TypeNode | undefined)[] | undefined {
     const checker = context.typeChecker;
     const reference = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, checker);
+      readThroughIdentityAliases(context.typeNode, checker);
     if (!reference || !ts.isTypeReferenceNode(reference)) return undefined;
     if (
       this.#resolveTypeReferenceName(reference.typeName, context) === aliasName
@@ -2354,7 +2832,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     const argumentNodes = reference.typeArguments ?? [];
     return (conditional.branch.typeArguments ?? []).map((argument) => {
-      if (holdsTypeParameter(argument, checker, conditional.unreadable)) {
+      if (
+        holdsTypeParameter(argument, checker, new Set(conditional.unreadable))
+      ) {
         return undefined;
       }
       const bare = unwrapTypeParentheses(argument);
@@ -2372,8 +2852,8 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   /**
    * The type arguments written on the reference being formatted. The
-   * reference is read through parentheses and plain aliases
-   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * reference is read through parentheses, plain aliases, and aliases whose
+   * whole body is one of their parameters (`readThroughIdentityAliases()`): `type Name = Owned<string, typeof setName>`
    * holds the arguments that `Name` stands for, and a policy read from the
    * bare `Name` would find none and drop the writer binding without a word.
    */
@@ -2381,7 +2861,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
     const typeNode = context.typeNode &&
-      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+      readThroughIdentityAliases(context.typeNode, context.typeChecker);
     if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }
@@ -2430,6 +2910,14 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
       if (bound) {
         return this.#extractLiteralLikeValue(bound, undefined, context);
+      }
+      const at = this.#boundArgumentAt(typeNode, context);
+      if (at) {
+        return this.#extractLiteralLikeValue(
+          at.argument.type,
+          at.argument.node,
+          at.context,
+        );
       }
       const fromSyntax = this.#readLiteralSyntax(
         type,
@@ -2734,6 +3222,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeNode: ts.TypeNode,
     context: GenerationContext,
   ): unknown {
+    const at = this.#boundArgumentAt(typeNode, context);
+    if (at) {
+      return at.argument.node
+        ? this.#extractDefaultValueFromNode(at.argument.node, at.context)
+        : this.#extractDefaultValue(at.argument.type, at.context);
+    }
     // Handle typeof expressions (TypeQuery nodes)
     // These reference a variable's value, like: typeof defaultRoutes
     if (ts.isTypeQueryNode(typeNode)) {

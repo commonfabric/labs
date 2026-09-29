@@ -41,7 +41,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       }, "v");
 
       // Forge a link-write policy input whose carried label view attaches an
@@ -52,13 +52,13 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-integrity-source",
-          path: ["value"],
+          path: [],
         },
         cfcLabelView: {
           version: 1,
@@ -133,7 +133,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       }, "v");
       tx.recordCfcWritePolicyInput({
         kind: "link-write",
@@ -141,13 +141,13 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-reader-source",
-          path: ["value"],
+          path: [],
         },
         cfcLabelView: {
           version: 1,
@@ -191,7 +191,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space" as const,
         id: target.getAsNormalizedFullLink().id,
-        path: ["value", "field"],
+        path: ["field"],
       };
       tx.markCfcRelevant("test");
       tx.writeValueOrThrow(address, "v");
@@ -202,7 +202,7 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-schema-reader-source",
-          path: ["value"],
+          path: [],
         },
         linkSchema: {
           type: "string",

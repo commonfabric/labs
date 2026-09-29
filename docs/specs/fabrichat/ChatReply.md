@@ -20,7 +20,7 @@ interface ChatReply {
 ## Fields
 
 - **`message`** links the message replied to. It MUST be a message in the same
-  room. A link keeps the target's identity and label.
+  room, and not deleted. A link keeps the target's identity and label.
 - **`shownIn`** says where the reply is shown:
 
   | `shownIn` | The reply is shown | Like |
@@ -63,5 +63,5 @@ another. A room never holds a thread within a thread.
 A `"both"` message appears in both. A `"main"` reply is in no thread, and quotes
 a message that the main conversation also shows.
 
-Neither view is stored. Both are derived from `messages`, the same way in every
-client.
+Neither view is stored. Both are derived from the room's messages, the same way
+in every client.

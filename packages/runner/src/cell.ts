@@ -114,6 +114,7 @@ import {
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
 import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
+import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -223,7 +224,19 @@ type SinkOptions = {
    * reactive label delivery over a subscription. Off by default.
    */
   includeCfcLabel?: boolean;
+
+  /**
+   * Join the CFC labels of everything the sink's read consumed, following
+   * links, as `collectConsumedLabel()` joins them for a transaction, and pass
+   * the join to the callback as a third argument. The label metadata is read
+   * on the sink's transaction, so a label-only write to anything the read
+   * reached re-fires the sink. Off by default.
+   */
+  includeConsumedLabel?: boolean;
 };
+
+/** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
+export type SinkConsumedLabel = ReturnType<typeof collectConsumedLabel>;
 
 export type RawCellReadOptions = IReadOptions & {
   /**
@@ -643,6 +656,7 @@ declare module "@commonfabric/api" {
       callback: (
         value: Readonly<T>,
         cfcLabel?: CfcLabelView | undefined,
+        consumed?: SinkConsumedLabel,
       ) => Cancel | undefined | void,
       options?: SinkOptions,
     ): Cancel;
@@ -3331,6 +3345,7 @@ export class CellImpl<T extends FabricValue>
     callback: (
       value: Readonly<T>,
       cfcLabel?: CfcLabelView | undefined,
+      consumed?: SinkConsumedLabel,
     ) => Cancel | undefined | void,
     options: SinkOptions = {},
   ): Cancel {
@@ -4374,6 +4389,7 @@ function subscribeToReferencedDocs<T>(
   callback: (
     value: T,
     cfcLabel?: CfcLabelView | undefined,
+    consumed?: SinkConsumedLabel,
   ) => Cancel | undefined | void,
   runtime: Runtime,
   ref: CellViewRef,
@@ -4419,7 +4435,10 @@ function subscribeToReferencedDocs<T>(
           kickCrossSpaceTargets: false,
         })
         : undefined;
-      sink.cleanup = callback(newValue, cfcLabel);
+      const consumed = options.includeConsumedLabel
+        ? collectConsumedLabel(tx)
+        : undefined;
+      sink.cleanup = callback(newValue, cfcLabel, consumed);
 
       // no async await here, but that also means no retry. TODO(seefeld): Should
       // we add a retry? So far all sinks are read-only, so they get re-triggered

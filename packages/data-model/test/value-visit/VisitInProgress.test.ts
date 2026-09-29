@@ -2,7 +2,9 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue, PrimitiveValueTag } from "@";
+import { UnknownValue } from "@/codec-common";
 import { CODEC, type NonterminalCodec } from "@/codec-interface/interface.ts";
+import { deepFreeze } from "@/deep-freeze.ts";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
 import {
@@ -25,9 +27,33 @@ function visit(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {
   return new VisitInProgress(vis, { mode: "visit" }).visit(value);
 }
 
-/** Runs a fresh structural-map of `value` with `vis`. */
+/**
+ * Runs a fresh structural-map of `value` with `vis`, freezing the containers
+ * it produces.
+ */
 function map(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {
   return new VisitInProgress(vis, { mode: "map", freeze: true }).visit(value);
+}
+
+/**
+ * Runs a fresh structural-map of `value` with `vis`, leaving the containers it
+ * produces mutable.
+ */
+function mutableMap(
+  value: unknown,
+  vis: ValueVisitor<unknown, unknown>,
+): unknown {
+  return new VisitInProgress(vis, { mode: "map", freeze: false }).visit(value);
+}
+
+/** Returns a `FabricError` with the given message. */
+function error(message: string): FabricError {
+  return new FabricError({
+    type: "Error",
+    message,
+    stack: undefined,
+    cause: undefined,
+  });
 }
 
 /**
@@ -477,15 +503,15 @@ describe("VisitInProgress", () => {
 
       describe("`FabricInstance` recursion", () => {
         // `FabricLink` and `FabricError` are the fixtures because their
-        // codecs are real. A link's state is its payload, the very object,
+        // codecs are real. A link's state is its `.payload`, the very object,
         // which makes the sequence easy to state; an error's state is built
         // fresh on each encode and can hold a `cause`, which is what a cycle
         // through an instance needs.
 
         it("reports the instance and its state to `visitingFabricInstanceState()`, then visits the state under the instance", () => {
           const rec = new Recorder();
-          const payload = { id: "fid1:abc" };
-          const link = new FabricLink(payload);
+          const link = new FabricLink({ id: "fid1:abc" });
+          const payload = link.payload;
 
           expect(visit(link, rec)).toBeUndefined();
           expect(rec.events).toEqual([
@@ -562,8 +588,8 @@ describe("VisitInProgress", () => {
         it("ends the visit from `visitingFabricInstanceState()`, before the state is visited", () => {
           const rec = new Recorder();
           rec.onVisitingFabricInstanceState = () => mainResult("before");
-          const payload = { id: "fid1:abc" };
-          const link = new FabricLink(payload);
+          const link = new FabricLink({ id: "fid1:abc" });
+          const payload = link.payload;
 
           expect(visit([link, 1], rec)).toBe("before");
           expect(rec.events.map((e) => e[1])).not.toContain(payload);
@@ -1011,20 +1037,20 @@ describe("VisitInProgress", () => {
             expect(map(5, new Recorder())).toBe(5);
           });
 
-          it("returns the same array when no element changes", () => {
-            const array = [1, [2]];
+          it("returns the same array when no element changes and the array is deeply frozen", () => {
+            const array = deepFreeze([1, [2]]);
 
             expect(map(array, new Recorder())).toBe(array);
           });
 
-          it("returns the same plain object when no entry changes", () => {
-            const object = { a: 1, b: { c: 2 } };
+          it("returns the same plain object when no entry changes and the object is deeply frozen", () => {
+            const object = deepFreeze({ a: 1, b: { c: 2 } });
 
             expect(map(object, new Recorder())).toBe(object);
           });
 
-          it("returns the same instance when its state does not change", () => {
-            const link = new FabricLink({ id: "fid1:abc" });
+          it("returns the same instance when its state does not change and the instance is deeply frozen", () => {
+            const link = deepFreeze(new FabricLink({ id: "fid1:abc" }));
 
             expect(map(link, new Recorder())).toBe(link);
           });
@@ -1114,7 +1140,7 @@ describe("VisitInProgress", () => {
           });
 
           it("counts a `NaN` left alone as no change", () => {
-            const array = [NaN];
+            const array = Object.freeze([NaN]);
 
             expect(map(array, new Recorder())).toBe(array);
           });
@@ -1224,22 +1250,12 @@ describe("VisitInProgress", () => {
             rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
             const object = { a: 1 };
 
-            expect(map(object, rec)).toBe(object);
+            expect(map(object, rec)).toEqual(object);
             expect(rec.resultTypeChecks).not.toContain("a");
           });
         });
 
         describe("`FabricInstance`s", () => {
-          /** Returns a `FabricError` with the given message. */
-          function error(message: string): FabricError {
-            return new FabricError({
-              type: "Error",
-              message,
-              stack: undefined,
-              cause: undefined,
-            });
-          }
-
           it("returns a new instance decoded from the mapped state", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
@@ -1276,6 +1292,19 @@ describe("VisitInProgress", () => {
             expect(rec.events.map((e) => e[1])).not.toContain(1);
           });
 
+          it("returns a new instance for a deeply frozen instance whose state changes", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) =>
+              (v === "fid1:abc") ? mapTo("fid1:xyz") : undefined;
+            const original = deepFreeze(new FabricLink({ id: "fid1:abc" }));
+            const result = map(original, rec);
+
+            expect(result).toBeInstanceOf(FabricLink);
+            expect(result).not.toBe(original);
+            expect((result as FabricLink).payload).toEqual({ id: "fid1:xyz" });
+            expect(original.payload).toEqual({ id: "fid1:abc" });
+          });
+
           it("throws when the codec refuses the mapped state", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => (v === "boom") ? mapTo(5) : undefined;
@@ -1283,6 +1312,33 @@ describe("VisitInProgress", () => {
             expect(() => map(error("boom"), rec)).toThrow(
               /Codec of .* refused replacement state /,
             );
+          });
+
+          it("throws when the codec refuses a state mapped to `undefined`", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(undefined);
+
+            expect(() => map(error("boom"), rec)).toThrow(
+              /Codec of .* refused replacement state `undefined`/,
+            );
+          });
+
+          it("decodes a state mapped to `undefined` when the codec accepts it", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(undefined);
+            const decoded = error("decoded");
+            const states: unknown[] = [];
+            const instance = errorWithCodec("boom", {
+              canDecode: () => true,
+              decode: (_tag: string, state: unknown) => {
+                states.push(state);
+                return decoded;
+              },
+            });
+
+            expect(map(instance, rec)).toBe(decoded);
+            expect(states.length).toBe(1);
+            expect(states[0]).toBeUndefined();
           });
 
           it("throws when the codec fails while checking the mapped state", () => {
@@ -1337,8 +1393,8 @@ describe("VisitInProgress", () => {
             expect(map([1, 2], rec)).toEqual(["one", 2]);
           });
 
-          it("returns a replacement container that is left unchanged as that same container", () => {
-            const two = [2];
+          it("returns a frozen replacement container that is left unchanged as that same container", () => {
+            const two = Object.freeze([2]);
             const rec = new Recorder();
             rec.onValue = (v) => (v === 1) ? replace(two) : DO_DISPATCH;
 
@@ -1393,6 +1449,284 @@ describe("VisitInProgress", () => {
             inProgress.visit({ a: 3 });
             expect(rec.domainAssignableChecks).toBe(1);
           });
+        });
+
+        describe("freezing", () => {
+          it("freezes the array it makes from mapped elements", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+
+            expect(Object.isFrozen(map([1], rec))).toBe(true);
+          });
+
+          it("returns a frozen copy of an unchanged array that is not frozen, leaving the original unfrozen", () => {
+            const array = [1, 2];
+            const result = map(array, new Recorder());
+
+            expect(result).not.toBe(array);
+            expect(result).toEqual(array);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(array)).toBe(false);
+          });
+
+          it("returns a frozen copy of an unchanged plain object that is not frozen, leaving the original unfrozen", () => {
+            const object = { a: 1 };
+            const result = map(object, new Recorder());
+
+            expect(result).not.toBe(object);
+            expect(result).toEqual(object);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(object)).toBe(false);
+          });
+
+          it("returns a frozen copy of an unfrozen container, holding the same unchanged frozen child", () => {
+            const child = Object.freeze([2]);
+            const parent = [1, child];
+            const result = map(parent, new Recorder()) as unknown[];
+
+            expect(result).not.toBe(parent);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[1]).toBe(child);
+          });
+
+          it("returns frozen copies of the unfrozen containers inside a frozen container", () => {
+            const child = [2];
+            const parent = Object.freeze([1, child]);
+            const result = map(parent, new Recorder()) as unknown[];
+
+            expect(result).not.toBe(parent);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[1]).not.toBe(child);
+            expect(Object.isFrozen(result[1])).toBe(true);
+            expect(Object.isFrozen(child)).toBe(false);
+          });
+
+          it("returns a new frozen instance for an unfrozen instance whose state does not change", () => {
+            const original = new FabricError({
+              type: "Error",
+              message: "boom",
+              stack: undefined,
+              cause: undefined,
+            });
+            const result = map(original, new Recorder());
+
+            expect(result).toBeInstanceOf(FabricError);
+            expect(result).not.toBe(original);
+            expect((result as FabricError).message).toBe("boom");
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(Object.isFrozen(original)).toBe(false);
+          });
+
+          it("leaves unfrozen the external state an instance encodes as itself", () => {
+            // An `UnknownValue`'s state is an external reference, which its
+            // codec returns as itself, unfrozen.
+            const state = { a: 1 };
+            const original = new UnknownValue("Test@1", state);
+            const result = map(original, new Recorder()) as UnknownValue;
+
+            expect(result).not.toBe(original);
+            expect(result.state).not.toBe(state);
+            expect(result.state).toEqual(state);
+            expect(Object.isFrozen(result.state)).toBe(true);
+            expect(Object.isFrozen(state)).toBe(false);
+          });
+
+          it("places a container the visitor supplies through `mapTo` as given", () => {
+            const supplied = { b: 2 };
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo(supplied);
+            const result = map([1], rec) as unknown[];
+
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result[0]).toBe(supplied);
+            expect(Object.isFrozen(supplied)).toBe(false);
+          });
+
+          it("rebuilds an unfrozen instance around a state the visitor maps to itself, leaving that state as given", () => {
+            const state = { a: 1 };
+            const original = new UnknownValue("Test@1", state);
+            const rec = new Recorder();
+            rec.onPlainObject = (v) => mapTo(v);
+            const result = map(original, rec) as UnknownValue;
+
+            expect(result).not.toBe(original);
+            expect(Object.isFrozen(result)).toBe(true);
+            expect(result.state).toBe(state);
+            expect(Object.isFrozen(state)).toBe(false);
+          });
+
+          it("returns a frozen instance as itself when the visitor maps its state to itself", () => {
+            const state = { a: 1 };
+            const original = Object.freeze(new UnknownValue("Test@1", state));
+            const rec = new Recorder();
+            rec.onPlainObject = (v) => mapTo(v);
+
+            expect(map(original, rec)).toBe(original);
+            expect(Object.isFrozen(state)).toBe(false);
+          });
+
+          it("places a state the visitor supplies through `mapTo` as given", () => {
+            const supplied = { b: 2 };
+            const rec = new Recorder();
+            rec.onPlainObject = () => mapTo(supplied);
+            const result = map(
+              new UnknownValue("Test@1", { a: 1 }),
+              rec,
+            ) as UnknownValue;
+
+            expect(result.state).toBe(supplied);
+            expect(Object.isFrozen(supplied)).toBe(false);
+          });
+
+          it("returns the instance its codec's `decode()` returns, as it is", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
+            const decoded = error("decoded");
+            const instance = errorWithCodec("boom", {
+              canDecode: () => true,
+              decode: () => decoded,
+            });
+
+            expect(map(instance, rec)).toBe(decoded);
+            expect(Object.isFrozen(decoded)).toBe(false);
+          });
+        });
+
+        describe("without freezing", () => {
+          it("returns an unfrozen copy of an unchanged frozen array", () => {
+            const array = Object.freeze([1, 2]);
+            const result = mutableMap(array, new Recorder());
+
+            expect(result).not.toBe(array);
+            expect(result).toEqual(array);
+            expect(Object.isFrozen(result)).toBe(false);
+          });
+
+          it("returns an unfrozen copy of an unchanged frozen plain object", () => {
+            const object = Object.freeze({ a: 1 });
+            const result = mutableMap(object, new Recorder());
+
+            expect(result).not.toBe(object);
+            expect(result).toEqual(object);
+            expect(Object.isFrozen(result)).toBe(false);
+          });
+
+          it("returns unfrozen copies of the unchanged containers inside a container", () => {
+            const child = deepFreeze({ b: 2 });
+            const parent = deepFreeze({ a: child });
+            const result = mutableMap(parent, new Recorder()) as {
+              a: unknown;
+            };
+
+            expect(result.a).not.toBe(child);
+            expect(result.a).toEqual(child);
+            expect(Object.isFrozen(result.a)).toBe(false);
+          });
+
+          it("leaves the array it makes from mapped elements unfrozen", () => {
+            const rec = new Recorder();
+            rec.onPrimitive = () => mapTo("one");
+
+            expect(Object.isFrozen(mutableMap([1], rec))).toBe(false);
+          });
+
+          it("returns a new instance for a deeply frozen instance whose state does not change", () => {
+            const link = deepFreeze(new FabricLink({ id: "fid1:abc" }));
+            const result = mutableMap(link, new Recorder());
+
+            expect(result).toBeInstanceOf(FabricLink);
+            expect(result).not.toBe(link);
+            expect(Object.isFrozen(result)).toBe(false);
+          });
+        });
+      });
+
+      describe("containers the visitor returns `undefined` for", () => {
+        it("maps a nested container to `undefined` when the visitor leaves `undefined` alone", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) => (v.length === 1) ? undefined : DO_RECURSE_VALUES;
+          const result = map([0, [1]], rec) as unknown[];
+
+          expect(result.length).toBe(2);
+          expect(result[1]).toBeUndefined();
+        });
+
+        it("maps a container to whatever the visitor maps `undefined` to", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = (v) =>
+            ("inner" in v) ? DO_RECURSE_VALUES : undefined;
+          rec.onPrimitive = (v) =>
+            (v === undefined) ? mapTo("gone") : undefined;
+
+          expect(map({ inner: { a: 1 } }, rec)).toStrictEqual({
+            inner: "gone",
+          });
+        });
+
+        it("maps a root container to `undefined`", () => {
+          const rec = new Recorder();
+          rec.onArray = () => undefined;
+
+          expect(map([1], rec)).toBeUndefined();
+        });
+
+        it("maps a container to `undefined` without freezing", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = (v) => ("a" in v) ? undefined : DO_RECURSE_VALUES;
+          const result = mutableMap({ b: { a: 1 } }, rec) as { b: unknown };
+
+          expect(Object.hasOwn(result, "b")).toBe(true);
+          expect(result.b).toBeUndefined();
+        });
+
+        it("maps an instance to `undefined`", () => {
+          const rec = new Recorder();
+          rec.onInstance = () => undefined;
+
+          expect(map([error("boom")], rec)).toStrictEqual([undefined]);
+        });
+
+        it("throws when the codec refuses the `undefined` that an instance's declined state becomes", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => undefined;
+
+          expect(() => map(error("boom"), rec)).toThrow(
+            /Codec of .* refused replacement state `undefined`/,
+          );
+        });
+
+        it("maps a cyclic reference to `undefined` when `visitCycle()` returns `undefined`", () => {
+          const rec = new Recorder();
+          rec.onCycle = () => undefined;
+          const array: unknown[] = [1];
+          array.push(array);
+          const result = map(array, rec) as unknown[];
+
+          expect(result).toStrictEqual([1, undefined]);
+        });
+
+        it("visits `undefined` in a plain visit, in place of the container", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) => (v.length === 1) ? undefined : DO_RECURSE_VALUES;
+          const inner = [1];
+
+          visit([0, inner], rec);
+          expect(rec.events.map((e) => e[1])).not.toContain(1);
+          expect(
+            rec.events.filter((e) => e[0] === "value").map((e) => e[1]),
+          ).toStrictEqual([[0, inner], 0, inner, undefined]);
+        });
+
+        it("does not visit `undefined` in a plain visit for a container the visitor returns `mapTo` for", () => {
+          const rec = new Recorder();
+          rec.onArray = (v) =>
+            (v.length === 1) ? mapTo(undefined) : DO_RECURSE_VALUES;
+          const inner = [1];
+
+          expect(visit([0, inner], rec)).toBeUndefined();
+          expect(
+            rec.events.filter((e) => e[0] === "value").map((e) => e[1]),
+          ).toStrictEqual([[0, inner], 0, inner]);
         });
       });
     });

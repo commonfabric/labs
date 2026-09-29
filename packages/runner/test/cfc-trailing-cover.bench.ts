@@ -20,7 +20,7 @@ for (const count of [1, 2, 5, 50]) {
     warmup: 100,
     fn(b) {
       b.start();
-      const index = new ConsumedLabelIndex(entries, { canonicalPaths: true });
+      const index = new ConsumedLabelIndex(entries);
       let found = 0;
       for (const query of queries) {
         found += index.overlapping(query, false).length;

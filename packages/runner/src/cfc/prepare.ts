@@ -111,6 +111,7 @@ import {
 } from "./represents-principal.ts";
 import {
   canonicalizeCfcMetadata,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
 } from "./canonical.ts";
 import {
@@ -1599,7 +1600,7 @@ const attemptsOnlyApplicationsAt = (
   for (const read of getTransactionReadActivities(tx)) {
     if (!sameDocument(read, target)) continue;
     if (!isReadMarkedAsAttemptedWrite(read.meta)) continue;
-    const path = canonicalizeLogicalPath(read.path.map(String));
+    const path = canonicalizeDocumentPath(read.path.map(String));
     const index = unmatched.findIndex((candidate) =>
       arraysEqual(candidate, path)
     );
@@ -2054,7 +2055,6 @@ class VerifierMetadataResolver {
     let index = this.#labelIndexes.get(metadata);
     if (index === undefined) {
       index = new ConsumedLabelIndex(metadata.labelMap.entries, {
-        canonicalPaths: true,
         onQuery: (wildcard) =>
           this.#tx.noteCfcPreparationWork?.(
             wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
@@ -2094,22 +2094,14 @@ class VerifierMetadataResolver {
         this.#viewIndexes.set(metadata, index);
       }
       const logicalPath = canonicalizeLogicalPath(path);
-      const matching = index.overlapping(logicalPath);
-      // Match claims in the view's logical coordinates, including stored
-      // paths spelled with a leading `value`. Preserve the stored spelling
-      // below: the view builder owns its own path normalization.
       const projected = withoutShadowedPrincipalClaims(
-        matching.map(({ entry, path }) => ({ ...entry, path })),
+        index.overlapping(logicalPath).map(({ entry }) => entry),
         logicalPath,
       );
-      const entries = projected.map((entry, index) => ({
-        ...entry,
-        path: matching[index].entry.path,
-      }));
       views.set(key, {
         view: cfcLabelViewFromMetadata({
           ...metadata,
-          labelMap: { ...metadata.labelMap, entries },
+          labelMap: { ...metadata.labelMap, entries: projected },
         }, path),
         principalClaims: (labelForEntriesAtPath(projected, logicalPath)
           ?.integrity ?? []).filter((atom) =>
@@ -2142,7 +2134,6 @@ class VerifierMetadataResolver {
             label: entry.label,
           })),
           {
-            canonicalPaths: true,
             onQuery: (wildcard) =>
               this.#tx.noteCfcPreparationWork?.(
                 wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
@@ -2389,7 +2380,7 @@ const writePolicyIdentitiesByTarget = (
     const key = targetKey(input.target);
     let paths = result.get(key);
     if (paths === undefined) result.set(key, paths = new Map());
-    const path = encodePointer(canonicalizeLogicalPath(input.target.path));
+    const path = encodePointer(input.target.path);
     if (!paths.has(path)) paths.set(path, identityForInput(input));
   }
   return result;
@@ -2443,7 +2434,7 @@ const valueWritePathsOf = (
   (getTransactionWriteAttempts(tx) ?? []).filter((write) =>
     sameDocument(write, target) &&
     (write.path.length === 0 || write.path[0] === "value")
-  ).map((write) => canonicalizeLogicalPath(write.path.map(String)));
+  ).map((write) => canonicalizeDocumentPath(write.path.map(String)));
 
 /**
  * The authoring identity for a field path: the schema input on this cell whose
@@ -2500,8 +2491,7 @@ const linkWritesByTarget = (
   return result;
 };
 
-const pathKey = (path: readonly string[]): string =>
-  encodePointer(canonicalizeLogicalPath(path));
+const pathKey = (path: readonly string[]): string => encodePointer(path);
 
 const pathPatternsOverlap = (
   prefix: readonly string[],
@@ -2970,7 +2960,7 @@ const valueWriteTargets = (
   for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       const rawPath = write.address.path;
-      const writePath = canonicalizeLogicalPath(rawPath);
+      const writePath = canonicalizeDocumentPath(rawPath);
       // The reserved-sibling exclusion keys on the RAW storage path: the
       // runtime-internal surfaces are document-root siblings of `value`
       // (raw `["cfc", ...]`/`["source", ...]`), while user fields of the
@@ -3325,7 +3315,7 @@ const recordedReferences = (
   const references = new Map<string, CfcAddress>();
   for (const { address, reference } of writersRecordedRoots(tx, target)) {
     if (reference === undefined) continue;
-    references.set(pathKey(canonicalizeLogicalPath(address.path)), reference);
+    references.set(pathKey(address.path), reference);
   }
   return references;
 };
@@ -3671,7 +3661,7 @@ const forEachFlowObservation = (
     // references — so the link-origin entry the link write mints at each
     // output slot is the whole of an element's protection in its output, and
     // `cfc-template-population.test.ts` measures that over a labeled element.
-    const logicalPath = canonicalizeLogicalPath(read.path);
+    const logicalPath = canonicalizeDocumentPath(read.path);
     const space = read.space;
     const id = read.id as URI;
     const scope = normalizeCellScope(read.scope);
@@ -3750,7 +3740,7 @@ const forEachFlowObservation = (
         id,
         scope,
         (read.type ?? "application/json") as MediaType,
-        canonicalizeLogicalPath(lengthOf),
+        canonicalizeDocumentPath(lengthOf),
         {
           shape: "shape",
           nonRecursive: true,
@@ -3949,7 +3939,7 @@ const slotStampDescribesAnother = (
   return metadata.labelMap.entries.some((entry) =>
     isWitnessEvidence(entry) &&
     (entry.observes === undefined || entry.observes === "value") &&
-    pathKey(canonicalizeLogicalPath(entry.path)) === key &&
+    pathKey(entry.path) === key &&
     (entry.label.integrity ?? []).some(isTransformedByAtom) &&
     !stampNamesReference(entry, target)
   );
@@ -4100,7 +4090,6 @@ const deriveFlowJoinImpl = (
               readConsumesEntry(shape, entry)
             ),
             {
-              canonicalPaths: true,
               onQuery: (wildcard) =>
                 tx.noteCfcPreparationWork?.(
                   wildcard
@@ -4253,7 +4242,7 @@ const deriveFlowJoinImpl = (
                 { nonRecursive: true, consumes: "value", ...exclusion },
                 indexFor("value"),
               ).filter((entry) =>
-                pathKey(canonicalizeLogicalPath(entry.path)) ===
+                pathKey(entry.path) ===
                   pathKey(lengthPath)
               );
               return lengthEntries.length === 0
@@ -5754,7 +5743,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
         if (write.path.length > 0 && write.path[0] !== "value") return false;
-        const writePath = canonicalizeLogicalPath(write.path);
+        const writePath = canonicalizeDocumentPath(write.path);
         return concretePathHasPrefix(writePath, path) ||
           (ancestorTouches && concretePathHasPrefix(path, writePath));
       };
@@ -5788,7 +5777,7 @@ const ifcEntryAppliesToAttemptedWrite = (
   ].filter((write) => write.path.length === 0 || write.path[0] === "value")
     .map((write) => ({
       write,
-      path: canonicalizeLogicalPath(write.path),
+      path: canonicalizeDocumentPath(write.path),
     })).filter(({ write, path: writePath }) =>
       write.space === target.space &&
       write.id === target.id &&
@@ -5924,7 +5913,7 @@ const buildWritePrefixBounds = (
         byTarget.set(key, list);
       }
       list.push({
-        path: canonicalizeLogicalPath(raw),
+        path: canonicalizeDocumentPath(raw),
         journalIndex: attempt.journalIndex,
       });
     }
@@ -6189,21 +6178,25 @@ const verifyInputRequirements = (
   // transaction writes the document. The activity list stays live so newly
   // recorded reads remain visible to later targets.
   let clockLessReads = 0;
+  // Read activities carry document-rooted paths; trigger reads arrive with
+  // logical ones. The set tells the two apart when a path is canonicalized.
+  const activityReads = [
+    ...(tx.getPotentiallyExternalReadActivities?.() ??
+      tx.getReadActivities?.() ?? []),
+  ].filter((read) => !isInternalVerifierRead(read.meta)).map((read) => {
+    if (provenance !== undefined && read.journalIndex === undefined) {
+      clockLessReads += 1;
+    }
+    return {
+      ...read,
+      // A read without a clock position (journal-less backend) is treated
+      // as preceding every write: it joins every prefix — conservative.
+      journalIndex: read.journalIndex ?? -Infinity,
+    };
+  });
+  const documentReads = new Set<object>(activityReads);
   const currentReads = [
-    ...[
-      ...(tx.getPotentiallyExternalReadActivities?.() ??
-        tx.getReadActivities?.() ?? []),
-    ].filter((read) => !isInternalVerifierRead(read.meta)).map((read) => {
-      if (provenance !== undefined && read.journalIndex === undefined) {
-        clockLessReads += 1;
-      }
-      return {
-        ...read,
-        // A read without a clock position (journal-less backend) is treated
-        // as preceding every write: it joins every prefix — conservative.
-        journalIndex: read.journalIndex ?? -Infinity,
-      };
-    }),
+    ...activityReads,
     // §8.9.2 / SC-3 (H5): the trigger reads join the gate when enabled — a
     // handler scheduled by a labeled write must satisfy requiredIntegrity even
     // if its branch never re-reads that write. Empty when the flag is off.
@@ -6231,7 +6224,11 @@ const verifyInputRequirements = (
   const sourceMetadata = currentReads.map((read) => {
     // Gate paths are captured before resolving an envelope: backend reads may
     // mutate a caller-owned path array. Ungated targets only need the address.
-    if (needsReadLabels) read.path = canonicalizeLogicalPath(read.path);
+    if (needsReadLabels) {
+      read.path = documentReads.has(read)
+        ? canonicalizeDocumentPath(read.path)
+        : canonicalizeLogicalPath(read.path);
+    }
     return metadataResolver.read(
       read.space,
       read.id,
@@ -6435,10 +6432,7 @@ const verifyInputRequirements = (
           id: target.id,
           // RFC 6901 escaping, so a consumer can round-trip the pointer to
           // the exact schema-entry segments even when a property name
-          // contains "/" or "~" (parsePointer is the inverse). Deliberately
-          // NOT logicalPathToPointer: entry.path is already value-relative,
-          // and its canonicalization would strip a root property literally
-          // named "value".
+          // contains "/" or "~" (parsePointer is the inverse).
           path: encodePointer(entry.path),
           boundSource,
           prefixGatedReads: gating.length,
@@ -8174,7 +8168,7 @@ const storedValuesAt = (
   const attempts = (getTransactionWriteAttempts(tx) ?? []).filter((attempt) =>
     sameDocument(attempt, target) && attempt.path[0] === "value"
   ).map((attempt) => ({
-    path: canonicalizeLogicalPath(attempt.path.map(String)),
+    path: canonicalizeDocumentPath(attempt.path.map(String)),
     journalIndex: attempt.journalIndex,
   }));
   const UNKNOWN = Symbol("unknown");
@@ -8819,13 +8813,17 @@ const collectConsumedLabelImpl = (
   // rules bind kind/source structurally, so evidence still has to match the
   // clause it discharges.
   const integrityAtoms: CfcAtom[] = [];
+  // Read activities carry document-rooted paths; trigger reads arrive with
+  // logical ones, and the set marks them when a path is canonicalized.
+  const triggerReadList = triggerReadSources(tx);
+  const triggerReads = new Set<object>(triggerReadList);
   for (
     const read of [
       ...(tx.getReadActivities?.() ?? []),
       // §8.9.2 / SC-3 (H5): a handler scheduled by a confidential write must not
       // egress past a sink ceiling just because its branch never re-read that
       // write. Empty when the trigger-read gate is off.
-      ...triggerReadSources(tx),
+      ...triggerReadList,
     ]
   ) {
     if (isInternalVerifierRead(read.meta)) continue;
@@ -8904,12 +8902,15 @@ const collectConsumedLabelImpl = (
         integrityAtoms.push(...(entry.label.integrity ?? []));
       }
     };
-    collectAt(canonicalizeLogicalPath(read.path), read.nonRecursive);
+    const toLogical = triggerReads.has(read)
+      ? canonicalizeLogicalPath
+      : canonicalizeDocumentPath;
+    collectAt(toLogical(read.path), read.nonRecursive);
     const lengthOf = isLinkResolutionProbe(read.meta)
       ? undefined
       : nativeLengthParent(tx, read);
     if (lengthOf !== undefined) {
-      collectAt(canonicalizeLogicalPath(lengthOf), true);
+      collectAt(toLogical(lengthOf), true);
     }
   }
   // Label-metadata observations (inv-12 Stage 2): the introspection
@@ -10167,7 +10168,7 @@ export function* prepareBoundaryCommitSteps(
       );
       if (claims.length > 0) {
         existingPrincipalClaims.set(
-          pathKey(canonicalizeLogicalPath(e.path)),
+          pathKey(e.path),
           claims as readonly CfcAtom[],
         );
       }
@@ -10214,7 +10215,7 @@ export function* prepareBoundaryCommitSteps(
           );
           const carriedClaims = mint.attributeCurrentPrincipal === false
             ? existingPrincipalClaims.get(
-              pathKey(canonicalizeLogicalPath(entry.path)),
+              pathKey(entry.path),
             )
             : undefined;
           // Store confidentiality is grow-only (§8.12.1): a re-write of a path must
@@ -11628,7 +11629,7 @@ export function* prepareBoundaryCommitSteps(
       // deferred paths alone.
       const declaredPositions = (schema: JSONSchema) =>
         cfcSchemaEntries(schema).map((entry) => ({
-          path: encodePointer(canonicalizeLogicalPath(entry.path)),
+          path: encodePointer(entry.path),
           ifc: withoutUndefinedMembers(
             isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
           ),

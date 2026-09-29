@@ -388,6 +388,82 @@ interface SchemaRoot { head: Node; }
       });
     });
 
+    for (
+      const [spelling, argument, holder] of [
+        ["`undefined` joined to it", "T | undefined", "Node<string>"],
+        [
+          "`Readonly` over an object argument",
+          "Readonly<T>",
+          "Node<{ a: string }>",
+        ],
+      ] as const
+    ) {
+      it(`keeps the scope on each reference to a generic recursive alias with ${spelling}, which the checker settles`, async () => {
+        // The written argument nests without end, but the type the checker
+        // instantiates settles, and the recursion is a reference to its
+        // definition, carrying the scope as any reference to one does.
+        const schemas = await propertySchemas(`
+type Node<T> = PerUser<{ label: T; next?: Cell<Node<${argument}>> }>;
+interface SchemaRoot { head: ${holder}; }
+`);
+
+        const defs = schemas.$defs as Record<string, Record<string, unknown>>;
+        const recursive = Object.keys(defs).find((name) =>
+          JSON.stringify(defs[name]).includes(`"#/$defs/${name}"`)
+        );
+        expect(recursive).toBeDefined();
+        expect(JSON.stringify(defs[recursive!])).toContain(
+          JSON.stringify({
+            $ref: `#/$defs/${recursive}`,
+            scope: "user",
+            asCell: ["cell"],
+          }),
+        );
+        expect(defs[recursive!]!.scope).toBeUndefined();
+        expect((schemas.head as Record<string, unknown>).scope).toBe("user");
+      });
+    }
+
+    for (const argument of ["T", "Readonly<T>"]) {
+      it(`reports a generic recursion through a scope around a cell, with \`${argument}\`, keeping each handle's scope in its cell entry`, async () => {
+        // Such a scope's cycle is found at the cell's value, which a reading
+        // under bindings takes from its syntax, so none is found, and the
+        // reading stops at the nesting bound. No reference settles in place of
+        // a handle, which would drop the cell the scope caps.
+        const { type, checker, typeNode } = await getTypeFromCode(
+          `
+type Node<T> = PerUser<Cell<{ label: T; next?: Node<${argument}> }>>;
+interface SchemaRoot { head: Node<{ a: string }>; }
+`,
+          "SchemaRoot",
+        );
+        const diagnostics: string[] = [];
+        const schema = new SchemaGenerator().generateSchema(
+          type,
+          checker,
+          typeNode,
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.type) },
+        ) as JSONSchemaObj;
+
+        expect(diagnostics).toEqual(["schema-type:unread"]);
+        // Each handle read keeps its scope; the innermost, past the bound,
+        // accepts any value.
+        const handle = [{ kind: "cell", scope: "user" }];
+        const handles: unknown[] = [];
+        JSON.stringify(schema, (key, value) => {
+          if (key === "next" && Object.keys(value).length > 0) {
+            handles.push(value.asCell);
+          }
+          return value;
+        });
+        expect(handles.length).toBeGreaterThan(0);
+        for (const found of handles) expect(found).toEqual(handle);
+        expect(
+          (schema.properties?.head as Record<string, unknown>).asCell,
+        ).toEqual(handle);
+      });
+    }
+
     it("throws for an alias of a scope wrapper that is a union member", async () => {
       const { type, checker, typeNode } = await getTypeFromCode(
         `

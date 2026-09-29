@@ -25,7 +25,6 @@ const makeView = (messages: number): CfcLabelView => ({
   version: 1,
   entries: Array.from({ length: messages * 6 }, (_, index) => ({
     path: [
-      "value",
       "messages",
       String(Math.floor(index / 6)),
       `field~/${index % 6}`,

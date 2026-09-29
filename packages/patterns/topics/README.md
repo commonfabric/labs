@@ -17,17 +17,14 @@ dense from `1` and never reused, through the library in
 [`collection-naming/`](../collection-naming/README.md); a topic is cited as
 `top/42`.
 
-**Topics shows no topic's number for now.** `SHOW_TOPIC_NUMBERS` in `topic.tsx`
-is off while only some topics have a number, and a topic then publishes no
-`shortName`. That one absence covers every place a number shows, because every
-one of them reads that property: the topic's header, the board's cards, the
-survey rows, and the entries of whatever mention universe a topic's editor
+**A topic publishes the number it stores**, as `shortName`, and one property is
+what every place a number shows reads: the topic's header, the board's cards,
+the survey rows, and the entries of whatever mention universe a topic's editor
 completes over — the board's derived copies, or the topics themselves where a
-topic is not yet rewired to that universe. So no pill shows a number and `#42`
-offers no topic either way. The numbers themselves are untouched: the board
-allocates one on every create, records it in `names`, lists it beside its topic
-in `namesTable`, and `top/42` resolves. Wherever numbers are shown, a number
-renders as a badge beside its topic's title rather than in place of it.
+topic is not yet rewired to that universe. So a mention's pill shows the number
+and `#42` offers the topic storing it. A topic nobody has numbered publishes
+none, and every one of those surfaces reads nothing for it. A number renders as
+a badge beside its topic's title rather than in place of it.
 
 Topics reference each other. A reference is a **cell**, not a string: picking a
 completion in the body editor stores the destination piece itself, and a link
@@ -115,26 +112,26 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   as an unread reference, so surveying its keys expands no topic. A topic
   publishes what it stores as `shortName`, and every reader reaches the number
   through that one property: the survey row, the card badge, and the mention
-  universe row, which a mention's pill and a `#42` query read. A topic publishes
-  it only while `SHOW_TOPIC_NUMBERS` is on, so while that is off none of them
-  carries a number and the name is read from `namesTable` instead — the number
-  is stored all the same. A topic reads nothing of its board to hold its number,
-  which is what keeps a topic's reads out of its siblings.
+  universe row, which a mention's pill and a `#42` query read. A topic reads
+  nothing of its board to hold its number, which is what keeps a topic's reads
+  out of its siblings.
 
   `backfillNames` is the step for a board that held topics before it numbered
   anything: it numbers every topic the namespace does not hold, in filing order,
   and asks every topic reporting no number to store the one the namespace holds
   for it, through that topic's own `recordName`. Asking is the most a board can
   do — a board writes a member's result and never a member's argument — so the
-  step reports what it allocated and what it asked, and running it again
-  completes whichever asking did not land. While numbers are hidden it cannot
-  see what a topic stores, so it asks every topic every run. That repeat is safe
-  and not idle: `recordName` reads the ungated input, so a topic already storing
-  the number writes nothing further and one whose number never landed stores it
-  now, and the asking is itself a write either way. `naming` is what the board
-  declares about those numbers, so a consumer reads the promise rather than
-  assuming one, and `namesTable` is the reverse lookup a caller uses to find the
-  board's number for a topic by identity, including one that publishes none.
+  step reports what it allocated, what it found already stored, and what it
+  asked, and running it again completes whichever asking did not land. An empty
+  `pending` is the finished state, and a topic's published number is the signal
+  the step reads to reach it. A repeat over a board in that state writes nothing
+  at all — no namespace key and no event. Where a topic is still outstanding the
+  repeat is safe but not free: the step asks it again, that asking is itself a
+  write, and the topic stores the number if it has not already. `naming` is what
+  the board declares about those numbers, so a consumer reads the promise rather
+  than assuming one, and `namesTable` is the reverse lookup a caller uses to
+  find the board's number for a topic by identity, including one that publishes
+  none.
 
   Every demand for that property is declared OPTIONAL rather than defaulted, and
   the spelling is what lets the whole graft be applied over a board deployed
@@ -155,9 +152,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   of every reader paying it on every load. The lift and its row type are shared
   with the collection-naming exemplar (`../collection-naming/mentionable.ts`):
   both boards derive their universe through the one derivation, so a member's
-  number reads the same on either. A Topics row carries the empty name while
-  Topics shows no numbers, because the copy is taken off a topic that publishes
-  none.
+  number reads the same on either. A row carries the empty name where the copy
+  is taken off a member that publishes none.
 
   The reference is what a picked completion stores, and it is deliberately
   outside the demand a topic declares over the universe: a property that demand
@@ -294,11 +290,8 @@ cf piece call --cell <board> addTopic \
 # -> { "result": { "name": "1", "topic": { "$link": "/of:fid1:..." } } }
 cf cell get --cell <board> names
 # -> { "1": {} }
-# Idempotent. While `SHOW_TOPIC_NUMBERS` is off the step cannot see what a topic
-# stores, so `named` is empty and `pending` holds every topic however many runs
-# have gone by: re-run until `assigned` is empty, and read one topic's stored
-# number from its own input. The three lists below are what this returns once
-# numbers are shown again, with an empty `pending` as the finished state.
+# Idempotent. Re-run until `pending` comes back empty, which is the finished
+# state: every listed topic publishes the number the namespace holds for it.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
 # -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
 cf cell get --cell <topic> shortName --input
@@ -424,15 +417,12 @@ schema rather than the full topic: the declared schema bounds the default
 readback, and every name a verb's result publishes is permanent, so the create
 hands back the survey row plus the write-time facts only the pattern could
 resolve (`createdAt`, `createdBy`). `name` rides beside it — the number the
-create allocated, as written to the namespace and passed into the topic — for
-two reasons: the row IS the created topic, so reading a property off a piece
-filed a moment ago waits for that piece to materialize, and the topic publishes
-no `shortName` at all while numbers are hidden. `backfillNames` returns three
-lists of numbers in filing order: `assigned`, what it wrote into the namespace;
-`named`, the topics it found already reporting theirs; and `pending`, the ones
-it asked, none of which it can confirm. While numbers are hidden `named` is
-always empty and `pending` holds every listed topic, which is what
-`BackfillNamesResult` states and what an operator reads around. `addComment` and
+create allocated, as written to the namespace and passed into the topic —
+because the row IS the created topic, so reading its `shortName` waits for that
+piece to materialize. `backfillNames` returns three lists of numbers in filing
+order: `assigned`, what it wrote into the namespace; `named`, the topics it
+found already publishing theirs; and `pending`, the ones it asked, none of which
+it can confirm. An empty `pending` is the finished state. `addComment` and
 `addLink` return the appended record, `setBody` the persisted body plus the
 attribution it wrote, `setTitle` the persisted title plus its attribution; each
 carries fields the pattern resolved that a caller cannot compute for itself.

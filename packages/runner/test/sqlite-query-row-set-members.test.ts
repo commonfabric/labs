@@ -34,6 +34,7 @@ import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
+import { encodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
@@ -71,6 +72,15 @@ const BODIES_SQL =
 /** Projects a column that declares nothing. */
 const NOTES_SQL =
   "SELECT note FROM messages WHERE container_id = ?1 ORDER BY id";
+
+/** Projects a link column, which declares nothing. */
+const TARGETS_SQL =
+  "SELECT target_cf_link FROM messages WHERE container_id = ?1 ORDER BY id";
+/** The row schema of a query that reads `target_cf_link` as a cell. */
+const TARGETS_ROW_SCHEMA = {
+  type: "object",
+  properties: { target_cf_link: { asCell: ["cell"], type: "object" } },
+} as const;
 
 type QueryScope = "session" | "space";
 type FlowLabels = "persist" | "off";
@@ -142,6 +152,7 @@ describe("sqlite-query-row-set-members", () => {
               ifc: { confidentiality: BODY_CLAUSE },
             },
             note: { type: "string", sqlType: "text" },
+            target_cf_link: { type: "string", sqlType: "text" },
           },
           required: [],
         },
@@ -219,8 +230,10 @@ describe("sqlite-query-row-set-members", () => {
     scope: QueryScope;
     /** Binds the labeled cell as the parameter, with no lift between. */
     direct?: boolean;
+    /** The row schema a typed query carries, which marks its link columns. */
+    rowSchema?: unknown;
   }) => {
-    const { cause, db, sql, source, scope, direct } = options;
+    const { cause, db, sql, source, scope, direct, rowSchema } = options;
     const { commonfabric: cf } = createTrustedBuilder(runtime);
     const { lift } = cf as unknown as {
       lift: (
@@ -257,6 +270,7 @@ describe("sqlite-query-row-set-members", () => {
           reactOn: db,
           sql,
           params: direct ? [input.labeled] : parameterOf(input),
+          ...(rowSchema !== undefined && { rowSchema }),
         } as any,
       );
       return { rows };
@@ -331,6 +345,23 @@ describe("sqlite-query-row-set-members", () => {
   const selectLabeled = async (source: ParameterSource) => {
     const tx = runtime.edit();
     source.useLabeled.withTx(tx).set(true);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /** Moves the parameter back to the unlabeled cell, which selects `c-beta`. */
+  const selectUnlabeled = async (source: ParameterSource) => {
+    const tx = runtime.edit();
+    source.useLabeled.withTx(tx).set(false);
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /** Moves the labeled parameter to another container. */
+  const selectLabeledContainer = async (
+    source: ParameterSource,
+    value: string,
+  ) => {
+    const tx = runtime.edit();
+    source.labeled.withTx(tx).set(value);
     expect((await tx.commit()).error).toBeUndefined();
   };
 
@@ -792,6 +823,160 @@ describe("sqlite-query-row-set-members", () => {
       }
     });
   });
+
+  for (
+    const [scope, flowLabels] of [
+      ["session", "persist"],
+      ["space", "persist"],
+      ["session", "off"],
+      ["space", "off"],
+    ] as const
+  ) {
+    describe(`a ${scope}-scoped result of unlabeled columns that links a standing row document, flow labels ${flowLabels}`, () => {
+      // The projected column declares nothing, so a row document stores no
+      // label, and the result store carries `S`. A settle that finds a row's
+      // document standing writes the slot that links it and not the
+      // document.
+
+      beforeEach(async () => {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+        makeRuntime(flowLabels);
+      });
+
+      /**
+       * Settles `c-alpha` under the labeled cell, and returns the row
+       * documents of that selection and of the unlabeled one settled ahead
+       * of it, which only a lift's output has.
+       */
+      const labeledSelection = async (cause: string) => {
+        const db = await seededDb();
+        const source = await parameterSource(`${scope}-${flowLabels}-${cause}`);
+        const rows = await runQuery({
+          cause: `${scope}-${flowLabels}-${cause}`,
+          db,
+          sql: NOTES_SQL,
+          source,
+          scope,
+          direct: flowLabels === "off",
+        });
+        let unlabeled: ReturnType<typeof rowLinks> = [];
+        if (flowLabels === "persist") {
+          await settled(rows, 1);
+          unlabeled = rowLinks(rows);
+          await selectLabeled(source);
+        }
+        await settled(rows, 2);
+        return { source, rows, unlabeled, labeled: rowLinks(rows) };
+      };
+
+      /** Selects no row and then `c-alpha` again, under the labeled cell. */
+      const selectAgain = async (
+        source: ParameterSource,
+        // deno-lint-ignore no-explicit-any -- the builtin's state
+        rows: Cell<any>,
+      ) => {
+        await selectLabeledContainer(source, "c-none");
+        await settled(rows, 0);
+        await selectLabeledContainer(source, "c-alpha");
+        return await settled(rows, 2);
+      };
+
+      it("settles the rows of an earlier labeled selection on the documents they stand on", async () => {
+        const { source, rows, labeled } = await labeledSelection("again");
+
+        const state = await selectAgain(source, rows);
+
+        expect(state.result).toEqual([{ note: "n1" }, { note: "n2" }]);
+        expect(rowLinks(rows).map((link) => link.id)).toEqual(
+          labeled.map((link) => link.id),
+        );
+      });
+
+      it("stores no label on a row document it links again", async () => {
+        const { source, rows } = await labeledSelection("unstored");
+
+        await selectAgain(source, rows);
+        await runtime.settled();
+
+        const tx = runtime.edit();
+        try {
+          expect(
+            rowLinks(rows).map((link) => readStoredCfcMetadata(tx, link)),
+          ).toEqual([undefined, undefined]);
+        } finally {
+          tx.abort("label read");
+        }
+      });
+
+      if (flowLabels === "persist") {
+        it("settles the row of an earlier unlabeled selection on the document it stands on", async () => {
+          const { source, rows, unlabeled } = await labeledSelection("back");
+
+          await selectUnlabeled(source);
+
+          const state = await settled(rows, 1);
+          expect(state.result).toEqual([{ note: "n3" }]);
+          expect(rowLinks(rows).map((link) => link.id)).toEqual(
+            unlabeled.map((link) => link.id),
+          );
+        });
+      }
+    });
+  }
+
+  for (const scope of ["session", "space"] as const) {
+    describe(`a ${scope}-scoped result of an unlabeled link column that links a standing row document`, () => {
+      // The row holds a link to a cell that stores no label. The link write
+      // policy refuses such a link beneath a labeled position, so a row that
+      // settles twice is one whose root took no label from the result store.
+
+      it("settles the row of an earlier selection, whose link column reads the cell it names", async () => {
+        const db = await seededDb();
+        const seedTx = runtime.edit();
+        const target = runtime.getCell<{ name: string }>(
+          space,
+          `${scope}-link-target`,
+          undefined,
+          seedTx,
+        );
+        target.set({ name: "Ada" });
+        expect((await seedTx.commit()).error).toBeUndefined();
+        await seed(
+          db,
+          "INSERT INTO messages (container_id, target_cf_link) VALUES (?, ?)",
+          ["c-link", encodeCfLinkValue(target)],
+        );
+        const source = await parameterSource(`${scope}-link`);
+        await selectLabeledContainer(source, "c-link");
+        const rows = await runQuery({
+          cause: `${scope}-link`,
+          db,
+          sql: TARGETS_SQL,
+          source,
+          scope,
+          direct: true,
+          rowSchema: TARGETS_ROW_SCHEMA,
+        });
+        await settled(rows, 1);
+        const earlier = rowLinks(rows).map((link) => link.id);
+
+        await selectLabeledContainer(source, "c-none");
+        await settled(rows, 0);
+        await selectLabeledContainer(source, "c-link");
+        await settled(rows, 1);
+
+        expect(rowLinks(rows).map((link) => link.id)).toEqual(earlier);
+        const read = rows.resolveAsCell().asSchema({
+          type: "object",
+          properties: {
+            result: { type: "array", items: TARGETS_ROW_SCHEMA },
+          },
+        }).get() as { result: { target_cf_link: Cell<unknown> }[] };
+        expect(read.result[0].target_cf_link.get()).toEqual({ name: "Ada" });
+      });
+    });
+  }
 
   describe("a row document under a labeled parameter", () => {
     it("carries the row's label and nothing of `S` on the row's existence", async () => {

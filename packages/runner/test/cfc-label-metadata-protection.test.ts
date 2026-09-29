@@ -161,7 +161,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       space: spaceB,
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
+      path: ["field"],
     }, "v");
     tx.recordCfcWritePolicyInput({
       kind: "link-write",
@@ -169,7 +169,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         space: spaceB,
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       },
       source: {
         space: sourceSpace,
@@ -384,7 +384,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "field"],
+            path: ["field"],
           },
           source: {
             space: spaceA,
@@ -436,7 +436,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           space: spaceB,
           scope: "space",
           id: targetId,
-          path: ["value", "legacyField"],
+          path: ["legacyField"],
         }, "old");
         tx1.recordCfcWritePolicyInput({
           kind: "link-write",
@@ -444,7 +444,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "legacyField"],
+            path: ["legacyField"],
           },
           source: {
             space: spaceA,
@@ -465,7 +465,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           space: spaceB,
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         }, "v");
         tx2.recordCfcWritePolicyInput({
           kind: "link-write",
@@ -473,7 +473,7 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
             space: spaceB,
             scope: "space",
             id: targetId,
-            path: ["value", "field"],
+            path: ["field"],
           },
           source: {
             space: spaceA,

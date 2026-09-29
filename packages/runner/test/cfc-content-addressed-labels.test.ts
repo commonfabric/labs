@@ -646,7 +646,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "secret"],
+          path: ["secret"],
         })).toBe(true);
         tx.abort();
         return Promise.resolve();
@@ -668,7 +668,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "elsewhere"],
+          path: ["elsewhere"],
         })).toBe(false);
         tx.abort();
         return Promise.resolve();
@@ -846,7 +846,7 @@ describe("CFC content-addressed labels", () => {
         space,
         id: "of:nested" as URI,
         scope: "space",
-        path: ["value", "anything"],
+        path: ["anything"],
       })).toBe(true);
     });
 
@@ -876,7 +876,7 @@ describe("CFC content-addressed labels", () => {
           space,
           id: id as URI,
           scope: "space",
-          path: ["value", "secret"],
+          path: ["secret"],
         })).toBe(true);
         tx.abort();
         return Promise.resolve();

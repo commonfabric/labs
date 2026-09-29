@@ -18,6 +18,8 @@ import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
   getPropertyNameText,
+  instantiatedPropertyType,
+  instantiatedValueType,
   isFunctionLike,
   safeGetPropertyType,
 } from "../type-utils.ts";
@@ -30,6 +32,8 @@ import {
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
 import { unwrapTypeParentheses } from "../typescript/type-node.ts";
+import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -249,8 +253,15 @@ export class ObjectFormatter implements TypeFormatter {
     );
 
     const props = checker.getPropertiesOfType(type);
+    // A CFC metadata carrier a mapped type folded into the object is a
+    // label, not a member: no value holds it.
+    let carrier: ts.Symbol | undefined;
     for (const prop of props) {
       const propName = prop.getName();
+      if (propName === CFC_CARRIER_PROPERTY) {
+        carrier = prop;
+        continue;
+      }
 
       let propTypeNode = getExplicitPropertyTypeNode(
         context.typeNode,
@@ -335,6 +346,7 @@ export class ObjectFormatter implements TypeFormatter {
         resolvedPropType,
         context,
         propTypeNode,
+        instantiatedPropertyType(context.instantiatedAs, propName, checker),
       );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
@@ -373,6 +385,7 @@ export class ObjectFormatter implements TypeFormatter {
         chosenIndex,
         context,
         undefined,
+        instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations
       const sym = type.getSymbol?.();
@@ -412,7 +425,14 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    return schema;
+    const labels = carrier &&
+      this.#schemaGenerator.labelsCarriedBy(carrier, context);
+    return labels
+      ? labels.reduce<MutableJSONSchema>(
+        (labelled, label) => withIfcLabels(labelled, label),
+        schema,
+      )
+      : schema;
   }
 
   #lookupBuiltInSchema(

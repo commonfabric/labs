@@ -30,6 +30,9 @@ export type MainResultForm<ResultType> = {
 /**
  * A `mapTo` form. `value` is a value in the domain of `ResultType` which is to
  * be substituted in place of the visited value in the structural-map result.
+ * The visitor engine places `value` as given, frozen or not, whether or not the
+ * operation freezes the structure it builds: it is the visitor's statement of
+ * what it wants in that position.
  */
 export type MapToForm<ResultType> = {
   readonly type: "mapTo";
@@ -48,7 +51,7 @@ export type MapToForm<ResultType> = {
  * non-container, that situation is detected by the visitor engine at runtime
  * and results in a `throw`n error.
  *
- * **Note:** The visit calls per-mapping are specifically in key-then-value
+ * **Note:** The visit calls per keyed item are specifically in key-then-value
  * order, and if the result of visiting a key is a `mainResult`, then that ends
  * the iteration before the corresponding value is visited.
  */
@@ -102,9 +105,8 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * See the included result types for details on what they mean. As for
  * `undefined`, if a visitor returns it in the context of this type, it means
  * that the visit of the given value was completed; the visitor engine will not
- * process it further. For a top-level `map()` call, this additionally means
- * that the originally-visited value is the mapped result of the visit of the
- * value.
+ * process it further. (`VisitResult` gives `undefined` a more specific meaning
+ * for a container.)
  */
 export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
@@ -120,7 +122,18 @@ export type MappedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
  * Possible results from `visitValue()`, `visitCycle()`, or one of the methods
  * that `DefaultValueVisitor.visitValue()` can call (directly or indirectly).
  *
- * See the included result types for details on what they mean.
+ * See the included result types for details on what they mean. What
+ * `undefined` means depends on the visited value:
+ *
+ * * For a non-container, `undefined` means that the visit of the value was
+ *   completed. In a structural-map operation, the value maps to itself.
+ * * For a container, `undefined` means exactly the same as a `replace` whose
+ *   replacement is `undefined`: the visitor engine goes on to visit `undefined`
+ *   in the container's place, and the visitor may handle that visit or not. A
+ *   visitor which wants to finish with a container without that further visit
+ *   returns a `mapTo` instead. Beneath the top level of a plain visit a `mapTo`
+ *   is ignored, and in a structural-map operation it supplies the container's
+ *   result directly.
  */
 export type VisitResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>

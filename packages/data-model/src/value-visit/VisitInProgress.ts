@@ -70,10 +70,6 @@ export type VisitInProgressConfig =
  *
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
- *
- * TODO(danfuzz): Honor the configuration's `freeze`. Until then, a
- * structural-map operation behaves the same whatever `freeze` says: an
- * unchanged value is its own result, and nothing is frozen.
  */
 export class VisitInProgress<
   PlusType = never,
@@ -188,9 +184,10 @@ export class VisitInProgress<
       }
 
       case "recurseOf": {
+        const { container, containerTag } = result;
         let recurseResult: MainVisitResult<PlusType, ResultType>;
 
-        switch (result.containerTag) {
+        switch (containerTag) {
           case VALUE_TAGS.Array: {
             recurseResult = this.#recurseFabricArray(result);
             break;
@@ -213,13 +210,12 @@ export class VisitInProgress<
             // submodule: `containerTag` is typed as exactly the three cases
             // above, so nothing else can reach here.
             throw new Error(
-              `Shouldn't happen: Got unrecognized \`containerTag\`: \`${result.containerTag}\``,
+              `Shouldn't happen: Got unrecognized \`containerTag\`: \`${containerTag}\``,
             );
           }
             // deno-coverage-ignore-stop
         }
 
-        const { container } = result;
         if (
           (recurseResult === undefined) && this.#mapMode &&
           !Object.is(container, value)
@@ -249,9 +245,11 @@ export class VisitInProgress<
 
   /**
    * Iteratively calls `visitValue()` and `visitCycle()` on the visitor, until
-   * the visitor returns something other than a `replace` result. When doing a
-   * structural-map operation, an `undefined` ("no change") result for a
-   * replacement becomes a `mapTo` of the replacement.
+   * the visitor returns something other than a `replace` result. An
+   * `undefined` result for a container is treated exactly as a `replace` whose
+   * replacement is `undefined`. When doing a structural-map operation, an
+   * `undefined` ("no change") result for a non-container replacement becomes a
+   * `mapTo` of the replacement.
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
@@ -294,13 +292,17 @@ export class VisitInProgress<
         }
 
         default: {
-          if (
-            (result === undefined) && this.#mapMode &&
-            !Object.is(value, original)
-          ) {
-            // "No change" to a `replace`ment means that the replacement stands
-            // in place of the original value.
-            return { type: "mapTo", value: this.#assertResultType(value) };
+          if (result === undefined) {
+            if (isFabricContainerValueTag(tag)) {
+              // For a container, `undefined` means `replace(undefined)`.
+              value = undefined;
+              tag = this.#tagOfValueElseNull(value);
+              continue;
+            } else if (this.#mapMode && !Object.is(value, original)) {
+              // "No change" to a `replace`ment means that the replacement
+              // stands in place of the original value.
+              return { type: "mapTo", value: this.#assertResultType(value) };
+            }
           }
 
           return result;
@@ -418,8 +420,8 @@ export class VisitInProgress<
         }
       }
 
-      return (mapResult && anyChanges)
-        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
+      return mapResult
+        ? this.#makeRecurseResult(array, mapResult, anyChanges)
         : undefined;
     } finally {
       this.#stack.popExpect(array);
@@ -487,65 +489,27 @@ export class VisitInProgress<
         return result;
       }
 
-      if (Object.is(mappedTo, state)) {
-        // The state visit returned the original state value, so we in turn
-        // return the original `FabricInstance`.
+      // Under freezing, a frozen instance whose state came back as itself is
+      // the result as it stands. Anything else is rebuilt from the mapped
+      // state, as given: a container the walk recursed into has already been
+      // built with the frozenness this operation calls for, and a value a
+      // visitor supplied is the visitor's, so neither is the walk's to freeze.
+      // The rebuilt instance is left as its codec's `decode()` returned it,
+      // having been asked for the frozenness this operation calls for.
+      if (
+        this.#freezeMappedContainers && Object.isFrozen(instance) &&
+        Object.is(mappedTo, state)
+      ) {
         return undefined;
       }
 
-      // This cast is sound because `FabricInstance` implementations aren't
-      // supposed to care about what their `PlusType` is. What we're saying
-      // here is that whatever codec was used to encode the instance as
-      // `FabricInstancePlus<PlusType>` is fine to use as a
-      // `FabricInstancePlus<ResultType>` on state of type
-      // `FabricValuePlus<ResultType>` to decode back into an instance.
-      const codecForResultType = codec as NonterminalCodec<
-        unknown
-      > as NonterminalCodec<ResultType>;
+      const instanceResult = this.#reconstructFabricInstance(
+        instance,
+        codec,
+        mappedTo,
+      );
 
-      let canDecode;
-      try {
-        canDecode = codecForResultType.canDecode(mappedTo);
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} failed while checking replacement state $quote${mappedTo}`,
-          { cause },
-        );
-      }
-
-      if (!canDecode) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} refused replacement state $quote${mappedTo}`,
-        );
-      }
-
-      let codecTag;
-      try {
-        codecTag = codec.tagForValue(instance);
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} failed when asked for a tag.`,
-          { cause },
-        );
-      }
-
-      try {
-        return {
-          type: "mapTo",
-          value: this.#assertResultType(
-            codecForResultType.decode(
-              codecTag,
-              mappedTo,
-              NULL_LIVE_ENVIRONMENT,
-            ),
-          ),
-        };
-      } catch (cause) {
-        throw new Error(
-          debugStr`Codec of $quote${instance} accepted but then failed to decode replacement state $quote${mappedTo}`,
-          { cause },
-        );
-      }
+      return { type: "mapTo", value: this.#assertResultType(instanceResult) };
     } finally {
       this.#stack.popExpect(instance);
     }
@@ -662,8 +626,8 @@ export class VisitInProgress<
         }
       }
 
-      return (mapResult && anyChanges)
-        ? { type: "mapTo", value: this.#assertResultType(mapResult) }
+      return mapResult
+        ? this.#makeRecurseResult(plainObj, mapResult, anyChanges)
         : undefined;
     } finally {
       this.#stack.popExpect(plainObj);
@@ -766,13 +730,36 @@ export class VisitInProgress<
   }
 
   /**
-   * Gets the tag for the given value, consulting the visitor's `isPlusType()`
-   * only where the value cannot be a `FabricValue`.
+   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
+   * iteration as appropriate, based on `#mapMode`. Specifically, a
+   * `mainResult` is always returned as-is. Other than that, this always returns
+   * a `mapTo` result when mapping (furthermore validating the result as
+   * necessary), and always returns `undefined` when _not_ mapping.
    */
-  #tagOfValueElseNull(
-    value: FabricValuePlus<PlusType>,
-  ): FabricValuePlusTag | null {
-    return tagOfFabricValueElseNull(value, this.#isPlusType);
+  #handleMappingAsAppropriate(
+    original: FabricValuePlus<PlusType>,
+    visitResult: MainVisitResult<PlusType, ResultType>,
+  ): MainVisitResult<PlusType, ResultType> {
+    if (!this.#mapMode) {
+      return (visitResult?.type === "mainResult") ? visitResult : undefined;
+    }
+
+    switch (visitResult?.type) {
+      case "mainResult":
+      case "mapTo": {
+        return visitResult;
+      }
+
+      case undefined: {
+        return { type: "mapTo", value: this.#assertResultType(original) };
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitResult);
+      }
+        // deno-coverage-ignore-stop
+    }
   }
 
   /**
@@ -813,36 +800,97 @@ export class VisitInProgress<
   }
 
   /**
-   * Converts a `#visitValue()` result from a `recurse`-induced sub-value
-   * iteration as appropriate, based on `#mapMode`. Specifically, a
-   * `mainResult` is always returned as-is. Other than that, this always returns
-   * a `mapTo` result when mapping (furthermore validating the result as
-   * necessary), and always returns `undefined` when _not_ mapping.
+   * Makes the result value for one of the `recurse*()` methods, when performing
+   * a structural-map operation. See the main docs for `mapValue()` and
+   * `mutableMapValue()` in re when `undefined` can be returned and when copies
+   * of containers must be made.
    */
-  #handleMappingAsAppropriate(
-    original: FabricValuePlus<PlusType>,
-    visitResult: MainVisitResult<PlusType, ResultType>,
-  ): MainVisitResult<PlusType, ResultType> {
-    if (!this.#mapMode) {
-      return (visitResult?.type === "mainResult") ? visitResult : undefined;
+  #makeRecurseResult(
+    originalValue: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
+    anyChanges: boolean,
+  ): MapToForm<ResultType> | undefined {
+    if (this.#freezeMappedContainers) {
+      if (!anyChanges && Object.isFrozen(originalValue)) {
+        return undefined;
+      }
+
+      Object.freeze(resultValue);
+      // ...and continue below.
     }
 
-    switch (visitResult?.type) {
-      case "mainResult":
-      case "mapTo": {
-        return visitResult;
-      }
+    return { type: "mapTo", value: this.#assertResultType(resultValue) };
+  }
 
-      case undefined: {
-        return { type: "mapTo", value: this.#assertResultType(original) };
-      }
+  /**
+   * Helper for `#recurseFabricInstance`, which uses the original instance's
+   * codec to reconstruct a result from the original's encoded state, with lots
+   * of error checking to help produce nice messages.
+   */
+  #reconstructFabricInstance(
+    originalInstance: FabricInstancePlus<PlusType>,
+    originalCodec: NonterminalCodec<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
+  ): FabricInstancePlus<ResultType> {
+    // This cast is sound because `FabricInstance` implementations aren't
+    // supposed to care about what their `PlusType` is. What we're saying here
+    // is that whatever codec was used to encode the instance as
+    // `FabricInstancePlus<PlusType>` is fine to use as a
+    // `FabricInstancePlus<ResultType>` on state of type
+    // `FabricValuePlus<ResultType>` to decode back into an instance.
+    const resultCodec = originalCodec as NonterminalCodec<
+      unknown
+    > as NonterminalCodec<ResultType>;
 
-      default: {
-        // deno-coverage-ignore-start
-        this.#throwShouldntHappenResultType(visitResult);
-      }
-        // deno-coverage-ignore-stop
+    let canDecode;
+    try {
+      canDecode = resultCodec.canDecode(resultState);
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} failed while checking replacement state $quote${resultState}`,
+        { cause },
+      );
     }
+
+    if (!canDecode) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} refused replacement state $quote${resultState}`,
+      );
+    }
+
+    let codecTag;
+    try {
+      codecTag = originalCodec.tagForValue(originalInstance);
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} failed when asked for a tag.`,
+        { cause },
+      );
+    }
+
+    try {
+      return resultCodec.decode(
+        codecTag,
+        resultState,
+        NULL_LIVE_ENVIRONMENT,
+        !this.#freezeMappedContainers,
+      ) as FabricInstancePlus<ResultType>;
+    } catch (cause) {
+      throw new Error(
+        debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
+        { cause },
+      );
+    }
+  }
+
+  /**
+   * Gets the tag for the given value, consulting the visitor's `isPlusType()`
+   * only where the value cannot be a `FabricValue`.
+   */
+  #tagOfValueElseNull(
+    value: FabricValuePlus<PlusType>,
+  ): FabricValuePlusTag | null {
+    return tagOfFabricValueElseNull(value, this.#isPlusType);
   }
 
   // deno-coverage-ignore-start
