@@ -72,6 +72,9 @@ A client that draws natively MUST:
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
+- **Offer leaving wherever it shows a group room of its own**, with no more
+  steps than the room requires. Leaving has to be reliably within reach, since a
+  room someone can't leave is a way to hold them there.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -92,6 +95,7 @@ gesture on the reviewed surface its policy names:
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
+| leave a room | room | `leave` | none |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an

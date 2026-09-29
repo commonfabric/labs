@@ -39,7 +39,8 @@ Every write goes through one handler per stream:
 | `commitDelete` | `deleteMessage` | `ChatDeleteSurface` |
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
-| `commitJoin` | `join` | none |
+| `commitShowProfile` | `showProfile` | none |
+| `commitLeave` | `leave` | none |
 | `commitAdd` | `add` | `ChatMembersSurface` |
 | `commitRemove` | `remove` | `ChatMembersSurface` |
 | `commitDelivered` | `delivered` | none |
@@ -64,11 +65,10 @@ one. They have the same kind of write policy as `commitSend`.
 
 `commitSend`, `commitEdit`, `commitDelete`, and `commitSendReaction` choose a
 recorded time in the same transaction that records it: the chosen time, or the
-smallest later time, in nanoseconds, that the room hasn't
-used yet (see [unique times](ChatMessage.md#unique-times)). A room keeps
-the times it has used in a keyed collection, so the check doesn't scan every
-message, and two records made at once conflict and retry rather than share a
-time.
+smallest later time, in nanoseconds, that the room hasn't used yet (see [unique
+times](ChatMessage.md#unique-times)). A room keeps the times it has used in a
+keyed collection, so the check doesn't scan every message, and two records made
+at once conflict and retry rather than share a time.
 
 Today's `commitReact` toggles a reaction, which a repeated or delayed event can
 turn into the opposite of what the person meant. It splits into
@@ -86,9 +86,14 @@ write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
 the runtime's write policies can split one document this way is a prerequisite
 to check.
 
-`commitJoin` appends to `roster` as the `loom` pattern's `addParticipant` does:
-a mergeable set add, so concurrent joins all land and a profile is not listed
-twice.
+`commitShowProfile` appends to `roster` as the `loom` pattern's `addParticipant`
+does: a mergeable set add, so concurrent additions all land and a profile is not
+listed twice.
+
+`commitLeave` asks the host to remove the sender's own entry from the room
+space's access list, granting OWNER to the remaining members first when the
+sender is the last OWNER. It also records the sender in a keyed collection of
+principals who have left, which `commitAdd` checks.
 
 `commitAdd` and `commitRemove` ask the host to change the room space's access
 list. They are the only handlers that reach beyond the room's own record.
@@ -113,5 +118,9 @@ as today's room computes `cannotSend`.
 - **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
   for a pattern to ask its host to change an access list. Today only hosts can
   do that (`ACLManager`, the runtime client's `space:setAclEntry`).
+- **Leaving without OWNER.** `commitLeave` removes the sender's own access list
+  entry even when the sender is only a READ or WRITE member. Whether the memory
+  layer lets a non-OWNER remove their own entry, or the host has to do it on
+  their behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).

@@ -23,7 +23,7 @@ interface ChatRoomOutput {
   /** `roster`, plus any author with no roster entry. */
   participants: Cell<ChatProfile>[];
 
-  /** Whether the viewer can send, edit, delete, react, and join now. */
+  /** Whether the viewer can send, edit, delete, react, and show a profile. */
   canSend: boolean;
 
   sendMessage: Stream<{ version: ChatMessageVersion; replyTo?: ChatReply }>;
@@ -34,8 +34,9 @@ interface ChatRoomOutput {
   deleteMessage: Stream<{ message: Cell<ChatMessage> }>;
   sendReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   deleteReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
-  join: Stream<void>;
+  showProfile: Stream<void>;
   /** Group rooms of their own only. */
+  leave?: Stream<void>;
   add?: Stream<{ principal: string; access: "WRITE" | "OWNER" }>;
   remove?: Stream<{ principal: string }>;
   delivered?: Stream<{ id: string }>;
@@ -72,22 +73,30 @@ chat takes the space's access list as it is, and adds nothing to it.
 
 The room space's access list is the room's membership. A member is any principal
 it admits, at any level. A member with READ can read the room; sending,
-reacting, and joining append to the room's streams, so they need WRITE; adding
-and removing members needs OWNER. The space's member set is how a room and its
-clients read the membership: who the members are, their access, and which
-profile shows each of them. A room keeps no membership of its own.
+reacting, and showing a profile append to the room's streams, so they need
+WRITE; adding and removing members needs OWNER. Leaving needs only membership.
+The space's member set is how a room and its clients read the membership: who
+the members are, their access, and which profile shows each of them. A room
+keeps no membership of its own.
 
 Until the runtime provides member sets, a room offers `roster`, a set of profile
-claims that members contribute with `join`, and consumers combine it with the
-access list themselves. The two can disagree: a member who has never joined has
-no roster entry, and a roster entry whose principal has lost access stays until
-it's cleaned up. A consumer MUST NOT treat a roster entry as proof of access.
+claims that members contribute with `showProfile`, and consumers combine it with
+the access list themselves. The two can disagree: a member who has never shown a
+profile has no roster entry, and a roster entry whose principal has lost access
+stays until it's cleaned up. A consumer MUST NOT treat a roster entry as proof
+of access.
 
 A direct room's membership is decided at creation, and never changes after. A
-group room of its own changes through `add` and `remove`. A space's own chat
-changes when the space's membership does. Only group rooms of their own offer
-`add`, `remove`, `delivered`, and `outgoingNotices`; the others have none of
-them.
+group room of its own changes through `add`, `remove`, and `leave`. A space's
+own chat changes when the space's membership does. Only group rooms of their own
+offer `leave`, `add`, `remove`, `delivered`, and `outgoingNotices`; the others
+have none of them. A person leaves a direct room's conversation by forgetting it
+in their manager, and a space's own chat by leaving the space.
+
+Any member of a group room of its own can always leave it. A room that someone
+can't leave lets anyone who can add them hold them there, so leaving never
+depends on another member, a reviewed gesture, or the room's last OWNER staying
+put (see [`leave`](#leave)).
 
 ## Facts
 
@@ -108,10 +117,10 @@ them.
 - **`roster`** and **`participants`** are links to profiles, compared with
   `equals()`. `participants` is `roster` plus any author without a roster entry.
   Neither is proof of access.
-- **`canSend`** says whether the viewer can send, edit, delete, react, and join
-  right now: their access is WRITE or OWNER, and their profile resolves. It is
-  computed for each viewer, so a READ-only member's client can tell them why
-  their gestures would be refused before they make one.
+- **`canSend`** says whether the viewer can send, edit, delete, react, and show
+  a profile right now: their access is WRITE or OWNER, and their profile
+  resolves. It is computed for each viewer, so a READ-only member's client can
+  tell them why their gestures would be refused before they make one.
 - **`outgoingNotices`**, on group rooms of their own, holds a notice for each
   person `add` admitted, until a client reports it delivered.
 - The lists here are projections. An implementation may keep the roster, and
@@ -148,7 +157,8 @@ These rules hold for every stream:
   gesture on that surface (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
   record it writes is labeled `authored-by` the principal who sent it.
-- An event that arrives before the sender's profile resolves is refused.
+- An event that arrives before the sender's profile resolves is refused, except
+  `leave`, which never depends on a profile.
 - A refusal is silent: the room records no outcome, so a sender can't tell a
   refused event from one that hasn't taken effect yet. A client MUST check an
   event against the stream's rules before sending it (see
@@ -162,7 +172,8 @@ These rules hold for every stream:
 | [`deleteMessage`](#deletemessagemessage-cellchatmessage) | `ChatDeleteSurface` | records the sender's message as deleted |
 | [`sendReaction`](#sendreactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, if it isn't there |
 | [`deleteReaction`](#deletereactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | removes the sender's reaction, if it's there |
-| [`join`](#join) | none | adds the sender's profile to `roster` |
+| [`showProfile`](#showprofile) | none | adds the sender's profile to `roster` |
+| [`leave`](#leave) | none | gives up the sender's own access to the room |
 | [`add`](#addprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access |
 | [`remove`](#removeprincipal-string) | `ChatMembersSurface` | revokes a principal's access |
 | [`delivered`](#deliveredid-string) | none | the notice removed from `outgoingNotices` |
@@ -227,13 +238,12 @@ time, meaning its handler clock's reading when it makes the record. It MAY
 accept a send or edit whose proposal is in the future, if the proposal is
 plausibly close, but it then records a time no later than the current time.
 
-The only thing that can carry a recorded time past the current time is the
-steps added to make it unique (see
-[unique times](ChatMessage.md#unique-times)), and those never carry it past the
-end of the current clock tick. A handler clock reading stands for a whole tick
-of the system's clock resolution, so a reading of `t` with a resolution of `r`
-covers times from `t` up to, but not including, `t + r`, and a bumped time stays
-within that range.
+The only thing that can carry a recorded time past the current time is the steps
+added to make it unique (see [unique times](ChatMessage.md#unique-times)), and
+those never carry it past the end of the current clock tick. A handler clock
+reading stands for a whole tick of the system's clock resolution, so a reading
+of `t` with a resolution of `r` covers times from `t` up to, but not including,
+`t + r`, and a bumped time stays within that range.
 
 Accepting a sender's time lets a sender place a message earlier than it arrived,
 within the room's window of plausibility, but never later than it arrived. That
@@ -335,7 +345,7 @@ Like `sendReaction`, sending it twice has the same effect as sending it once. A
 client never toggles: it sends whichever of the two the person asked for, so a
 repeated or delayed event can't undo what the person meant.
 
-### `join()`
+### `showProfile()`
 
 No parameters. The profile added is always the sender's profile, as the room
 resolves it, never one the sender names.
@@ -349,11 +359,36 @@ Adds the sender's profile to `roster`.
 - **When to send:** a client SHOULD send it when it first shows a room to a
   member. It has no effect once the room's space has a member set.
 
+It doesn't make anyone a member: membership is the access list. It only shows
+which profile an existing member is to be shown by.
+
+### `leave()`
+
+No parameters. The one leaving is always the sender.
+
+Gives up the sender's own access to a group room of its own.
+
+- **Admitted:** without a reviewed gesture, from any member at any level. It
+  acts on no one but the sender, and it has to work from any client acting as
+  them, including one that can't issue trusted gestures.
+- **Effect:** removes the sender from the room space's access list, and removes
+  their roster entry. Their messages and reactions stay in the history. If the
+  sender is the room's last OWNER and other members remain, the room first
+  grants OWNER to every remaining member, since a space's access list must keep
+  a concrete OWNER. If no one else remains, the sender's entry stays in the
+  access list only because the list can't be empty, and the room is otherwise
+  abandoned: no one else can read it or be added to it.
+- **Afterward:** the room refuses to `add` the sender again (see
+  [`add`](#addprincipal-string-access-write--owner)), and the sender's client
+  sends `forget` to their manager.
+- **Refused:** never, for a member of a group room of its own. The room doesn't
+  offer it elsewhere.
+
 ### `add(principal: string, access: "WRITE" | "OWNER")`
 
 - `principal: string` — The DID of the person to admit.
 - `access: "WRITE" | "OWNER"` — What to grant. WRITE lets them send, react, and
-  join; OWNER also lets them add and remove members.
+  show a profile; OWNER also lets them add and remove members.
 
 Admits another person to a group room of its own. This is an outward act: it
 grants someone else access.
@@ -363,6 +398,8 @@ grants someone else access.
 - **Effect:** grants `principal` the access to the room's space, by principal.
   It issues no space invitation, for the reason
   [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room) gives.
+- **Refused:** a `principal` who has left the room. Someone who left isn't added
+  back without their own say (see [open questions](#open-questions)).
 - **Notice:** the grant tells `principal` nothing, so the room also adds a
   notice for them to `outgoingNotices`. The client that sent `add` delivers it,
   as it delivers the manager's (see
@@ -382,7 +419,8 @@ withdraws someone else's access.
   member the room space's access list makes OWNER.
 - **Effect:** revokes `principal`'s access to the room's space. Their messages
   and reactions stay in the history.
-- **Refused:** removing the room's last OWNER.
+- **Refused:** removing the room's last OWNER. A member can always leave
+  instead.
 
 ### `delivered(id: string)`
 
@@ -404,3 +442,13 @@ group rooms of their own.
   that draw natively. A client uses it to show a room outside any container.
   Inside a container, it reads the placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
+
+## Open questions
+
+- **Returning after leaving.** A room refuses to `add` someone who left it, so
+  no one can pull them back in. How someone who left can choose to return is not
+  yet designed.
+- **Being added without consent.** `add` grants access immediately, so a person
+  can be made a member of a room they never agreed to, and appear in its member
+  set, before any notice reaches them. `leave` lets them get out, but not stop
+  it happening.

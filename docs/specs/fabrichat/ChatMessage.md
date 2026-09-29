@@ -102,10 +102,11 @@ every thread, and every message's history. One record keeps one time, so a
 message's `sentAt` and its first earlier version's `sentAt` are the same
 recording, not two.
 
-Every recorded time is a [`FabricEpochNsec`](../space-model-formal-spec/1-fabric-values.md): an exact count of nanoseconds since the
-POSIX epoch, held as a `bigint`. When a new record's time is one the room has
-already used, the room records it at the smallest later time, in nanoseconds,
-that it hasn't used.
+Every recorded time is a
+[`FabricEpochNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
+count of nanoseconds since the POSIX epoch, held as a `bigint`. When a new
+record's time is one the room has already used, the room records it at the
+smallest later time, in nanoseconds, that it hasn't used.
 
 A bumped time stays within the end of the current clock tick (see
 [`ChatRoomOutput`](ChatRoomOutput.md#recorded-times)). A one-second tick holds a
