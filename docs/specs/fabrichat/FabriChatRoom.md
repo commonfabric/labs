@@ -222,8 +222,9 @@ the room is created from the same settings the handlers read.
   behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
-- **Per-session state written by a handler.** `windows` is a `PerSession` value
-  inside the room, which the scoped-cell design provides (see [scoped cell
+- **Per-session state written by a handler.** `windows` is a `PerSession` cell
+  linked from the room's `PerSpace` message list, a nesting the scoped-cell
+  design provides across a `Cell` boundary (see [scoped cell
   instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
   the instance belonging to the session that sent the event, including when the
   handler runs somewhere other than that session's client. Whether the runtime

@@ -128,7 +128,7 @@ provide, the document says so, under the heading "Prerequisites".
 - **Member.** A principal the room space's access list admits. A room of its own
   admits only WRITE and OWNER; a space's own chat can have READ members, who
   read only its newest messages. OWNER is needed to add or remove members.
-  Membership is the access list, and nothing kept beside it.
+  Membership is the access list, and nothing kept beside it decides it.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
@@ -183,8 +183,10 @@ provide, the document says so, under the heading "Prerequisites".
    relays a send. A reviewed gesture reaches the room's own writer, so the
    room's write policy names only the room's own surfaces.
 9. **The protocol surface is UI-free.** The contracts, and the records they
-   offer, hold data and take requests. None of them carries presentation state:
-   what to show, and state such as a draft, belong to whatever draws the chat.
+   offer, hold data and take requests. None of them carries rendering state,
+   such as a draft, a reply being composed, or a scroll position: that belongs
+   to whatever draws the chat. A client's requests to read, such as its windows,
+   are part of the protocol.
 
 ## Shared spaces
 

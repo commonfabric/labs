@@ -4,7 +4,7 @@ Status: proposed design (see [`README.md`](README.md)).
 
 One entry in a room's log of recent activity: something the room recorded, and
 when. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers its recent activity,
-oldest first, as `recentActivity`.
+in `seq` order, as `recentActivity`.
 
 ```ts
 // Shown for illustration only.
@@ -42,8 +42,8 @@ can't find its message by its proposal among the messages. It can in
   it made the record, never a sender's proposal. For a send, that can be later
   than the message's `sentAt`, which may be the sender's proposed time. Every
   `at` is unique in the room, like every time a room records (see [unique
-  times](ChatMessage.md#unique-times)), so it identifies its entry. Entries are
-  ordered by `at`, and expire by it.
+  times](ChatMessage.md#unique-times)), so it identifies its entry. Entries
+  expire by `at`, but are ordered by `seq` (see [catching up](#catching-up)).
 - **`requestId`** is the `requestId` of the event the entry records.
 - **`what`** links the thing the event changed or added:
 
@@ -71,14 +71,15 @@ obliteration would have to reach.
 A room numbers its entries with `seq`: 1 for its first entry, and one more for
 each entry after, assigned in the same transaction as the entry itself. So `seq`
 has no gaps and never goes backward, whatever any clock says, and it is what a
-client catches up by.
+client catches up by. `recentActivity` is in `seq` order, which can differ from
+the order of `at`, since a delayed event can carry an old `at` with a new `seq`.
 
 A client remembers the highest `seq` it has seen. When it reads the room again,
 it reads the entries after that one. It can do that as long as the room still
 has them: the room says, in `recentActivityExpiredThrough`, the highest `seq` it
 has dropped for age (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)). If that
-is at or past the highest `seq` the client has seen, the client has missed
-entries, and it reopens its windows instead of catching up.
+is past the highest `seq` the client has seen, the client has missed entries,
+and it reopens its windows instead of catching up.
 
 This doesn't depend on time. An entry's `at` is its handler clock, which is the
 instant of the event that set the handler running, so an event that waited

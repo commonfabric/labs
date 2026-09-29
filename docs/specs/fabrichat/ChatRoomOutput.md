@@ -14,7 +14,7 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
-  /** What the room recorded recently, oldest first. */
+  /** What the room recorded recently, in `seq` order. */
   recentActivity: ChatRoomActivity[];
 
   /** Members' profiles, as claims; only until the space has a member set. */
@@ -169,7 +169,7 @@ gesture, or the room's last OWNER staying put (see
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, each reaction added or removed, and
   each change to the roster or membership, as a
-  [`ChatRoomActivity`](ChatRoomActivity.md), oldest first. A client follows a
+  [`ChatRoomActivity`](ChatRoomActivity.md), in `seq` order. A client follows a
   room by reading it, rather than by comparing messages with what it had, and
   finds the message a send of its own produced there. It holds entries within
   the room's `recentActivityWindowNsec`.
@@ -185,8 +185,8 @@ gesture, or the room's last OWNER staying put (see
 
 ## Scopes
 
-A room's fields fall into two [scopes](../scoped-cell-instances.md#summary), and
-the difference matters to a client:
+A room's fields fall into two [scopes](../scoped-cell-instances.md#summary),
+plus one value computed for each reader, and the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
@@ -198,12 +198,16 @@ the difference matters to a client:
   only `messages.windows`, the windows a session has opened onto the messages
   (see [`ChatMessageList`](ChatMessageList.md#scope)). Passing the room's link
   to someone else never passes a session's windows: they read their own.
+- **Computed for each reader**: `canSend`. It is derived when it's read, from
+  the reader's own access and profile, so each reader sees their own answer,
+  through the room or through a placement, and it needs no instance and no
+  write.
 
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants`, and in `messages`, everything but
-`windows`. `canSend` is derived the same way, but for the particular reader. A
-session's windows come into being with its first `openWindow`, so a READ member,
-who can't write, never has any, and can still read `messages.latest`.
+`windows`. A session's windows come into being with its first `openWindow`, so a
+READ member, who can't write, never has any, and can still read
+`messages.latest`.
 
 Nothing in a room is `PerUser`.
 

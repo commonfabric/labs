@@ -23,7 +23,7 @@ interface ChatMessageList {
   latest: { messages: ChatMessage[]; hasOlder: boolean };
 
   /** This session's open windows, by the `windowId` its client chose. */
-  windows: Record<string, ChatMessageWindow>;
+  windows: Cell<PerSession<Record<string, ChatMessageWindow>>>;
 
   openWindow: Stream<{
     requestId: string;
@@ -64,12 +64,15 @@ line between them runs through its fields:
   (see [`ChatRoomOutput`](ChatRoomOutput.md#membership)). The streams are the
   same for everyone too.
 - **`PerSession`**: `windows`, one instance per memory session in the room's
-  space. A session is, roughly, one connection: a client's runtime talking to
-  the room. Two sessions reading the same room have their own windows, even when
-  they belong to the same person. The windows go when their session does, and
-  none of them is part of the room's record. A session's `windows` come into
-  being with its first `openWindow`, and read as empty until then, so a session
-  that only reads, as a READ member's does, has none.
+  space. It is a cell of its own, linked from the list, since a narrower scope
+  inside a broader one needs a `Cell` boundary between them (see [scoped cell
+  instances](../scoped-cell-instances.md)). A session is, roughly, one
+  connection: a client's runtime talking to the room. Two sessions reading the
+  same room have their own windows, even when they belong to the same person.
+  The windows go when their session does, and none of them is part of the room's
+  record. A session's `windows` come into being with its first `openWindow`, and
+  read as empty until then, so a session that only reads, as a READ member's
+  does, has none.
 
 ## Windows
 
@@ -128,6 +131,11 @@ window when it wants them in it.
 
 Like every stream, `openWindow` is one-way. A client knows its request has been
 fulfilled when `windows[windowId].requestId` becomes the request's.
+
+`openWindow` and `closeWindow` are idempotent by construction: repeating one
+sets or removes the same window again. So they stay out of the room's request
+memory (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)), and their
+`requestId` serves only to tell a client which request it's seeing.
 
 ## Limits
 
