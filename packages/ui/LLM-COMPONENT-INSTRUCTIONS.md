@@ -970,11 +970,12 @@ answer slot and verified to be the seal's write: the slot of the instance the
 bound terms digest to, under the policy the bound policy cell names. The
 published answer for an instance never changes, but which instance the component
 shows is only as fixed as its bindings, which a room member's own code can
-rewrite. Binding both to cells each `WriteAuthorizedBy` the one handler that
-writes it, which writes only while the cell is unwritten, refuses other code's
-writes to those cells and nothing more. A failure other than those refusals (a
-lost worker connection, a slot the seal did not write) is shown as an alert;
-before the room has terms it asks nothing. **Tag**: `<cf-custody-answer>`
+rewrite. Binding both to cells each declared `WriteAuthorizedBy` the one handler
+that writes it, which writes only while the cell is unwritten, refuses other
+code's writes to those cells and nothing more. A failure other than those
+refusals (a lost worker connection, a slot the seal did not write) is shown as
+an alert; before the room has terms it asks nothing. **Tag**:
+`<cf-custody-answer>`
 
 **Bindings**:
 
