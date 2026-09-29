@@ -1,8 +1,8 @@
 /**
  * The real FabriChat manager, creating rooms in spaces of their own. A room is
- * created with `inSpace()`, a cross-space commit, which works in this lane and
- * not in the pattern-unit one; `packages/patterns/fabrichat/manager.test.tsx`
- * covers the manager's refusals there.
+ * created with `inSpace()`, a cross-space commit, which works against a
+ * runtime and storage of the test's own and not in the pattern-unit lane;
+ * `../fabrichat/manager.test.tsx` covers the manager's refusals there.
  */
 
 import { expect } from "@std/expect";
@@ -10,12 +10,12 @@ import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-
-import type { RuntimeProgram } from "../src/harness/types.ts";
-import { Runtime } from "../src/runtime.ts";
-import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { Runtime } from "@commonfabric/runner";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "@commonfabric/runner/storage/cache.deno";
 
 const signer = await Identity.fromPassphrase("fabrichat-manager");
 const home = signer.did();
@@ -23,33 +23,9 @@ const home = signer.did();
 const BOB = "did:key:z6MkBob";
 const CAROL = "did:key:z6MkCarol";
 
-const fabrichatDir = fromFileUrl(
-  new URL("../../patterns/fabrichat/", import.meta.url),
+const MANAGER_PATH = fromFileUrl(
+  new URL("../fabrichat/manager.tsx", import.meta.url),
 );
-const read = (name: string) => Deno.readTextFileSync(fabrichatDir + name);
-
-// The manager's core, given a profile of its own: `#profile` resolves nothing
-// here, and a manager starts no chat without one.
-const WRAPPER_SRC = [
-  "import { FabriChatManagerCore } from './manager.tsx';",
-  "import { pattern, Writable } from 'commonfabric';",
-  "",
-  "export default pattern(() => {",
-  "  const profile = new Writable({ name: 'Tester' }).for('profile');",
-  "  return FabriChatManagerCore({ myProfile: profile });",
-  "});",
-].join("\n");
-
-const PROGRAM: RuntimeProgram = {
-  main: "/main.tsx",
-  files: [
-    { name: "/main.tsx", contents: WRAPPER_SRC },
-    ...["manager.tsx", "room.tsx", "schemas.tsx", "logic.ts"].map((name) => ({
-      name: `/${name}`,
-      contents: read(name),
-    })),
-  ],
-};
 
 const RESULT_CAUSE = "fabrichat manager";
 
@@ -84,12 +60,12 @@ const roomSchema = {
 } as any;
 
 describe("fabrichat-manager", () => {
-  let server: MemoryV2Server.Server;
+  let server: ReturnType<typeof newLoopbackServer>;
   let storageManager: EmulatedStorageManager;
   let runtime: Runtime;
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newLoopbackServer();
     storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -110,19 +86,40 @@ describe("fabrichat-manager", () => {
   // Starts the manager, and returns a way to send it an event and wait for
   // the event's effect.
   const startManager = async () => {
+    // The manager's core, given a profile of its own: `#profile` resolves
+    // nothing here, and a manager starts no chat without one.
+    const program = {
+      ...await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        { main: MANAGER_PATH },
+      ),
+      mainExport: "FabriChatManagerCore",
+    };
     const tx = runtime.edit();
-    const pattern = await runtime.patternManager.compilePattern(PROGRAM, {
+    const pattern = await runtime.patternManager.compilePattern(program, {
       space: home,
       tx,
     });
+    const profile = runtime.getCell<{ name: string }>(
+      home,
+      "profile",
+      undefined,
+      tx,
+    );
+    profile.set({ name: "Tester" });
     const resultCell = runtime.getCell<Record<string, unknown>>(
       home,
       RESULT_CAUSE,
       undefined,
       tx,
     );
-    // deno-lint-ignore no-explicit-any
-    const manager = runtime.run(tx, pattern as any, {}, resultCell);
+    const manager = runtime.run(
+      tx,
+      // deno-lint-ignore no-explicit-any
+      pattern as any,
+      { myProfile: profile },
+      resultCell,
+    );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit()).error).toBeUndefined();
     await manager.pull();
@@ -189,6 +186,7 @@ describe("fabrichat-manager", () => {
     await send("createGroup", { requestId: "g-1", title: "Team", members: [] });
     expect(rooms().length).toBe(1);
   });
+
   it("accepts a group room it was admitted to", async () => {
     const { manager, send, rooms } = await startManager();
 
