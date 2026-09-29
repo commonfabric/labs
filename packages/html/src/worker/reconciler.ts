@@ -51,6 +51,7 @@ import {
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   type RenderConfidentialityResolver,
+  type RenderConsulted,
   reportCfcDenial,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -258,6 +259,15 @@ export class WorkerReconciler {
    * still gates soundly.
    */
   readonly #modulePolicySource?: WorkerReconcilerOptions["modulePolicySource"];
+
+  /**
+   * The grant source whose `subscribe()` lets a gated cell re-render when a
+   * grant document its render consulted is written or revoked. When
+   * `undefined`, there is no reactive upgrade, and the sync snapshot still
+   * gates soundly.
+   */
+  readonly #grantSource?: WorkerReconcilerOptions["grantSource"];
+
   readonly #spaceAccess?: WorkerReconcilerOptions["spaceAccess"];
 
   constructor(options: WorkerReconcilerOptions) {
@@ -266,6 +276,7 @@ export class WorkerReconciler {
     this.#resolveRenderConfidentiality = options.resolveRenderConfidentiality;
     this.#membershipProvider = options.membershipProvider;
     this.#modulePolicySource = options.modulePolicySource;
+    this.#grantSource = options.grantSource;
     this.#spaceAccess = options.spaceAccess;
     // Security knob: a present-but-unknown value fails closed to "deny";
     // only an absent option keeps the documented "allow" default.
@@ -371,6 +382,9 @@ export class WorkerReconciler {
       let lastRootValue: unknown;
       let rootHasRendered = false;
       const rootWatchedDocs = new Set<string>();
+      const reevalRoot = () => {
+        if (rootHasRendered) renderRoot(lastRootValue);
+      };
       const renderRoot = (resolvedVnode: unknown) => {
         logger.debug("root-cell-update", () => ({ resolvedVnode }));
         lastRootValue = resolvedVnode;
@@ -379,9 +393,7 @@ export class WorkerReconciler {
           vnode as Cell<unknown>,
           rootWatchedDocs,
           addCancel,
-          () => {
-            if (rootHasRendered) renderRoot(lastRootValue);
-          },
+          reevalRoot,
         );
         // The mounted cell is an egress like any descendant cell: gate its
         // own label against the root policy (the host ceiling when
@@ -394,6 +406,7 @@ export class WorkerReconciler {
           !this.#canRenderCellUnderPolicy(
             vnode as Cell<unknown>,
             this.#rootRenderPolicy,
+            this.#grantConsultation(rootWatchedDocs, addCancel, reevalRoot),
           )
         ) {
           if (!accessLost) {
@@ -1287,11 +1300,13 @@ export class WorkerReconciler {
    * confidentiality label (its schema's, when it carries none) sits under
    * the ceiling or is declassified, resolved through the display-boundary
    * exchange rules when a resolver is wired and a ceiling is in force. A
-   * label that cannot be read fails closed.
+   * label that cannot be read fails closed. `consulted` hears what the
+   * resolution read beyond the label, the grant candidates its rules named.
    */
   #canRenderCellUnderPolicy(
     cell: Cell<unknown>,
     policy: RenderPolicy,
+    consulted?: RenderConsulted,
   ): boolean {
     if (
       policy.maxConfidentiality === undefined &&
@@ -1340,6 +1355,7 @@ export class WorkerReconciler {
         this.#integrityLabels(labelView),
         () => labelSpaces,
         policy,
+        consulted,
       );
     }
     for (const atom of confidentiality) {
@@ -1366,12 +1382,13 @@ export class WorkerReconciler {
     integrity: readonly CfcAtom[],
     spaces: () => readonly string[],
     policy: RenderPolicy,
+    consulted?: RenderConsulted,
   ): boolean {
     const resolved = this.#resolveRenderConfidentiality!({
       confidentiality,
       integrity,
       spaces,
-    });
+    }, consulted);
     const offending = atomsOutsideCeiling(resolved, policy.maxConfidentiality);
     for (const clause of offending) {
       // Ungrantable: the marker means "the label could not be read" — no
@@ -1549,7 +1566,9 @@ export class WorkerReconciler {
    * Reads the same label view the render fit consumes, so what the fit
    * resolves and what is watched stay in lockstep. A label-read failure or a
    * subscription that throws is swallowed (fail closed on watching — the
-   * render fit itself stays fail-closed independently).
+   * render fit itself stays fail-closed independently). The grant documents
+   * a render consults cannot be named from the label, so those are watched
+   * as the fit reports them, through `#grantConsultation`.
    */
   #watchCellMembership(
     cell: Cell<unknown>,
@@ -1576,22 +1595,8 @@ export class WorkerReconciler {
     // still fail-closes independently; we just set up no reactive upgrade.
     if (source.view === undefined) return;
     const confidentiality = this.#confidentialityLabels(source.view);
-    // A subscription that throws leaves that document unwatched (fail closed
-    // on watching) and must not escape into the cell's sink.
-    const watch = (key: string, subscribe: () => Cancel) => {
-      if (watched.has(key)) return;
-      try {
-        addCancel(subscribe());
-        watched.add(key);
-      } catch (error) {
-        // Unwatched; the render fit stays fail-closed independently, but a
-        // cell that can no longer upgrade should say why.
-        logger.error(
-          "render policy watch subscription failed",
-          () => ({ key, error }),
-        );
-      }
-    };
+    const watch = (key: string, subscribe: () => Cancel) =>
+      this.#watchRenderDocument(watched, addCancel, key, subscribe);
     if (provider !== undefined) {
       for (const space of membershipSpacesInConfidentiality(confidentiality)) {
         watch(
@@ -1612,6 +1617,60 @@ export class WorkerReconciler {
         }
       }
     }
+  }
+
+  /**
+   * Helper for the render watchers, which subscribes to one document a
+   * gated cell's render depends on: idempotent per `key` via `watched`, with
+   * the cancel registered through `addCancel` (the cell's cancel group). A
+   * subscription that throws leaves that document unwatched (fail closed on
+   * watching) and must not escape into the cell's sink.
+   */
+  #watchRenderDocument(
+    watched: Set<string>,
+    addCancel: (cancel: Cancel) => void,
+    key: string,
+    subscribe: () => Cancel,
+  ): void {
+    if (watched.has(key)) return;
+    try {
+      addCancel(subscribe());
+      watched.add(key);
+    } catch (error) {
+      // Unwatched; the render fit stays fail-closed independently, but a
+      // cell that can no longer upgrade should say why.
+      logger.error(
+        "render policy watch subscription failed",
+        () => ({ key, error }),
+      );
+    }
+  }
+
+  /**
+   * What a render fit reports its grant consultation to: each candidate a
+   * `policyState`-guarded rule names, present or absent, is watched so
+   * `reeval` runs when it is written or revoked. A candidate is named by a
+   * rule and the bindings its guards established, which the label alone
+   * cannot say, so unlike the ACLs and manifests `#watchCellMembership`
+   * derives from the label these are watched as the fit reads them.
+   * `undefined` without a grant source, so the fit reports nothing.
+   */
+  #grantConsultation(
+    watched: Set<string>,
+    addCancel: (cancel: Cancel) => void,
+    reeval: () => void,
+  ): RenderConsulted | undefined {
+    const grants = this.#grantSource;
+    if (grants === undefined) return undefined;
+    return {
+      grant: (candidate) =>
+        this.#watchRenderDocument(
+          watched,
+          addCancel,
+          `grant:${JSON.stringify([candidate.space, candidate.id])}`,
+          () => grants.subscribe(candidate, reeval),
+        ),
+    };
   }
 
   #confidentialityLabelsFromCellSchema(
@@ -4016,15 +4075,15 @@ export class WorkerReconciler {
         childState.currentValue,
       );
       childState.currentValue = resolvedChild;
-      this.#watchCellMembership(
-        cell,
-        watchedDocs,
-        addCancel,
-        () => renderResolved(childState.currentValue, true),
-      );
+      const reeval = () => renderResolved(childState.currentValue, true);
+      this.#watchCellMembership(cell, watchedDocs, addCancel, reeval);
       const accessLost = this.#cellAccessError(cell) !== undefined;
       const blockedByPolicy = accessLost ||
-        !this.#canRenderCellUnderPolicy(cell, policy);
+        !this.#canRenderCellUnderPolicy(
+          cell,
+          policy,
+          this.#grantConsultation(watchedDocs, addCancel, reeval),
+        );
       const blockedByIntegrity = !blockedByPolicy &&
         this.#shouldBlockTextFromCell(resolvedChild, cell, policy);
 

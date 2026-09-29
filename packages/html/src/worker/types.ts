@@ -9,6 +9,7 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
 import type {
   CfcConfClause,
+  CfcGrantSource,
   CfcModulePolicySource,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
@@ -419,6 +420,17 @@ export interface WorkerReconcilerOptions {
    * no reactive upgrade; the sync snapshot still gates soundly.
    */
   modulePolicySource?: Pick<CfcModulePolicySource, "subscribe">;
+
+  /**
+   * The grant source backing {@link resolveRenderConfidentiality}. When
+   * present, a rendered cell whose render consulted a grant candidate — a
+   * `policyState`-guarded rule named one, present or absent — subscribes to
+   * that document within its cancel group, so a cell sealed for want of a
+   * grant re-renders once the grant is written, and one a grant released
+   * re-seals when the grant is revoked. Absent → no reactive upgrade; the
+   * sync snapshot still gates soundly.
+   */
+  grantSource?: Pick<CfcGrantSource, "subscribe">;
 }
 
 /**

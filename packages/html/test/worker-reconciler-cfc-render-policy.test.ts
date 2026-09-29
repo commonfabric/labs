@@ -11,6 +11,8 @@ import {
 import {
   buildCfcPolicyArtifactManifest,
   buildCfcPolicySnapshot,
+  type CfcGrantCandidate,
+  type CfcGrantSource,
   createRenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -3963,6 +3965,12 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               return () => {};
             },
           },
+          grantSource: {
+            subscribe: (candidate) => {
+              subscribed.push(candidate.space);
+              return () => {};
+            },
+          },
         });
         const cancel = reconciler.mount({
           type: "vnode",
@@ -4162,6 +4170,215 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           assertEquals(
             throwingCollector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Direct release"),
+            false,
+          );
+        } finally {
+          cancelThrowing();
+        }
+      },
+    );
+
+    await t.step(
+      "reactively re-renders a PolicyOf cell once the grant its rule names is written, and re-seals when it is revoked",
+      async () => {
+        // The rule's grant guard names one candidate document. The render
+        // resolver reports it, the reconciler watches it, and the value
+        // renders only while the source resolves the grant.
+        const manifest = buildCfcPolicyArtifactManifest({
+          formatVersion: 1,
+          moduleIdentity: "sha256:grant-release-module",
+          symbol: "releaseToGrantee",
+          template: {
+            templateVersion: 1,
+            exchangeRules: [{
+              name: "releaseToGrantee",
+              preCondition: {
+                confidentiality: [{ thisPolicy: true }],
+                integrity: [],
+              },
+              guard: {
+                policyState: [{
+                  kind: "ShareGrant",
+                  owner: { thisPolicyField: "subject" },
+                  resource: "of:answer",
+                  audience: {
+                    type: CFC_ATOM_TYPE.User,
+                    subject: { var: "$grantee" },
+                  },
+                }],
+              },
+              postCondition: {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.User,
+                  subject: { var: "$grantee" },
+                }],
+                integrity: [],
+              },
+            }],
+            dependencies: { authorityOnly: [], dataBearing: [] },
+            integrityRequirements: {},
+          },
+        });
+        const policyRef = cfcAtom.modulePolicyRef(
+          manifest.manifest.moduleIdentity,
+          manifest.manifest.symbol,
+          manifest.policyDigest,
+          signer.did(),
+        );
+        const seedTx = runtime.edit();
+        const sealedCell = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-awaiting-grant",
+          undefined,
+          seedTx,
+        );
+        const sealedLink = sealedCell.getAsNormalizedFullLink();
+        writeSeedEnvelopeDoc(seedTx, signer.did());
+        seedStoredEnvelope(seedTx, {
+          space: signer.did(),
+          id: sealedLink.id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: "Granted answer",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: [policyRef], integrity: [] },
+              }],
+            },
+          },
+        });
+        assertEquals((await seedTx.commit()).ok !== undefined, true);
+        const sealed = runtime.getCell<string>(
+          signer.did(),
+          "cfc-policy-of-awaiting-grant",
+        );
+
+        // The one document the guard names, and whether it currently holds
+        // a live grant to the acting user.
+        const candidate: CfcGrantCandidate = {
+          space: signer.did(),
+          id: "grant:cfc:hand-built-answer-grant" as never,
+        };
+        let granted = false;
+        const listeners: Array<
+          { candidate: CfcGrantCandidate; onChange: () => void }
+        > = [];
+        const grantSource: CfcGrantSource = {
+          resolve: (_query, consulted) => {
+            consulted?.(candidate);
+            return granted
+              ? [{
+                kind: "ShareGrant",
+                space: signer.did(),
+                owner: signer.did(),
+                resource: "of:answer",
+                audience: cfcAtom.user(signer.did()),
+                grantedAt: 1,
+              } as never]
+              : [];
+          },
+          subscribe: (candidate, onChange) => {
+            const entry = { candidate, onChange };
+            listeners.push(entry);
+            return () => {
+              const index = listeners.indexOf(entry);
+              if (index >= 0) listeners.splice(index, 1);
+            };
+          },
+        };
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+          renderConfidentialityCeiling: {
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+            ],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+            modulePolicyResolver: () => manifest,
+            grantSource,
+          }),
+          grantSource,
+        });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [sealed as never],
+        });
+        const text = () =>
+          collector.getOpsOfType("create-text").map((op) => op.text);
+        try {
+          await t.settle();
+          assertEquals(text().includes("Granted answer"), false);
+          assertEquals(text().includes("Content hidden by policy"), true);
+          // Watched: the candidate the evaluation reported, and only it.
+          assertEquals(listeners.map((entry) => entry.candidate), [candidate]);
+
+          granted = true;
+          collector.clear();
+          for (const listener of [...listeners]) listener.onChange();
+          await t.settle();
+          assertEquals(text().includes("Granted answer"), true);
+
+          // Revocation: the source stops resolving, the feed fires, and the
+          // rendered content is replaced by the blocked placeholder.
+          granted = false;
+          collector.clear();
+          for (const listener of [...listeners]) listener.onChange();
+          await t.settle();
+          assertEquals(text().includes("Granted answer"), false);
+          assertEquals(text().includes("Content hidden by policy"), true);
+        } finally {
+          cancel();
+        }
+        assertEquals(listeners, []);
+
+        // A source whose subscribe throws leaves the cell unwatched and still
+        // gated; the throw does not escape into the render.
+        const errors: Error[] = [];
+        const throwingCollector = createOpsCollector();
+        const throwing = new WorkerReconciler({
+          onOps: throwingCollector.onOps,
+          onError: (error) => errors.push(error),
+          renderConfidentialityCeiling: {
+            atoms: [cfcAtom.user(signer.did())],
+            caveatKinds: [],
+          },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+            modulePolicyResolver: () => manifest,
+            grantSource,
+          }),
+          grantSource: {
+            subscribe: () => {
+              throw new Error("grant store unavailable");
+            },
+          },
+        });
+        const cancelThrowing = throwing.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [sealed as never],
+        });
+        try {
+          await t.settle();
+          assertEquals(errors, []);
+          assertEquals(
+            throwingCollector.getOpsOfType("create-text").map((op) => op.text)
+              .includes("Granted answer"),
             false,
           );
         } finally {
