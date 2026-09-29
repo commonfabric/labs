@@ -32,6 +32,7 @@ import {
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";
 import type { Cell } from "../src/cell.ts";
@@ -380,27 +381,12 @@ describe("sqlite-query-row-set-members", () => {
     }
   };
 
-  const canonical = (value: unknown): string =>
-    JSON.stringify(
-      value,
-      (_key, held) =>
-        held !== null && typeof held === "object" && !Array.isArray(held)
-          ? Object.fromEntries(
-            Object.entries(held as Record<string, unknown>).sort(([a], [b]) =>
-              a < b ? -1 : a > b ? 1 : 0
-            ),
-          )
-          : held,
-    );
-
   /** Whether every alternative of `clause` is among `atoms`. */
   const hasClause = (
     atoms: readonly unknown[],
     clause: readonly unknown[],
   ): boolean =>
-    clause.every((atom) =>
-      atoms.some((held) => canonical(held) === canonical(atom))
-    );
+    clause.every((atom) => atoms.some((held) => deepEqual(held, atom)));
 
   /**
    * The confidentiality the result store declares at `path` for the

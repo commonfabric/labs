@@ -1516,28 +1516,33 @@ are stamped the file-correspondence rules are retired.
 query's selection inputs are labeled"). Three points where the text and the
 runner differ, or where the text leaves a choice open:
 
-**SC-49 [clarify] Count and membership under one class — §8.17.6 rule 1.**
-`open`. Rule 1 puts `S` and the membership labels on a result's membership,
-order and count, and puts a member's payload label on the reference identity
-at its slot. The runner stores a result as an array of references and has
-one class, `enumerate`, for membership and count
-([`cfc-observation-classes.md`](./cfc-observation-classes.md) §4). A read of
-the array yields every reference, so the `enumerate` entry carries the
-members' payload labels as well, and a count carries them with it. Proposed
-edit: say that a runtime whose count observation cannot be separated from an
-observation of the references over-taints the count, and that this conforms.
+**SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
+`open`. Rule 4 derives a member's address from its content and payload
+label, and so puts the payload label on the reference identity at each slot,
+since a reader could otherwise confirm a guess at a member by recomputing
+its address. The runner keys each member's address on a per-space secret as
+well (a runtime secret the transaction layer mints, labeled so that no
+ceiling admits a value derived from it), which makes the address say nothing
+about the member to code that cannot read the member. The slot then carries
+`S` alone, and a read of one member through the result carries that
+member's payload label and not another's. Proposed edit: allow a keyed
+derivation whose key untrusted code cannot use, say that the reference
+identity at a slot then need not carry the payload label, and record the
+residual that equal addresses stay observable under `S`: two slots holding
+equal members, and a member kept across a change of the selection, share an
+address.
 
 **SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
 item.** `open`. The item requires that untrusted code obtain a member
 reference only through a result, and offers a namespace untrusted code cannot
 write to as the means. A namespace stops a member's address from being
 received by writing the same content. It does not stop a reference from being
-constructed out of an address the code computed, where the runtime's link
-representation lets code write one as data. The existence entry's exemption
-from `S` rests on this item. Proposed edit: state the requirement over both
-routes, and say what a runtime whose references are constructible records:
-the residual is whether a guessed member has been in any result, disclosed
-under the member's payload label and without `S`.
+constructed out of an address the code learned, where the runtime's link
+representation lets code write one as data. With a secret in the address
+(SC-49), an address can no longer be computed from a guess, so what remains
+is an address learned through a result, which is a retained reference.
+Proposed edit: state the requirement over both routes, and allow a secret
+in the address as the means for the second.
 
 **SC-51 [clarify] The existence entry of a member with labels at two levels —
 §8.17.6 rule 4, last item.** `open`. The item says the existence entry

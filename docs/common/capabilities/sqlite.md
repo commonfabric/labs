@@ -141,7 +141,8 @@ statement is a durable cost of the space rather than the cost of one render. A
 query that returns a million distinct rows writes a million documents, and they
 stay written after the view that asked for them is gone. A row document is
 written once and never changed. It is keyed on the row's content and, for a
-row of a labeled database, on its label, so equal rows share one document, a
+row of a labeled database, on its label, beside a per-space secret that keeps
+the id from saying anything about the row. Equal rows share one document, a
 row the result held before takes its old document back, and a re-run whose
 rows are unchanged writes no row documents. A row whose data or label changed
 is another document, and the one it had stays in the space. A reference a
@@ -294,9 +295,11 @@ a position of `result` carries the parameters' label and that row's label. A
 reader outside the join therefore cannot observe the array's membership,
 length, or withheld count, and code that reads any of them carries the join
 into what it writes: a row count of a query over labeled columns carries the
-columns' labels. An addressed row's payload retains only that row's own
-labels. `cf cell get-label <cell>
-<path>/result/<i>/<col>` follows the links the path crosses and reports the
+columns' labels, and so does anything computed by mapping over `result`,
+which reads its membership. A row read through `result` by its position
+carries the parameters' label and that row's own labels, and not the other
+rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
+the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.
 

@@ -404,12 +404,11 @@ with the pure half in
    possible follow-up.)
 3. **Evaluate per row, attach per row.** Each result row is stored as an
    immutable entity doc of its own under the result cell, keyed on its
-   content and its label (Section [05](./05-reactivity.md)). The doc id is a
-   value derived from the row, so the reference at each result slot carries
-   the row's label ("Where a query's selection inputs are labeled" below):
-   a reader the row label excludes cannot observe the id at the slot. The
-   flush writes each labeled row doc **directly** (its own id, root path)
-   under a root-`ifc` schema. Keyed by the row doc's id, the per-row root label coexists with Phase 2's
+   content, its label and the space's row salt (Section
+   [05](./05-reactivity.md), and "Where a query's selection inputs are
+   labeled" below). The flush writes each labeled row doc **directly** (its
+   own id, root path) under a root-`ifc` schema. Keyed by the row doc's id,
+   the per-row root label coexists with Phase 2's
    per-column field labels on the same doc and dominates its fields by
    prefix-match (a field of a row is at least as confidential as the row —
    inheriting down can only raise). Downstream consumers inherit it through
@@ -784,7 +783,7 @@ the request, recorded at issue and supplied by the settle.
 
 | Observation | Label | Carried by |
 | --- | --- | --- |
-| `/result` membership, order, length | `S` joined with the rows' labels | declared `observes: "enumerate"` entry at `/result` |
+| `/result` membership, order, length | `S` joined with the rows' labels | declared `observes: "enumerate"` entry at `/result`, consumed by a read of `/result` or its `length` and not by a read of one slot |
 | `/withheld` | the same | declared entry at `/withheld` |
 | which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
 | a row's content | the row's column and row labels | the row document's own entries |
@@ -803,12 +802,16 @@ session-scoped result is filtered for its one reader under that reader's own
 ceiling, so it takes the labels of the rows it holds. The labels of the rows
 it dropped would withhold the result from the reader it was filtered for.
 
-The membership carries the rows' labels, and not `S` alone, because the
-stored array holds the row references as values and a row document's id is
-derived from the row's content. A reader of the array holds every id without
-having probed a slot. The runner has one class for membership and count, so
-the length carries the same label: a value derived from the row count of a
-result over labeled columns carries the columns' labels, at every scope.
+The membership carries the rows' labels as well as `S` because which rows
+exist is a fact about each of them (§8.17.4). The runner has one class for
+membership and count, so the length carries the same label: a value derived
+from the row count of a result over labeled columns carries the columns'
+labels, at every scope. A read of one slot, and of the row it leads to, does
+not consume the membership entry: an `enumerate` entry applies to a read of
+its container and of a declared container's `length`, and not to a read of
+one child ([`cfc-observation-classes.md`](../cfc-observation-classes.md)
+§6.1). A reader of row 0 therefore carries `S` and row 0's label, and not
+row 1's; code that enumerates or counts the rows carries all of them.
 
 The slot entry for `S` is a declared `followRef` entry because that is the
 class every reader of a reference consumes: a standalone probe of a slot,
@@ -838,18 +841,32 @@ projects an `asCell` link column declares no existence label: a label at a
 row's root subjects every link written beneath it to the link write policy,
 which refuses a link to a cell that carries no label metadata.
 
-Two residuals are recorded against §8.17.6:
+A row document's id is hashed with the space's row salt as well as the row
+key and the result cell's coordinates. The salt is a runtime secret
+(`packages/runner/src/runtime-secret.ts`): one document per space at a
+reserved id, minted with a random value by the first settle that needs it.
+The transaction write chokepoint refuses every unprivileged write to that id,
+so no code can plant a salt it knows, and the one writer,
+`ensureRuntimeSecret()`, returns nothing. The salt is labeled with the
+read-failed atom, which no ceiling admits, so code that reads it cannot
+write, display or send anything derived from it; the builtin reads it as a
+verifier-internal read, which joins nothing to the settle's label. Without
+the salt the id would be a value computable from the row, and the reference
+at each slot would have to carry the row's label so that a reader could not
+confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the
+id says nothing about the row, so the slot carries `S` alone.
 
-- **A row reference can be built from a guessed id.** §8.17.6 requires that
-  untrusted code obtain a row reference only through a result. No cell a
-  pattern creates can land on a row document's id: the id's preimage holds
-  the row key beside the cause, and every cell-creation route fixes its own
-  keys there. A pattern can still write a link naming any id as plain data
-  and read through it. Reading a row that way consumes the row's label, so
-  content stays protected. What it discloses without `S` is whether a guessed
-  row has been in any result of the query. Closing it takes references that
-  code cannot construct from an id, which is a property of the link
-  representation and not of this builtin.
+Three residuals are recorded against §8.17.6:
+
+- **Equal ids are visible under `S`.** An id is opaque, but it is stable: two
+  slots holding equal rows hold one id, and a row that stays in a result
+  across a change of parameter keeps its id. A reader of the result learns
+  both under `S` and the membership labels, without reading a row.
+- **The salt's protection is its label.** Anything that reads the space's
+  documents outside the runtime, or a runtime whose enforcement mode does not
+  refuse writes on labels, can read the salt and recompute ids. The residual
+  a recomputed id opens is the one the salt closes: whether a guessed row is
+  in a result, disclosed without the row's label.
 - **A row document is immutable by construction of its writer, and nothing
   refuses another writer.** The builtin never writes a document twice. A
   pattern holding a row reference can write to it. A writer claim naming the
