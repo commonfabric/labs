@@ -1,5 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
-import { debugStr } from "@commonfabric/data-model";
+import { debugStr, toCompactDebugString } from "@commonfabric/data-model";
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import {
@@ -20,6 +20,7 @@ import {
   type SandboxSessionUnavailableReason,
 } from "../sandbox/types.ts";
 import { SandboxPathEscapeError } from "../sandbox/errors.ts";
+import { escapeForOperatorLog } from "../operator-log.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 // Two RECOVERABLE tool errors the model itself can fix: it passed a `cwd`
@@ -49,6 +50,16 @@ export const BASH_TIMEOUT_EXIT_CODE = 124;
  * session, with a name that is one, or with the same name to start over.
  */
 export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
+
+/**
+ * How many characters of a runtime's message about a refused session the
+ * operator's log carries. A message is written for an operator and ends in
+ * the underlying cause, and the log is the one place it is kept, so the bound
+ * is there to keep a message of any length from flooding the log and not to
+ * summarize one. A longer message is carried to this length, followed by the
+ * length it had.
+ */
+export const BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH = 8000;
 
 export interface BashToolInput {
   command: string;
@@ -210,6 +221,46 @@ const sessionRefusalForReason = (reason: unknown): string =>
     ? SESSION_REFUSAL_BY_REASON[reason as SandboxSessionUnavailableReason]
     : SESSION_REFUSAL_FOR_UNKNOWN_REASON;
 
+/**
+ * How long the rendering of a runtime's message may be: six characters for
+ * each character carried, which is what the longest escape takes, and room
+ * for the quotes and the note of a cut. No message that is a string renders
+ * longer, so the cut at this length is for a `message` that is something
+ * else.
+ */
+const SESSION_REFUSAL_LOG_RENDERING_MAX_LENGTH =
+  6 * BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH + 100;
+
+/**
+ * The line the operator's log gets for a session the runtime refused: the run
+ * and the tool output the refusal belongs to, which are what join the line
+ * to a transcript, then the runtime's reason and its message. The tool adds
+ * nothing of the call's input: a command or a session name is in the line
+ * only where the runtime's message holds one. It is one line whatever the
+ * message holds, and it is bounded: see
+ * {@link BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH}.
+ */
+const sessionRefusalLogLine = (
+  runId: string,
+  outputId: BashToolOutput["outputId"],
+  error: SandboxSessionUnavailableError,
+): string => {
+  const message = toCompactDebugString(error.message, {
+    maxStringLength: BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH,
+    // As many lines as a rendering carries: the length is the bound.
+    maxStringLines: Infinity,
+    maxLength: SESSION_REFUSAL_LOG_RENDERING_MAX_LENGTH,
+    backtickQuote: true,
+  });
+  // The rendering escapes what JSON escapes, which leaves the C1 control
+  // characters, the Unicode line breaks and the directional characters as
+  // they are. The line is escaped whole, so that what the run id holds is
+  // covered with the rest.
+  return escapeForOperatorLog(
+    debugStr`cf-harness: bash: the sandbox runtime refused a session, run $quote,long${runId}, output $quote,long${outputId}, reason $quote${error.reason}: ${message}`,
+  );
+};
+
 export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
   descriptor: bashToolDescriptor,
   descriptorForRuntime: bashToolDescriptorForRuntime,
@@ -337,9 +388,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         // the model is told which in this file's words, selected by the
         // error's reason. The runtime's message goes to the operator's log
         // and nowhere the model reads.
-        console.error(
-          debugStr`cf-harness: bash: the sandbox runtime refused a session, reason $quote${error.reason}: $quote,xlong${error.message}`,
-        );
+        console.error(sessionRefusalLogLine(context.runId, outputId, error));
         // This refusal is the runtime's, so it arrives after the invocation
         // record above was made, and the record stays. It says the call was
         // prepared and handed to the runtime, which is what happened, and

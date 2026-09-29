@@ -23,6 +23,7 @@ import { discoverHarnessSkills } from "../src/skills/registry.ts";
 import {
   BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE,
   BASH_CWD_OUTSIDE_SANDBOX_PREFIX,
+  BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH,
   BASH_SESSION_UNAVAILABLE_EXIT_CODE,
   BASH_TIMEOUT_EXIT_CODE,
   bashTool,
@@ -3767,6 +3768,125 @@ Deno.test("bash tool logs the runtime's own words about a refused session for th
     line,
     "open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container",
   );
+});
+
+/**
+ * The one line the bash tool writes to the operator's log when a runtime
+ * refuses a session with `message`, for a call by the run `runId`.
+ */
+const loggedSessionRefusal = async (
+  message: string,
+  runId = "run-1",
+): Promise<string> => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(message, "start-failed"),
+    ),
+  );
+  context.runId = runId;
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  assertEquals(logged.calls[0].args.length, 1);
+  return String(logged.calls[0].args[0]);
+};
+
+/**
+ * Matches a character that must not reach the operator's log as itself: a
+ * control character, a line or paragraph separator, or a character that sets
+ * the direction text is laid out in.
+ */
+const RAW_IN_LOG_LINE =
+  // deno-lint-ignore no-control-regex
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
+
+Deno.test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
+  // The cause is what a runtime's message ends in, so the end is what is
+  // looked for.
+  const message =
+    `sandbox session "build" could not start: Failed to spawn '/opt/operator/toolchains/gvisor/bin/runsc': ${
+      "Permission denied (os error 13); ".repeat(20)
+    }the binary is not executable by uid 501, WHICH-IS-WHY`;
+  assertEquals(message.length > 600, true);
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "is not executable by uid 501, WHICH-IS-WHY");
+  assertStringIncludes(line, "sandbox session");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool logs every line of a runtime's message of more than five lines", async () => {
+  const message = [
+    "sandbox session could not start:",
+    "line 2",
+    "line 3",
+    "line 4",
+    "line 5",
+    "line 6",
+    "the seventh line, WHICH-IS-WHY",
+  ].join("\n");
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "line 6\\nthe seventh line, WHICH-IS-WHY");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
+  const bound = BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH;
+  assertEquals(bound >= 4000, true);
+  const kept = `${"k".repeat(bound - 10)}KEPT-TAIL.`;
+  assertEquals(kept.length, bound);
+
+  // A message as long as the bound is carried whole, and a longer one is cut.
+  const whole = await loggedSessionRefusal(kept);
+  assertStringIncludes(whole, "KEPT-TAIL.");
+  assertEquals(whole.includes("length:"), false);
+
+  const cut = await loggedSessionRefusal(`${kept}CUT-TAIL${"c".repeat(3000)}`);
+  assertStringIncludes(cut, "KEPT-TAIL.");
+  assertEquals(cut.includes("CUT-TAIL"), false);
+  // The note of the cut gives the length of the whole message.
+  assertStringIncludes(cut, `length:${bound + "CUT-TAIL".length + 3000}`);
+  assertEquals(cut.length < bound + 500, true);
+});
+
+Deno.test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
+  const message =
+    "start\ncf-harness: FORGED LINE\r\x1b[2J\x1b]0;title\x07 c1:\u009b31m nel:\u0085 del:\x7f ls:\u2028 ps:\u2029 rlo:\u202eDESREVER lri:\u2066 end";
+
+  const line = await loggedSessionRefusal(message);
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  // Each is there escaped, in the place it had.
+  assertStringIncludes(line, "start\\ncf-harness: FORGED LINE\\r\\u001b[2J");
+  assertStringIncludes(line, "\\u001b]0;title\\u0007 c1:\\u009b31m");
+  assertStringIncludes(line, "nel:\\u0085 del:\\u007f");
+  assertStringIncludes(line, "ls:\\u2028 ps:\\u2029");
+  assertStringIncludes(line, "rlo:\\u202eDESREVER lri:\\u2066 end");
+});
+
+Deno.test("bash tool escapes what a run id holds that would break the log line", async () => {
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run\ncf-harness: FORGED\u009b\u202e",
+  );
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
+});
+
+Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
+  // A run id the output id does not hold, so each is found by itself.
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run-of-the-operator",
+  );
+
+  assertStringIncludes(line, 'run `"run-of-the-operator"`');
+  assertStringIncludes(line, 'output `"run-1:bash:1"`');
+  assertStringIncludes(line, 'reason `"start-failed"`');
 });
 
 class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {
