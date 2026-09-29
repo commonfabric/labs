@@ -102,14 +102,21 @@ The current design direction is:
 
 What works today:
 
-- shell-centric execution against the local `runsc-cfc` sandbox path
-- sandbox containers default to Docker `--network bridge` so local Loom/Fabric
-  helper services can be reached through Docker Desktop's `host.docker.internal`
-  host alias during early integration work; set
-  `CF_HARNESS_DOCKER_NETWORK_MODE=host` when a runtime should explicitly use
-  host networking
-- default sandbox image aligned with the public CFC kitchen-sink image published
-  from the sibling `gvisor` repo:
+- shell-centric execution in a gVisor sandbox through one of two drivers: Docker
+  with the Docker-registered `runsc-cfc` runtime, which is the default, or a
+  `runsc` binary the harness invokes directly, selected with
+  `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
+- named `bash` sessions on the direct driver: a long-lived container that later
+  calls execute in, offered to the model only where the run's sandbox has
+  sessions
+- under the Docker driver, sandbox containers default to Docker
+  `--network bridge` so local Loom/Fabric helper services can be reached through
+  Docker Desktop's `host.docker.internal` host alias during early integration
+  work; set `CF_HARNESS_DOCKER_NETWORK_MODE=host` when a runtime should
+  explicitly use host networking. The direct driver reads the same variable and
+  defaults to `sandbox`, its counterpart of `bridge`
+- under the Docker driver, a default sandbox image aligned with the public CFC
+  kitchen-sink image published from the sibling `gvisor` repo:
   - `us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest`
   - override per run with `--sandbox-image` or `CF_HARNESS_SANDBOX_IMAGE`
 - durable Loom collections through an explicitly configured host transport; see
@@ -327,6 +334,10 @@ What is not done yet:
   - one batch/interactive executable boundary for Loom-owned runs
 - [src/sqlite-session-store.ts](src/sqlite-session-store.ts)
   - SQLite-backed interactive chat session, turn, and event persistence
+- [src/sandbox/](src/sandbox/)
+  - the Docker and direct `runsc` sandbox drivers, the selection between them,
+    the CFC result parser they share, and the process runner that holds a
+    session's long-lived child
 - [src/artifacts.ts](src/artifacts.ts)
   - persisted run state, run manifest, transcript and its omission record, run
     report, capability snapshot, and tool output storage
@@ -865,9 +876,63 @@ has one for each, and a home that is wiped starts a new one.
 No real principal appears in this document. A principal published next to the
 name of whoever committed it is tied to a person for good.
 
+### Sandbox runtimes
+
+Sandboxed tools run through one of two drivers, and a run selects one:
+
+```bash
+deno task run -- \
+  --workspace /path/to/workspace \
+  --sandbox-runtime runsc \
+  --sandbox-rootfs /path/to/rootfs \
+  --sandbox-cfc-policy /path/to/cfc-policy.json \
+  --prompt "Run uname -a and report the exact output."
+```
+
+`--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
+as its default. A run that names neither uses Docker. The two coexist on one
+machine: the direct driver registers nothing with Docker and keeps its `runsc`
+state under the run's own scratch directory.
+
+- `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
+  `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
+  `--cfc-invocation-context-dir` configure it, and the direct driver reads none
+  of them.
+- `runsc` writes an OCI bundle and invokes a `runsc` binary itself, with no
+  Docker: gVisor's `runsc` on Linux, and on macOS the darwin build from the
+  sibling `gvisor` repo, which forwards the same command line into one VM. Its
+  settings are `--sandbox-rootfs` (`CF_HARNESS_SANDBOX_ROOTFS`),
+  `--sandbox-cfc-policy` (`CF_HARNESS_RUNSC_CFC_POLICY`),
+  `CF_HARNESS_RUNSC_BINARY`, and the shared `CF_HARNESS_DOCKER_NETWORK_MODE`.
+
+The direct driver passes `--cfc` to `runsc` exactly when a CFC policy is
+configured, and an enforcing run without one is refused before anything
+executes. With no policy named, it uses the one the Docker path's installer
+places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
+so both drivers label the same files the same way.
+
+Under the direct driver `bash` takes an optional `session`. A call that names a
+session executes in a container the harness keeps for the rest of the run, and a
+call that names none runs in a fresh container of its own. Sessions are refused
+in the enforcing CFC modes. Under Docker the `bash` descriptor has no `session`
+argument.
+
+The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
+inside a writable mount of the run, and a scratch directory that lies inside any
+mount.
+
+<!-- TODO(merge): default user and scratch rule -->
+
+[Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
+reference is the full contract: the defaults of each setting, the runtime
+description each driver records and how to tell the two apart in it, the
+network-mode mapping, the session contract and its refusals, the lifecycle of a
+session's process, and the trust checks.
+
 On hosts without the `runsc-cfc` Docker runtime (or where the installed CFC
 policy does not label the workspace mount, which makes in-sandbox file reads
-fail with SIGSYS), run with the plain `runc` runtime and observe-mode CFC:
+fail with SIGSYS), the Docker driver can run with the plain `runc` runtime and
+observe-mode CFC:
 
 ```bash
 export CF_HARNESS_SANDBOX_DOCKER_RUNTIME=runc
@@ -1851,12 +1916,12 @@ and `pattern-author` profiles are offered the tool under the same gate and work
 through the parent's session; the `browser`, `web_fetch`, and `web_search`
 profiles never receive it.
 
-`run_pattern` executes on the trusted host side — it never enters the docker
-sandbox. The session (a `PiecesController` against the deployed API) is built
-lazily on the tool's first invocation; construction verifies the configured
-space's authorization, and only a healthy session is cached for the run. A
-session that fails to build surfaces as an ordinary tool-output error rather
-than a run failure, and the next tool call retries the construction.
+`run_pattern` executes on the trusted host side — it never enters the sandbox,
+whichever driver runs it. The session (a `PiecesController` against the deployed
+API) is built lazily on the tool's first invocation; construction verifies the
+configured space's authorization, and only a healthy session is cached for the
+run. A session that fails to build surfaces as an ordinary tool-output error
+rather than a run failure, and the next tool call retries the construction.
 
 `--fabric-foreign-spaces` (`CF_HARNESS_FABRIC_FOREIGN_SPACES`) admits foreign
 references with a JSON map from space DIDs to HTTP(S) origins, for example
@@ -3357,10 +3422,17 @@ for it: the gate needs a serving deployment, so `API_URL` is what admits it, and
 every case is skipped without one. That file's own header carries a local
 invocation.
 
-On Linux, Docker/runsc runs default to the host UID/GID. On macOS, the default
-omits `--user` because Docker Desktop bind mounts may expose host files as
-`root:root`, which prevents non-root container users from writing mounted Loom
-workspaces. An explicit `containerUser` still overrides the platform default.
+Under the Docker driver, runs on Linux default to the host UID/GID. On macOS,
+the default omits `--user` because Docker Desktop bind mounts may expose host
+files as `root:root`, which prevents non-root container users from writing
+mounted Loom workspaces. An explicit `containerUser` still overrides the
+platform default.
+
+The two sidecar directories described below are the Docker driver's CFC
+transport. The direct driver has neither: it hands `runsc` the invocation
+context and takes the result back on descriptors it opens for each call, from
+files private to that call under the run's scratch directory. See
+[Sandbox runtimes](#sandbox-runtimes).
 
 CFC sandbox result mediation requires the installed `runsc-cfc` runtime to use
 the same host result directory that `cf-harness` reads. Configure runsc with

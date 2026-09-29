@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-22\
-Revision: `7827662012`
+Last verified: 2026-09-29\
+Revision: `d73caa85a8`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -24,15 +24,18 @@ The runtime has four main boundaries:
    state and are restored on resume.
 2. The prompt loop performs bounded turns through the selected model provider
    and invokes only the configured tool/profile surface.
-3. Most tool execution uses Docker with a configurable runtime, normally
-   `runsc-cfc`. The browser child is a constrained host-adjacent profile whose
-   typed `browser` tool the harness binds to a leased local CDP endpoint itself.
-   The optional `run_pattern` tool is a distinct trusted-host path whose Fabric
-   identity stays outside Docker. It runs pieces in the configured space and
-   admits input references from that space or foreign DIDs the operator lists
-   with their hosts. The agent result writer is a second such path, invoked by a
-   host caller rather than by the model, writing a run's structured result into
-   the configured space.
+3. Most tool execution runs in a gVisor sandbox through one of two drivers: the
+   default drives Docker with a configurable Docker-registered runtime, normally
+   `runsc-cfc`, and the other invokes a `runsc` binary directly, with no Docker.
+   [Sandbox runtimes](#sandbox-runtimes) describes both. The browser child is a
+   constrained host-adjacent profile whose typed `browser` tool the harness
+   binds to a leased local CDP endpoint itself. The optional `run_pattern` tool
+   is a distinct trusted-host path whose Fabric identity stays outside the
+   sandbox. It runs pieces in the configured space and admits input references
+   from that space or foreign DIDs the operator lists with their hosts. The
+   agent result writer is a second such path, invoked by a host caller rather
+   than by the model, writing a run's structured result into the configured
+   space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -47,6 +50,227 @@ The Common Fabric runner or another trusted mediator owns authoritative CFC
 meaning. The harness transports prompt-slot and invocation evidence, applies the
 selected exposure/side-effect policy, and records its decisions. It does not ask
 the model to make policy decisions.
+
+## Sandbox runtimes
+
+Sandboxed tools execute through one of two drivers. Both read the trusted CFC
+result of a command through one shared parser, which marks the command's output
+`observed`, `opaque`, or `denied`. The parser reads one shape differently for
+the two: a result whose structured label is empty beside a label string that is
+not `runsc`'s spelling of the empty label. The Docker driver reads that output
+as `observed`, and the direct driver withholds it.
+
+- The **Docker driver** is the default. It shells out to Docker and names a
+  Docker-registered runtime, normally `runsc-cfc`. The CFC invocation context
+  and the result travel through two host sidecar directories that the runtime's
+  registration names.
+- The **direct driver** writes an OCI bundle and invokes a `runsc` binary
+  itself. On Linux that binary is gVisor's `runsc`. On macOS it is the darwin
+  build from the sibling `gvisor` repository, which takes the same command line
+  and forwards it into one VM that every run on the machine shares. The
+  invocation context goes in, and the result comes out, on descriptors the
+  driver opens for each call, so no directory is registered anywhere.
+
+### Selection
+
+`--sandbox-runtime <docker|runsc>` selects the driver and
+`CF_HARNESS_SANDBOX_RUNTIME` supplies its default. The flag wins over the
+environment, any other value is refused, and a run that names neither uses
+Docker. The batch CLI, the interactive stdio entrypoint, and both lanes of the
+Loom local host derive the selection through one function, so runs started from
+one environment execute on the same driver. The console does not read the
+selection, and its sessions run on the Docker driver.
+
+The selection belongs to a run. The direct driver registers nothing with Docker
+and keeps its `runsc` state under the run's own scratch directory, so runs on
+either driver coexist on one machine.
+
+The settings below describe the direct driver and are read only when it is
+selected:
+
+| Setting        | Flag                   | Environment                      | When neither names one                                                                  |
+| -------------- | ---------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
+| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the VM's image store. On Linux, the run is refused. |
+| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.  |
+| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc` on `PATH`.                                                                      |
+| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                              |
+
+The rootfs is a directory on Linux and, on macOS, the marker path the darwin
+`runsc` maps to a block image. `runsc` is passed `--cfc` exactly when a CFC
+policy is configured. An empty `--sandbox-cfc-policy` means none; an empty
+`CF_HARNESS_RUNSC_CFC_POLICY` names nothing, so the default applies. An
+enforcing run with no policy is refused as it starts, before any command
+executes in the sandbox and before the first model turn. A runtime built outside
+an engine has no such check in front of it, and refuses each enforcing call
+instead.
+
+`--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
+`--cfc-invocation-context-dir` configure the Docker driver. The direct driver
+reads none of them.
+
+### Runtime description
+
+Each driver describes itself, and the description is recorded in
+`capabilities.json` under `cfc.sandbox` and in `policy-snapshot.json` under
+`substrate.sandbox`. It is recorded once, when the run first starts.
+
+| Field                                     | Docker driver                                           | Direct driver                                  |
+| ----------------------------------------- | ------------------------------------------------------- | ---------------------------------------------- |
+| `kind`                                    | `docker-runsc-cfc`                                      | `runsc-cfc`                                    |
+| `sessions`                                | absent                                                  | `true`                                         |
+| `cfc.runtimeRequested`                    | `true`                                                  | `true` exactly when a CFC policy is configured |
+| `cfc.runtimeName`                         | the Docker runtime's name, normally `runsc-cfc`         | absent                                         |
+| `cfc.image`                               | the Docker image                                        | the rootfs path                                |
+| `cfc.networkMode`                         | `none`, `bridge`, or `host`                             | `none`, `sandbox`, or `host`                   |
+| `cfc.extraDockerArgsCount`                | the count of extra Docker arguments                     | absent                                         |
+| `cfc.invocationContextTransport`          | `sidecar`, where an invocation-context directory is set | `fd`                                           |
+| `cfc.invocationContextTransportReadiness` | the registration reading, or `unverified` before one    | `intrinsic`                                    |
+
+`runsc-cfc` therefore names two different things, and the field it appears in
+says which. As a `kind` it is the direct driver. As a `cfc.runtimeName` it is
+the Docker-registered runtime, and the `kind` beside it is `docker-runsc-cfc`.
+
+`sandbox` is a network mode only the direct driver reports. It is `runsc`'s own
+network stack, the direct driver's default and the counterpart of Docker's
+`bridge`. `CF_HARNESS_DOCKER_NETWORK_MODE` is shared by both drivers and is
+written in Docker's vocabulary, which maps onto the direct driver's as follows:
+
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | Docker driver | Direct driver |
+| -------------------------------- | ------------- | ------------- |
+| unset                            | `bridge`      | `sandbox`     |
+| `none`                           | `none`        | `none`        |
+| `bridge`                         | `bridge`      | `sandbox`     |
+| `host`                           | `host`        | `host`        |
+
+A value outside that vocabulary is refused on either driver.
+
+`--describe-capabilities` lists `--sandbox-runtime`, `--sandbox-rootfs`, and
+`--sandbox-cfc-policy` among its CLI flags, which is how an adapter learns that
+a build carries the direct driver. The probe does not report which driver a run
+will use, and it does not establish that a `runsc` binary, a rootfs, or the
+macOS VM is present.
+
+### The `bash` descriptor and sessions
+
+The model-facing descriptor of `bash` depends on the runtime. Before each model
+request the prompt loop reads the sandbox's description and offers the
+descriptor that fits it:
+
+- where the description reports `sessions`, which is the direct driver, `bash`
+  takes an optional `session` argument;
+- otherwise, which is the Docker driver, `bash` takes `command`, `cwd`, and
+  `timeoutMs` and no `session`. Selecting the direct driver is the only thing
+  that changes the descriptor.
+
+A session is a long-lived container. The first call that names a session starts
+it, and each later call that names it executes inside it, so what a command
+leaves behind is there for the next one: files outside the mounts, background
+processes, installed packages. A call that names no session runs in a fresh
+container of its own, as every call does under Docker.
+
+- A session name is 1 to 32 characters drawn from letters, digits, `_`, `.`, and
+  `-`, starting with a letter or a digit.
+- A session belongs to the runtime that started it, and an engine builds one
+  runtime for each run. Two runs that name the same session therefore never
+  share a container, and neither do two sessions of one run.
+- A session lasts until its run ends, which in an interactive chat is one turn.
+  A resumed run starts with none. A session ends earlier when a command in it
+  overruns its timeout or cannot be run; when its container exits; and when the
+  harness process exits. The command that overran returns the ordinary timeout
+  result, exit code 124, and takes the whole session down with it, because the
+  driver holds no handle on the one process.
+- A runtime holds at most eight sessions at a time.
+- Every container's `/tmp` is a memory-backed file system capped at 512 MiB, and
+  its rootfs overlay is held in memory.
+
+Sessions are refused in the enforcing CFC modes, `enforce-explicit` and
+`enforce-strict`, because a flow-control result taken for one `exec` is not a
+sound basis for enforcement:
+
+- the result is a snapshot taken when the executed process exits, while the
+  call's output keeps draining and the session's background processes keep
+  running, so labeled data can reach the output after the result was computed;
+- processes in one container share its process namespace and its memory-backed
+  file systems, and taint does not travel through metadata such as another
+  process's environment or a directory's name, so one call can read what another
+  learned;
+- once a tainted write reaches a sink in the container, every later result in
+  that session carries the taint.
+
+In an enforcing mode a call without a session still runs, in a container of its
+own with a result of its own. In `observe` a session's result is reported as the
+observation it is.
+
+A refusal over `session` is recoverable. The tool returns exit code 125 with
+empty standard output, no command has run, and the working directory is
+unchanged. The first two refusals below are the tool's own and leave nothing in
+the run's record. The other four are raised by the runtime, after the call's
+invocation context was recorded. The refusal states its reason and the next step
+open to the model:
+
+| Reason                          | What the model is told                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The runtime has no sessions     | To rerun the command without `session`.                                                                                                             |
+| The name is not a session name  | The rule for a name, and to rerun with a name that satisfies it or with none. The rejected name is not repeated.                                    |
+| The run is in an enforcing mode | That sessions are unavailable in that mode, and to run the command without one.                                                                     |
+| The session was lost            | That the session ended and its state is gone. This is reported once, on the next call that names the session; naming it again starts an empty one.  |
+| The session cap is reached      | That the run holds as many sessions as it may, and to reuse one of them or run without a session.                                                   |
+| The session failed to start     | That it could not start, and to run without a session or try again. A failed start is not retained, so the next call that names it starts it again. |
+
+### Process lifecycle
+
+`ProcessRunner.spawn()` starts a process and returns a `ProcessHandle` for it
+instead of waiting for it to exit. The handle carries the process id, a promise
+that resolves with the exit code, and `kill()`. The direct driver holds one
+handle per session, for that session's attached `runsc run`. `spawn()` is
+optional on a process runner, and a runner without it cannot keep a session
+alive: the session fails to start and the call is refused as above.
+
+A session's process is spawned with its standard input held. The harness keeps
+the write end of that pipe open and never writes to it, and the container's
+first process does nothing but read it. The pipe closes when the harness process
+exits, however it exits, so a session ends with the harness even when the
+harness is killed outright. `kill()` closes the pipe as well.
+
+The engine closes a runtime it built on every terminal transition — completed,
+failed, canceled, and interrupted — before it writes the run's outcome. Closing
+the direct driver's runtime takes down every session and every container of a
+call still in flight, removes the run's scratch tree where nothing is left in
+it, and leaves the runtime refusing further calls. The engine closes its runtime
+once. A close that throws is logged and does not change the outcome. A runtime
+handed to the engine is closed only where the caller also handed over its
+ownership.
+
+A container is taken down by deleting it and then asking `runsc` whether it is
+still there, killing and deleting once more where it is. Each of those control
+commands is bounded at 15 seconds, and a session has 30 seconds to report that
+it is running.
+
+Every child of a run whose engine built the direct driver's runtime is given a
+runtime of its own, built from the parent's configuration. A child therefore
+cannot execute in its parent's sessions, holds a session cap of its own, and
+closes its own runtime when it ends. Under the Docker driver a child shares its
+parent's runtime unless it mounts an acquired skill. On either driver, a child
+of a run whose runtime was handed in shares that runtime, its sessions and
+session cap included, and leaves it open when it ends.
+
+### Trust
+
+Three files decide how the direct driver's sandbox is built and labeled: the CFC
+policy, the rootfs, and the `runsc` binary. Each is refused when it lies inside
+a writable mount of the run, where the sandbox could rewrite it. The comparison
+is by real path, so a symbolic link into a mount is caught, and it ignores case
+on macOS. A `runsc` binary named by anything other than an absolute path is not
+checked.
+
+The scratch directory holds the bundle, the invocation context, and the result
+of each call, so whoever can write there can swap a bundle or a result under the
+run. It has to be out of reach of the sandbox and of every other user of the
+host. The first is checked for every scratch directory: one that lies inside any
+mount of the run, read-only or writable, is refused, by the same real-path
+comparison.
+
+<!-- TODO(merge): default user and scratch rule -->
 
 ## Supported surfaces
 
@@ -77,7 +301,9 @@ The current package provides:
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
-  tools;
+  tools, over the Docker driver by default or the direct `runsc` driver where a
+  run selects it, with named `bash` sessions on the direct driver; see
+  [Sandbox runtimes](#sandbox-runtimes);
 - children through `default`, `browser`, `web_fetch`, `web_search`, and
   `pattern-author` profiles, of which the ones a turn starts together run
   together, beside a bounded private `research` loop that no delegation may
@@ -260,7 +486,9 @@ The current package provides:
   `pin="owner/repo/slug@<commit sha>"` for `run_skill_script`, and the child
   mounts that one skill's acquired scripts read-only at `/acquired-skill` and no
   other skill's, in a sandbox of its own built from the parent's configuration
-  plus that mount rather than in the parent's shared one;
+  plus that mount. Under the Docker driver that is what separates it from the
+  children that share the parent's runtime; under the direct driver every child
+  has a sandbox of its own, and this one differs only by the mount;
 - pattern references by trusted record: `delegate_task` takes up to eight
   optional `{ patternId, note? }` entries and resolves each id only from the
   records that run already holds — successful `search_patterns` results retained
@@ -607,11 +835,25 @@ mode.
   indexed source. Research records each observation as missing label coverage;
   downstream enforcement can carry known confidentiality, while the coverage gap
   remains diagnostic rather than becoming a clean classification.
-- Capability discovery does not prove that Docker, `runsc-cfc`, a browser lease,
-  or another external dependency is healthy. Callers must perform dependency
-  preflight for workflows that require them.
-- Package-default sandbox networking is a provisional bridge-oriented posture,
-  not the final destination policy model. Product adapters may narrow it.
+- Capability discovery does not prove that Docker, `runsc-cfc`, a directly
+  invoked `runsc` and its rootfs, a browser lease, or another external
+  dependency is healthy. Callers must perform dependency preflight for workflows
+  that require them.
+- Package-default sandbox networking is a provisional bridge-oriented posture on
+  both drivers, `bridge` under Docker and `sandbox` under the direct driver, not
+  the final destination policy model. Product adapters may narrow it.
+- Sandbox sessions are unavailable in the enforcing CFC modes, because a
+  session's flow-control result cannot vouch for everything that reaches a
+  call's output. An enforcing run on the direct driver runs every command in a
+  container of its own.
+- A resumed run does not take its sandbox driver from the run it resumes. It
+  uses the driver that the flags and environment select when it resumes, while
+  `capabilities.json` and `policy-snapshot.json` keep the runtime description
+  recorded when the run first started.
+- A signal that interrupts a batch CLI run closes the root run's sandbox runtime
+  and not the runtimes of its children. A child's sessions still end, because
+  they end with the harness process; nothing takes down a container of a child's
+  call that is still in flight.
 - A turn's tool calls run in the order written, and a delegation does not hold
   the calls after it, so the children one turn starts run together while its
   other calls run in turn against the session's one working directory; a
@@ -665,5 +907,5 @@ deno task test
 ```
 
 Product adapters maintain their own contract and cancellation tests; package
-tests alone are not evidence that Docker, Browser Access, or a live product
-instance is healthy.
+tests alone are not evidence that Docker, a directly invoked `runsc`, Browser
+Access, or a live product instance is healthy.

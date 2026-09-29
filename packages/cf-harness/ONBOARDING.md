@@ -58,8 +58,11 @@ first run does without.
    `Warning Ignored build scripts for packages: npm:fuse-native@2.2.6` box on
    stderr. It is noise; the command's output is on stdout.
 
-2. **Docker with the `runsc-cfc` runtime.** Every tool the model runs executes
-   in a container under that runtime. On macOS, follow the gVisor
+2. **Docker with the `runsc-cfc` runtime.** The console runs every sandboxed
+   tool in a container under that runtime. The batch CLI can instead invoke
+   `runsc` directly, with no Docker; the package README's
+   [Sandbox runtimes](README.md#sandbox-runtimes) covers that driver. On macOS,
+   follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
    it owns installation and registration. Confirm the result:
 
@@ -597,8 +600,9 @@ is a real problem.
 
 ## 8. Run the CLI path instead
 
-The batch CLI and the console resolve the same session configuration. The CLI
-refuses an enforcing run unless both runsc-cfc transports are named:
+The batch CLI and the console resolve the same session configuration. On the
+Docker driver, which is the default, the CLI refuses an enforcing run unless
+both runsc-cfc transports are named:
 
 ```sh
 cd <labs>/packages/cf-harness
