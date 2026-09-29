@@ -890,9 +890,11 @@ deno task run -- \
 ```
 
 `--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
-as its default. A run that names neither uses Docker. The two coexist on one
-machine: the direct driver registers nothing with Docker and keeps its `runsc`
-state under the run's own scratch directory.
+as its default. A run that names neither uses Docker. The flags in this section
+are the batch CLI's; the interactive stdio entrypoint and the interactive lane
+of the Loom local host refuse them and read the environment variables alone. The
+two coexist on one machine: the direct driver registers nothing with Docker and
+keeps its `runsc` state under the run's own scratch directory.
 
 - `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
   `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
@@ -900,8 +902,8 @@ state under the run's own scratch directory.
   of them.
 - `runsc` writes an OCI bundle and invokes a `runsc` binary itself, with no
   Docker: gVisor's `runsc` on Linux, and on macOS the darwin build from the
-  sibling `gvisor` repo, which forwards the same command line into one VM. Its
-  settings are `--sandbox-rootfs` (`CF_HARNESS_SANDBOX_ROOTFS`),
+  sibling `gvisor` repo, which is expected to forward the same command line into
+  one VM. Its settings are `--sandbox-rootfs` (`CF_HARNESS_SANDBOX_ROOTFS`),
   `--sandbox-cfc-policy` (`CF_HARNESS_RUNSC_CFC_POLICY`),
   `CF_HARNESS_RUNSC_BINARY`, and the shared `CF_HARNESS_DOCKER_NETWORK_MODE`.
 
@@ -921,12 +923,14 @@ The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any
 mount.
 
-The direct driver runs a command as the container user it is configured with,
-and as root when it is configured with none, on every host. The Docker driver's
-default on Linux is the host user. The direct driver's default scratch directory
-is made for the run with no access for group or others, under a parent it
-verifies is this user's alone; a scratch directory named by the caller is not
-verified.
+Every run that the batch CLI, the interactive stdio entrypoint, or the Loom
+local host starts on the direct driver runs its commands as root, on every host.
+None of them configures a container user: only a caller that builds the runtime
+itself can name one, numerically. The Docker driver's default on Linux is the
+host user. Those runs also use the direct driver's default scratch directory,
+which is made for the run with no access for group or others, under a parent the
+driver verifies is this user's alone. Only a caller that builds the runtime
+itself can name another scratch directory, and that one is not verified.
 
 [Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
 reference is the full contract: the defaults of each setting, the runtime
@@ -1412,12 +1416,15 @@ its own planner could have read.
 
 The child a `delegate_task` hands that handle to mounts the directory read-only
 at `/acquired-skill`, and mounts the one skill its handle names and no other.
-Such a child does not share its parent's container — a mount is a property of
-the container, so the child is given the parent's sandbox configuration plus
-that one mount and builds its own sandbox from it. That is possible only where
-this harness built the parent's sandbox from a configuration; a run whose
-sandbox runtime was handed in has none to extend, and its children go on sharing
-it, acquired skill or not. It receives `run_skill_script` and the operator's
+Such a child builds a sandbox of its own — a mount is a property of the
+container, so the child is given the parent's sandbox configuration plus that
+one mount and builds its own sandbox from it. Under the Docker driver that sets
+it apart from a child with no acquired skill, which shares its parent's sandbox
+runtime. Under the direct driver every child builds a runtime of its own, and
+this one's carries the mount. Building is possible only where this harness built
+the parent's sandbox from a configuration; a run whose sandbox runtime was
+handed in has none to extend, and its children share that runtime on either
+driver, acquired skill or not. It receives `run_skill_script` and the operator's
 allowlist entries for that pin, and for no other skill: the allowlist is the
 run's while a child's tool surface is its profile's, and neither reaches the
 other on its own. An acquisition is not an authorization — mounting the bytes
@@ -2456,7 +2463,7 @@ deno task run -- \
   --prompt "Build this pattern."
 ```
 
-Sandbox image override:
+Sandbox image override, under the Docker driver:
 
 ```bash
 deno task run -- \
@@ -2469,7 +2476,9 @@ deno task run -- \
 
 Use this for Deno 2 / Common Fabric CLI validation while keeping the mounted
 workspace as the source of truth for Labs, Pattern Factory, and Loom code. Run
-reports include the selected sandbox image in the capability snapshot.
+reports include the selected sandbox image in the capability snapshot. The
+direct driver does not read `--sandbox-image`, and the `image` in its capability
+snapshot is the rootfs path.
 
 Loom-backed batch runs may also pass a retained manifest:
 
@@ -3246,10 +3255,13 @@ deno task cfc-audit /tmp/cfc-properties \
 Two properties the brief for this suite named are established elsewhere, and a
 second copy would be a second encoding rather than more coverage:
 
-- **P-refuse-start** — `assertDockerRunscCfcTransportForMode` refuses to start
-  an enforcing run whose CFC transports are unwired, and
-  `test/docker-runsc-sandbox.test.ts` covers both enforcing modes, each
-  transport missing on its own, and both present.
+- **P-refuse-start** — under the Docker driver
+  `assertDockerRunscCfcTransportForMode` refuses to start an enforcing run whose
+  CFC transports are unwired, and `test/docker-runsc-sandbox.test.ts` covers
+  both enforcing modes, each transport missing on its own, and both present.
+  Under the direct driver `assertRunscCfcPolicyForMode` refuses to start an
+  enforcing run that has no CFC policy, and `test/runsc-sandbox.test.ts` covers
+  both enforcing modes.
 - **P-dial-order** and **P-posture-parity** — `audit/test/seeded-violations.ts`
   turns AUD-13 to `fail` and to `warn` on non-conforming matrix points, and
   `audit/test/deployment.test.ts` covers AUD-18. These are the stronger form for
@@ -3434,9 +3446,10 @@ mounted Loom workspaces. An explicit `containerUser` still overrides the
 platform default.
 
 The two sidecar directories described below are the Docker driver's CFC
-transport. The direct driver has neither: it hands `runsc` the invocation
-context and takes the result back on descriptors it opens for each call, from
-files private to that call under the run's scratch directory. See
+transport. The direct driver has neither. Where a CFC policy is configured, it
+hands `runsc` the invocation context and takes the result back on descriptors it
+opens for each call, from files private to that call under the run's scratch
+directory; with no policy it hands over no context and takes back no result. See
 [Sandbox runtimes](#sandbox-runtimes).
 
 CFC sandbox result mediation requires the installed `runsc-cfc` runtime to use
