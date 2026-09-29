@@ -1361,29 +1361,40 @@ describe("CFC render resolver — grants at the display boundary", () => {
       });
     });
 
-    it("keeps the clause sealed under a document at the grant's address that is not a grant", async () => {
-      // Written past the trusted writer, straight into storage: the shape is
-      // a grant's, but its fields do not re-derive the address it sits at.
-      await withRuntime(async (runtime) => {
-        const tx = runtime.storageManager.edit();
-        tx.write({
-          space: answerCandidate.space as never,
-          id: answerCandidate.id,
-          type: "application/json",
-          path: ["value"],
-        }, {
-          version: 1,
-          space: OWNER,
-          kind: "ShareGrant",
-          owner: OWNER,
-          resource: OTHER_ANSWER,
-          audience: [userViewer],
-          grantedAt: 1000,
-        } as never);
-        expect((await tx.commit()).error).toBeUndefined();
-        await runtime.idle();
-        expect(resolveAsViewer(runtime)).toEqual([shareRef]);
-      });
+    it("keeps the clause sealed under a document at the grant's address that the guard matches but that does not verify", async () => {
+      // Written past the trusted writer, straight into storage. Each carries
+      // the fields the guard reads, so only verify-on-read refuses it: a
+      // stored space other than the one it sits in, a version that is not
+      // the grant version, a time that is not a number.
+      const grant = {
+        version: 1,
+        space: OWNER,
+        kind: "ShareGrant",
+        owner: OWNER,
+        resource: ANSWER,
+        audience: [userViewer],
+        grantedAt: 1000,
+      };
+      for (
+        const stored of [
+          { ...grant, space: "did:key:z6MkASpaceTheDocumentIsNotIn" },
+          { ...grant, version: 2 },
+          { ...grant, grantedAt: "1000" },
+        ]
+      ) {
+        await withRuntime(async (runtime) => {
+          const tx = runtime.storageManager.edit();
+          tx.write({
+            space: answerCandidate.space as never,
+            id: answerCandidate.id,
+            type: "application/json",
+            path: ["value"],
+          }, stored as never);
+          expect((await tx.commit()).error).toBeUndefined();
+          await runtime.idle();
+          expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+        });
+      }
     });
 
     it("keeps the clause sealed under a single-use grant, since a render is an observing site", async () => {
