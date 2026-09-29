@@ -186,17 +186,37 @@ export default pattern<{ rows: (Confidential<Secret, ["row"]> | undefined)[] }>(
      */
     const policyCapture = async (declaration: string, declarations = "") => {
       const output = await transformFiles({
-        "/rules.ts":
-          `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+        "/rules.ts": `import {
+  type CfcExchangeRulesDeclaration,
+  exchangeRule,
+  exchangeRules,
+  THIS_POLICY,
+} from "commonfabric/cfc";
 export const neverRelease = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: { integrity: ["never"] },
   post: { dropClause: true },
 });
-export const rules = exchangeRules([neverRelease]);`,
+export const rules = exchangeRules([neverRelease]);
+export const releaseToReaders = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: ["reader"] },
+  post: { dropClause: true },
+});
+export const releaseToWriters = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: ["writer"] },
+  post: { dropClause: true },
+});
+export const readers: CfcExchangeRulesDeclaration = exchangeRules([
+  releaseToReaders,
+]);
+export const writers: CfcExchangeRulesDeclaration = exchangeRules([
+  releaseToWriters,
+]);`,
         "/test.tsx": `${IMPORTS}
 import { type PolicyOf } from "commonfabric/cfc";
-import { rules } from "./rules.ts";
+import { readers, rules, writers } from "./rules.ts";
 ${declarations}
 export default pattern<{ ${declaration} }>(
   ({ secret }) => ({ out: computed(() => secret?.a ?? "") }),
@@ -238,6 +258,34 @@ export default pattern<{ ${declaration} }>(
           "interface Other { a: string; c: number; }",
         ),
       ).toMatchObject(POLICY_LABEL);
+    });
+
+    it("reads the policy of each of two CFC aliases over the same union", async () => {
+      // `readers` and `writers` are declared with one type, so the checker
+      // folds both labeled unions into the same members, and only their nodes
+      // tell the policies apart.
+      const labeled = (binding: string) =>
+        `Confidential<Secret | Other, [PolicyOf<typeof ${binding}>]>`;
+      const policy = (binding: string) => ({
+        policyRefKind: "module",
+        __ctPolicyIdentityOf: { file: "/rules.ts", path: [binding] },
+      });
+
+      for (
+        const [first, second] of [["readers", "writers"], [
+          "writers",
+          "readers",
+        ]]
+      ) {
+        expect(
+          await policyCapture(
+            `secret: ${labeled(first!)} | ${labeled(second!)} | null`,
+            "interface Other { a: string; c: number; }",
+          ),
+        ).toMatchObject({
+          ifc: { confidentiality: [policy(first!), policy(second!)] },
+        });
+      }
     });
 
     it("reads the policy of a value an alias of a nullable union names", async () => {

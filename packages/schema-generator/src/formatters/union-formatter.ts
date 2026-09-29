@@ -115,10 +115,13 @@ export interface CoveringMemberNode {
  *   through parentheses and aliases without type parameters, is read for the
  *   members it writes (`readUnionMemberNodes()`), since the checker folds
  *   those into `members`.
- * - `covering` holds, by each member it stands for, a node that stands for
- *   several members, where `readsWhole` accepts it. That is a node whose
- *   type is a union it does not write: the members `Confidential<A | B, …>`
- *   distributes into, say, or `true` and `false` for `boolean`.
+ * - `covering` holds, by each member they stand for, the nodes that stand for
+ *   several members, where `readsWhole` accepts them, in the order they are
+ *   written. That is a node whose type is a union it does not write: the
+ *   members `Confidential<A | B, …>` distributes into, say, or `true` and
+ *   `false` for `boolean`. Several such nodes can stand for the same members,
+ *   as two whose labels differ only in the policy a `typeof` names do, where
+ *   the policies' bindings have one type.
  */
 export function pairUnionMemberNodes(
   members: readonly ts.Type[],
@@ -127,19 +130,21 @@ export function pairUnionMemberNodes(
   readsWhole: (type: ts.UnionType, node: ts.TypeNode) => boolean,
 ): {
   ordered: Array<ts.TypeNode | undefined>;
-  covering: Map<ts.Type, CoveringMemberNode>;
+  covering: Map<ts.Type, CoveringMemberNode[]>;
 } {
   const read = new Set<ts.TypeNode>();
   const memberNodes = unionNode.types.flatMap((node) =>
     readUnionMemberNodes(node, checker, read)
   );
   const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
-  const covering = new Map<ts.Type, CoveringMemberNode>();
+  const covering = new Map<ts.Type, CoveringMemberNode[]>();
   for (const node of memberNodes) {
     if (ordered.includes(node)) continue;
     const type = getTypeNodeMemberType(node, checker);
     if (!type?.isUnion() || !readsWhole(type, node)) continue;
-    for (const member of type.types) covering.set(member, { node, type });
+    for (const member of type.types) {
+      covering.set(member, [...covering.get(member) ?? [], { node, type }]);
+    }
   }
   return { ordered, covering };
 }
@@ -310,15 +315,18 @@ export class UnionFormatter implements TypeFormatter {
     // A member node that stands for several members is read once, as one
     // alternative for all of them, where it is read whole: a node that says
     // what their types cannot, such as the labels of `Confidential<A | B, …>`.
+    // Each of several such nodes standing for the same members is an
+    // alternative of its own.
     const readCovering = new Set<ts.TypeNode>();
     let unionOptions = members.flatMap((m, index) => {
-      const cover = paired?.covering.get(m);
-      if (!cover) return [generate(m, index)];
-      if (readCovering.has(cover.node)) return [];
-      readCovering.add(cover.node);
-      return [
-        this.#schemaGenerator.formatChildType(cover.type, context, cover.node),
-      ];
+      const covers = paired?.covering.get(m);
+      if (!covers) return [generate(m, index)];
+      return covers.filter(({ node }) => !readCovering.has(node)).map(
+        ({ node, type }) => {
+          readCovering.add(node);
+          return this.#schemaGenerator.formatChildType(type, context, node);
+        },
+      );
     });
     // When widenLiterals is true, try to merge structurally identical schemas
     // that only differ in literal enum values

@@ -800,10 +800,13 @@ Default paths of §7:
     as one alternative for all of them, where it is a CFC alias that
     `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
     `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
-    only the node can spell, as a `PolicyOf<typeof rules>` binding. Its
-    members are otherwise read by their types: `boolean` stands for `true`
-    and `false`, `Default<T, V>`'s place in a union is §7's, and a scope
-    wrapper's is §10's.
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
+    such nodes can stand for the same members, as two whose policies differ
+    only in a `typeof` binding do where the bindings have one type, and each
+    is an alternative of its own, in the order written. Its members are
+    otherwise read by their types: `boolean` stands for `true` and `false`,
+    `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
+    §10's.
 
 ## 9. Intersections
 
@@ -1349,9 +1352,10 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   the member alone, as an optional property's does, and otherwise the node
   of the union the declaration writes that it is read at (§8,
   `pairUnionMemberNodes`). A node that stands for several members is read
-  once for all of them. A member with no such node is read by its type. A
-  schema whose own reference
-  chain already holds every label is left as it is (`holdsIfcLabels`).
+  once for all of them, and a member several such nodes stand for may be
+  under the labels of any of them. A member with no such node is read by its
+  type. A schema whose own reference chain already holds every label is left
+  as it is (`holdsIfcLabels`).
 - **`spelledBy`** is the annotation of the member a printed node holds the
   value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural

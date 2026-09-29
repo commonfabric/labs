@@ -1754,6 +1754,7 @@ describe("Schema: CFC authoring aliases", () => {
           Cfc<T, { confidentiality: X }>;
         type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
         declare const rules: unknown;
+        declare const rules2: unknown;
         interface A { a: string }
         interface B { b: number }
         type Both =
@@ -1789,6 +1790,10 @@ describe("Schema: CFC authoring aliases", () => {
       __ctPolicyIdentityOf: { file: "test.ts", path: ["rules"] },
       subject: { __ctOwningSpace: true },
     };
+    const POLICY_2 = {
+      ...POLICY,
+      __ctPolicyIdentityOf: { file: "test.ts", path: ["rules2"] },
+    };
 
     it("keeps a CFC alias's labels on the members of a union it distributes into", async () => {
       expect(
@@ -1803,6 +1808,29 @@ describe("Schema: CFC authoring aliases", () => {
             ifc: { confidentiality: [POLICY] },
           },
         ],
+      });
+    });
+
+    it("reads each of two nodes that stand for the same members as an alternative of its own", async () => {
+      // `rules` and `rules2` have one type, so the checker folds both labeled
+      // unions into the same members, and only their nodes tell the policies
+      // apart.
+      const labeled = (binding: string) =>
+        `Confidential<A | B, readonly [PolicyOf<typeof ${binding}>]>`;
+      const alternative = (policy: typeof POLICY) => ({
+        anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }],
+        ifc: { confidentiality: [policy] },
+      });
+
+      expect(
+        await fieldSchema(`${labeled("rules")} | ${labeled("rules2")} | null`),
+      ).toEqual({
+        anyOf: [{ type: "null" }, alternative(POLICY), alternative(POLICY_2)],
+      });
+      expect(
+        await fieldSchema(`${labeled("rules2")} | ${labeled("rules")} | null`),
+      ).toEqual({
+        anyOf: [{ type: "null" }, alternative(POLICY_2), alternative(POLICY)],
       });
     });
 

@@ -2326,8 +2326,8 @@ export class SchemaGenerator {
    * (`joinMemberIfcLabels()`). A member is spelled by the node of the union
    * `typeNode` writes, read through parentheses and aliases
    * (`readAuthoredTypeNode()`), that it is read at
-   * (`pairUnionMemberNodes()`). A member a node that stands for several
-   * members stands for has the labels of all of them together.
+   * (`pairUnionMemberNodes()`). A member that nodes standing for several
+   * members stand for may be under the labels of any of those nodes.
    */
   #labelsOf(
     type: ts.Type,
@@ -2365,11 +2365,13 @@ export class SchemaGenerator {
     if (values.length < 2) return labels;
     return joinMemberIfcLabels(
       labels ?? {},
-      values.map((member) => {
-        const cover = paired?.covering.get(member);
-        return (cover
-          ? this.#labelsOf(cover.type, cover.node, context)
-          : this.#labelsOf(member, memberNode(member), context)) ?? {};
+      values.flatMap((member) => {
+        const covers = paired?.covering.get(member);
+        return covers
+          ? covers.map(({ node, type }) =>
+            this.#labelsOf(type, node, context) ?? {}
+          )
+          : [this.#labelsOf(member, memberNode(member), context) ?? {}];
       }),
     );
   }

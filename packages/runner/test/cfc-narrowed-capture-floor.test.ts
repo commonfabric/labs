@@ -28,7 +28,8 @@ type StoredEntry = {
 
 /**
  * A pattern over `secret`, declared by `declaration`, returning `out`, beside
- * a module declaring the exchange rules `rules`.
+ * a module declaring the exchange rules `rules`, and `readers` and `writers`,
+ * which are declared with one type.
  */
 const program = (declaration: string, out: string): RuntimeProgram => ({
   main: "/main.tsx",
@@ -37,7 +38,7 @@ const program = (declaration: string, out: string): RuntimeProgram => ({
     contents: [
       "import { computed, pattern, type Confidential } from 'commonfabric';",
       "import { type PolicyOf } from 'commonfabric/cfc';",
-      "import { rules } from './rules.ts';",
+      "import { readers, rules, writers } from './rules.ts';",
       "interface Secret { a: string; b: string }",
       "interface Other { a: string; c: number }",
       "type Either = Confidential<Secret, ['x']> | Confidential<Other, ['y']>;",
@@ -48,13 +49,25 @@ const program = (declaration: string, out: string): RuntimeProgram => ({
   }, {
     name: "/rules.ts",
     contents: [
-      "import { exchangeRule, exchangeRules, THIS_POLICY } from 'commonfabric/cfc';",
+      "import { type CfcExchangeRulesDeclaration, exchangeRule, exchangeRules, THIS_POLICY } from 'commonfabric/cfc';",
       "export const neverRelease = exchangeRule({",
       "  appliesTo: THIS_POLICY,",
       "  pre: { integrity: ['never'] },",
       "  post: { dropClause: true },",
       "});",
       "export const rules = exchangeRules([neverRelease]);",
+      "export const releaseToReaders = exchangeRule({",
+      "  appliesTo: THIS_POLICY,",
+      "  pre: { integrity: ['reader'] },",
+      "  post: { dropClause: true },",
+      "});",
+      "export const releaseToWriters = exchangeRule({",
+      "  appliesTo: THIS_POLICY,",
+      "  pre: { integrity: ['writer'] },",
+      "  post: { dropClause: true },",
+      "});",
+      "export const readers: CfcExchangeRulesDeclaration = exchangeRules([releaseToReaders]);",
+      "export const writers: CfcExchangeRulesDeclaration = exchangeRules([releaseToWriters]);",
     ].join("\n"),
   }],
 });
@@ -196,6 +209,39 @@ describe("cfc-narrowed-capture-floor", () => {
     ).toMatchObject([{
       confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
     }]);
+  });
+
+  describe("a lift reading a value two CFC aliases over the same union label", () => {
+    // `readers` and `writers` have one type, so the checker folds both labeled
+    // unions into the same members, and only their nodes tell the policies
+    // apart.
+
+    /** The policies the result of a lift reading `first | second` declares. */
+    const declaredPolicies = async (first: string, second: string) => {
+      const labeled = (binding: string) =>
+        `Confidential<Secret | Other, [PolicyOf<typeof ${binding}>]>`;
+      const [label] = await declaredLabelsOfOut(
+        `secret: ${labeled(first)} | ${labeled(second)} | null`,
+        'secret?.a ?? ""',
+      );
+      return new Set(
+        (label?.confidentiality as { symbol?: string }[]).map((atom) =>
+          atom.symbol
+        ),
+      );
+    };
+
+    it("labels the result with both policies, `readers` written first", async () => {
+      expect(await declaredPolicies("readers", "writers")).toEqual(
+        new Set(["readers", "writers"]),
+      );
+    });
+
+    it("labels the result with both policies, `writers` written first", async () => {
+      expect(await declaredPolicies("writers", "readers")).toEqual(
+        new Set(["readers", "writers"]),
+      );
+    });
   });
 
   describe("a lift reading whole an optional value whose annotation writes a union", () => {
