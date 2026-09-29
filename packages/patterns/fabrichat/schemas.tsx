@@ -1,0 +1,417 @@
+/**
+ * The FabriChat contracts and records: what a room and a chat manager offer,
+ * and the records they hold. `docs/specs/fabrichat/` states each of them; the
+ * names here are the spec's, so a client written against the spec reads these
+ * types unchanged.
+ *
+ * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
+ * compared through `nsecOf()`.
+ */
+import {
+  type Cell,
+  FabricEpochNsec,
+  NAME,
+  type Stream,
+  UI,
+  VIEWS,
+  type VNode,
+} from "commonfabric";
+
+// ---------------------------------------------------------------------------
+// Reviewed surfaces
+// ---------------------------------------------------------------------------
+
+/**
+ * The reviewed surface every message write is made from: sending, editing,
+ * deleting, and obliterating. The runtime admits one writer, one action, and
+ * one surface for a stored record, so the four message acts share them.
+ */
+export const CHAT_MESSAGE_SURFACE = "ChatMessageSurface";
+
+/** The reviewed action a message write is, on `CHAT_MESSAGE_SURFACE`. */
+export const CHAT_MESSAGE_ACTION = "ChatMessageWrite";
+
+/** The reviewed surface a reaction is added or removed from. */
+export const CHAT_REACT_SURFACE = "ChatReactSurface";
+
+/** The reviewed action a reaction is, on `CHAT_REACT_SURFACE`. */
+export const CHAT_REACT_ACTION = "ChatReact";
+
+/** The reviewed surface members are added and removed from. */
+export const CHAT_MEMBERS_SURFACE = "ChatMembersSurface";
+
+/** The reviewed surface a conversation is started from. */
+export const CHAT_START_SURFACE = "ChatStartSurface";
+
+// ---------------------------------------------------------------------------
+// Times
+// ---------------------------------------------------------------------------
+
+/** Nanoseconds in one millisecond, the handler clock's unit. */
+export const NSEC_PER_MSEC = 1_000_000n;
+
+/**
+ * Nanoseconds in one tick of the handler clock. A handler's clock reads to the
+ * second, so a reading `t` stands for every time from `t` up to, but not
+ * including, `t + CLOCK_TICK_NSEC`.
+ */
+export const CLOCK_TICK_NSEC = 1_000_000_000n;
+
+/** The nanoseconds a recorded time holds. */
+export const nsecOf = (time: FabricEpochNsec): bigint => time.value;
+
+/** A recorded time holding `nsec`. */
+export const epochNsec = (nsec: bigint): FabricEpochNsec =>
+  new FabricEpochNsec(nsec);
+
+/** A handler clock reading, in milliseconds, as a recorded time. */
+export const epochNsecFromMsec = (msec: number): FabricEpochNsec =>
+  epochNsec(BigInt(Math.floor(msec)) * NSEC_PER_MSEC);
+
+// ---------------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------------
+
+/**
+ * The part of a person's profile the room reads. It is a view of the person's
+ * shared profile, reached through a link, and never a copy.
+ */
+export interface ChatProfile {
+  /** The person's display name, if they have set one. */
+  name?: string;
+
+  /** The person's avatar: a URL or a glyph, if they have set one. */
+  avatar?: string;
+}
+
+/** A live link to a person's profile. */
+export type ProfileCell = Cell<ChatProfile>;
+
+// ---------------------------------------------------------------------------
+// Room records
+// ---------------------------------------------------------------------------
+
+/** One version of a message: its body, and when the room recorded it. */
+export interface ChatMessageVersion {
+  /** The version's text. */
+  body: string;
+
+  /**
+   * When the room recorded this version; in a send or an edit, the time the
+   * sender proposes.
+   */
+  sentAt: FabricEpochNsec;
+}
+
+/** The body of a deleted or obliterated message. */
+export interface ChatDeletedBody {
+  /** Always `true`: the marker of a deleted message. */
+  deleted: true;
+}
+
+/** Where a reply is shown. */
+export type ChatReplyShownIn = "main" | "thread" | "both";
+
+/** What a reply replies to, and where it is shown. */
+export interface ChatReply {
+  /** The message replied to, in the same room. */
+  message: Cell<ChatMessage>;
+
+  /** Where the reply is shown. */
+  shownIn: ChatReplyShownIn;
+}
+
+/** One person's reaction to one message, with one emoji. */
+export interface ChatReaction {
+  /** The profile the reactor reacted under. */
+  reactorProfile: ProfileCell;
+
+  /** A single emoji. */
+  emoji: string;
+
+  /** When the room recorded the reaction. Unique in the room. */
+  sentAt: FabricEpochNsec;
+}
+
+/** One message in a room, with its reactions and its edit history. */
+export interface ChatMessage {
+  /** The profile the sender sent under; absent once obliterated. */
+  authorProfile?: ProfileCell;
+
+  /** The current text, or the marker of a deleted message. */
+  body: string | ChatDeletedBody;
+
+  /** When the room recorded the message's first version. Unique in the room. */
+  sentAt: FabricEpochNsec;
+
+  /**
+   * When the room recorded the current version, if it isn't the first: the
+   * latest edit or deletion. Unique in the room.
+   */
+  editedAt?: FabricEpochNsec;
+
+  /** The versions before the current one, oldest first. */
+  earlierVersions: ChatMessageVersion[];
+
+  /** What this message replies to, and where it is shown; absent for none. */
+  replyTo?: ChatReply;
+
+  /** Everyone's reactions to this message, in no particular order. */
+  reactions: ChatReaction[];
+}
+
+/** A room's policy, stated correctly, with every key present. */
+export interface ChatRoomPolicy {
+  /** Whether an OWNER may obliterate messages. */
+  ownersMayObliterate: boolean;
+
+  /** Whether an edit or a plain deletion keeps the version it replaces. */
+  keepsHistory: boolean;
+
+  /** Whether a sender's deletion of their own message obliterates it. */
+  deletionIsObliteration: boolean;
+
+  /** How far before the room's clock a proposed time is accepted, in ns. */
+  proposedTimeMaxAgeNsec: bigint;
+
+  /** How far after the room's clock a proposed time is accepted, in ns. */
+  proposedTimeMaxLeadNsec: bigint;
+
+  /** How long an entry stays in `recentActivity`, in ns. */
+  recentActivityWindowNsec: bigint;
+
+  /** The most messages a message window holds. */
+  maxWindowCount: number;
+
+  /** The most message windows a session can have open. */
+  maxOpenWindows: number;
+}
+
+/** The kind of room: how it was created, not how many members it has. */
+export type ChatRoomKind = "direct" | "group";
+
+/** What a room says about itself, set once when it is created. */
+export interface ChatRoomAbout {
+  /** `"direct"` if created as a direct room; `"group"` otherwise. */
+  kind: ChatRoomKind;
+
+  /** A group room's title. A direct room, and a space's own chat, have none. */
+  title?: string;
+
+  /** When the room was created; absent for a space's own chat. */
+  createdAt?: FabricEpochNsec;
+
+  /** The room's policy, stated correctly, in a document of its own. */
+  policy: ChatRoomPolicy;
+}
+
+/** One entry in a room's log of recent activity. */
+export interface ChatRoomActivity {
+  /** The entry's place in the room's activity: 1, 2, 3, … with no gaps. */
+  seq: number;
+
+  /** When the room recorded it. Unique in the room. */
+  at: FabricEpochNsec;
+
+  /** The `requestId` of the event it records. */
+  requestId: string;
+
+  /**
+   * The thing the event changed or added: a message, or the room's
+   * membership, as the room offers it (its `roster`).
+   */
+  what: Cell<unknown>;
+}
+
+/** Where a window of messages sits in its view. */
+export type ChatWindowAnchor =
+  | { before: FabricEpochNsec | "end" }
+  | { after: FabricEpochNsec | "start" }
+  | { around: FabricEpochNsec };
+
+/**
+ * A request that opens, moves, or closes a window. Opening names where the
+ * window sits and how many messages it holds; closing names only the window.
+ */
+export interface WindowEvent {
+  /** Chosen by the client; shown in the window once an open is fulfilled. */
+  requestId: string;
+
+  /** The window to set or close, chosen by the client. */
+  windowId: string;
+
+  /** The root of the thread to show; absent for the main conversation. */
+  root?: Cell<ChatMessage>;
+
+  /** Where the window sits; required to open one. */
+  from?: ChatWindowAnchor;
+
+  /** The most messages to show, capped by the room's `maxWindowCount`. */
+  count?: number;
+}
+
+/** A notice from `add`, waiting for a client to deliver it. */
+export interface ChatRoomNotice {
+  /** The notice's id, unique in the room. */
+  id: string;
+
+  /** The DID of the person admitted. */
+  recipient: string;
+}
+
+/** The request that reports a notice delivered. */
+export interface DeliveredEvent {
+  /** Chosen by the sender, and unique among its requests. */
+  requestId: string;
+
+  /** The id of the notice delivered. */
+  id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Manager records
+// ---------------------------------------------------------------------------
+
+/**
+ * A room as a manager or a placement links it: only the part of
+ * `ChatRoomOutput` a consumer reads through the link.
+ */
+export interface ChatRoomLink {
+  /** What the room says about itself. */
+  about?: ChatRoomAbout;
+
+  /** The room's data face. */
+  [VIEWS]?: { room: object };
+}
+
+/** One room in a user's chat manager. */
+export interface ChatIndexEntry {
+  /** The room. */
+  room: Cell<ChatRoomLink>;
+
+  /** The room's kind, as its `about.kind` says. */
+  kind: ChatRoomKind;
+
+  /** A direct room's other member, by principal. */
+  counterpart?: string;
+
+  /** When this user created or accepted it. */
+  since: FabricEpochNsec;
+}
+
+/** The outcome of a manager request. */
+export type ChatRequestOutcome =
+  | {
+    /** The request has not finished. */
+    status: "pending";
+  }
+  | {
+    /** The request finished. */
+    status: "done";
+
+    /** The entry it produced; absent for `forget`. */
+    entry?: ChatIndexEntry;
+  }
+  | {
+    /** The request was refused. */
+    status: "refused";
+
+    /** Why. */
+    reason: string;
+  };
+
+/** A notice a manager's request produced, for a client to deliver. */
+export interface ChatManagerNotice {
+  /** The notice's id, unique in the manager. */
+  id: string;
+
+  /** The room the recipient was admitted to. */
+  room: Cell<ChatRoomLink>;
+
+  /** The DID of the person admitted. */
+  recipient: string;
+}
+
+/** The request that finds or creates the direct room with a person. */
+export interface OpenDirectEvent {
+  /** Chosen by the sender; the outcome is recorded under it. */
+  requestId: string;
+
+  /** The DID of the other person. */
+  counterpart: string;
+}
+
+/** The request that creates a group room. */
+export interface CreateGroupEvent {
+  /** Chosen by the sender; the outcome is recorded under it. */
+  requestId: string;
+
+  /** The DIDs of the people to admit besides this user. */
+  members: string[];
+
+  /** The room's title. */
+  title: string;
+}
+
+/** The request that records a room this user has been admitted to. */
+export interface AcceptEvent {
+  /** Chosen by the sender; the outcome is recorded under it. */
+  requestId: string;
+
+  /** The room, from the notice that announced it. */
+  room: Cell<ChatRoomLink>;
+
+  /** For a direct room, the DID of its creator, as `about`'s label names. */
+  counterpart?: string;
+}
+
+/** The request that removes a room from this user's list. */
+export interface ForgetEvent {
+  /** Chosen by the sender; the outcome is recorded under it. */
+  requestId: string;
+
+  /** The room to forget. */
+  room: Cell<ChatRoomLink>;
+}
+
+/** A chat manager's data face, for hosts that draw it natively. */
+export interface ChatManagerView {
+  /** Every room this user belongs to and hasn't forgotten, newest first. */
+  rooms: ChatIndexEntry[];
+
+  /** The direct room this user shares with each counterpart, by principal. */
+  direct: Record<string, ChatIndexEntry>;
+
+  /** The outcome of each request, by the `requestId` its caller chose. */
+  requests: Record<string, ChatRequestOutcome>;
+
+  /** Notices this user's requests have produced that no one has delivered. */
+  outgoingNotices: ChatManagerNotice[];
+
+  /** Finds or creates the direct room with a person. */
+  openDirect: Stream<OpenDirectEvent>;
+
+  /** Creates a group room. */
+  createGroup: Stream<CreateGroupEvent>;
+
+  /** Records a room this user has been admitted to. */
+  accept: Stream<AcceptEvent>;
+
+  /** Removes a room from this user's list. */
+  forget: Stream<ForgetEvent>;
+
+  /** Reports a notice delivered. */
+  delivered: Stream<DeliveredEvent>;
+}
+
+/** What `wish({ query: "#chatManager" })` resolves to. */
+export interface ChatManagerOutput extends ChatManagerView {
+  /** The manager's name, for lists of pieces. */
+  [NAME]: string;
+
+  /** The manager's rendering. */
+  [UI]: VNode;
+
+  /** The manager's data face, as one group. */
+  [VIEWS]: { chats: ChatManagerView };
+}
