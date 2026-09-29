@@ -18,7 +18,10 @@ Messages retain exact epoch nanoseconds, live profile links, previous versions,
 and explicit reply placement. Reactions are separate authored records. Reviewed
 controls admit sends, edits, deletions, reactions, permanent removal, and
 membership administration. Profile contribution and leaving use the
-authenticated actor without requiring a reviewed control.
+authenticated actor without requiring a reviewed control. The group's Leave
+control queues private-index cleanup in the departure transaction; a failed
+departure keeps the index entry. Forget reads opaque references, so it remains
+available after room access has been revoked.
 
 The room offers the latest 100 main-conversation messages and up to 50 fixed
 session windows. A window retains original message links, so edits and removal

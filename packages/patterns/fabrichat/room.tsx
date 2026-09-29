@@ -23,6 +23,7 @@ import {
   type PerSpace,
   setSpaceMembers,
   spaceMembers,
+  type Stream,
   type TrustedActionWrite,
   UI,
   VIEWS,
@@ -43,6 +44,8 @@ import {
   threadRoot,
 } from "./records.ts";
 import type {
+  ChatIndexEntry,
+  ChatManagerOutput,
   ChatMessage,
   ChatMessageWindow,
   ChatProfile,
@@ -823,39 +826,60 @@ function membershipActivity(
   recordActivity(state, requestId, state.roster.resolveAsCell(), at, now);
 }
 
-/** Lets a member leave, promoting the longest-standing member when necessary. */
-export const commitLeave = handler<{ requestId: string }, RoomWriterState>(
-  (event, state) => {
-    const key = requestKey(event.requestId, state);
-    const actor = currentPrincipal();
-    const acl = spaceMembers();
-    if (!key || !actor || !hasMembership(state) || !acl?.[actor]) return;
-    const remaining = Object.keys(acl).filter((principal) =>
-      principal !== actor && principal !== "*"
-    );
-    const after = { ...acl };
-    if (remaining.length === 0) {
-      state.memory.key("abandoned").set(true);
-    } else {
-      delete after[actor];
-      if (!remaining.some((principal) => after[principal] === "OWNER")) {
-        const order = (principal: string) =>
-          state.memory.key("admissions").key(principal).get() ??
-            (state.initialMembers.includes(principal)
-              ? 0
-              : Number.MAX_SAFE_INTEGER);
-        remaining.sort((a, b) =>
-          order(a) - order(b) || (a < b ? -1 : a > b ? 1 : 0)
-        );
-        after[remaining[0]] = "OWNER";
-      }
-      setSpaceMembers(after);
+/** Leaves membership and records the departure in one transaction. */
+function writeLeave(
+  event: { requestId: string },
+  state: RoomWriterState,
+): boolean {
+  const key = requestKey(event.requestId, state);
+  const actor = currentPrincipal();
+  const acl = spaceMembers();
+  if (!key || !actor || !hasMembership(state) || !acl?.[actor]) return false;
+  const remaining = Object.keys(acl).filter((principal) =>
+    principal !== actor && principal !== "*"
+  );
+  const after = { ...acl };
+  if (remaining.length === 0) {
+    state.memory.key("abandoned").set(true);
+  } else {
+    delete after[actor];
+    if (!remaining.some((principal) => after[principal] === "OWNER")) {
+      const order = (principal: string) =>
+        state.memory.key("admissions").key(principal).get() ??
+          (state.initialMembers.includes(principal)
+            ? 0
+            : Number.MAX_SAFE_INTEGER);
+      remaining.sort((a, b) =>
+        order(a) - order(b) || (a < b ? -1 : a > b ? 1 : 0)
+      );
+      after[remaining[0]] = "OWNER";
     }
-    state.memory.key("left").key(actor).set(true);
-    removeProfile(actor, state);
-    membershipActivity(event.requestId, key, state);
-  },
-);
+    setSpaceMembers(after);
+  }
+  state.memory.key("left").key(actor).set(true);
+  removeProfile(actor, state);
+  membershipActivity(event.requestId, key, state);
+  return true;
+}
+
+/** Lets a member leave and optionally cleans up their client's private index. */
+export const commitLeave = handler<
+  { requestId: string },
+  RoomWriterState & {
+    uiForget?: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
+    uiRooms?: Cell<ChatIndexEntry[]>;
+    uiLeave?: Stream<{ requestId: string }>;
+  }
+>((event, state) => {
+  // Find the indexed reference while membership permits reading stream aliases.
+  const room = state.uiRooms?.get()?.find((entry) =>
+    equals(entry.room.key("leave"), state.uiLeave)
+  )?.room;
+  if (writeLeave(event, state) && room) {
+    // Cross-space event lineage holds this send until the departure commits.
+    state.uiForget?.send({ requestId: event.requestId, room });
+  }
+});
 
 /** Admits one member without downgrading an existing owner's grant. */
 function writeAdd(
@@ -1575,6 +1599,9 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
         return { message: records!.key(index).resolveAsCell(), reactions };
       });
     });
+    const manager = wish<Pick<ChatManagerOutput, "rooms" | "forget">>({
+      query: "#chatManager",
+    });
     const facts = {
       about,
       recentActivity,
@@ -1621,6 +1648,12 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
           : undefined
       ),
     };
+    const leaveAndForget = commitLeave({
+      ...state,
+      uiForget: manager.result?.forget,
+      uiRooms: manager.result?.rooms,
+      uiLeave: facts.leave,
+    });
     return {
       [NAME]: "FabriChat",
       [UI]: (
@@ -1649,8 +1682,9 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                 ? (
                   <cf-button
                     variant="ghost"
+                    disabled={manager.result === undefined}
                     onClick={action(() =>
-                      facts.leave?.send({ requestId: uiRequestId() })
+                      leaveAndForget.send({ requestId: uiRequestId() })
                     )}
                   >
                     Leave conversation

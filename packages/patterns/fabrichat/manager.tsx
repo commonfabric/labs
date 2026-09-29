@@ -2,17 +2,19 @@
 import {
   action,
   type AuthoredByCurrentUser,
-  type Cell,
+  Cell,
   computed,
   currentPrincipal,
   equals,
   FabricEpochNsec,
   handler,
   NAME,
+  type OpaqueCell,
   pattern,
   setSpaceMembers,
   spaceMembers,
   type Stream,
+  toSchema,
   type TrustedActionWrite,
   UI,
   VIEWS,
@@ -351,17 +353,36 @@ export const accept = handler<
   state.requests.key(event.requestId).set({ status: "done", entry });
 });
 
-/** Hides a room while retaining the direct-room mapping for reopening. */
+/** The index fields needed to hide an entry without reading any room data. */
+interface ForgetState {
+  rooms: Writable<
+    (Omit<ChatIndexEntry, "room"> & { room: OpaqueCell<unknown> })[]
+  >;
+  requests: Writable<
+    Record<string, { status: "pending" | "done" | "refused" }>
+  >;
+}
+
+/** Hides a room by link identity even after its contents become inaccessible. */
 export const forget = handler<
   { requestId: string; room: Cell<ChatRoomOutput> },
-  ManagerState
->((event, state) => {
-  if (!canRequest(event.requestId, state)) return;
-  state.rooms.set(
-    state.rooms.get().filter((entry) => !equals(entry.room, event.room)),
-  );
-  state.requests.key(event.requestId).set({ status: "done" });
-});
+  ForgetState
+>(
+  toSchema<{ requestId: string; room: OpaqueCell<unknown> }>(),
+  toSchema<ForgetState>(),
+  (event, state) => {
+    if (!event.requestId.trim()) return;
+    const prior = state.requests.key(event.requestId).get();
+    if (prior && prior.status !== "pending") return;
+    state.rooms.set(
+      state.rooms.get().filter((entry) =>
+        !Cell.equalLinks(entry.room, event.room) &&
+        !equals(entry.room, event.room)
+      ),
+    );
+    state.requests.key(event.requestId).set({ status: "done" });
+  },
+);
 
 /** Retires a notice after its client confirms delivery. */
 export const delivered = handler<

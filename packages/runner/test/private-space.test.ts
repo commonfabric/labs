@@ -1,3 +1,6 @@
+import { stuckNet } from "@commonfabric/test-support/stuck-net";
+import { type Cell, isCell } from "../src/cell.ts";
+import { UI } from "../src/builder/types.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { join } from "@std/path";
@@ -37,6 +40,29 @@ class PrivateStorageManager extends StorageManager {
     };
     super({ as: creator, memoryHost: new URL("memory://") }, factory);
   }
+}
+
+/** Finds the actual rendered departure stream without changing its bindings. */
+function findLeaveControl(value: unknown): Cell<unknown> | undefined {
+  if (isCell(value)) return findLeaveControl(value.get());
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = findLeaveControl(child);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const node = value as { name?: string; children?: unknown; props?: unknown };
+  const children = isCell(node.children) ? node.children.get() : node.children;
+  if (
+    node.name === "cf-button" && Array.isArray(children) &&
+    children.includes("Leave conversation")
+  ) {
+    const props = isCell(node.props) ? node.props.get() : node.props;
+    return (props as { onClick: Cell<unknown> }).onClick;
+  }
+  return findLeaveControl(children);
 }
 
 const creator = await Identity.fromPassphrase("private-space-creator");
@@ -191,6 +217,14 @@ describe("private-space", () => {
         tx,
       );
       runtime.run(tx, pattern, {}, result);
+      const home = runtime.getCell(
+        creator.did(),
+        "chat-test-home",
+        undefined,
+        tx,
+      );
+      home.set({ chatManager: result });
+      runtime.getHomeSpaceCell(tx).key("defaultPattern").set(home);
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit()).error).toBeUndefined();
       await result.pull();
@@ -420,9 +454,51 @@ describe("private-space", () => {
         principal: member,
         access: "WRITE",
       }, 3);
-      await room.key("leave").send({ requestId: "leave-creator" });
-      await runtime.idle();
-      await manager.synced();
+      const ui = room.key(UI);
+      await ui.pull();
+      const leaveControl = findLeaveControl(ui);
+      expect(leaveControl).toBeDefined();
+      const replica = manager.open(roomSpace).replica as unknown as {
+        commitNative: (...args: unknown[]) => unknown;
+      };
+      const originalCommit = replica.commitNative;
+      let rejected = false;
+      replica.commitNative = function (...args: unknown[]) {
+        if ((args[0] as { aclChange?: unknown }).aclChange) {
+          rejected = true;
+          return Promise.resolve({
+            error: new Error("Injected leave refusal"),
+          });
+        }
+        return Reflect.apply(originalCommit, this, args);
+      };
+      try {
+        await leaveControl!.send(undefined);
+        await runtime.idle();
+      } finally {
+        replica.commitNative = originalCommit;
+      }
+      expect(rejected).toBe(true);
+      await result.key("rooms").pull();
+      expect(result.key("rooms").get()).toHaveLength(2);
+      expect((await new ACLManager(runtime, roomSpace).get())?.[creator.did()])
+        .toBe("OWNER");
+      const forgotten = Promise.withResolvers<void>();
+      const stuck = stuckNet(
+        "leaving a FabriChat room removes its private index entry",
+      );
+      const stopWatching = result.key("rooms").sink((value) => {
+        if (Array.isArray(value) && value.length === 1) forgotten.resolve();
+      });
+      try {
+        await leaveControl!.send(undefined);
+        await Promise.race([forgotten.promise, stuck.rejects]);
+        await manager.synced();
+        expect(result.key("rooms").get()).toHaveLength(1);
+      } finally {
+        stuck.clear();
+        stopWatching();
+      }
       const remaining = await MemoryClient.connect({
         transport: MemoryClient.loopback(server),
       });
