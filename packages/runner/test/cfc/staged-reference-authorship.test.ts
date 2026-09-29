@@ -97,65 +97,119 @@ describe("staged-reference-authorship", () => {
   });
 
   for (const kind of ["authored-by", "represents-principal"] as const) {
-    for (const rootPath of [[], ["value"]]) {
-      it(`keeps ${kind} on a projected prefixed metadata path with ${rootPath.length ? "a prefixed" : "an unprefixed"} root`, async () => {
-        const seed = runtime.edit();
-        writeSeedEnvelopeDoc(seed, space);
-        const source = runtime.getCell(space, "legacy-source", undefined, seed);
-        seedStoredEnvelope(seed, source.getAsNormalizedFullLink(), {
-          value: { field: text },
-          cfc: {
+    it(`keeps ${kind} on a stored field claim beneath a root claim`, async () => {
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      const source = runtime.getCell(space, "seeded-source", undefined, seed);
+      seedStoredEnvelope(seed, source.getAsNormalizedFullLink(), {
+        value: { field: text },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
             version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [
-                {
-                  path: rootPath,
-                  label: { integrity: [{ kind, subject: alice.did() }] },
-                },
-                {
-                  path: ["value", "field"],
-                  label: { integrity: [{ kind, subject: bob.did() }] },
-                },
-              ],
+            entries: [
+              {
+                path: [],
+                label: { integrity: [{ kind, subject: alice.did() }] },
+              },
+              {
+                path: ["field"],
+                label: { integrity: [{ kind, subject: bob.did() }] },
+              },
+            ],
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+      for (const principal of [alice.did(), bob.did()]) {
+        const tx = runtime.edit();
+        const sink = runtime.getCell(space, `seeded-sink-${principal}`, {
+          type: "object",
+          properties: {
+            copied: {
+              type: "string",
+              ifc: { requiredIntegrity: [{ kind, subject: principal }] },
             },
           },
-        });
-        expect((await seed.commit()).error).toBeUndefined();
-        expect(
-          readStoredCfcMetadata(
-            runtime.readTx(),
-            source.getAsNormalizedFullLink(),
-          )?.labelMap.entries.map(({ path }) => path),
-        ).toContainEqual(["value", "field"]);
-        for (const principal of [alice.did(), bob.did()]) {
-          const tx = runtime.edit();
-          const sink = runtime.getCell(space, `legacy-sink-${principal}`, {
-            type: "object",
-            properties: {
-              copied: {
-                type: "string",
-                ifc: { requiredIntegrity: [{ kind, subject: principal }] },
-              },
-            },
-          }, tx);
-          sink.set({ copied: source.withTx(tx).key("field") });
-          recordReferencedArgumentFields(tx, sink.getAsNormalizedFullLink(), [
-            "copied",
-          ]);
-          const result = await tx.commit();
-          if (principal === alice.did()) {
-            expect(result.error?.message).toContain("write floor failed");
-          } else {
-            expect(result.error).toBeUndefined();
-            expect(sink.withTx(runtime.readTx()).key("copied").get()).toBe(
-              text,
-            );
-          }
+        }, tx);
+        sink.set({ copied: source.withTx(tx).key("field") });
+        recordReferencedArgumentFields(tx, sink.getAsNormalizedFullLink(), [
+          "copied",
+        ]);
+        const result = await tx.commit();
+        if (principal === alice.did()) {
+          expect(result.error?.message).toContain("write floor failed");
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(sink.withTx(runtime.readTx()).key("copied").get()).toBe(
+            text,
+          );
         }
-      });
-    }
+      }
+    });
+
+    it(`keeps ${kind} on a stored reference in a field named \`value\``, async () => {
+      // A payload field named `value` is an ordinary field, not the document
+      // root, so the reference it holds keeps its author's claim rather than
+      // taking the wrapper's.
+
+      const seed = runtime.edit();
+      actAs(seed, bob.did());
+      const leaf = runtime.getCell(
+        space,
+        "value-leaf",
+        claimSchema(kind),
+        seed,
+      );
+      leaf.set({ content: text });
+      recordTrustedWrite(seed, leaf.getAsNormalizedFullLink());
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const stored = runtime.edit();
+      actAs(stored, alice.did());
+      const wrapper = runtime.getCell(
+        space,
+        "value-wrapper",
+        claimSchema(kind),
+        stored,
+      );
+      wrapper.set({ value: leaf.withTx(stored), own: "Alice's value" });
+      recordReferencedArgumentFields(
+        stored,
+        wrapper.getAsNormalizedFullLink(),
+        ["value"],
+      );
+      recordTrustedWrite(stored, wrapper.getAsNormalizedFullLink());
+      expect((await stored.commit()).error).toBeUndefined();
+
+      for (const principal of [alice.did(), bob.did()]) {
+        const copy = runtime.edit();
+        actAs(copy, alice.did());
+        const sink = runtime.getCell(space, `value-sink-${principal}`, {
+          type: "object",
+          properties: {
+            copied: {
+              type: "object",
+              ifc: { requiredIntegrity: [{ kind, subject: principal }] },
+            },
+          },
+        }, copy);
+        sink.set({ copied: wrapper.withTx(copy).key("value") as never });
+        recordReferencedArgumentFields(copy, sink.getAsNormalizedFullLink(), [
+          "copied",
+        ]);
+        const result = await copy.commit();
+        if (principal === alice.did()) {
+          expect(result.error?.message).toContain("write floor failed");
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(
+            sink.withTx(runtime.readTx()).key("copied").key("content").get(),
+          ).toBe(text);
+        }
+      }
+    });
 
     for (const confidentialSlot of [false, true]) {
       for (const order of ["bottom-up", "top-down", "stored"] as const) {
