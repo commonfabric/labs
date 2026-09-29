@@ -930,14 +930,14 @@ The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any
 mount.
 
-Every run that the batch CLI, the interactive stdio entrypoint, or the Loom
-local host starts on the direct driver runs its commands as root, on every host.
-None of them configures a container user: only a caller that builds the runtime
-itself can name one, numerically. The Docker driver's default on Linux is the
-host user. Those runs also use the direct driver's default scratch directory,
-which is made for the run with no access for group or others, under a parent the
-driver verifies is this user's alone. Only a caller that builds the runtime
-itself can name another scratch directory, and that one is not verified.
+Every run that the batch CLI, the interactive stdio entrypoint, the Loom local
+host, or the console starts on the direct driver runs its commands as root, on
+every host. None of them configures a container user: only a caller that builds
+the runtime itself can name one, numerically. The Docker driver's default on
+Linux is the host user. Those runs also use the direct driver's default scratch
+directory, which is made for the run with no access for group or others, under a
+parent the driver verifies is this user's alone. Only a caller that builds the
+runtime itself can name another scratch directory, and that one is not verified.
 
 [Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
 reference is the full contract: the defaults of each setting, the runtime
