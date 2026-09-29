@@ -120,18 +120,16 @@ class SharedV2StorageManager extends V2Storage.StorageManager {
 }
 
 describe("CFC canonicalization helpers", () => {
-  it("strips the value wrapper and sorts metadata entries canonically", () => {
+  it("sorts metadata entries canonically and keeps a leading `value` segment", () => {
     const metadata = canonicalizeCfcMetadata({
       version: 1,
       schemaHash: "abc",
       labelMap: {
         version: 1,
         entries: [
-          { path: ["value", "b"], label: { confidentiality: ["secret"] } },
-          {
-            path: ["value", "a"],
-            label: { confidentiality: ["confidential"] },
-          },
+          { path: ["value", "a"], label: { confidentiality: ["secret"] } },
+          { path: ["b"], label: { confidentiality: ["secret"] } },
+          { path: ["a"], label: { confidentiality: ["confidential"] } },
         ],
       },
     });
@@ -139,8 +137,9 @@ describe("CFC canonicalization helpers", () => {
     expect(metadata.labelMap.entries.map((entry) => entry.path)).toEqual([
       ["a"],
       ["b"],
+      ["value", "a"],
     ]);
-    expect(logicalPathToPointer(["value", "a"])).toBe("/a");
+    expect(logicalPathToPointer(["value", "a"])).toBe("/value/a");
   });
 
   it("canonicalizes write-policy input deterministically", () => {
@@ -150,7 +149,7 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:target",
-        path: ["value", "items"],
+        path: ["items"],
       },
       claim: "projection",
       sources: [
@@ -158,13 +157,13 @@ describe("CFC canonicalization helpers", () => {
           space: signer.did(),
           scope: "space",
           id: "of:b",
-          path: ["value", "items", "1"],
+          path: ["items", "1"],
         },
         {
           space: signer.did(),
           scope: "space",
           id: "of:a",
-          path: ["value", "items", "0"],
+          path: ["items", "0"],
         },
       ],
     });
@@ -184,12 +183,12 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:doc",
-        path: ["value", "z"],
+        path: ["z"],
       }, {
         space: signer.did(),
         scope: "space",
         id: "of:doc",
-        path: ["value", "a"],
+        path: ["a"],
       }],
       attemptedWrites: [],
       writes: [],
@@ -225,8 +224,8 @@ describe("CFC canonicalization helpers", () => {
       ["a"],
       ["z"],
     ]);
-    // Sorted by journalIndex (temporal order), paths verbatim (raw, no
-    // leading-"value" strip) — the §6 order binding, not an address sort.
+    // Sorted by journalIndex (temporal order), with paths kept as recorded, in
+    // document form — the §6 order binding, not an address sort.
     expect(
       input.writeAttemptLog.map((attempt) => ({
         path: attempt.path,
@@ -306,13 +305,13 @@ describe("CFC canonicalization helpers", () => {
         space: signer.did(),
         scope: "space",
         id: "of:target",
-        path: ["value", "bookmark"],
+        path: ["bookmark"],
       },
       source: {
         space: signer.did(),
         scope: "space",
         id: "of:source",
-        path: ["value", "title"],
+        path: ["title"],
       },
     });
 
@@ -1383,9 +1382,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-repeat-dereference",
           scope: "space" as const,
-          // Recorded raw; the repeat below arrives already canonicalized, and
-          // the two are the same dereference.
-          path: ["value", "slot"],
+          path: ["slot"],
         },
         target: {
           space: signer.did(),
@@ -1412,10 +1409,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
   });
 
   it("invalidates prepared state on a dereference under a payload field named `value`", async () => {
-    // `["value","value","slot"]` is the payload path `value.slot`, a
-    // different dereference from `["value","slot"]`'s payload `slot`. Reading
-    // the second must still invalidate, or the guard would mistake it for a
-    // repeat of the first and hold a decision the digest no longer covers.
+    // A dereference trace names its source by logical path, so
+    // `["value","slot"]` is the payload path `value.slot`, a different
+    // dereference from `["slot"]`. Reading the second must still invalidate, or
+    // the guard would mistake it for a repeat of the first and hold a decision
+    // the digest no longer covers.
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
@@ -1439,7 +1437,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-payload-value-field",
           scope: "space",
-          path: ["value", "slot"],
+          path: ["slot"],
         },
         target,
         kind: "value",
@@ -1452,7 +1450,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
           space: signer.did(),
           id: "of:cfc-payload-value-field",
           scope: "space",
-          path: ["value", "value", "slot"],
+          path: ["value", "slot"],
         },
         target,
         kind: "value",

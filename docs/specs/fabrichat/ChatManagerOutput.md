@@ -41,7 +41,9 @@ interface ChatManagerOutput {
     counterpart?: string;
   }>;
   forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
-  delivered: Stream<{ id: string }>;
+  delivered: Stream<{ requestId: string; id: string }>;
+
+  [VIEWS]: { chats: object };
 }
 ```
 
@@ -71,6 +73,21 @@ A grant gives access but tells the recipient nothing. So the manager also
 produces a **notice** for each other member, saying which room they have been
 admitted to and by whom (see [delivering notices](#delivering-notices)).
 
+## Views
+
+The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
+hosts that draw natively: `rooms`, `direct`, `requests`, and `outgoingNotices`,
+and every stream below. A native client drives the manager through that group as
+it drives a room through the room's `room` group (see
+[`clients.md`](clients.md#showing-a-room)).
+
+## Scopes
+
+Everything a manager holds is `PerSpace` in the user's home space (see
+[scopes](../scoped-cell-instances.md#summary)). A home space admits only its
+user, so `PerSpace` there means one instance for that user, which is why nothing
+in it needs to be `PerUser` or `PerSession`.
+
 ## Facts
 
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this
@@ -95,13 +112,13 @@ admitted to and by whom (see [delivering notices](#delivering-notices)).
 
 Each stream is a one-way, asynchronous request to the manager. Sending an event
 finishes when the event is accepted, not when it takes effect, and returns no
-value. So every event carries a `requestId` its sender chooses (except
-`delivered`), and the manager records the outcome under that id in `requests`:
-`pending`, then `done` or `refused`. A sender watches for it there.
+value. So every event carries a `requestId` its sender chooses, and the manager
+records the outcome under that id in `requests`: `pending`, then `done` or
+`refused`. A sender watches for it there.
 
 Each stream below is written as a call, with its event's keys as the parameters:
-`openDirect(requestId: string, counterpart: string)` sends `{ requestId,
-counterpart }`.
+`openDirect(requestId: string, counterpart: string)` sends
+`{ requestId, counterpart }`.
 
 These rules hold for every stream:
 
@@ -119,7 +136,7 @@ These rules hold for every stream:
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
-| [`delivered`](#deliveredid-string) | none | the notice removed from `outgoingNotices` |
+| [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
 ### `openDirect(requestId: string, counterpart: string)`
 
@@ -174,9 +191,10 @@ Creates a group room. This is an outward act: it grants other people access.
 - `room: Cell<ChatRoomOutput>` — A link to the room this user has been admitted
   to, from the notice that announced it.
 - `counterpart?: string` — For a direct room, the DID of its other member.
-  Required for a direct room, and ignored for a group room. It must be the
-  room's creator, as the room's `about` is labeled (see
-  [`ChatAbout`](ChatAbout.md#who-created-the-room)); a notice's claim of who
+  Required for a direct room, and ignored for a group room. The client MUST have
+  checked that it's the room's creator, as the room's `about` is labeled, before
+  sending (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room) and
+  [`clients.md`](clients.md#finding-conversations)); a notice's claim of who
   sent it is only a hint.
 
 Records a room this user has been admitted to.
@@ -184,15 +202,15 @@ Records a room this user has been admitted to.
 - **Admitted:** without a reviewed gesture, since it changes only this user's
   own index. Whether to add a room to their index is the user's decision (see
   [`clients.md`](clients.md#finding-conversations)).
-- **Effect:** for a direct room, first checks `counterpart` against the
-  principal the room's `about` is labeled `authored-by`, and, once the room's
-  space has a member set, against its members. Then records an entry in `rooms`.
-  For a direct room, it also records the entry in `direct`, unless `direct`
-  already has an entry for `counterpart`, in which case that entry stays, as
-  under [crossing creations](#crossing-creations).
+- **Effect:** records an entry in `rooms`. The manager, being a pattern, can't
+  read `about`'s label itself, so it records the client's checked `counterpart`;
+  once the room's space has a member set, it also checks that `counterpart` is a
+  member. For a direct room, it also records the entry in `direct`, unless
+  `direct` already has an entry for `counterpart`, in which case that entry
+  stays, as under [crossing creations](#crossing-creations).
 - **Outcome:** `done` with the entry, or `refused` if this user can't read the
-  room, or if the room is direct and `counterpart` is missing or isn't the
-  room's creator.
+  room, or if the room is direct and `counterpart` is missing, or, once there
+  are member sets, isn't a member.
 
 A client also sends `accept` when the user first opens a shared space's own
 chat, which is created with its space and not by a manager.
@@ -212,16 +230,18 @@ Removes a room from this user's list.
   The room, and this user's access to it, are untouched.
 - **Outcome:** `done`, with no entry.
 
-### `delivered(id: string)`
+### `delivered(requestId: string, id: string)`
 
+- `requestId: string` — Chosen by the sender, and unique among its requests.
+  Sending the same event again with it changes nothing further.
 - `id: string` — The id of a notice in `outgoingNotices`. An id that isn't there
   is ignored.
 
 Reports that a notice in `outgoingNotices` has been delivered.
 
 - **Admitted:** without a reviewed gesture.
-- **Effect:** removes the notice from `outgoingNotices`. It carries no
-  `requestId`, and has no outcome in `requests`.
+- **Effect:** removes the notice from `outgoingNotices`. It records no outcome
+  in `requests`.
 
 ## Creating a room: partial states
 
@@ -256,8 +276,8 @@ knowledge that a room exists.
 A notice is also unauthenticated: it travels by whatever channel a client has,
 so its claim of who sent it can be false. A recipient MUST NOT rely on that
 claim. Who created a room is what the room's `about` is labeled with (see
-[`ChatAbout`](ChatAbout.md#who-created-the-room)), and `accept` checks a direct
-room's `counterpart` against that label.
+[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), and a client checks a
+direct room's `counterpart` against that label before it sends `accept`.
 
 ## Crossing creations
 

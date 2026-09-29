@@ -118,6 +118,15 @@ describe("collectConsumedLabel()", () => {
   });
 
   it("distinguishes every address field and preserves escaped path segments", () => {
+    const paths = [
+      [],
+      [""],
+      ["a/b"],
+      ["a", "b"],
+      ["~1"],
+      ["/"],
+      ["value", "field"],
+    ];
     const addresses: CfcAddress[] = [
       address,
       { ...address, id: "of:other" },
@@ -125,10 +134,7 @@ describe("collectConsumedLabel()", () => {
       { ...address, scope: "user" },
       { ...address, id: "of:source\0did:key:extra" },
       { ...address, space: "did:key:extra\0did:key:source" },
-      ...[[], [""], ["a/b"], ["a", "b"], ["~1"], ["/"]].map((path) => ({
-        ...address,
-        path,
-      })),
+      ...paths.map((path) => ({ ...address, path })),
       { ...address, path: ["a\0/b"], id: "of:source\0extra" },
       { ...address, path: ["extra\0/a\0/b"] },
     ];
@@ -159,17 +165,6 @@ describe("collectConsumedLabel()", () => {
       { atom: "first", read: other, labelPath: other.path },
       { atom: "second", read: address, labelPath: address.path },
     ]);
-  });
-
-  it("deduplicates canonical path aliases while retaining the first address", () => {
-    const first = { ...address, path: ["value", "field"] };
-    const sources = collectConsumedLabel(transaction([
-      observation(first, ["private"]),
-      observation(address, ["private"]),
-    ])).sources;
-
-    expect(sources).toHaveLength(1);
-    expect(sources[0].read).toBe(first);
   });
 
   it("keeps distinct label paths for one read and joins payload and metadata sources", () => {

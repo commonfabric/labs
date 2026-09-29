@@ -30,18 +30,25 @@ a room to anyone its space doesn't admit.
 - **The people a client offers** when starting a conversation from a shared
   space are that space's member set.
 - **A notice** says the person has been admitted to a room. Its claim of who
-  sent it is unauthenticated, so a client shows who created the room from the
-  room's `about` label (see [`ChatAbout`](ChatAbout.md#who-created-the-room)),
-  never from the notice. The client follows it with `accept` to their manager,
-  passing that creator as `counterpart` for a direct room. Whether to add the
-  room to their list is the person's decision, so a client SHOULD accept only
-  after showing them who created the room, and what it is.
+  sent it is unauthenticated. Before sending `accept` for a direct room, a
+  client MUST read the principal the room's `about` is labeled `authored-by`
+  (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), as
+  `cf-cfc-authorship` reads a message's label, and pass that principal as
+  `counterpart`, never the notice's claim. The manager can't make this check
+  itself, since a pattern can't read a label's principal. A client shows who
+  created the room from the same label. Whether to add the room to their list is
+  the person's decision, so a client SHOULD accept only after showing them who
+  created the room, and what it is.
 
 ## Showing a room
 
-A client that draws natively reads a placement's `chat` group, reached through
-an adapter's `placement` output, or a room's `room` group for a room shown
-outside any container. Both are in `[VIEWS]` (see [views a host draws
+A client that draws natively reads a placement's `chat` group, which the adapter
+a container holds re-exports, or a room's `room` group for a room shown outside
+any container, and drives the manager through its `chats` group. It reads a
+room's newest messages from its `messages`
+([`ChatMessageList`](ChatMessageList.md)), and the rest a window at a time,
+through windows it opens there, and never asks for the whole conversation at
+once. Both are in `[VIEWS]` (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
 
@@ -64,10 +71,26 @@ A client that draws natively MUST:
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
-- **Use each message's entity as its id.**
+- **Follow the room through `recentActivity`** (see
+  [`ChatRoomActivity`](ChatRoomActivity.md)) rather than by comparing the
+  messages with what it had. It catches up by `seq`, from the highest one it has
+  seen, and reopens its windows when the room's `recentActivityExpiredThrough`
+  shows it has missed entries (see [catching
+  up](ChatRoomActivity.md#catching-up)).
+- **Use each message's entity as its id**, or its `sentAt`, which is unique in
+  its room.
+- **Show edits and deletions.** A client shows a deleted message as deleted,
+  never with text from its history, and marks a message with `editedAt` as
+  edited. Whether it shows `earlierVersions` is its choice.
+- **Show obliterated messages as removed**, by whoever the tombstone is labeled
+  with, and drop anything the client had kept of the message: its text, its
+  sender, its history, and its reactions.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
+- **Offer leaving wherever it shows a group room of its own**, with no more
+  steps than the room requires. Leaving has to be reliably within reach, since a
+  room someone can't leave is a way to hold them there.
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -83,8 +106,13 @@ gesture on the reviewed surface its policy names:
 | Act | Pattern | Stream | Reviewed surface |
 | --- | --- | --- | --- |
 | send a message | room | `sendMessage` | `ChatSendSurface` |
-| add or remove a reaction | room | `react` | `ChatReactSurface` |
+| edit a message | room | `editMessage` | `ChatEditSurface` |
+| delete a message | room | `deleteMessage` | `ChatDeleteSurface` |
+| obliterate a message | room | `obliterateMessage` | `ChatObliterateSurface` |
+| add a reaction | room | `sendReaction` | `ChatReactSurface` |
+| remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
+| leave a room | room | `leave` | none |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
 A client sends to the room's own streams, never through a placement or an
@@ -94,9 +122,35 @@ A room refuses a bad event silently, so a client MUST check each event against
 its stream's rules before sending it: a non-empty body, a reply whose target is
 in the same room and allowed for its `shownIn`, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
-`canSend` to tell the person when they can't send at all. A client that resumes
-an interrupted `createGroup` MUST resend it with its original `requestId`, and
-SHOULD do the same for `openDirect` (see
+`canSend` to tell the person when they can't send at all. A client mints a fresh
+`requestId` for each request, such as a random 128-bit value: it is what keeps
+two messages with the same text apart, and what lets the room ignore an event
+its runtime happens to deliver twice. It proposes a version's `sentAt` from its
+own clock when the person sends or edits.
+
+A client never sends an event again on its own. It can't re-issue a trusted
+gesture from its code (rule 2 below), so an event it sent again would be
+refused, and getting an event to the room is its runtime's job: a runtime
+re-submits an event it can't tell was appended, with its trusted mark, and runs
+an appended event until the run completes.
+
+A send can go unacknowledged: the room's `recentActivity` holds no entry with
+the send's `requestId`, labeled with the sender (see
+[`ChatRoomActivity`](ChatRoomActivity.md)). An entry that does match links, as
+its `what`, the message the send produced. While the send's proposal is within
+the room's `proposedTimeMaxAgeNsec`, its runtime may still be delivering it.
+Once the proposal is older than that, the room would refuse it, so, unless the
+client has missed entries (see [catching up](ChatRoomActivity.md#catching-up)),
+it SHOULD show the message as not sent and offer the person an explicit retry. A
+retry is the person pressing Send again: a new gesture, sent as a new request,
+with a fresh `requestId` and a fresh proposal, and showing exactly what it
+sends, as rule 3 requires. The retry is the person's decision because it can
+duplicate the message, if the first send did arrive and the client never saw it.
+The same holds for an edit. A client that has missed entries can't tell whether
+the send arrived, and says so, rather than calling it not sent.
+
+A client that resumes an interrupted `createGroup` MUST resend it with its
+original `requestId`, and SHOULD do the same for `openDirect` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#creating-a-room-partial-states)).
 
 **A client that renders the patterns' `[UI]`** meets this by construction. The

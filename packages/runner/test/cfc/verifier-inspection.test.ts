@@ -100,7 +100,7 @@ describe("prepareBoundaryCommit()", () => {
               .getAsNormalizedFullLink()
           );
           for (const target of targets) {
-            tx.writeValueOrThrow({ ...target, path: ["value", "field"] }, "v");
+            tx.writeValueOrThrow({ ...target, path: ["field"] }, "v");
             tx.recordCfcWritePolicyInput({
               kind: "link-write",
               target: { ...target, path: ["field"] },

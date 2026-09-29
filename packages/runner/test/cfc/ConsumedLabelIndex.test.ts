@@ -84,6 +84,7 @@ describe("ConsumedLabelIndex", () => {
       ["other"],
       ["a", "b"],
       ["a"],
+      ["a", "b"],
       ["value", "a", "b"],
     ].map(entry);
     const index = new ConsumedLabelIndex(entries);

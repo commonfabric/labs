@@ -29,6 +29,7 @@ import {
   isSchedulerDependencyRead,
   isWriteDestinationRead,
 } from "../storage/reactivity-log.ts";
+import { canonicalizeDocumentPath } from "./canonical.ts";
 import type { CfcConfClause } from "./clause.ts";
 import {
   cfcLabelViewFromMetadata,
@@ -169,7 +170,10 @@ export function assertCfcReadCeiling(
     isSchedulerDependencyRead(options?.meta)
   ) return;
   const metadata = readStoredCfcMetadata(tx, address);
-  let entries = cfcLabelViewFromMetadata(metadata, address.path)?.entries ?? [];
+  let entries = cfcLabelViewFromMetadata(
+    metadata,
+    canonicalizeDocumentPath(address.path),
+  )?.entries ?? [];
   if (linkProbe) {
     entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
   } else if (address.path.at(-1) === "length") {
@@ -182,8 +186,10 @@ export function assertCfcReadCeiling(
       nonRecursive: true,
     });
     if (Array.isArray(parent)) {
-      const parentEntries = cfcLabelViewFromMetadata(metadata, parentPath)
-        ?.entries ?? [];
+      const parentEntries = cfcLabelViewFromMetadata(
+        metadata,
+        canonicalizeDocumentPath(parentPath),
+      )?.entries ?? [];
       const membershipEntries = parentEntries.filter((entry) =>
         entry.path.length === 0 && readConsumesEntry("shape", entry)
       );
