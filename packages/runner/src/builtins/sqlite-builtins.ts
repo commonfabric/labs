@@ -1881,13 +1881,18 @@ export function sqliteQuery(
                 //
                 // A row's existence carries the label of the row and nothing
                 // of the request: a row is reached through a result slot,
-                // and the slot is where the request's label sits.
+                // and the slot is where the request's label sits. A row
+                // holding a link column declares none: a label at a row's
+                // root makes every link written beneath it answer to the
+                // link write policy, which refuses a link to a cell that
+                // carries no label metadata.
                 const storedRows = resultRows.map((row, i) => {
                   const schema = {
                     ...rowSchemas[i],
                     ...(perRow[i] !== undefined
                       ? { ifc: perRow[i] }
                       : columnConfidentiality.length > 0 &&
+                        linkCols.length === 0 &&
                         {
                           ifc: {
                             confidentiality: columnConfidentiality,

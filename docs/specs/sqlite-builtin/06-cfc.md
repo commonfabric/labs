@@ -835,7 +835,10 @@ A row carrying per-column labels and no row label declares the join of its
 column labels on its root as an `observes: "shape"` entry, so its existence
 carries them. A row under a row label carries the row label at its root for
 every class; where such a row also carries per-column labels, its existence
-carries the row label and its columns carry theirs.
+carries the row label and its columns carry theirs. A row of a query that
+projects an `asCell` link column declares no existence label: a label at a
+row's root makes every link written beneath it answer to the link write
+policy, which refuses a link to a cell that carries no label metadata.
 
 Two residuals are recorded against §8.17.6:
 
