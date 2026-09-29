@@ -362,6 +362,10 @@ into the room, and the room then shows the member's answer as its own.
 the cell it writes, so running the handler again writes nothing. A writer claim
 on `T | null` sits on the `T` branch alone and does not refuse a write of
 `null`, so the room's terms are absent until proposed rather than `null`.
+The runtime stores a writer claim with the document from the piece's creation
+([#8212](https://github.com/commonfabric/labs/pull/8212)), so the claim also
+refuses other code's write into a slot that is still absent, and a write
+through a link whose schema declares no claim.
 
 The seal writes a room's box link only into a document that exists: an absent
 document could be the address of a custody document the seal has yet to
