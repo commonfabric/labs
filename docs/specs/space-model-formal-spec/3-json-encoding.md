@@ -290,6 +290,18 @@ See `1-fabric-values.md` Section 3.5.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
 
+> **Bounding a decode of untrusted text.** Parsing JSON text builds every
+> value the text writes, and because a `hole` run carries its length as a
+> number, a few bytes can also stand for billions of array slots that any walk
+> over the decoded array visits. A decoder reading untrusted text may therefore
+> refuse text standing for more slots than a limit its caller sets. A slot is
+> an array element or a record member written in the text, wherever it
+> appears, and a `hole` run adds one slot for each hole past the first that it
+> stands for. The elements and members can be counted by scanning the text
+> without parsing it, so a decoder can refuse text before building any of it.
+> The format itself sets no limit, and a decoder reading text it wrote itself
+> sets none.
+
 ## 4. Detection
 
 In the JSON wire format, any plain object containing at least one key that

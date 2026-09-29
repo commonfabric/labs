@@ -24,12 +24,14 @@ import type {
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
   type AttemptedWrite,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
   CFC_ENFORCING_STRICTNESS,
@@ -115,6 +117,13 @@ import {
   RESERVED_SIBLINGS,
   type ReservedSibling,
 } from "../reserved-sibling-seam.ts";
+import {
+  isRuntimeSecretId,
+  readRuntimeSecret,
+  RUNTIME_SECRET_SCHEMA,
+  RUNTIME_SECRET_WRITER,
+  runtimeSecretLink,
+} from "../runtime-secret.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
@@ -1165,7 +1174,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         space: read.space,
         id: read.id,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path) as string[],
+        path: canonicalizeDocumentPath(read.path) as string[],
       }));
     }
   }
@@ -1306,6 +1315,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (address.id.startsWith(CFC_POLICY_MANIFEST_ID_PREFIX)) {
       throw new Error(
         `cfcPolicyManifest: ${address.id} is immutable reserved policy state`,
+      );
+    }
+    if (isRuntimeSecretId(address.id)) {
+      throw new Error(
+        `${address.id} is a runtime secret: ensureRuntimeSecret() mints it, ` +
+          `and nothing else writes it.`,
       );
     }
     // The raw meta seam. A meta field is a document-root sibling of `value`:
@@ -2423,7 +2438,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       consumedReads.push(deepFreeze({
         ...bare,
         scope: normalizeCellScope(read.scope),
-        path: canonicalizeLogicalPath(read.path),
+        path: canonicalizeDocumentPath(read.path),
         ...(raw !== undefined ? { journalIndex: rankByRaw.get(raw)! } : {}),
       }));
     }
@@ -2434,7 +2449,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         deepFreeze({
           ...address,
           scope: normalizeCellScope(address.scope),
-          path: canonicalizeLogicalPath(address.path),
+          path: canonicalizeDocumentPath(address.path),
         }),
     );
 
@@ -2444,7 +2459,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         writes.push(deepFreeze({
           ...write.address,
           scope: normalizeCellScope(write.address.scope),
-          path: canonicalizeLogicalPath(write.address.path),
+          path: canonicalizeDocumentPath(write.address.path),
         }));
       }
     }
@@ -2756,6 +2771,47 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     });
     return id;
+  }
+
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    if (!runtimeWritePolicyAuthorized(authorization)) {
+      throw new Error(
+        "ensureRuntimeSecret() requires the runtime's authorization",
+      );
+    }
+    this.#assertWritable("ensureRuntimeSecret()");
+    if (readRuntimeSecret(this, space, name) !== undefined) return;
+    const link = runtimeSecretLink(space, name);
+    this.#runPrivilegedSystemWrite(() => {
+      this.writeValueOrThrow(
+        link,
+        toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(32))),
+      );
+    });
+    // The label arrives the way a schema-declared one does on any write, so
+    // the secret carries it from the commit that creates it.
+    this.markCfcRelevant(`runtime-secret:${link.id}`);
+    // Recorded under the writer's builtin identity, which the schema's
+    // writer claim names, so the claim stored with the secret is what later
+    // readers trust it by.
+    const identity = this.#cfcState.implementationIdentity;
+    assignCfcImplementationIdentity(this, {
+      kind: "builtin",
+      builtinId: RUNTIME_SECRET_WRITER,
+    });
+    try {
+      this.recordCfcWritePolicyInput({
+        kind: "schema",
+        target: { space, id: link.id, scope: link.scope, path: [] },
+        schema: RUNTIME_SECRET_SCHEMA,
+      });
+    } finally {
+      assignCfcImplementationIdentity(this, identity);
+    }
   }
 
   /**
@@ -4063,6 +4119,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI {
     return this.#wrapped.stageContentAddressedDocument(space, value);
+  }
+
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {

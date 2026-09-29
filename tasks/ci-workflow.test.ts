@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { dirname } from "@std/path";
+import { dirname, relative } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
@@ -11,16 +11,20 @@ import {
   COMPILE_CACHE_FILE,
 } from "./ci-capabilities.ts";
 import {
-  COVERAGE_PROFILE_DIR,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
+  coverageRoot,
   DEFAULT_COVERAGE_DIR,
   measuredSetOfReport,
+  parseLaneArgs,
+  profileRoot,
 } from "./ci-lane.ts";
 import { measuredSetDirectory } from "./test-selection/coverage.ts";
 import {
+  FULL_LANE_BOUND_SECONDS,
   FULL_LANES_MAX,
   FULL_RUN_LABEL,
+  LANE_BOUND_SECONDS,
   LANES,
 } from "./test-selection/policy.ts";
 
@@ -59,13 +63,6 @@ function stepBlock(job: string, stepName: string): string {
   const nextStepOffset = job.slice(bodyStart).search(/^ {6}- name: /m);
   const end = nextStepOffset < 0 ? job.length : bodyStart + nextStepOffset;
   return job.slice(start, end);
-}
-
-function stepBlocks(job: string): { name: string; body: string }[] {
-  return job.split(/^ {6}- name: /m).slice(1).map((step) => {
-    const nameEnd = step.indexOf("\n");
-    return { name: step.slice(0, nameEnd), body: step.slice(nameEnd + 1) };
-  });
 }
 
 // The minutes each YAML anchor in the workflow stands for, by anchor name.
@@ -324,6 +321,22 @@ Deno.test("every work step is bounded before its job is", async () => {
       );
     }
   }
+});
+
+Deno.test("a lane's step is bounded above what a lane is packed to finish inside", async () => {
+  // A lane packs its work against a budget derived from the bound of the
+  // run it is part of, and the bound on the step that runs it only stops a
+  // lane that hangs. At or below either run's bound, it would stop a lane
+  // that was running to plan, with its later batches unrun.
+  const job = (await parsedWorkflow("deno.yml")).jobs.tests;
+  const minutes = namedStep(job, "🧪 Run the lane")["timeout-minutes"];
+  assert(typeof minutes === "number", "the lane step has no timeout-minutes");
+  const packed = Math.max(LANE_BOUND_SECONDS, FULL_LANE_BOUND_SECONDS);
+  assert(
+    minutes * 60 > packed,
+    `the lane step is bounded at ${minutes} minutes, and a lane is packed ` +
+      `to finish inside ${packed} seconds`,
+  );
 });
 
 Deno.test("Pull Request Comments follows the CI workflow by name", async () => {
@@ -685,14 +698,19 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   const job = ci.jobs.tests;
 
   // The whole of what the lane converted, so a marker beside a report and
-  // the compile cache's state travel with the reports, and the raw profiles
-  // stay behind.
+  // the compile cache's state travel with the reports. The raw profiles
+  // are outside it, because the upload walks every directory under the
+  // path it is given, and one directory of them can hold more entries
+  // than the walk can take in one call.
   const coverage = namedStep(job, "📤 Upload the lane's coverage reports");
   const paths = String(coverage.with?.path).trim().split("\n");
-  assertEquals(paths, [
-    `${DEFAULT_COVERAGE_DIR}/`,
-    `!${DEFAULT_COVERAGE_DIR}/${COVERAGE_PROFILE_DIR}/`,
-  ]);
+  assertEquals(paths, [`${DEFAULT_COVERAGE_DIR}/`]);
+  const options = parseLaneArgs([], "/repo")!;
+  assertEquals(coverageRoot(options), `/repo/${paths[0]!.replace(/\/$/, "")}`);
+  assert(
+    relative(coverageRoot(options), profileRoot(options)).startsWith("../"),
+    "the raw profiles are inside the uploaded directory",
+  );
   assertEquals(
     coverage.with?.name,
     "lane-coverage-${{ github.job }}-${{ matrix.lane }}",
@@ -705,9 +723,7 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   // download of several artifacts puts each under a directory named for it.
   // A report the lane wrote therefore arrives at the path below, and the
   // readers have to find its set there.
-  const included = paths.filter((at) => !at.startsWith("!"));
-  assertEquals(included.length, 1);
-  const root = included[0]!.replace(/\/$/, "");
+  const root = paths[0]!.replace(/\/$/, "");
   const set = measuredSetDirectory({
     suite: "workspace-unit",
     set: { member: "packages/bakery", reachedBy: [], units: [] },
@@ -1156,7 +1172,7 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
   const job = jobBlock(suite, "cfc-properties");
   assertStringIncludes(
     job,
-    "run: deno test --shuffle=$(deno task -q test-seed) -A " +
+    "run: deno test --shuffle=$(deno task -q test-seed) --no-check -A " +
       "test/cfc-properties/\n",
   );
   assertStringIncludes(job, "deno task cfc-audit ");
@@ -1339,82 +1355,6 @@ Deno.test("Deploy steps call the bastion wrapper the way it accepts", async () =
   // case where the search comes back empty and the loop above does nothing.
   for (const name of ["deno.yml", "deploy-production.yml"]) {
     assert(callers.includes(name), `${name}: no deploy.sh call found`);
-  }
-});
-
-Deno.test("a configured presence URL reaches every shell bundle CI builds", async () => {
-  // Both shells CI builds take their co-presence endpoint from a repository
-  // variable, and an unset variable is a supported state that builds a working
-  // shell. Every check the wiring performs therefore sits inside an
-  // `if [ -n "$PRESENCE_URL" ]` that a repository without the variable never
-  // enters, so those checks cannot report on the wiring itself: remove the
-  // wiring and the same runs stay green. The properties a configured value
-  // depends on are checked here instead, against the workflow text, where
-  // repository configuration does not get to decide whether the check runs.
-
-  const deno = await workflow("deno.yml");
-
-  // Each job that builds a shell, and the directory its build leaves the
-  // bundle in. Both are named so the shell embedded in the toolshed binary and
-  // the one published to the bucket are held to a single shape.
-  const bundles = new Map([
-    ["build-toolshed", "packages/toolshed/shell-frontend/scripts"],
-    ["deploy-shell-staging", "dist/scripts"],
-  ]);
-
-  // Membership is checked both ways. A job that starts carrying a presence URL
-  // without being named above would go unchecked, and a job that stops
-  // carrying one is a shell that quietly lost co-presence.
-  const carriers = jobIds(deno).filter((id) =>
-    jobBlock(deno, id).includes('PRESENCE_URL=$PRESENCE_URL" >> "$GITHUB_ENV"')
-  );
-  assertEquals(carriers.sort(), [...bundles.keys()].sort());
-
-  for (const [id, bundle] of bundles) {
-    const steps = stepBlocks(jobBlock(deno, id));
-
-    const exporter = steps.findIndex((step) =>
-      step.body.includes('PRESENCE_URL=$PRESENCE_URL" >> "$GITHUB_ENV"')
-    );
-    assert(exporter >= 0, `${id}: no step exports PRESENCE_URL`);
-
-    // Read from `vars`, never `secrets`: the value ships inside a bundle any
-    // reader can open, so hiding it would cost review and buy nothing.
-    assertStringIncludes(steps[exporter].body, "PRESENCE_URL: ${{ vars.");
-
-    // What the bundle carries is `URL.href`, which is not always the spelling
-    // the variable holds — a host written without a path gains a trailing
-    // slash. Exporting the normalized form is what makes the check below an
-    // equality on the value that shipped rather than a prefix match.
-    assertStringIncludes(
-      steps[exporter].body,
-      "packages/shell/src/lib/presence-url.ts",
-    );
-    assertStringIncludes(steps[exporter].body, "?.href");
-
-    // A configured endpoint that did not reach the bundle is a deployment
-    // whose co-presence is off with nothing downstream to notice, so the build
-    // is not allowed to pass until the URL is found in what it produced.
-    const verifier = steps.findIndex((step) =>
-      step.body.includes(`grep -rqF -e "$PRESENCE_URL" ${bundle}`)
-    );
-    assert(
-      verifier >= 0,
-      `${id}: nothing greps ${bundle} for the presence URL`,
-    );
-    assertStringIncludes(
-      steps[verifier].body,
-      'does not reference $PRESENCE_URL."\n            exit 1\n',
-    );
-
-    // GITHUB_ENV reaches the steps after the one that writes it, and not that
-    // step itself. An exporter placed after the build it configures would
-    // export a value no later step reads, and the guarded check above would
-    // then skip on an empty variable instead of failing.
-    assert(
-      exporter < verifier,
-      `${id}: PRESENCE_URL is exported after the build that has to read it`,
-    );
   }
 });
 

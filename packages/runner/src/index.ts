@@ -59,7 +59,7 @@ export type {
 } from "./unsafe-host-trust.ts";
 export * from "./interface.ts";
 export { raw } from "./module.ts";
-export type { Cell, Stream } from "./cell.ts";
+export type { Cell, SinkConsumedLabel, Stream } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
@@ -94,10 +94,14 @@ export type {
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
+  IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
 } from "./storage/interface.ts";
-export { hasOperationStorageCapability } from "./storage/interface.ts";
+export {
+  hasOperationStorageCapability,
+  hasPresenceStorageCapability,
+} from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
 export type {
   EntityIdListOptions,

@@ -54,7 +54,7 @@ import {
   watermarkCell,
   watermarkDocLink,
 } from "../src/executor/watermark.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -84,24 +84,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     if (this.settleGate !== undefined) await this.settleGate;
   }
 }
-
-const newSharedServer = (
-  options: { sessionTtlMs?: number; subscriptionRefreshDelayMs?: number } = {},
-) =>
-  new MemoryV2Server.Server({
-    ...(options.sessionTtlMs === undefined ? {} : {
-      sessions: new MemoryV2Server.SessionRegistry({
-        ttlMs: options.sessionTtlMs,
-      }),
-    }),
-    subscriptionRefreshDelayMs: options.subscriptionRefreshDelayMs ?? 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 const spaceSigner = await Identity.fromPassphrase("serving loop space");
 const space = spaceSigner.did() as MemorySpace;
@@ -224,7 +206,7 @@ describe("stage F serving loop", () => {
     parks.matching((entry) => entry.space === space);
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingRuntime = undefined;
     onServingRuntime = undefined;
     servingFetch = undefined;
@@ -2208,7 +2190,10 @@ describe("stage F serving loop", () => {
   });
 
   it("parks an idle space with no live sessions (IDLE_PARK_MS), releasing the lease", async () => {
-    server = newSharedServer({ sessionTtlMs: 50 });
+    server = newSharedServer({
+      sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 50 }),
+      subscriptionRefreshDelayMs: 0,
+    });
     host = newHost({
       flushDeadlineMs: 500,
       idleParkMs: 100,

@@ -33,6 +33,11 @@ import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
 import { pythonLanguage } from "./python/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
+import { kotlinLanguage } from "./kotlin/language.ts";
+import { propertiesLanguage } from "./properties/language.ts";
+import { tomlLanguage } from "./toml/language.ts";
+import { proguardLanguage } from "./proguard/language.ts";
+import { xmlLanguage } from "./xml/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -241,8 +246,8 @@ export interface LanguageMetadata {
 export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
-   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"binary"`, or
-   * `"plain-text"`.
+   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"binary"`,
+   * or `"plain-text"`.
    */
   readonly id: string;
 
@@ -457,6 +462,11 @@ function allLanguages(): readonly Language[] {
     yamlLanguage,
     pythonLanguage,
     swiftLanguage,
+    kotlinLanguage,
+    tomlLanguage,
+    propertiesLanguage,
+    proguardLanguage,
+    xmlLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];

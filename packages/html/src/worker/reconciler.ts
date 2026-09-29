@@ -33,6 +33,7 @@ import {
   type JSONSchema,
   KeepAsCell,
   parseLink,
+  type SinkConsumedLabel,
   type Stream,
   UI,
   useCancelGroup,
@@ -97,6 +98,43 @@ const TEXT_INTEGRITY_PROP_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
   new Map([
     ["cf-chat-message", new Set(["name", "content"])],
   ]);
+/**
+ * `$` bindings a trusted host component never shows a value from. It hands
+ * each reference to a worker operation and shows only what that operation
+ * answers, so the operation, not the render policy, decides what the
+ * component may show; a value it reads through one serves only as a signal
+ * to ask again.
+ */
+const REFERENCE_BINDING_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
+  new Map([
+    [
+      "cf-custody-seal",
+      new Set(["draft", "terms", "policy", "sources", "box"]),
+    ],
+    ["cf-custody-answer", new Set(["terms", "policy", "output"])],
+  ]);
+
+/**
+ * The label a render decision was made on, as a denial reports it: a cell's
+ * stored label, its schema's, a read's consumed labels, or none it could
+ * read.
+ */
+type RenderLabelSummary = {
+  labelSource: "stored" | "schema" | "consumed" | "unreadable";
+  confidentiality: readonly CfcConfClause[];
+  integrity: readonly CfcAtom[];
+};
+
+/**
+ * How a prop's admission watches the membership its labels name: the
+ * documents already watched, the cancel group the watches join, and what to
+ * run when one changes.
+ */
+type MembershipWatch = {
+  readonly watched: Set<string>;
+  readonly addCancel: (cancel: Cancel) => void;
+  reeval: () => void;
+};
 
 function isNestedPatternOutput(value: unknown, cell: Cell<unknown>): boolean {
   if (
@@ -882,17 +920,132 @@ export class WorkerReconciler {
       : principals.map((subject) => ({ kind: "authored-by", subject }));
   }
 
-  #bindingOpsForCell(
+  /**
+   * Binds `cell` to the element's `propName` while the node's render policy
+   * admits what a read of it consumes. A binding hands the host a live handle
+   * to the cell, whose reads return what the worker's read of it returns, so
+   * the decision follows that read: it is made again whenever what the read
+   * consumed changes, labels included, and whenever the membership those
+   * labels name changes, and the binding is removed while the policy refuses
+   * it. `replacing` says whether the element may hold a binding for
+   * `propName` from before. `read` is the cell whose read decides, when the
+   * binding was reached through a slot whose labels the choice of `cell`
+   * carries.
+   */
+  #bindCell(
     state: NodeState,
     propName: string,
     cell: Cell<unknown>,
-  ): VDomOp[] {
-    return [{
-      op: "set-binding",
-      nodeId: state.nodeId,
-      propName,
-      cellRef: this.#cellRefForBinding(cell),
-    }];
+    replacing: boolean,
+    read: Cell<unknown> = cell,
+  ): Cancel {
+    const bind = () =>
+      this.#queueOps([{
+        op: "set-binding",
+        nodeId: state.nodeId,
+        propName,
+        cellRef: this.#cellRefForBinding(cell),
+      }]);
+    if (
+      REFERENCE_BINDING_SINKS.get(state.tagName)?.has(propName) ||
+      this.#admitsEverything(state.renderPolicy)
+    ) {
+      bind();
+      return () => {};
+    }
+    const [cancel, addCancel] = useCancelGroup();
+    const watch = { watched: new Set<string>(), addCancel, reeval: () => {} };
+    let shown: boolean | undefined = replacing || undefined;
+    let consumed: SinkConsumedLabel | undefined;
+    let first = true;
+    watch.reeval = () => {
+      shown = this.#admitProp(
+        state,
+        propName,
+        read,
+        [consumed],
+        shown,
+        first,
+        bind,
+        watch,
+      );
+      first = false;
+    };
+    addCancel(this.#sinkCell(read, (_value, labels) => {
+      consumed = labels;
+      watch.reeval();
+    }, true));
+    return cancel;
+  }
+
+  /**
+   * Decides whether the node's render policy admits a prop or binding whose
+   * value was read from `source` by `reads`, each consuming the labels it
+   * reports, and emits only what the decision changes. `shown` says whether the prop may
+   * be showing before the decision, or is undefined when nothing has been
+   * shown for it; the result says whether it may be showing after. `show`
+   * runs when the prop is admitted and either its value `changed` or it was
+   * not showing. A refused prop is removed when it may be showing, and the
+   * refusal reported once per standing block. Watches the membership the
+   * consumed labels name.
+   */
+  #admitProp(
+    state: NodeState,
+    key: string,
+    source: Cell<unknown>,
+    reads: readonly (SinkConsumedLabel | undefined)[],
+    shown: boolean | undefined,
+    changed: boolean,
+    show: () => void,
+    { watched, addCancel, reeval }: MembershipWatch,
+  ): boolean {
+    const policy = state.renderPolicy;
+    if (this.#admitsEverything(policy)) {
+      if (changed || shown !== true) show();
+      return true;
+    }
+    // A read the sink could not label is treated as consuming the marker no
+    // policy admits.
+    const confidentiality = reads.flatMap((read) =>
+      read?.confidentiality ?? [CFC_LABEL_READ_FAILED_ATOM]
+    );
+    const integrity = reads.flatMap((read) => read?.integrity ?? []);
+    const spaces = reads.flatMap((read) =>
+      [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
+    );
+    this.#watchLabelMembership(
+      confidentiality,
+      spaces,
+      watched,
+      addCancel,
+      reeval,
+    );
+    if (
+      confidentiality.length === 0
+        ? this.#confidentialityLabelsFromCellSchema(source).every((atom) =>
+          this.#atomRenderableUnderPolicy(atom, policy)
+        )
+        : this.#canRenderLabelUnderPolicy(
+          confidentiality,
+          integrity,
+          () => spaces,
+          policy,
+        )
+    ) {
+      if (changed || shown !== true) show();
+      return true;
+    }
+    if (shown !== false) {
+      this.#reportRenderDenial(() => ({
+        labelSource: "consumed",
+        confidentiality,
+        integrity,
+      }), policy);
+      if (shown) {
+        this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
+      }
+    }
+    return false;
   }
 
   /** Keep the nested pattern's whole result cell on its existing root node. */
@@ -959,16 +1112,24 @@ export class WorkerReconciler {
   }
 
   /** Keeps a rendered subscription responsive to session access loss and recovery. */
-  #sinkCell<T>(cell: Cell<T>, deliver: (value: T | undefined) => void): Cancel {
+  #sinkCell<T>(
+    cell: Cell<T>,
+    deliver: (value: T | undefined, consumed?: SinkConsumedLabel) => void,
+    includeConsumedLabel = false,
+  ): Cancel {
     const [cancel, addCancel] = useCancelGroup();
     const watched = new Set<string>();
     let active = true;
     let current: T | undefined;
+    let consumed: SinkConsumedLabel | undefined;
     const emit = () => {
-      if (active) deliver(this.#cellAccessError(cell) ? undefined : current);
+      if (active) {
+        deliver(this.#cellAccessError(cell) ? undefined : current, consumed);
+      }
     };
-    addCancel(cell.sink((value) => {
+    addCancel(cell.sink((value, _cfcLabel, read) => {
       current = value;
+      consumed = read;
       if (this.#spaceAccess !== undefined) {
         for (const candidate of [cell, this.#resolveCellForBinding(cell)]) {
           const space = this.#spaceOfCell(candidate);
@@ -979,7 +1140,7 @@ export class WorkerReconciler {
         }
       }
       emit();
-    }, { readOnly: true }));
+    }, { readOnly: true, includeConsumedLabel }));
     return () => {
       active = false;
       cancel();
@@ -1282,6 +1443,12 @@ export class WorkerReconciler {
       left.every((value, index) => deepEqual(value, right[index]));
   }
 
+  /** Whether `policy` admits every cell, having no ceiling to fit. */
+  #admitsEverything(policy: RenderPolicy): boolean {
+    return policy.maxConfidentiality === undefined &&
+      policy.declassifyConfidentiality.length === 0;
+  }
+
   /**
    * Whether `cell` may render under `policy`: every atom of its
    * confidentiality label (its schema's, when it carries none) sits under
@@ -1293,10 +1460,7 @@ export class WorkerReconciler {
     cell: Cell<unknown>,
     policy: RenderPolicy,
   ): boolean {
-    if (
-      policy.maxConfidentiality === undefined &&
-      policy.declassifyConfidentiality.length === 0
-    ) {
+    if (this.#admitsEverything(policy)) {
       return true;
     }
 
@@ -1309,14 +1473,6 @@ export class WorkerReconciler {
     } catch {
       return false;
     }
-    // Epic H3b: with a resolver wired and a ceiling in force, exchange-resolve
-    // the cell's label (runner-side) before the fit — this is where
-    // `Space(...)`-via-`HasRole` principal forms become admissible. Without a
-    // resolver, or on a declassify-only boundary, fall back to the H3a
-    // per-atom exact-match path.
-    const useResolver = this.#resolveRenderConfidentiality !== undefined &&
-      policy.maxConfidentiality !== undefined;
-
     if (labelView === undefined) {
       // Schema IFC is a constraint, not the data label. Use it only as a
       // conservative fallback when no stored/read label metadata is available.
@@ -1333,21 +1489,45 @@ export class WorkerReconciler {
       );
     }
 
-    const confidentiality = this.#confidentialityLabels(labelView);
-    if (useResolver) {
+    return this.#canRenderLabelUnderPolicy(
+      this.#confidentialityLabels(labelView),
+      this.#integrityLabels(labelView),
+      () => labelSpaces,
+      policy,
+    );
+  }
+
+  /**
+   * Whether a label may render under `policy`, resolved through the
+   * display-boundary exchange rules when a resolver is wired and a ceiling is
+   * in force, and fitted atom by atom otherwise. `spaces` names where a
+   * module policy the label selects has its manifest.
+   */
+  #canRenderLabelUnderPolicy(
+    confidentiality: readonly CfcConfClause[],
+    integrity: readonly CfcAtom[],
+    spaces: () => readonly string[],
+    policy: RenderPolicy,
+  ): boolean {
+    // Epic H3b: with a resolver wired and a ceiling in force, exchange-resolve
+    // the label (runner-side) before the fit — this is where
+    // `Space(...)`-via-`HasRole` principal forms become admissible. Without a
+    // resolver, or on a declassify-only boundary, fall back to the H3a
+    // per-atom exact-match path.
+    if (
+      this.#resolveRenderConfidentiality !== undefined &&
+      policy.maxConfidentiality !== undefined
+    ) {
       return this.#resolvedConfidentialityRenderable(
         confidentiality,
-        this.#integrityLabels(labelView),
-        () => labelSpaces,
+        integrity,
+        spaces,
         policy,
       );
     }
-    for (const atom of confidentiality) {
-      if (!this.#atomRenderableUnderPolicy(atom, policy)) {
-        return false;
-      }
-    }
-    return true;
+    return confidentiality.every((atom) =>
+      this.#atomRenderableUnderPolicy(atom, policy)
+    );
   }
 
   /**
@@ -1445,11 +1625,7 @@ export class WorkerReconciler {
    * constraint as the same conservative fallback the gate uses, and the
    * read-failure case named rather than left blank.
    */
-  #renderLabelSummary(cell: Cell<unknown>): {
-    labelSource: "stored" | "schema" | "unreadable";
-    confidentiality: readonly CfcConfClause[];
-    integrity: readonly CfcAtom[];
-  } {
+  #renderLabelSummary(cell: Cell<unknown>): RenderLabelSummary {
     let labelView: CfcLabelView | undefined;
     try {
       labelView = this.#resolveCellLabelView(cell);
@@ -1483,11 +1659,19 @@ export class WorkerReconciler {
    * read-failure marker blocks with no ceiling in force at all.
    */
   #denyCellRender(cell: Cell<unknown>, policy: RenderPolicy): void {
+    this.#reportRenderDenial(() => this.#renderLabelSummary(cell), policy);
+  }
+
+  /** {@link #denyCellRender}, for the label `summary` gives. */
+  #reportRenderDenial(
+    summary: () => RenderLabelSummary,
+    policy: RenderPolicy,
+  ): void {
     reportCfcDenial(
       "render-confidentiality-ceiling",
       "the render policy did not admit a cell's confidentiality label",
       () => ({
-        ...this.#renderLabelSummary(cell),
+        ...summary(),
         ceiling: policy.maxConfidentiality ?? "unbounded",
         declassified: policy.declassifyConfidentiality,
         caveatKindAllow: policy.caveatKindAllow,
@@ -1575,7 +1759,29 @@ export class WorkerReconciler {
     // No stored label (or a read failure) → nothing to watch. The render fit
     // still fail-closes independently; we just set up no reactive upgrade.
     if (source.view === undefined) return;
-    const confidentiality = this.#confidentialityLabels(source.view);
+    this.#watchLabelMembership(
+      this.#confidentialityLabels(source.view),
+      source.spaces,
+      watched,
+      addCancel,
+      reeval,
+    );
+  }
+
+  /**
+   * Subscribes `reeval` to the membership and module-policy manifests that
+   * `confidentiality` names, as {@link #watchCellMembership} describes, with
+   * the manifests looked up in `spaces`.
+   */
+  #watchLabelMembership(
+    confidentiality: readonly CfcConfClause[],
+    spaces: readonly string[],
+    watched: Set<string>,
+    addCancel: (cancel: Cancel) => void,
+    reeval: () => void,
+  ): void {
+    const provider = this.#membershipProvider;
+    const manifests = this.#modulePolicySource;
     // A subscription that throws leaves that document unwatched (fail closed
     // on watching) and must not escape into the cell's sink.
     const watch = (key: string, subscribe: () => Cancel) => {
@@ -1604,7 +1810,7 @@ export class WorkerReconciler {
       for (
         const reference of modulePolicyRefsInConfidentiality(confidentiality)
       ) {
-        for (const space of source.spaces) {
+        for (const space of spaces) {
           watch(
             `manifest:${JSON.stringify([space, reference.policyDigest])}`,
             () => manifests.subscribe(reference, space, reeval),
@@ -1953,37 +2159,111 @@ export class WorkerReconciler {
    * reference's own position for the scalar there and follows it as it
    * changes. A record or a list behind the reference stays the reference its
    * declaration made it.
+   *
+   * `deliver` receives each value with the cell it was read from and the
+   * labels each read behind it consumed.
    */
   #sinkPropValue(
     cell: Cell<unknown>,
-    deliver: (value: unknown) => void,
+    deliver: (
+      value: unknown,
+      source: Cell<unknown>,
+      reads: readonly (SinkConsumedLabel | undefined)[],
+    ) => void,
+    includeConsumedLabel: boolean,
   ): Cancel {
-    let referenced: { cell: Cell<unknown>; cancel: Cancel } | undefined;
-    const cancelOuter = this.#sinkCell(cell, (value) => {
+    type Referenced = {
+      cell: Cell<unknown>;
+      cancel: Cancel;
+      value: unknown;
+      consumed: SinkConsumedLabel | undefined;
+    };
+    let referenced: Referenced | undefined;
+    // The labels the read of the reference consumed: a dereference retains
+    // them, since which target it names can depend on them (spec §4.6.3).
+    let outer: SinkConsumedLabel | undefined;
+    const deliverReferenced = (current: Referenced) =>
+      deliver(current.value, current.cell, [outer, current.consumed]);
+    const cancelOuter = this.#sinkCell(cell, (value, consumed) => {
+      outer = consumed;
       const named = cellOfOpaqueReference(value);
       if (named === undefined) {
         referenced?.cancel();
         referenced = undefined;
-        deliver(value);
+        deliver(value, cell, [consumed]);
         return;
       }
       // The reference's position outlives the read that projected it, so the
       // subscription must not hold that read's transaction.
       const scalar = named.withTx(undefined).asSchema(REFERENCED_SCALAR_SCHEMA);
       if (referenced !== undefined && areLinksSame(referenced.cell, scalar)) {
+        if (includeConsumedLabel) deliverReferenced(referenced);
         return;
       }
       referenced?.cancel();
-      referenced = {
+      const current: Referenced = {
         cell: scalar,
-        cancel: this.#sinkCell(scalar, deliver),
+        cancel: () => {},
+        value: undefined,
+        consumed: undefined,
       };
-    });
+      referenced = current;
+      current.cancel = this.#sinkCell(scalar, (value, consumed) => {
+        current.value = value;
+        current.consumed = consumed;
+        deliverReferenced(current);
+      }, includeConsumedLabel);
+    }, includeConsumedLabel);
     return () => {
       cancelOuter();
       referenced?.cancel();
       referenced = undefined;
     };
+  }
+
+  /**
+   * {@link #sinkPropValue}, delivering only values whose read consumed
+   * labels the node's render policy admits, and removing the prop while it
+   * does not. The decision is made again whenever what the read consumed
+   * changes, labels included, and whenever the membership those labels name
+   * changes, as it is for a cell child.
+   * `replacing` says whether the element may hold a value for `key` from
+   * before.
+   */
+  #sinkAdmittedPropValue(
+    state: NodeState,
+    key: string,
+    cell: Cell<unknown>,
+    replacing: boolean,
+    deliver: (value: unknown) => void,
+  ): Cancel {
+    const [cancel, addCancel] = useCancelGroup();
+    const watch = { watched: new Set<string>(), addCancel, reeval: () => {} };
+    let shown: boolean | undefined = replacing || undefined;
+    let latest: {
+      value: unknown;
+      source: Cell<unknown>;
+      reads: readonly (SinkConsumedLabel | undefined)[];
+    } = { value: undefined, source: cell, reads: [] };
+    const decide = (changed: boolean) => {
+      const { value, source, reads } = latest;
+      shown = this.#admitProp(
+        state,
+        key,
+        source,
+        reads,
+        shown,
+        changed,
+        () => deliver(value),
+        watch,
+      );
+    };
+    watch.reeval = () => decide(false);
+    addCancel(this.#sinkPropValue(cell, (value, source, reads) => {
+      latest = { value, source, reads };
+      decide(true);
+    }, !this.#admitsEverything(state.renderPolicy)));
+    return cancel;
   }
 
   #transformPropValueForState(
@@ -2260,33 +2540,13 @@ export class WorkerReconciler {
         if (existingState) {
           existingState.cancel();
         }
-        const cancel = this.#sinkPropValue(value as Cell<unknown>, (
-          resolvedValue,
-        ) => {
-          logger.debug(
-            "prop-update",
-            () => ({ nodeId: state.nodeId, key, value: resolvedValue }),
-          );
-          const propValue = this.#transformPropValueForState(
-            state,
-            key,
-            resolvedValue,
-            value as Cell<unknown>,
-          );
-          this.#queueOps([{
-            op: "set-prop",
-            nodeId: state.nodeId,
-            key,
-            value: propValue,
-          }]);
-          if (this.#isTextIntegrityPolicyProp(key)) {
-            this.#refreshTextIntegrityBoundary(ctx, state);
-          }
-        });
-        state.propSubscriptions.set(key, {
-          cell: value as Cell<unknown>,
-          cancel,
-        });
+        this.#bindCellProp(
+          ctx,
+          state,
+          key,
+          value as Cell<unknown>,
+          existingState !== undefined,
+        );
       } else {
         // Static prop. Skip the redundant worker→main set-prop op for an
         // unchanged primitive value (see canSkipUnchangedStaticProp). #4366 made
@@ -2507,14 +2767,40 @@ export class WorkerReconciler {
       if (existingState) {
         existingState.cancel();
       }
-      this.#queueOps(
-        this.#bindingOpsForCell(state, propName, value as Cell<unknown>),
-      );
       state.propSubscriptions.set(key, {
         cell: value as Cell<unknown>,
-        cancel: () => {},
+        cancel: this.#bindCell(
+          state,
+          propName,
+          value as Cell<unknown>,
+          existingState !== undefined,
+        ),
       });
     }
+  }
+
+  /**
+   * The keys among `keys` whose value the node's render policy has to decide
+   * on by what a read of that key consumes: each whose stored value is a
+   * link, and every one when the policy does not admit the props object's
+   * own label, as when the props are linked from a document of their own. A
+   * props object that cannot be read counts every key.
+   */
+  #propKeysReadAlone(
+    state: NodeState,
+    propsCell: Cell<WorkerProps>,
+    keys: readonly string[],
+  ): ReadonlySet<string> {
+    const raw = this.#readCellPolicyValue(propsCell);
+    if (
+      !isObjectNotArray(raw) ||
+      !this.#canRenderCellUnderPolicy(propsCell, state.renderPolicy)
+    ) {
+      return new Set(keys);
+    }
+    return new Set(
+      keys.filter((key) => parseLink(raw[key], propsCell) !== undefined),
+    );
   }
 
   /**
@@ -2569,6 +2855,10 @@ export class WorkerReconciler {
 
       const props = resolvedProps as Record<string, unknown>;
       const newKeys = new Set(Object.keys(props));
+      const gated = !this.#admitsEverything(state.renderPolicy);
+      const readAlone = gated
+        ? this.#propKeysReadAlone(state, propsCell, [...newKeys])
+        : new Set<string>();
 
       // Remove props that no longer exist
       for (const [key, propState] of state.propSubscriptions) {
@@ -2662,21 +2952,32 @@ export class WorkerReconciler {
           }
           if (existingState) existingState.cancel();
 
-          const propName = getBindingPropName(key);
-          this.#queueOps(
-            this.#bindingOpsForCell(state, propName, resolvedTarget),
-          );
           state.propSubscriptions.set(key, {
             cell: resolvedTarget,
-            cancel: () => {},
+            cancel: this.#bindCell(
+              state,
+              getBindingPropName(key),
+              resolvedTarget,
+              existingState !== undefined,
+              // Read through the props' slot, whose labels govern which cell
+              // is bound, as the host's handle reads the target.
+              propsCell.key(key).asSchema(
+                resolvedTarget.getAsNormalizedFullLink().schema,
+              ),
+            ),
           });
         } else if (
-          key !== "style" && isObjectOrArray(value)
+          (isObjectOrArray(value) && (key !== "style" || gated)) ||
+          readAlone.has(key)
         ) {
           // Generic object/array values are deliberately capped in
           // rendererVDOMSchema, so they need a per-prop sink for deep
-          // resolution. Style is excluded: its explicit schema already
-          // traverses the object through the parent props sink.
+          // resolution. Style is excluded while no render policy gates the
+          // node: its explicit schema already traverses the object through
+          // the parent props sink. Under a policy, a style object and a value
+          // read through a link take a per-prop sink too, so the policy
+          // decides on the labels that read consumed; a literal is part of
+          // this view, which the policy already admitted.
           const existingState = state.propSubscriptions.get(key);
           if (existingState?.cell) continue; // Already has active per-prop sink
 
@@ -2685,28 +2986,32 @@ export class WorkerReconciler {
 
           // Schema `true` = accept everything → enables deep traversal of this prop
           const propKeyCell = propsCell.key(key).asSchema(true);
-          const propSinkCancel = this.#sinkPropValue(propKeyCell, (
-            deepValue,
-          ) => {
-            const propValue = this.#transformPropValueForState(
-              state,
-              key,
-              deepValue,
-              this.#resolveTextPropSourceCell(state, propsCell, key, value),
-            );
-            this.#queueOps([{
-              op: "set-prop",
-              nodeId: state.nodeId,
-              key,
-              value: propValue,
-            }]);
-          });
+          const propSinkCancel = this.#sinkAdmittedPropValue(
+            state,
+            key,
+            propKeyCell,
+            existingState !== undefined,
+            (deepValue) => {
+              const propValue = this.#transformPropValueForState(
+                state,
+                key,
+                deepValue,
+                this.#resolveTextPropSourceCell(state, propsCell, key, value),
+              );
+              this.#queueOps([{
+                op: "set-prop",
+                nodeId: state.nodeId,
+                key,
+                value: propValue,
+              }]);
+            },
+          );
           state.propSubscriptions.set(key, {
             cell: propKeyCell as Cell<unknown>,
             cancel: propSinkCancel,
           });
         } else {
-          // Schema-resolved style value or primitive value - set directly
+          // Literal primitive or style string - set directly
           const existingState = state.propSubscriptions.get(key);
 
           // Cancel a generic per-prop sink if its value became direct.
@@ -3388,6 +3693,35 @@ export class WorkerReconciler {
   }
 
   /**
+   * Sets `key` from a cell's value each time it changes. `replacing` says
+   * whether the element may hold a value for `key` from before.
+   */
+  #bindCellProp(
+    ctx: ReconcileContext,
+    state: NodeState,
+    key: string,
+    cell: Cell<unknown>,
+    replacing: boolean,
+  ): void {
+    state.propSubscriptions.set(key, {
+      cell,
+      cancel: this.#sinkAdmittedPropValue(state, key, cell, replacing, (
+        value,
+      ) => {
+        this.#queueOps([{
+          op: "set-prop",
+          nodeId: state.nodeId,
+          key,
+          value: this.#transformPropValueForState(state, key, value, cell),
+        }]);
+        if (this.#isTextIntegrityPolicyProp(key)) {
+          this.#refreshTextIntegrityBoundary(ctx, state);
+        }
+      }),
+    });
+  }
+
+  /**
    * Bind props to an element, handling reactive values and events.
    * Tracks Cell references in propSubscriptions for later diffing.
    */
@@ -3489,41 +3823,19 @@ export class WorkerReconciler {
         }
       } else if (isBindingProp(key)) {
         // Bidirectional binding ($prop)
-        const propName = getBindingPropName(key);
         if (isCell(value)) {
-          this.#queueOps(
-            this.#bindingOpsForCell(state, propName, value as Cell<unknown>),
-          );
           state.propSubscriptions.set(key, {
             cell: value as Cell<unknown>,
-            cancel: () => {},
+            cancel: this.#bindCell(
+              state,
+              getBindingPropName(key),
+              value as Cell<unknown>,
+              false,
+            ),
           });
         }
       } else if (isCell(value)) {
-        // Reactive prop value
-        const sinkCancel = this.#sinkPropValue(value as Cell<unknown>, (
-          resolvedValue,
-        ) => {
-          const propValue = this.#transformPropValueForState(
-            state,
-            key,
-            resolvedValue,
-            value as Cell<unknown>,
-          );
-          this.#queueOps([{
-            op: "set-prop",
-            nodeId: state.nodeId,
-            key,
-            value: propValue,
-          }]);
-          if (this.#isTextIntegrityPolicyProp(key)) {
-            this.#refreshTextIntegrityBoundary(ctx, state);
-          }
-        });
-        state.propSubscriptions.set(key, {
-          cell: value as Cell<unknown>,
-          cancel: sinkCancel,
-        });
+        this.#bindCellProp(ctx, state, key, value as Cell<unknown>, false);
       } else {
         // Static prop value
         const propValue = this.#transformPropValueForState(state, key, value);

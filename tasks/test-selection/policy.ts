@@ -42,12 +42,12 @@ export const LANE_BUDGET_SECONDS = LANE_BOUND_SECONDS -
   LANE_PROLOGUE_SECONDS - LANE_SAFETY_SECONDS;
 
 /**
- * What a lane of the full run on `main` is packed to finish inside. Ten
- * minutes: `main` makes no promise about a first answer the way a pull
- * request does, so this is chosen for how many jobs the run should take
- * rather than for how long anybody waits.
+ * What a lane of the full run on `main` is packed to finish inside.
+ * Thirty minutes: `main` makes no promise about a first answer the way a
+ * pull request does, so this is chosen for how many jobs the run should
+ * take rather than for how long anybody waits.
  */
-export const FULL_LANE_BOUND_SECONDS = 600;
+export const FULL_LANE_BOUND_SECONDS = 1800;
 
 /**
  * What the packer may fill in a lane of the full run, derived from that
@@ -179,6 +179,11 @@ export const MIN_CORRECTION_SPAN_SECONDS = LANE_BUDGET_SECONDS / 10;
  * slope fitted too high only over-charges, where one fitted too low lets
  * a lane pack work it has no time for: two batches of one suite have
  * fitted a slope of zero, which says a second of its tests costs nothing.
+ *
+ * It is also how many of the batches a suite's fit is still reading must
+ * carry a figure before the fit narrows to those alone. The fit narrows by
+ * one figure at a time, so each count is taken among the batches left by
+ * the figures before it, which `fitSuite()` describes.
  */
 export const MIN_CORRECTION_SAMPLES = 3;
 
@@ -719,7 +724,9 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when a slope is being fitted from too little and swinging about; " +
-      "down when a suite's real slope takes too long to be believed.",
+      "down when a suite's real slope takes too long to be believed. It " +
+      "is also how many of the batches a suite's fit is still reading " +
+      "must carry a figure before the batches lacking it are left out.",
   },
   {
     name: "FLAKE_EXCLUSION_RATE",

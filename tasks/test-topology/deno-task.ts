@@ -5,9 +5,9 @@
  * a member's task cannot be handed a subset: almost every one of them
  * lists its own paths, so appending more would add to what runs rather
  * than restrict it. What the task does carry is everything else the run
- * needs — the permissions, `--no-check`, a fake-clock preload, an `ENV`
- * assignment in front — so the task is read for those and its paths are
- * replaced with the chosen ones.
+ * needs — the permissions, a fake-clock preload, an `ENV` assignment in
+ * front — so the task is read for those and its paths are replaced with the
+ * chosen ones.
  *
  * Only the simple shape is read: leading `NAME=value` assignments, then
  * `deno test`, then flags and paths. A task carrying a shell
@@ -232,19 +232,28 @@ export function testBatches(
   ];
   const withoutParallel = (flags: readonly string[]) =>
     flags.filter((flag) => flag !== "--parallel");
-  // Indexed by whether a file is all-access, plus two when it is serial.
+  // In the order `testBatchOf()` numbers them.
   const batches: TestBatch[] = [
     { flags: task.flags, files: [] },
     { flags: allAccessFlags, files: [] },
     { flags: withoutParallel(task.flags), files: [] },
     { flags: withoutParallel(allAccessFlags), files: [] },
   ];
-  for (const file of files) {
-    const allAccess = matchesAny(file, task.allAccess) ? 1 : 0;
-    const serial = matchesAny(file, task.serial) ? 2 : 0;
-    batches[allAccess + serial]!.files.push(file);
-  }
+  for (const file of files) batches[testBatchOf(task, file)]!.files.push(file);
   return batches.filter((batch) => batch.files.length > 0);
+}
+
+/**
+ * Which of the `deno test` runs {@link testBatches} puts `file` in, as a
+ * number that stays the same whichever other files are run beside it.
+ */
+export function testBatchOf(
+  task: Pick<ParsedTestTask, "serial" | "allAccess">,
+  file: string,
+): number {
+  // Indexed by whether a file is all-access, plus two when it is serial.
+  return (matchesAny(file, task.allAccess) ? 1 : 0) +
+    (matchesAny(file, task.serial) ? 2 : 0);
 }
 
 /**

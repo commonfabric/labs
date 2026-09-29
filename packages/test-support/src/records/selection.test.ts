@@ -129,6 +129,50 @@ describe("selection", () => {
         .toEqual({ overhead: 3, correction: 1, unitOverhead: 0 });
     });
 
+    it("round-trips a suite's fit with its processes' setup measured", () => {
+      const manifest = sampleManifest();
+      manifest.calibration.suites = {
+        unit: {
+          overhead: 30,
+          correction: 1,
+          unitOverhead: 1,
+          process: { setup: 8, overhead: 2, correction: 0.5, unitOverhead: 0 },
+        },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a suite carrying no process fit as having none", () => {
+      // A fit made where no process marks when its units begin carries none.
+      const manifest = sampleManifest();
+      manifest.calibration.suites = {
+        unit: { overhead: 3, correction: 1, unitOverhead: 0 },
+      };
+      const parsed = parseManifest(serializeManifest(manifest));
+      expect(parsed?.calibration.suites.unit).toEqual({
+        overhead: 3,
+        correction: 1,
+        unitOverhead: 0,
+      });
+    });
+
+    it("refuses a process fit it cannot read", () => {
+      for (
+        const process of [
+          7,
+          { setup: -1, overhead: 0, correction: 1, unitOverhead: 0 },
+          { setup: 1, overhead: 0, correction: 0, unitOverhead: 0 },
+          { setup: 1, overhead: 0, correction: 1 },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.calibration.suites = {
+          unit: { overhead: 0, correction: 1, unitOverhead: 0, process },
+        };
+        expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+      }
+    });
+
     it("refuses a unit overhead an earlier shape carries unreadably", () => {
       // Absent and unreadable are different, and the difference only
       // arises in a shape whose absent figure has a reading: a fit made

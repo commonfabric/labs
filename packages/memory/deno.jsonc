@@ -4,7 +4,7 @@
     "check": "deno check .",
     "deno-test": {
       "description": "Run unit tests",
-      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
     },
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     "bench": {
@@ -28,6 +28,7 @@
     "./v2/path": "./v2/path.ts",
     "./v2/operation-codec": "./v2/operation-codec.ts",
     "./v2/client": "./v2/client.ts",
+    "./v2/presence": "./v2/presence.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
     "./v2/genesis-root": "./v2/genesis-root.ts",
     "./v2/engine": "./v2/engine.ts",

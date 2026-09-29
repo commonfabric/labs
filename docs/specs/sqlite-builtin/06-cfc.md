@@ -403,20 +403,17 @@ with the pure half in
    author-declared `derived:` fallback label for the refuse case remains a
    possible follow-up.)
 3. **Evaluate per row, attach per row.** Each result row is stored as an
-   entity doc of its own, keyed for a row-labeled row on its position and its
-   label under the result cell — never on its content, since the doc id is
-   visible to a reader the row label excludes, and on the label because a
-   doc's confidentiality can never weaken (Section
-   [05](./05-reactivity.md)); the
-   flush writes each labeled row doc
-   **directly** (its own id, root path) under a root-`ifc` schema, and then
-   reads each row's stored link back to confirm the row has a doc to carry
-   the label, refusing the query if one does not. Keyed by the row doc's id,
-   the per-row root label coexists with Phase 2's per-column field labels on
-   the same doc and dominates its fields by prefix-match (a field of a row is
-   at least as confidential as the row — inheriting down can only raise).
-   Downstream consumers inherit it through dereference traces
-   (`cfcLabelViewForDereferenceTraces`), exactly like per-column labels.
+   immutable entity doc of its own under the result cell, keyed on its
+   content, its label and the space's row salt (Section
+   [05](./05-reactivity.md), and "Where a query's selection inputs are
+   labeled" below). The flush writes each labeled row doc **directly** (its
+   own id, root path) under a root-`ifc` schema. Keyed by the row doc's id,
+   the per-row root label coexists with Phase 2's
+   per-column field labels on the same doc and dominates its fields by
+   prefix-match (a field of a row is at least as confidential as the row —
+   inheriting down can only raise). Downstream consumers inherit it through
+   dereference traces (`cfcLabelViewForDereferenceTraces`), exactly like
+   per-column labels.
 
 **Declared output ceiling.** A query may declare the maximum confidentiality
 its result may carry — a consumer contract checked per row against the
@@ -486,8 +483,9 @@ session. A runtime `skip` falls back to `fail` for aggregates; a query's own
 
 A **shared** query result materializes under its query-declared ceiling and
 mode, independently of runtime ceilings. The runtime ceiling does not join its
-request hash or filter its stored rows. The hash includes the shared result's
-shape-label contract version, so a memo without that protection is reissued.
+request hash or filter its stored rows. The hash of every query, shared or
+not, includes the version of the contract its result's labels are written
+under, so a result stored under another contract is reissued.
 Each reader instead observes the
 materialized result through the ordinary cell read guard. The result array
 carries the canonical join of all source-row labels, including rows that the
@@ -775,13 +773,123 @@ whose policy an author wrote.
 
 `/result`'s per-column entries are untouched — the route declines at a path a
 schema declares — and so are the row documents, because that settle
-transaction carries no clause of its own. What the settle DOES declare, for a
-shared result, is the membership: `/result`'s shape `ifc` is the join of the
-rows' own labels AND the label the request carried. How many rows there are
-and which they are is a function of the parameters as much as of the rows,
-and both are readable without opening a row. A session-scoped result is
-materialized per reader, so its membership tells its own reader only what
-they asked for, and it declares nothing.
+transaction carries no clause of its own.
+
+### Where a query's selection inputs are labeled
+
+CFC spec §8.17.6. `S` is the confidentiality of the query's selection inputs,
+its statement and parameters: the flow join of the transaction that issued
+the request, recorded at issue and supplied by the settle.
+
+| Observation | Label | Carried by |
+| --- | --- | --- |
+| `/result` membership, order, length | `S` joined with the rows' labels | declared `observes: "enumerate"` entry at `/result`, consumed by a read of `/result` or its `length` and not by a read of one slot |
+| `/withheld` | the same | declared entry at `/withheld` |
+| which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
+| a row's content | the row's column and row labels | the row document's own entries |
+| a row document's existence | the row's label | the row document's root entry |
+| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
+| `/pending`, on the success path | nothing | recorded residual |
+
+All of it holds at every scope. A session-scoped result is materialized per
+reader, which limits who can read it and does not label what that reader's
+code derives from it and writes elsewhere.
+
+Which rows' labels the membership takes turns on the scope. A shared result
+takes every row's, the rows its contract skipped included: the count of the
+rows it kept tells any reader of the space about the rows it dropped. A
+session-scoped result is filtered for its one reader under that reader's own
+ceiling, so it takes the labels of the rows it holds. The labels of the rows
+it dropped would withhold the result from the reader it was filtered for.
+
+The membership carries the rows' labels as well as `S` because which rows
+exist is a fact about each of them (§8.17.4). The runner has one class for
+membership and count, so the length carries the same label: a value derived
+from the row count of a result over labeled columns carries the columns'
+labels, at every scope. A read of one slot, and of the row it leads to, does
+not consume the membership entry: an `enumerate` entry applies to a read of
+its container and not to a read of one child, and a read of an array's native
+`length` counts as a read of the array
+([`cfc-observation-classes.md`](../cfc-observation-classes.md)
+§6.1). A reader of row 0 therefore carries `S` and row 0's label, and not
+row 1's; code that enumerates or counts the rows carries all of them.
+
+The slot entry for `S` is a declared `followRef` entry because that is the
+class every reader of a reference consumes: a standalone probe of a slot,
+`equals()` on a slot, the list's references taken as handles or read raw, and
+a dereference, which consumes the entry through the probe of the slot it
+follows ([`cfc-observation-classes.md`](../cfc-observation-classes.md) §6.1,
+[`cfc-template-population.md`](../cfc-template-population.md) §6). `S` is
+one label for the whole result, so one entry covers every slot, and it grows
+by clause and never shrinks, as the control paths' declarations do. A row's
+label differs from slot to slot, and the link written at a slot carries the
+labels of the document it names, replaced whenever the slot is written. Rows
+of one result under different row labels therefore keep their own: a reader
+of one row through the result does not pick up another row's label at the
+slot.
+
+`S` is not joined into a row. A reader who reaches a row through the result
+consumes `S` at the slot and the row's label at the row. A reader holding a
+reference to the row from elsewhere consumes the row's label alone, and what
+that reference reads never changes, because a row document is immutable.
+
+A row carrying per-column labels and no row label declares the join of its
+column labels on its root as an `observes: "shape"` entry, so its existence
+carries them. A row under a row label carries the row label at its root for
+every class; where such a row also carries per-column labels, its existence
+carries the row label and its columns carry theirs. A row of a query that
+projects an `asCell` link column declares no existence label: a label at a
+row's root subjects every link written beneath it to the link write policy,
+which refuses a link to a cell that carries no label metadata.
+
+A row to which neither its columns nor a row rule assign a label stores none,
+and declares an empty one. The link write policy governs the slots of a
+result store that carries a label, and refuses a link there to a document
+that stores no label and for which the writing transaction declares none. A
+settle that finds a row's document standing writes the slot and not the
+document, so the declaration cannot rely on what the document stores: every
+settle into a store that carries a label, or is written under one, declares
+the empty label at the root of each such row. The declaration stores nothing
+on the row document, and it does not subject a link written beneath the
+row's root to the link write policy, which counts a declaration by the atoms
+it holds. Into a store that carries no label a row declares nothing, so the
+rows of an unlabeled result do not make its settle relevant to commit
+preparation.
+
+A row document's id is hashed with the space's row salt as well as the row
+key and the result cell's coordinates. The salt is a runtime secret
+(`packages/runner/src/runtime-secret.ts`): one document per space at a
+reserved id, minted with a random value by the first settle that needs it.
+The transaction write chokepoint refuses every unprivileged write to that id,
+and the one writer, `ensureRuntimeSecret()`, returns nothing. A stored salt is
+trusted only when its stored schema carries the writer claim
+`writeAuthorizedBy: ["runtime-secret"]`, which the runtime records under that
+builtin identity when it mints one and which no executed code can satisfy. A
+value planted in the namespace before the chokepoint existed, or through a
+runtime without it, carries no such claim, and the next settle replaces it. The salt is labeled with the
+read-failed atom, which no ceiling admits, so code that reads it cannot
+write, display or send anything derived from it; the builtin reads it as a
+verifier-internal read, which joins nothing to the settle's label. Without
+the salt the id would be a value computable from the row, and the reference
+at each slot would have to carry the row's label so that a reader could not
+confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the
+id says nothing about the row, so the slot carries `S` alone.
+
+Three residuals are recorded against §8.17.6:
+
+- **Equal ids are visible under `S`.** An id is opaque, but it is stable: two
+  slots holding equal rows hold one id, and a row that stays in a result
+  across a change of parameter keeps its id. A reader of the result learns
+  both under `S` and the membership labels, without reading a row.
+- **The salt's protection is its label.** Anything that reads the space's
+  documents outside the runtime, or a runtime whose enforcement mode does not
+  refuse writes on labels, can read the salt and recompute ids. The residual
+  a recomputed id opens is the one the salt closes: whether a guessed row is
+  in a result, disclosed without the row's label.
+- **A row document is immutable by construction of its writer, and nothing
+  refuses another writer.** The builtin never writes a document twice. A
+  pattern holding a row reference can write to it. A writer claim naming the
+  builtin (`ifc.writeAuthorizedBy`) on each row document is the direction.
 
 What the store's undeclared bookkeeping was refusing by accident, before the
 route reached it, includes one case the sink seam cannot express: a query

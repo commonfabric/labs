@@ -125,6 +125,25 @@ export function readAuthoredTypeNode(
 }
 
 /**
+ * Returns the member nodes of the union `node` writes, read through
+ * parentheses and aliases ({@link readAuthoredTypeNode}), each member that
+ * writes a union read for its own members in turn. Returns `[node]` for a node
+ * that writes no union, and for a union already read on the way to it.
+ */
+export function readUnionMemberNodes(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+  visited = new Set<ts.TypeNode>(),
+): ts.TypeNode[] {
+  const written = readAuthoredTypeNode(node, checker);
+  if (!ts.isUnionTypeNode(written) || visited.has(written)) return [node];
+  visited.add(written);
+  return written.types.flatMap((member) =>
+    readUnionMemberNodes(member, checker, visited)
+  );
+}
+
+/**
  * Returns the annotation written on `member`'s declaration when it denotes
  * exactly `type`, the member's type where it is read, apart from the
  * `undefined` that an optional member's `?` adds. Returns `undefined` for a
@@ -144,7 +163,7 @@ export function readMemberAnnotation(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): ts.TypeNode | undefined {
-  const declaration = member.valueDeclaration;
+  const declaration = member.valueDeclaration ?? member.declarations?.[0];
   const annotation = declaration &&
       (ts.isPropertySignature(declaration) ||
         ts.isPropertyDeclaration(declaration))
@@ -152,15 +171,29 @@ export function readMemberAnnotation(
     : undefined;
   if (!annotation) return undefined;
   const annotated = checker.getTypeFromTypeNode(annotation);
-  if (annotated === type) return annotation;
+  if (denotesSameType(annotated, type)) return annotation;
   const optional = (member.flags & ts.SymbolFlags.Optional) !== 0;
   return optional && sameBesidesUndefined(annotated, type)
     ? annotation
     : undefined;
 }
 
+/**
+ * Whether `a` and `b` denote one type: they are the same type, or unions of
+ * the same members. A union written through an alias is a type apart from
+ * the same union written out, though the two denote one type.
+ */
+export function denotesSameType(a: ts.Type, b: ts.Type): boolean {
+  if (a === b) return true;
+  if (!a.isUnion() || !b.isUnion() || a.types.length !== b.types.length) {
+    return false;
+  }
+  const members = new Set<ts.Type>(b.types);
+  return a.types.every((member) => members.has(member));
+}
+
 /** Whether `a` and `b` are unions of the same types once `undefined` is set aside. */
-function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
+export function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
   const parts = (type: ts.Type) =>
     new Set(
       (type.isUnion() ? type.types : [type]).filter((part) =>
@@ -171,4 +204,107 @@ function sameBesidesUndefined(a: ts.Type, b: ts.Type): boolean {
   const bParts = parts(b);
   return aParts.size === bParts.size &&
     [...aParts].every((part) => bParts.has(part));
+}
+
+/**
+ * Returns the type parameter that `node` refers to, through parentheses, when
+ * it is a bare reference to one, and `undefined` for any other node.
+ */
+export function typeParameterOfReference(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeParameterDeclaration | undefined {
+  const bare = unwrapTypeParentheses(node);
+  if (
+    !ts.isTypeReferenceNode(bare) || !ts.isIdentifier(bare.typeName) ||
+    bare.typeArguments?.length
+  ) {
+    return undefined;
+  }
+  return checker.getSymbolAtLocation(bare.typeName)?.declarations?.find(
+    ts.isTypeParameterDeclaration,
+  );
+}
+
+/**
+ * Whether `node` holds a reference the checker binds to a type parameter, or,
+ * given `parameters`, to one of those.
+ */
+export function holdsTypeParameter(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  parameters?: { has(parameter: ts.TypeParameterDeclaration): boolean },
+): boolean {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    const referenced = checker.getSymbolAtLocation(node.typeName)
+      ?.declarations?.some((declaration) =>
+        ts.isTypeParameterDeclaration(declaration) &&
+        (parameters === undefined || parameters.has(declaration))
+      );
+    if (referenced) return true;
+  }
+  return ts.forEachChild(
+    node,
+    (child) => holdsTypeParameter(child, checker, parameters) || undefined,
+  ) ?? false;
+}
+
+/**
+ * Whether `node` holds a reference to a type parameter declared outside it,
+ * which is to say other than one a mapped type or an `infer` within it
+ * declares, and not one `bound` has, where given.
+ */
+export function holdsFreeTypeParameter(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  bound?: { has(parameter: ts.TypeParameterDeclaration): boolean },
+): boolean {
+  return holdsTypeParameter(node, checker, {
+    has: (parameter) =>
+      !(bound?.has(parameter) ?? false) && !declaresWithin(node, parameter),
+  });
+}
+
+/** Whether `declaration` is `node` or one of the nodes it holds. */
+function declaresWithin(node: ts.Node, declaration: ts.Node): boolean {
+  for (let at: ts.Node | undefined = declaration; at; at = at.parent) {
+    if (at === node) return true;
+  }
+  return false;
+}
+
+/**
+ * Returns the node `node` stands for, read as {@link readAuthoredTypeNode}
+ * reads it and, in turn, through each reference to an alias whose whole body
+ * is one of its own type parameters (`type Id<X> = X`), which denotes exactly
+ * the argument the reference supplies for it. An alias that leaves that
+ * argument out, or names itself through others, ends the walk.
+ */
+export function readThroughIdentityAliases(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode {
+  const visited = new Set<ts.TypeNode>();
+  let current = readAuthoredTypeNode(node, checker);
+  while (!visited.has(current) && ts.isTypeReferenceNode(current)) {
+    visited.add(current);
+    const declaration = getTypeAliasDeclaration(current, checker);
+    const body = declaration && unwrapTypeParentheses(declaration.type);
+    if (
+      !body || !ts.isTypeReferenceNode(body) || body.typeArguments?.length ||
+      !ts.isIdentifier(body.typeName)
+    ) {
+      return current;
+    }
+    const name = body.typeName.text;
+    const index = declaration.typeParameters?.findIndex((parameter) =>
+      parameter.name.text === name
+    ) ?? -1;
+    const argument = index >= 0 ? current.typeArguments?.[index] : undefined;
+    if (!argument) {
+      return current;
+    }
+    current = readAuthoredTypeNode(argument, checker);
+  }
+  return current;
 }

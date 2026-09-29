@@ -10,7 +10,7 @@ import {
 import {
   type ClientCommit,
   compatibleMemoryProtocolFlags,
-  decodeMemoryBoundary,
+  decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -28,6 +28,11 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  type PresenceJoinResult,
+  type PresencePublication,
+  type PresenceRecord,
+  type PresenceRemoveMessage,
+  type PresenceUpsertMessage,
   type ResponseMessage,
   type SessionEffectMessage,
   type SessionHolding,
@@ -52,6 +57,11 @@ import {
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
+import {
+  isPresenceRoom,
+  PresenceError,
+  validatePresencePublication,
+} from "./presence.ts";
 import type { Server } from "./server.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
@@ -144,6 +154,63 @@ export type SessionOpenAuthFactory = (
   session: MountOptions,
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
+
+/**
+ * What a presence room delivers to an observer, in the order it happens. A
+ * `snapshot` opens the membership and reopens it after every reconnect, each
+ * time with the participant id the relay assigned for that connection; a
+ * `failure` carries a refused publication or the session's termination, and
+ * nothing follows the latter.
+ */
+export type PresenceEvent =
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: PresenceRecord[];
+  }
+  | { kind: "upsert"; participant: PresenceRecord }
+  | { kind: "remove"; participantId: string }
+  | { kind: "failure"; error: Error };
+
+/** One observer's membership in one presence room. */
+export interface PresenceMembership {
+  /** The id the relay assigned this connection in the room; changes on reconnect. */
+  readonly participantId: string;
+
+  /**
+   * Replaces the record this session holds in the room, at the next
+   * revision. It does not wait for the relay: a refused publication reaches
+   * the observer as a `failure`. Throws a `PresenceError` for a publication
+   * outside the relay's bounds, before anything is sent.
+   */
+  publish(publication: PresencePublication): void;
+
+  /**
+   * Ends this observer's membership. The session leaves the room once its
+   * last observer has left; calling it again does nothing.
+   */
+  leave(): Promise<void>;
+}
+
+/**
+ * What one session holds for one room: its observers, the relay's view of the
+ * room as the session last applied it, and the record it last published.
+ */
+type PresenceRoomState = {
+  room: string;
+  observers: Set<(event: PresenceEvent) => void>;
+  participantId: string;
+  participants: Map<string, PresenceRecord>;
+
+  /** Revision of the last publication; `0` until one is made. */
+  revision: number;
+
+  /** The last publication, republished after a reconnect. */
+  publication: PresencePublication | null;
+
+  /** Settles when the relay has responded to the current join. */
+  joined: Promise<void>;
+};
 
 export type WatchMutationResult = {
   view: WatchView;
@@ -583,7 +650,7 @@ export class Client {
     let message: unknown;
     try {
       const decodeStart = performance.now();
-      message = decodeMemoryBoundary(payload);
+      message = decodeTrustedMemoryBoundary(payload);
       logger.time(decodeStart, "receive", "decodeBoundary");
       logIncomingFrame(message, memoryMessageFrameBytes(payload));
       // A frame whose raw text lacks every reserved reference prefix cannot
@@ -691,6 +758,17 @@ export class Client {
           session.space === message.space
         ) {
           session.handleRevoked(message.reason);
+        }
+      }
+      return;
+    }
+    if (isPresencePush(message)) {
+      for (const session of this.#spaces) {
+        if (
+          session.sessionId === message.sessionId &&
+          session.space === message.space
+        ) {
+          session.handlePresence(message);
         }
       }
       return;
@@ -903,6 +981,7 @@ export class SpaceSession {
   #readyOnConnection = true;
   #restoring = false;
   #caughtUpLocalSeq = 0;
+  #presenceRooms = new Map<string, PresenceRoomState>();
 
   /** Invoked when a restore REPLACES the session (a new session id, or the
    * same id re-opened without resume): the marker epoch reset, so
@@ -1076,6 +1155,122 @@ export class SpaceSession {
     });
     this.#noteResult(result.serverSeq);
     return result;
+  }
+
+  /**
+   * Joins the presence room `room` under this session's space and returns
+   * the membership, after delivering the relay's current snapshot to
+   * `observer`. Several observers may join one room; they share one
+   * membership and one published record. Throws a `ProtocolError` when the
+   * server does not advertise `presenceV1`, and a `PresenceError` for a
+   * malformed room id.
+   */
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.presenceV1 !== true) {
+      throw protocolError("memory server does not support presence");
+    }
+    if (!isPresenceRoom(room)) {
+      throw new PresenceError("Presence room id is invalid");
+    }
+    // The room's last observer may leave while the join is awaited, taking
+    // the state with it; a state that is no longer the room's is not one to
+    // attach to, so the join starts over on a fresh one.
+    let state: PresenceRoomState;
+    for (;;) {
+      const existing = this.#presenceRooms.get(room);
+      if (existing === undefined) {
+        const created: PresenceRoomState = {
+          room,
+          observers: new Set(),
+          participantId: "",
+          participants: new Map(),
+          revision: 0,
+          publication: null,
+          joined: Promise.resolve(),
+        };
+        created.joined = this.#joinPresence(created);
+        this.#presenceRooms.set(room, created);
+        state = created;
+      } else {
+        state = existing;
+      }
+      try {
+        await state.joined;
+      } catch (error) {
+        if (
+          this.#presenceRooms.get(room) === state && state.observers.size === 0
+        ) {
+          this.#presenceRooms.delete(room);
+        }
+        throw error;
+      }
+      this.#assertOpen();
+      if (this.#presenceRooms.get(room) === state) break;
+    }
+    state.observers.add(observer);
+    this.#deliverPresenceTo(observer, {
+      kind: "snapshot",
+      participantId: state.participantId,
+      participants: [...state.participants.values()],
+    });
+    const joined = state;
+    let left = false;
+    return {
+      get participantId() {
+        return joined.participantId;
+      },
+      publish: (publication) => {
+        if (left || this.#closed) return;
+        validatePresencePublication(publication);
+        joined.publication = publication;
+        joined.revision += 1;
+        this.#publishPresence(joined, joined.revision);
+      },
+      leave: async () => {
+        if (left) return;
+        left = true;
+        joined.observers.delete(observer);
+        if (joined.observers.size > 0) return;
+        if (this.#presenceRooms.get(room) === joined) {
+          this.#presenceRooms.delete(room);
+        }
+        if (this.#closed) return;
+        await joined.joined.catch(() => undefined);
+        await this.#client.request({
+          type: "presence.leave",
+          requestId: crypto.randomUUID(),
+          space: this.space,
+          sessionId: this.#sessionId,
+          room,
+        }).catch(() => undefined);
+      },
+    };
+  }
+
+  /** Applies one presence push from the relay to its room's observers. */
+  handlePresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
+    const state = this.#presenceRooms.get(message.room);
+    if (state === undefined) return;
+    if (message.type === "presence/upsert") {
+      const { participant } = message;
+      const held = state.participants.get(participant.participantId);
+      // The relay pushes only a revision above the one it last accepted for
+      // a membership, so an older one here arrived out of order; the newer
+      // record already shown is kept.
+      if (held !== undefined && held.revision >= participant.revision) return;
+      state.participants.set(participant.participantId, participant);
+      this.#deliverPresence(state, { kind: "upsert", participant });
+      return;
+    }
+    if (!state.participants.delete(message.participantId)) return;
+    this.#deliverPresence(state, {
+      kind: "remove",
+      participantId: message.participantId,
+    });
   }
 
   async resolveEventAttention(
@@ -1635,6 +1830,7 @@ export class SpaceSession {
           view.emit(sync);
         }
       }
+      this.#rejoinPresenceRooms();
       await Promise.all(replayTasks);
       this.#restoreComplete?.resolve();
       this.#restoreComplete = undefined;
@@ -1665,6 +1861,19 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
+    // The relay keeps a membership until it hears otherwise, and a closed
+    // session sends nothing further on its own, so each room is left now;
+    // the leave is not waited for. Observers hear the close as a failure.
+    for (const state of this.#presenceRooms.values()) {
+      void this.#client.request({
+        type: "presence.leave",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        room: state.room,
+      }).catch(() => undefined);
+    }
+    this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
     this.#readyOnConnection = false;
@@ -1722,6 +1931,7 @@ export class SpaceSession {
     this.#viewCapabilityLostObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
+    this.#endPresenceRooms(error);
     const observers = [...this.#accessLossObservers];
     this.#accessLossObservers.clear();
     if (isPermanentAuthorizationError(error)) {
@@ -1746,6 +1956,127 @@ export class SpaceSession {
       return;
     }
     this.#readyOnConnection = false;
+  }
+
+  async #joinPresence(state: PresenceRoomState): Promise<void> {
+    const result = await this.#client.request<PresenceJoinResult>({
+      type: "presence.join",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      room: state.room,
+    });
+    state.participantId = result.participantId;
+    state.participants = new Map(
+      result.participants.map((participant) => [
+        participant.participantId,
+        participant,
+      ]),
+    );
+  }
+
+  /**
+   * Sends the room's record at `revision` once the session is restored and
+   * the current join has settled — a reconnect in progress reopens the
+   * session and rejoins the room, and a publication sent before either has
+   * completed would be refused as not joined. A publication overtaken by a
+   * newer one while it waited is not sent: the relay wants only the latest,
+   * and it refuses a revision that does not advance. A connection error is
+   * not reported, since the reconnect that follows rejoins and republishes;
+   * any other refusal reaches the observers.
+   */
+  #publishPresence(state: PresenceRoomState, revision: number): void {
+    const publication = state.publication;
+    if (publication === null) return;
+    const send = async (): Promise<void> => {
+      // A restore that begins while the join is awaited replaces it, so the
+      // wait is repeated until the join awaited is still the room's.
+      for (;;) {
+        const joined = state.joined;
+        await this.#ensureSessionRestored();
+        await joined;
+        if (state.joined === joined) break;
+      }
+      if (
+        this.#closed || state.revision !== revision ||
+        this.#presenceRooms.get(state.room) !== state
+      ) {
+        return;
+      }
+      await this.#client.request({
+        type: "presence.publish",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        room: state.room,
+        revision,
+        name: publication.name,
+        facets: publication.facets,
+      });
+    };
+    void send().catch((error) => {
+      if (isConnectionError(error) || this.#closed) return;
+      this.#deliverPresence(state, {
+        kind: "failure",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+  }
+
+  /**
+   * Rejoins every room after the session is re-established, delivering the
+   * new snapshot and republishing the last record at a fresh revision. The
+   * relay assigned a new participant id with the new connection, so a
+   * snapshot rather than an upsert is what tells the observers.
+   */
+  #rejoinPresenceRooms(): void {
+    for (const state of this.#presenceRooms.values()) {
+      state.joined = this.#joinPresence(state);
+      void state.joined.then(() => {
+        if (this.#presenceRooms.get(state.room) !== state) return;
+        this.#deliverPresence(state, {
+          kind: "snapshot",
+          participantId: state.participantId,
+          participants: [...state.participants.values()],
+        });
+        if (state.publication !== null) {
+          state.revision += 1;
+          this.#publishPresence(state, state.revision);
+        }
+      }).catch((error) => {
+        if (isConnectionError(error) || this.#closed) return;
+        this.#deliverPresence(state, {
+          kind: "failure",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      });
+    }
+  }
+
+  #deliverPresence(state: PresenceRoomState, event: PresenceEvent): void {
+    for (const observer of state.observers) {
+      this.#deliverPresenceTo(observer, event);
+    }
+  }
+
+  #deliverPresenceTo(
+    observer: (event: PresenceEvent) => void,
+    event: PresenceEvent,
+  ): void {
+    try {
+      observer(event);
+    } catch (cause) {
+      console.error("presence observer threw:", cause);
+    }
+  }
+
+  /** Ends every room with `error`, telling each observer once. */
+  #endPresenceRooms(error: Error): void {
+    const rooms = [...this.#presenceRooms.values()];
+    this.#presenceRooms.clear();
+    for (const state of rooms) {
+      this.#deliverPresence(state, { kind: "failure", error });
+    }
   }
 
   #queueBackground(task: Promise<void>): void {
@@ -2709,6 +3040,17 @@ const isSessionRevoked = (
     typeof space === "string" &&
     typeof sessionId === "string" &&
     (reason === "taken-over" || reason === "unauthorized");
+};
+
+const isPresencePush = (
+  message: unknown,
+): message is PresenceUpsertMessage | PresenceRemoveMessage => {
+  if (!isPlainObject(message)) return false;
+  const { type, space, sessionId, room } = message;
+  return (type === "presence/upsert" || type === "presence/remove") &&
+    typeof space === "string" &&
+    typeof sessionId === "string" &&
+    typeof room === "string";
 };
 
 const isResponse = (message: unknown): message is ResponseMessage<unknown> => {

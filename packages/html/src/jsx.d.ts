@@ -3006,6 +3006,7 @@ interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
 interface CFCustodySealElement extends CFHTMLElement {}
+interface CFCustodyAnswerElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
@@ -4030,7 +4031,6 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
-  "presenceUrl"?: string;
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4058,6 +4058,7 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-error"?: any;
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
+  "oncf-presence-join"?: any;
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;
@@ -4347,6 +4348,17 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "$box"?: CellLike<unknown>;
   /** Fires once sealed; `instance` is the digest of the resolved terms. */
   "oncf-sealed"?: EventHandler<{ instance: string }>;
+}
+
+interface CFCustodyAnswerAttributes<T> extends CFHTMLAttributes<T> {
+  /** The room's terms document; its space is the room space. */
+  "$terms"?: CellLike<unknown>;
+  /** A cell holding the room's custody policy reference. */
+  "$policy"?: CellLike<unknown>;
+  /** The room's projected answer, which the host publishes once and shows. */
+  "$output"?: CellLike<unknown>;
+  /** Fires once the answer is published; `instance` names it when known. */
+  "oncf-published"?: EventHandler<{ instance?: string }>;
 }
 
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
@@ -5406,6 +5418,10 @@ declare global {
       "cf-custody-seal": CFDOM.DetailedHTMLProps<
         CFCustodySealAttributes<CFCustodySealElement>,
         CFCustodySealElement
+      >;
+      "cf-custody-answer": CFDOM.DetailedHTMLProps<
+        CFCustodyAnswerAttributes<CFCustodyAnswerElement>,
+        CFCustodyAnswerElement
       >;
       "cf-owner-view": CFDOM.DetailedHTMLProps<
         CFOwnerViewAttributes<CFHTMLElement>,

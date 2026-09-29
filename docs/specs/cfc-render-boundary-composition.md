@@ -29,6 +29,46 @@ gated by the render declassification policy (fail-closed under `deny`).
 Regression guard: "preserves an outer unlabeled-only boundary through an
 unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
+The ceiling in force at a node gates what reaches the page from that node by
+the same fit (`canRenderLabelUnderPolicy`):
+
+- A cell child the ceiling does not admit renders as the blocked placeholder.
+- A property whose value is read through a link, or is an object, is read by a
+  sink of its own, and the fit is made on the labels that read consumed: every
+  document the read passed through, including one behind a link crossed part
+  way along the path and one a link inside the value leads to. A property the
+  ceiling refuses is not set, and is removed if it was. That covers a cell
+  passed as a property (`<span title={cell}>`) and, in a view read from a
+  cell, as a pattern's view is, a property that links to one and an object or
+  `style` property holding such a link. A literal property is decided with the
+  props object it sits in: it is set directly while the ceiling admits that
+  object's own label, and read by a sink of its own, like the others, while
+  it does not, as when the view or its props are linked from a document of
+  their own. An object written inline in a view built outside a cell sends a
+  cell it holds as a link, not as the cell's value.
+- A `$` binding is made only while the ceiling admits what the worker's read
+  of the bound cell, under the cell's schema, consumes. The worker keeps
+  reading the bound cell and removes the binding when a write leaves that read
+  consuming a label the ceiling refuses. The binding hands the host a live
+  handle, and the worker answers the host's reads through it without the
+  ceiling: a read that follows a link the worker's read did not, and the
+  host's own subscription to the cell, which can deliver the write that causes
+  a removal before the removal arrives.
+
+Each decision is made again when what its read consumed changes, labels
+included, and when the membership those labels name changes, and only a
+change in the decision is emitted. A trusted host component that never shows a
+value from a binding, handing the reference to a worker operation and showing
+only what that operation answers, declares the binding in
+`REFERENCE_BINDING_SINKS` beside the reconciler, and the ceiling does not gate
+it. A value it reads through such a binding serves only as a signal to ask the
+operation again. `cf-custody-seal` is one, whose dialog shows what the seal's
+preparation answers, and `cf-custody-answer` another, which shows the answer
+the seal published. The declaration is reviewed like the component itself,
+since a component that shows what such a binding holds releases it past the
+ceiling.
+Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
+
 ## Text integrity (`requiredTextIntegrity` / `allowLiteralText`)
 
 Composes the same way — the meet of the parent and inner policies (CT-1796):

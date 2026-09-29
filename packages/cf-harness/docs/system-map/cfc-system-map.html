@@ -670,8 +670,8 @@
     // The state of this repository the map describes. Bump both when the
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
-      date: "2026-09-22",
-      sha: "7827662012",
+      date: "2026-09-29",
+      sha: "37971c23cd",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -907,7 +907,7 @@
         y: 540,
         w: 250,
         h: 92,
-        t: "Docker · runsc-cfc",
+        t: "Sandbox · runsc-cfc",
         s: "bash · read_file · write_file",
       },
       {
@@ -1223,7 +1223,7 @@
           1030,
           792,
         ]],
-        label: "observation + sidecar policy",
+        label: "observation + CFC result",
         lp: [1470, 958],
         gate: "g_obs",
         gt: 0.9,
@@ -1489,7 +1489,7 @@
       g_obs: {
         t: "Observation",
         status: "partial",
-        short: "sidecar taint",
+        short: "runsc taint",
         boundary: "sandbox → model context",
       },
       g_egress: {
@@ -1768,11 +1768,11 @@
         kind: "Outside",
         band: "outside",
         body:
-          `<p>Reached through the harness's web tools: the <code>web_fetch</code> and <code>web_search</code> child profiles, or a parent with an explicit <code>web_fetch</code> allowlist. Two-way risk: the request body can carry information out; the response is untrusted content coming in.</p><p>The sandbox is a second route. Its Docker network mode defaults to <code>bridge</code>, and <code>curl</code> is the only network-shaped command bash inspects (it allows localhost and <code>host.docker.internal</code> only), so a sandboxed shell in any profile can reach the network by other means.</p>`,
+          `<p>Reached through the harness's web tools: the <code>web_fetch</code> and <code>web_search</code> child profiles, or a parent with an explicit <code>web_fetch</code> allowlist. Two-way risk: the request body can carry information out; the response is untrusted content coming in.</p><p>The sandbox is a second route. Its network mode defaults to <code>bridge</code> under Docker and to <code>sandbox</code> under the direct driver, and <code>curl</code> is the only network-shaped command bash inspects (it allows localhost and <code>host.docker.internal</code> only), so a sandboxed shell in any profile can reach the network by other means.</p>`,
         threats: ["t1", "t2"],
         close: [
           "<code>web_fetch</code> applies bounds and redirect checks but stamps no label and no ExternalIngest mark on what it returns.",
-          "Network authority is a curl guard plus a Docker network mode, not an explicit destination profile across sandbox and web tools (harness deviation 3; CT-2202 item 2). Per-child <code>--network none</code> is described as cheap plumbing, not done.",
+          "Network authority is a curl guard plus a sandbox network mode, not an explicit destination profile across sandbox and web tools (harness deviation 3; CT-2202 item 2). A network mode of <code>none</code> per child is described as cheap plumbing, not done.",
         ],
       },
       skillssh: {
@@ -1902,10 +1902,12 @@
         kind: "Sandbox",
         band: "agent",
         body:
-          `<p>Most tool execution runs in Docker under <code>runsc-cfc</code>, the gVisor runtime with CFC taint tracking. Output crosses back to the model through a sidecar that marks each observation <code>observed</code>, <code>opaque</code> or <code>denied</code>; the harness renders that verdict and never overrides it. Network mode defaults to bridge.</p>`,
+          `<p>Most tool execution runs under gVisor's <code>runsc</code> with CFC taint tracking, through one of two drivers a run selects with <code>--sandbox-runtime</code> or <code>CF_HARNESS_SANDBOX_RUNTIME</code>. <b>Docker</b>, the default, shells out to Docker and names the Docker-registered runtime <code>runsc-cfc</code>; it describes itself as <code>kind: docker-runsc-cfc</code>. The <b>direct driver</b> writes an OCI bundle and invokes a <code>runsc</code> binary itself, with no Docker — gVisor's on Linux, and on macOS a darwin build that forwards the same command line into one VM; it describes itself as <code>kind: runsc-cfc</code>. Both work on one machine. Where CFC is wired, which is the two sidecar directories under Docker and a CFC policy under the direct driver, the output crosses back to the model with a trusted result that marks each observation <code>observed</code>, <code>opaque</code> or <code>denied</code>; the harness renders that verdict and never overrides it.</p><p>Network mode defaults to <code>bridge</code> under Docker and to <code>sandbox</code>, runsc's own network stack, under the direct driver. <code>CF_HARNESS_DOCKER_NETWORK_MODE</code> sets both in Docker's words: <code>none</code> stays <code>none</code>, <code>bridge</code> becomes <code>sandbox</code>, <code>host</code> stays <code>host</code>.</p><p><b>Sessions.</b> The model-facing <code>bash</code> descriptor depends on the runtime: under the direct driver it takes a <code>session</code> argument, under Docker it has none. A session is a long-lived container that later calls execute in. A runtime holds at most eight; one lasts until its run ends, a command in it overruns its timeout or cannot be run, its container exits, or the harness process exits. The harness holds each through a <code>ProcessHandle</code> on a child whose standard input it keeps open, so a session ends with the harness however the harness exits, and the engine closes a runtime it built on every terminal transition. Sessions are refused in the enforcing modes. A lost session, a session that ended during the call, a reached cap and a failed start each come back as a recoverable refusal naming the reason. Every child of a run whose engine built the direct driver's runtime gets a runtime of its own, so it cannot execute in its parent's sessions.</p><p><b>Trust.</b> The direct driver refuses a CFC policy, a rootfs or a runsc binary that lies inside a writable mount, where the sandbox could rewrite it. The scratch directory holds each call's context and result files, so whoever can write there can swap a result under the run: it has to be out of reach of the sandbox and of every other user of the host, and one that lies inside any mount is refused.</p>`,
+        links: [["a direct runsc driver with named sessions", 7894]],
         threats: ["t5", "t12"],
         close: [
           "The sandbox's taint (xattr) is a different label store from the runner's. Bridging the two is the retirement condition for the product <code>observe</code> bridges (CT-2202 item 7).",
+          "A session's flow-control result is taken when one <code>exec</code> exits, while the call's output keeps draining and the session's other processes keep running, so it cannot vouch for everything that reaches the output. Until a result is sound for a long-lived container, an enforcing run executes every command in a container of its own.",
         ],
       },
       mount: {
@@ -2071,19 +2073,20 @@
       },
       g_obs: {
         body:
-          `<p>Sandbox output crosses back through a sidecar that marks it <code>observed</code>, <code>opaque</code> or <code>denied</code> from runsc's xattr taint. The harness renders the verdict and never decides.</p>`,
+          `<p>Where CFC is wired, sandbox output crosses back with a trusted result that marks it <code>observed</code>, <code>opaque</code> or <code>denied</code> from runsc's xattr taint. Under the Docker driver the result is a sidecar file in a directory the runtime's registration names; under the direct driver it arrives on a descriptor the driver opens for the call. One parser reads both, and reads one shape differently for the two: a result whose structured label is empty beside a non-blank label string that is not runsc's spelling of the empty label is <code>observed</code> under Docker and withheld under the direct driver. The harness renders the verdict and never decides.</p>`,
         why:
           "The sandbox's taint store and the runner's label store are two different systems that do not yet speak.",
         close: [
           "Real sidecar evidence for every exposed observation, so Loom and Pattern Factory can leave <code>observe</code> mode (deviation 2).",
-          "The mediation depends on how the operator registered <code>runsc-cfc</code>. A console started with the fabric pair takes both sidecar directories from the <code>runsc-cfc</code> registration <code>docker info</code> reports — the result directory the runtime writes and the invocation-context directory the harness writes for it to read — so the two sides name the same paths; on the CLI path, without <code>--cfc-invocation-context-dir</code> the harness writes invocation contexts nothing reads and input labels drop silently, while the guard only checks that the directories are named (CT-2105).",
+          "The direct driver has no registration to get wrong: it passes <code>--cfc</code> exactly when a CFC policy is configured, refuses an enforcing run that has none, and refuses a session in an enforcing mode.",
+          "Under the Docker driver the mediation depends on how the operator registered <code>runsc-cfc</code>. A console started with the fabric pair takes both sidecar directories from the <code>runsc-cfc</code> registration <code>docker info</code> reports — the result directory the runtime writes and the invocation-context directory the harness writes for it to read — so the two sides name the same paths; on the CLI path, without <code>--cfc-invocation-context-dir</code> the harness writes invocation contexts nothing reads and input labels drop silently, while the guard only checks that the directories are named (CT-2105).",
           "Reserve the artifact root from the sandbox (CT-2117).",
         ],
         threats: ["t5", "t12"],
       },
       g_egress: {
         body:
-          `<p>Outbound from the harness: <code>web_fetch</code> applies bounds and redirect checks; the browser tool has a verb allowlist and a per-run origin allowlist for the values a <code>valueHandle</code> spends; the bash <code>curl</code> guard admits localhost targets only, and nothing else in the sandbox is inspected while its network mode is bridge. Inbound: the response is untrusted.</p><p>Inside a pattern, web egress is gated for real: the max-enforcement bundle puts public-only ceilings on the six fetch sinks.</p>`,
+          `<p>Outbound from the harness: <code>web_fetch</code> applies bounds and redirect checks; the browser tool has a verb allowlist and a per-run origin allowlist for the values a <code>valueHandle</code> spends; the bash <code>curl</code> guard admits localhost targets only, and nothing else in the sandbox is inspected while its network mode is bridge, or sandbox under the direct driver. Inbound: the response is untrusted.</p><p>Inside a pattern, web egress is gated for real: the max-enforcement bundle puts public-only ceilings on the six fetch sinks.</p>`,
         why:
           "The exfiltration sink an injected skill aims at. Harness-side it is protected mostly by the agent not holding values, not by a label check on the request.",
         close: [
@@ -2185,7 +2188,7 @@
         plan:
           "Real sidecar evidence for every exposed observation so the product adapters leave observe mode (deviation 2), and one label vocabulary across runsc taint and runner labels.",
         body:
-          `<p>A value written into the workspace mount is a file. Files carry runsc taint, not fabric labels, and the two stores do not talk. <b>What holds:</b> the write floor and the direct-command authority ladder on <code>write_file</code>; the sidecar's opaque/denied verdicts on reads.</p>`,
+          `<p>A value written into the workspace mount is a file. Files carry runsc taint, not fabric labels, and the two stores do not talk. <b>What holds:</b> the write floor and the direct-command authority ladder on <code>write_file</code>; the trusted result's opaque/denied verdicts on reads.</p>`,
         where: ["docker", "mount", "g_obs"],
       },
       t6: {
@@ -2286,7 +2289,7 @@
       e_parent_gateway:
         `<p>What the harness sends the provider and what the provider sends back. Outbound bytes are model-visible by definition; inbound completions are untrusted proposals. There is no label gate on this edge; see the gate.</p>`,
       e_run_pattern:
-        `<p><code>run_pattern</code> is the central tool: the child writes a pattern and runs it in the trusted fabric session against the handles it holds. Its fabric identity stays outside Docker and its authority is one configured space. Computation goes to the data.</p><p>Research reaches a child as a handle it can describe rather than as a gate on its source: what the child reuses of a kit is its own judgment, and nothing checks the source for imports.</p><p>The result of a run comes back as <code>resultRef</code>, a handle, on success and on a release refusal alike. A commit refusal (write floor, missing policy input, writer fit under strict) or a run failure returns an error with no handle. Fields the <code>resultSchema</code> models as inert (numbers, booleans, enums) come back as themselves if the ceiling admits them; everything else as a reference token.</p><p>Inline source and its compile or settle diagnostics are a separate, unlabeled side channel: the diagnostics remain model-facing so the author can repair the program (CT-2199).</p><p>A successful result carries a bounded <code>outputConcerns</code> report beside it: declared top-level outputs that report a failure, declare a pending read, or hold no rows on a settled result declaring a read. The scan combines the run's captured result with readable instances retained in the recorder's buffer, including composed readers; an unreadable or evicted instance can leave a concern unreported. It names the output and the pattern, never the failure's text, which stays in the artifact; a composed reader's outputs went through no release measurement, and a property name is a channel, so only a name the pattern's own schema declares is reported. A disclosure, not a refusal: the run succeeded and the piece stands. Pending counts are placeholders; pending concerns ask for a reread only when policy has not refused the result read. <code>assign_slug</code> refuses a declared pending read or an unestablished UI. Successful naming retains a host-only reference for the next bare session follow-up, reminted through the input-cell path.</p>`,
+        `<p><code>run_pattern</code> is the central tool: the child writes a pattern and runs it in the trusted fabric session against the handles it holds. Its fabric identity stays outside the sandbox and its authority is one configured space. Computation goes to the data.</p><p>Research reaches a child as a handle it can describe rather than as a gate on its source: what the child reuses of a kit is its own judgment, and nothing checks the source for imports.</p><p>The result of a run comes back as <code>resultRef</code>, a handle, on success and on a release refusal alike. A commit refusal (write floor, missing policy input, writer fit under strict) or a run failure returns an error with no handle. Fields the <code>resultSchema</code> models as inert (numbers, booleans, enums) come back as themselves if the ceiling admits them; everything else as a reference token.</p><p>Inline source and its compile or settle diagnostics are a separate, unlabeled side channel: the diagnostics remain model-facing so the author can repair the program (CT-2199).</p><p>A successful result carries a bounded <code>outputConcerns</code> report beside it: declared top-level outputs that report a failure, declare a pending read, or hold no rows on a settled result declaring a read. The scan combines the run's captured result with readable instances retained in the recorder's buffer, including composed readers; an unreadable or evicted instance can leave a concern unreported. It names the output and the pattern, never the failure's text, which stays in the artifact; a composed reader's outputs went through no release measurement, and a property name is a channel, so only a name the pattern's own schema declares is reported. A disclosure, not a refusal: the run succeeded and the piece stands. Pending counts are placeholders; pending concerns ask for a reread only when policy has not refused the result read. <code>assign_slug</code> refuses a declared pending read or an unestablished UI. Successful naming retains a host-only reference for the next bare session follow-up, reminted through the input-cell path.</p>`,
       e_handles_spaces:
         `<p>A <code>cfh:a:</code> token is a deterministic per-run name for a cell address. Bare fabric IDs are not converted. The mapping lives in <code>run-state.json</code> and survives batch resume; an interactive (console) restore does not persist it yet.</p>`,
       e_render:
@@ -2626,7 +2629,7 @@
             ],
             sel: "docker",
             h: "The mediators",
-            t: "The sandbox sidecar, our gateway, the connector ingress, the index: each is trusted to stamp or withhold at a boundary. They are ours, so they are inside the base; they are also where two label stores meet and can disagree.",
+            t: "The sandbox runtime, our gateway, the connector ingress, the index: each is trusted to stamp or withhold at a boundary. They are ours, so they are inside the base; they are also where two label stores meet and can disagree.",
           },
           {
             f: [

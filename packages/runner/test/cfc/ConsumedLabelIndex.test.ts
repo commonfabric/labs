@@ -24,7 +24,7 @@ describe("ConsumedLabelIndex", () => {
       ["field"],
     ];
     const entries = paths.map(entry);
-    const index = new ConsumedLabelIndex(entries, { canonicalPaths: true });
+    const index = new ConsumedLabelIndex(entries);
     paths[3].push("changed");
     expect(
       index.overlapping(["value", "field"], false).map((item) => item.ordinal),
@@ -48,7 +48,7 @@ describe("ConsumedLabelIndex", () => {
       [],
       ["*", "*"],
     ].map(entry);
-    const index = new ConsumedLabelIndex(entries, { canonicalPaths: true });
+    const index = new ConsumedLabelIndex(entries);
     for (const descendants of [true, false]) {
       const query = ["root", "*"];
       expect(index.overlapping(query, descendants).map(({ entry }) => entry))
@@ -84,6 +84,7 @@ describe("ConsumedLabelIndex", () => {
       ["other"],
       ["a", "b"],
       ["a"],
+      ["a", "b"],
       ["value", "a", "b"],
     ].map(entry);
     const index = new ConsumedLabelIndex(entries);
@@ -182,9 +183,9 @@ describe("ConsumedLabelIndex", () => {
     }
   });
   describe("constructor()", () => {
-    it("preserves payload coordinates when entries are already canonical", () => {
+    it("keeps a leading `value` segment of an entry's path as a field name", () => {
       const entries = [["value", "field"], ["field"], []].map(entry);
-      const index = new ConsumedLabelIndex(entries, { canonicalPaths: true });
+      const index = new ConsumedLabelIndex(entries);
       expect(index.overlapping(["value", "field"]).map((item) => item.entry))
         .toEqual([entries[0], entries[2]]);
       expect(index.overlapping(["field"]).map((item) => item.entry))
@@ -194,9 +195,7 @@ describe("ConsumedLabelIndex", () => {
     it("retains a supplied path when its caller reuses the input array", () => {
       const path = ["value", "*"];
       const original = entry(path, 0);
-      const index = new ConsumedLabelIndex([original], {
-        canonicalPaths: true,
-      });
+      const index = new ConsumedLabelIndex([original]);
       path[0] = "other";
       expect(index.overlapping(["value", "field"]).map((item) => item.entry))
         .toEqual([original]);

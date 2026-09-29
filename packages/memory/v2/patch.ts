@@ -4,6 +4,7 @@ import {
   CloneForMutationError,
   cloneIfNecessary,
   deepFreeze,
+  hashStringOf,
   type MutableFabricContainerValueLayer,
   tracePath,
   valueEqual,
@@ -340,6 +341,12 @@ const appendAtPath = (
   return newRoot;
 };
 
+/**
+ * The most distinct values `add-unique` compares against the array one by one,
+ * past which it looks the array's elements up in a set of the values instead.
+ */
+const ADD_UNIQUE_SCAN_LIMIT = 16;
+
 // Set-add by identity: append each value to the tail only if no existing element
 // equals it (by stored-value content equality), creating the array if absent.
 // The dedup runs against durable state on the server, so it is idempotent and
@@ -356,10 +363,24 @@ const addUniqueAtPath = (
       `add-unique target is not an array at ${encodePointer(path)}`,
     );
   }
-  for (const value of values) {
-    if (!container.some((existing) => valueEqual(existing, value))) {
-      container.push(cloneValue(value));
-    }
+  const adding = new ValueSet();
+  // `Array.from()` reads a hole in `values` as `undefined`, which is then
+  // added like any other value.
+  const distinct = Array.from(values).filter((value) => adding.add(value));
+  // A few values are each compared against the array directly. Past that,
+  // each element is looked up once in the set of values being added, which
+  // costs a lookup per element instead of a comparison per element and value.
+  let absent: FabricValue[];
+  if (distinct.length <= ADD_UNIQUE_SCAN_LIMIT) {
+    absent = distinct.filter((value) =>
+      !container.some((existing) => valueEqual(existing, value))
+    );
+  } else {
+    container.forEach((existing) => adding.delete(existing));
+    absent = distinct.filter((value) => adding.has(value));
+  }
+  for (const value of absent) {
+    container.push(cloneValue(value));
   }
   return newRoot;
 };
@@ -384,13 +405,88 @@ const removeByValueAtPath = (
   // The value at `path` was confirmed to be an array above, so its thawed
   // container is that same array.
   const array = container as FabricValue[];
-  for (let index = array.length - 1; index >= 0; index -= 1) {
-    if (valueEqual(array[index], value)) {
-      array.splice(index, 1);
+  // One compaction pass: each kept slot moves down over the removed ones,
+  // a hole staying a hole.
+  let kept = 0;
+  for (let index = 0; index < array.length; index += 1) {
+    if (valueEqual(array[index], value)) continue;
+    if (Object.hasOwn(array, index)) {
+      array[kept] = array[index];
+    } else {
+      delete array[kept];
     }
+    kept += 1;
   }
+  array.length = kept;
   return newRoot;
 };
+
+/**
+ * A set of `FabricValue`s under `valueEqual()`, so that testing a value against
+ * `N` others costs one lookup rather than `N` comparisons. Values are bucketed
+ * by a key two equal values always share -- a primitive by itself, anything
+ * else by its content hash -- and a bucket is searched with `valueEqual()`
+ * itself, so membership agrees with it exactly. Looking up an object in a set
+ * holding none costs no hash.
+ */
+class ValueSet {
+  #buckets = new Map<FabricValue, FabricValue[]>();
+
+  #holdsObjects = false;
+
+  /** Adds `value`, returning `false` if an equal value was already present. */
+  add(value: FabricValue): boolean {
+    if (this.has(value)) return false;
+    const key = ValueSet.#keyOf(value);
+    const bucket = this.#buckets.get(key);
+    if (bucket === undefined) {
+      this.#buckets.set(key, [value]);
+    } else {
+      bucket.push(value);
+    }
+    this.#holdsObjects ||= isObject(value);
+    return true;
+  }
+
+  /** Indicates whether a value equal to `value` is present. */
+  has(value: FabricValue): boolean {
+    return this.#find(value) !== undefined;
+  }
+
+  /** Removes a value equal to `value`, if one is present. */
+  delete(value: FabricValue): void {
+    const found = this.#find(value);
+    found?.bucket.splice(found.index, 1);
+  }
+
+  /**
+   * Helper for the members above, which finds the bucket holding a value equal
+   * to `value` and its position there.
+   */
+  #find(
+    value: FabricValue,
+  ): { bucket: FabricValue[]; index: number } | undefined {
+    if (!this.#holdsObjects && isObject(value)) return undefined;
+    const bucket = this.#buckets.get(ValueSet.#keyOf(value));
+    if (bucket === undefined) return undefined;
+    const index = bucket.findIndex((member) => valueEqual(member, value));
+    return index === -1 ? undefined : { bucket, index };
+  }
+
+  /**
+   * Returns the key `value` is bucketed under: itself for a primitive, and its
+   * content hash otherwise. A hash may equal a primitive string, which the
+   * bucket search settles.
+   */
+  static #keyOf(value: FabricValue): FabricValue {
+    return isObject(value) ? hashStringOf(value) : value;
+  }
+}
+
+/** Indicates whether `value` is a non-`null` object. */
+function isObject(value: FabricValue): boolean {
+  return typeof value === "object" && value !== null;
+}
 
 const readNumberOrAbsent = (
   root: FabricValue,

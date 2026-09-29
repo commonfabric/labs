@@ -17,6 +17,8 @@ import type {
   EventAttentionResolution,
   OpCursor,
   OperationFieldSnapshot,
+  PresenceFacets,
+  PresenceRecord,
 } from "@commonfabric/memory/v2";
 import type { MetaField } from "@commonfabric/runner";
 import type {
@@ -192,6 +194,12 @@ export enum RequestType {
   /** Discards an unconfirmed custody seal owned by this client. */
   CustodySealCancel = "custodySeal:cancel",
 
+  /** Publishes a custody instance's answer once, into its answer slot. */
+  CustodyAnswerPublish = "custodyAnswer:publish",
+
+  /** Reads a custody instance's published answer, verified as the seal's. */
+  CustodyAnswerRead = "custodyAnswer:read",
+
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
 
@@ -212,6 +220,15 @@ export enum RequestType {
 
   /** Forgets a client's pinned operation target. */
   OperationSessionClose = "operation:session-close",
+
+  /** Joins a presence room for a cell's field and starts its events. */
+  PresenceJoin = "presence:join",
+
+  /** Replaces the record this client holds in a presence room. */
+  PresencePublish = "presence:publish",
+
+  /** Leaves a presence room. */
+  PresenceLeave = "presence:leave",
 
   /** Runs a read-only SQL query against a SQLite database cell. */
   SqliteQuery = "sqlite:query",
@@ -542,6 +559,9 @@ export enum NotificationType {
 
   /** Reports a new operation-backed snapshot for a subscription. */
   OperationUpdate = "operation:update",
+
+  /** Carries one presence room event for a membership. */
+  PresenceUpdate = "presence:update",
 
   /** Reports one authoritative terminal event-delivery notice. */
   EventNeedsAttention = "callback:event-needs-attention",
@@ -1306,8 +1326,9 @@ export type CustodySealPreview = {
 
   /**
    * Whether every release rule of the room's policy requires the seal's input
-   * witness. When `false`, a member's own code can learn the actor's entry
-   * one answer at a time, and the confirmation says so.
+   * witness and releases only to the seal, which publishes the answer once
+   * per instance. When `false`, a member's own code can learn the actor's
+   * entry one answer at a time, and the confirmation says so.
    */
   witnessedRelease: boolean;
 
@@ -1341,6 +1362,49 @@ export type CustodySealCommitResponse = {
 export type CustodySealCancelRequest = BaseRequest & {
   type: RequestType.CustodySealCancel;
   id: string;
+};
+
+/**
+ * The {@link RequestType.CustodyAnswerPublish} request: the room's cells the
+ * worker reads the answer from. The worker reads each at the address named;
+ * whether the answer is published is decided by what it reads there.
+ */
+export type CustodyAnswerPublishRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerPublish;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+
+  /** The room's projected answer. */
+  output: CellRef;
+};
+
+/** What a custody answer publication wrote. */
+export type CustodyAnswerPublishResponse = {
+  /** The instance the answer was published for. */
+  instance: string;
+
+  /** The answer as published. */
+  answer: JSONValue;
+};
+
+/** The {@link RequestType.CustodyAnswerRead} request: the room's cells. */
+export type CustodyAnswerReadRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerRead;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+};
+
+/** A custody instance's published answer, absent while none is. */
+export type CustodyAnswerReadResponse = {
+  answer?: JSONValue;
 };
 
 /** The {@link RequestType.OperationQuery} request. */
@@ -1512,6 +1576,80 @@ export type OperationSessionCloseRequest = BaseRequest & {
    */
   operationSessionId: string;
 };
+
+/** The {@link RequestType.PresenceJoin} request. */
+export type PresenceJoinRequest = BaseRequest & {
+  type: RequestType.PresenceJoin;
+
+  /**
+   * Identifies this membership, chosen by the joiner. Every
+   * {@link PresenceUpdateNotification} carries it back, and the publish and
+   * leave requests name the membership by it.
+   */
+  subscriptionId: string;
+
+  /**
+   * The cell whose resolved field the room is derived from, and whose space
+   * the room lives under.
+   */
+  cell: CellRef;
+
+  /**
+   * An explicit room in place of the one derived from the field. The space
+   * is still the cell's: a room is addressed under it, and joining is
+   * admitted by the client's session on it.
+   */
+  room?: string;
+};
+
+/** What a {@link PresenceJoinRequest} returns. */
+export type PresenceJoinResponse = {
+  /** The id the relay assigned this membership. */
+  participantId: string;
+
+  /** The room the membership joined, derived or as requested. */
+  room: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+/** The {@link RequestType.PresencePublish} request. */
+export type PresencePublishRequest = BaseRequest & {
+  type: RequestType.PresencePublish;
+
+  /** The membership, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** Plain-text display name, within the relay's bounds. */
+  name: string;
+
+  /** Per-kind state, within the relay's bounds. */
+  facets: PresenceFacets;
+};
+
+/** The {@link RequestType.PresenceLeave} request. */
+export type PresenceLeaveRequest = BaseRequest & {
+  type: RequestType.PresenceLeave;
+
+  /** The membership to end, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+};
+
+/**
+ * One presence room event on its way across the worker boundary. It is the
+ * memory client's event with its `failure` error reduced to a name and a
+ * message, which is what survives the crossing.
+ */
+export type PresenceWireEvent =
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: PresenceRecord[];
+  }
+  | { kind: "upsert"; participant: PresenceRecord }
+  | { kind: "remove"; participantId: string }
+  | { kind: "failure"; error: { name: string; message: string } };
 
 /** A response carrying one operation-backed field snapshot. */
 export type OperationFieldResponse = {
@@ -3070,6 +3208,8 @@ export type IPCClientRequest =
   | CustodySealPrepareRequest
   | CustodySealCommitRequest
   | CustodySealCancelRequest
+  | CustodyAnswerPublishRequest
+  | CustodyAnswerReadRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -3077,6 +3217,9 @@ export type IPCClientRequest =
   | OperationSubscribeRequest
   | OperationUnsubscribeRequest
   | OperationSessionCloseRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
   | SqliteQueryRequest
   | SqliteExecRequest
   | GetCellRequest
@@ -3641,6 +3784,13 @@ export type EventAttentionResolveResponse = {
  */
 export type WorkerReadyNotification = {
   type: TransportNotificationType.WorkerReady;
+  /**
+   * The name of a Web Lock the worker holds from before this post until its
+   * runtime is torn down, which is when a terminated web worker's locks are
+   * released. A request for it is therefore granted only once the worker is
+   * gone. A worker that names none is not waited for.
+   */
+  lifetimeLock?: string;
 };
 
 /** The `console` methods the worker's console bridge forwards. */
@@ -3720,6 +3870,17 @@ export type OperationUpdateNotification = {
   field: OperationFieldSnapshot;
 };
 
+/** Reports one presence room event for a membership. */
+export type PresenceUpdateNotification = {
+  type: NotificationType.PresenceUpdate;
+
+  /** The membership this is for, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** The event, in its wire form. */
+  event: PresenceWireEvent;
+};
+
 /**
  * Every shape a successful response can carry. The arm a given request yields
  * is fixed by {@link Commands} rather than chosen here.
@@ -3736,6 +3897,8 @@ export type RemoteResponse =
   | SnapshotSharePreview
   | CustodySealPreview
   | CustodySealCommitResponse
+  | CustodyAnswerPublishResponse
+  | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3760,6 +3923,7 @@ export type RemoteResponse =
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
+  | PresenceJoinResponse
   | EventAttentionListResponse
   | EventAttentionResolveResponse;
 
@@ -3778,6 +3942,7 @@ export type IPCRemoteNotification =
   | VDomBatchNotification
   | PendingWritesNotification
   | OperationUpdateNotification
+  | PresenceUpdateNotification
   | EventNeedsAttentionNotification;
 
 /**
@@ -3973,6 +4138,14 @@ export type Commands = {
     request: CustodySealCancelRequest;
     response: EmptyResponse;
   };
+  [RequestType.CustodyAnswerPublish]: {
+    request: CustodyAnswerPublishRequest;
+    response: CustodyAnswerPublishResponse;
+  };
+  [RequestType.CustodyAnswerRead]: {
+    request: CustodyAnswerReadRequest;
+    response: CustodyAnswerReadResponse;
+  };
   [RequestType.OperationCapabilities]: {
     request: OperationCapabilitiesRequest;
     response: OperationCapabilitiesResponse;
@@ -3999,6 +4172,18 @@ export type Commands = {
   };
   [RequestType.OperationSessionClose]: {
     request: OperationSessionCloseRequest;
+    response: BooleanResponse;
+  };
+  [RequestType.PresenceJoin]: {
+    request: PresenceJoinRequest;
+    response: PresenceJoinResponse;
+  };
+  [RequestType.PresencePublish]: {
+    request: PresencePublishRequest;
+    response: BooleanResponse;
+  };
+  [RequestType.PresenceLeave]: {
+    request: PresenceLeaveRequest;
     response: BooleanResponse;
   };
   [RequestType.SqliteQuery]: {

@@ -92,6 +92,12 @@ export {
 } from "./registration.ts";
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
 export {
+  BEGAN_PREFIX,
+  BEGAN_SUFFIX,
+  markUnitsBegan,
+  unitsBegan,
+} from "./began.ts";
+export {
   preloadArgument,
   preloadModulePath,
   spoolWriteArgument,
@@ -156,6 +162,7 @@ export type {
   LanePlan,
   Manifest,
   ManifestEntry,
+  ProcessFit,
   ScoreInputs,
   SuiteFit,
   UnavailableEntry,

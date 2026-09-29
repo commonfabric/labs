@@ -3151,9 +3151,9 @@ type CalculatorRequest = {
           });
         });
 
-        it("reads a nongeneric alias whose payload substitution does not reach as its labels alone", async () => {
-          // `Contact` itself is read; the lowering leaves the payload, which
-          // still names `T`, as a guess.
+        it("reads a nongeneric alias whose payload holds an indexed access from the type it instantiates", async () => {
+          // No reading of `Secret`'s declaration under bindings reaches
+          // `T["name"]`; the type `Contact` instantiates holds it.
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3166,7 +3166,14 @@ type CalculatorRequest = {
 
           expect(schema).toEqual({
             $ref: "#/$defs/Contact",
-            $defs: { Contact: { ifc: { confidentiality: ["owner"] } } },
+            $defs: {
+              Contact: {
+                type: "object",
+                properties: { name: { type: "string", enum: ["Ada"] } },
+                required: ["name"],
+                ifc: { confidentiality: ["owner"] },
+              },
+            },
           });
         });
 
@@ -3188,7 +3195,7 @@ type CalculatorRequest = {
           expect(schema).toBe(true);
         });
 
-        it("leaves a generic the payload names unread, keeping the labels", async () => {
+        it("reads a generic the payload names with the argument", async () => {
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3205,7 +3212,21 @@ type CalculatorRequest = {
             ),
           );
 
-          expect(schema).toEqual({ ifc: { confidentiality: ["owner"] } });
+          expect(schema).toEqual({
+            type: "object",
+            properties: {
+              value: {
+                type: "object",
+                properties: {
+                  label: { type: "string" },
+                  extra: { type: "number" },
+                },
+                required: ["label", "extra"],
+              },
+            },
+            required: ["value"],
+            ifc: { confidentiality: ["owner"] },
+          });
         });
 
         it("reads an argument the reference leaves out as its default", async () => {
@@ -4101,6 +4122,323 @@ interface HasImage {
       // Should collapse to a single permissive schema instead of a union,
       // since at least one option was just true
       expect(props?.image).toEqual(true);
+    });
+  });
+
+  describe("nodes narrowed from a value", () => {
+    const LABELS = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> =
+        Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> =
+        Cfc<T, { integrity: X }>;
+      interface Secret { a: string; b: string }
+      interface Other { a: string; c: number }
+      declare const DEFAULT_MARKER: unique symbol;
+      type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+      type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+    `;
+
+    /**
+     * The schema of `Root`'s `narrowed`, a node recorded as narrowing the value
+     * the first property of `Wholes` declares, spelled by its node, or by the
+     * node of the property `spelledBy` names. With `inner`, the hint is on the
+     * node inside `narrowed`'s parentheses.
+     */
+    const narrowedSchema = async (
+      root: string,
+      whole: string,
+      { inner = false, spelledBy }: { inner?: boolean; spelledBy?: string } =
+        {},
+    ) => {
+      const { checker, sourceFile } = await createTestProgram(`${LABELS}
+        type Root = ${root};
+        interface Wholes { ${whole} }`);
+      let rootNode: ts.TypeNode | undefined;
+      let value: ts.PropertySignature | undefined;
+      let spelling: ts.PropertySignature | undefined;
+      ts.forEachChild(sourceFile, (node) => {
+        if (ts.isTypeAliasDeclaration(node) && node.name.text === "Root") {
+          rootNode = node.type;
+        } else if (
+          ts.isInterfaceDeclaration(node) && node.name.text === "Wholes"
+        ) {
+          const properties = node.members.filter(ts.isPropertySignature);
+          value = properties[0];
+          spelling = properties.find((property) =>
+            (property.name as ts.Identifier).text === (spelledBy ?? "")
+          ) ?? value;
+        }
+      });
+      const narrowed = (rootNode as ts.TypeLiteralNode).members.find((
+        member,
+      ): member is ts.PropertySignature =>
+        ts.isPropertySignature(member) &&
+        (member.name as ts.Identifier).text === "narrowed"
+      )!.type!;
+      const hinted = inner && ts.isParenthesizedTypeNode(narrowed)
+        ? narrowed.type
+        : narrowed;
+      const symbol = checker.getSymbolAtLocation(value!.name)!;
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeFromTypeNode(rootNode!),
+        checker,
+        rootNode,
+        undefined,
+        new WeakMap([[hinted, {
+          narrowedFrom: {
+            type: checker.getTypeOfSymbol(symbol),
+            typeNode: spelling!.type!,
+          },
+        }]]),
+      ) as { properties: Record<string, unknown> };
+      return schema.properties;
+    };
+
+    const A_ONLY = {
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+    };
+
+    it("gives a node the labels of the value it narrows", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from an optional property its value's labels", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value?: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from a nullable union its value member's labels", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        'value: Confidential<Secret, ["x"]> | null',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("gives a node narrowed from a union the confidentiality of every member and the labels all share", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        `value:
+          | Integrity<Confidential<Secret, ["x"]>, ["i"]>
+          | Integrity<Confidential<Other, ["y"]>, ["i"]>`,
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { confidentiality: ["x", "y"], integrity: ["i"] },
+      });
+    });
+
+    it("gives a node narrowed from a labeled union the union's labels and its members' confidentiality", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        `value: Confidential<
+          Confidential<Secret, ["x"]> | Confidential<Other, ["y"]>,
+          ["outer"]
+        >`,
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { confidentiality: ["outer", "x", "y"] },
+      });
+    });
+
+    it("leaves a node that holds the value's labels already as it is", async () => {
+      const { narrowed } = await narrowedSchema(
+        '{ narrowed: Confidential<{ a: string }, ["x"]> }',
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("adds the labels of the value a node does not hold", async () => {
+      const { narrowed } = await narrowedSchema(
+        '{ narrowed: Integrity<{ a: string }, ["i"]> }',
+        'value: Confidential<Secret, ["x"]>',
+      );
+
+      expect(narrowed).toEqual({
+        ...A_ONLY,
+        ifc: { integrity: ["i"], confidentiality: ["x"] },
+      });
+    });
+
+    it("reads the hint of a parenthesized node from the node inside", async () => {
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: ({ a: string }) }",
+        'value: Confidential<Secret, ["x"]>',
+        { inner: true },
+      );
+
+      expect(narrowed).toEqual({ ...A_ONLY, ifc: { confidentiality: ["x"] } });
+    });
+
+    it("names no type while reading a value whose reading comes back to it", async () => {
+      // The checker reduces the spelled `Writable<boolean | Default<true>>` to
+      // `Cell<boolean>`, whose value reads `boolean` through the written union,
+      // whose member `boolean` is that value again.
+      const properties = await narrowedSchema(
+        "{ narrowed: { a: string }; flag: boolean }",
+        `value: Writable<boolean>;
+         spelled: Writable<boolean | Default<true>>`,
+        { spelledBy: "spelled" },
+      );
+
+      expect(properties.narrowed).toEqual(A_ONLY);
+      expect(properties.flag).toEqual({ type: "boolean" });
+    });
+  });
+
+  describe("nodes spelled by a member annotation", () => {
+    // `typeof rules` is `unknown`, so `PolicyOf<unknown>` spells the same type
+    // as the annotation without naming the binding, as a print of it does.
+    const PROGRAM = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> =
+        Cfc<T, { confidentiality: X }>;
+      type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+      declare const rules: unknown;
+      type Root = {
+        field: Confidential<string, readonly [PolicyOf<unknown>]>;
+        maybe: Confidential<string, readonly [PolicyOf<unknown>]> | undefined;
+        nullable:
+          | Confidential<string, readonly [PolicyOf<unknown>]>
+          | null
+          | undefined;
+        count: number;
+      };
+      interface Members {
+        annotated: Confidential<string, readonly [PolicyOf<typeof rules>]>;
+        labeled: Confidential<string, readonly ["x"]>;
+        nullable: Confidential<string, readonly [PolicyOf<typeof rules>]> | null;
+        orUndefined:
+          | Confidential<string, readonly [PolicyOf<typeof rules>]>
+          | undefined;
+      }
+    `;
+
+    /** `Root`'s member `name`, generated with `hint` on its node. */
+    const fieldSchema = async (
+      hint: (
+        members: Map<string, ts.PropertySignature>,
+        checker: ts.TypeChecker,
+      ) => object,
+      name = "field",
+    ) => {
+      const { checker, sourceFile } = await createTestProgram(PROGRAM);
+      let rootNode: ts.TypeLiteralNode | undefined;
+      const members = new Map<string, ts.PropertySignature>();
+      ts.forEachChild(sourceFile, (node) => {
+        if (ts.isTypeAliasDeclaration(node) && node.name.text === "Root") {
+          rootNode = node.type as ts.TypeLiteralNode;
+        } else if (
+          ts.isInterfaceDeclaration(node) && node.name.text === "Members"
+        ) {
+          for (const member of node.members.filter(ts.isPropertySignature)) {
+            members.set((member.name as ts.Identifier).text, member);
+          }
+        }
+      });
+      const field = rootNode!.members.filter(ts.isPropertySignature).find(
+        (member) => (member.name as ts.Identifier).text === name,
+      )!.type!;
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeFromTypeNode(rootNode!),
+        checker,
+        rootNode,
+        undefined,
+        new WeakMap([[field, hint(members, checker)]]),
+      ) as { properties: Record<string, Record<string, unknown>> };
+      return schema.properties[name] as {
+        ifc?: Record<string, unknown>;
+        anyOf?: { ifc?: Record<string, unknown> }[];
+      };
+    };
+
+    const MODULE_POLICY = {
+      policyRefKind: "module",
+      __ctPolicyIdentityOf: { file: "test.ts", path: ["rules"] },
+    };
+
+    it("reads a node as the annotation it is spelled by", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }));
+
+      expect(schema.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
+    });
+
+    it("applies the hints of a node read as its annotation", async () => {
+      const schema = await fieldSchema((members, checker) => {
+        const labeled = members.get("labeled")!;
+        return {
+          spelledBy: members.get("annotated")!.type,
+          narrowedFrom: {
+            type: checker.getTypeFromTypeNode(labeled.type!),
+            typeNode: labeled.type,
+          },
+        };
+      });
+
+      expect(schema.ifc).toMatchObject({
+        confidentiality: [MODULE_POLICY, "x"],
+      });
+    });
+
+    it("reads a node as its annotation beside `undefined` where its type adds `undefined`", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }), "maybe");
+
+      expect(schema.anyOf).toMatchObject([
+        { type: "undefined" },
+        { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
+      ]);
+    });
+
+    it("reads a node as its annotation's members beside `undefined` where its type adds `undefined` to them", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("nullable")!.type,
+      }), "nullable");
+
+      expect(schema.anyOf).toMatchObject([
+        { type: ["null", "undefined"] },
+        { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
+      ]);
+    });
+
+    it("reads a node as its annotation's members other than `undefined` where its type has none", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("orUndefined")!.type,
+      }));
+
+      expect(schema).toMatchObject({
+        type: "string",
+        ifc: { confidentiality: [MODULE_POLICY] },
+      });
+    });
+
+    it("reads a node by its type where its annotation spells another", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }), "count");
+
+      expect(schema).toEqual({ type: "number" });
     });
   });
 

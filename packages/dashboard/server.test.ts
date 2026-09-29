@@ -38,6 +38,14 @@ import { github } from "./lib.ts";
 import type { Ctx, Run, RunSource, Tile, TileView } from "./types.ts";
 import { DASHBOARD_MESSAGE_LIFETIME_MS } from "./dashboard-message.ts";
 import { dashboardCacheFile } from "./history-files.ts";
+import {
+  sampleManifest,
+  serializeManifest,
+} from "@commonfabric/test-support/records";
+import {
+  MANIFEST_SHARE_MS,
+  TEST_SELECTION_PREFIX,
+} from "./test-selection-manifest.ts";
 
 const req = (path: string) => new Request(`http://localhost${path}`);
 
@@ -1533,6 +1541,63 @@ boardTest("broadcast: a client whose stream is gone is dropped rather than throw
     message: { text: "", updatedAt: null, revision: 0 },
   });
   assertEquals(clients.size, 0);
+});
+
+boardTest("sse: a serving tick sends an open live page its new markup, and only live pages have a stream", async () => {
+  const refused = await handle(req(`/events?page=${encodeURIComponent("/not-a-route")}`));
+  assertEquals(refused.status, 404);
+  await refused.body?.cancel();
+
+  // The test selection page reads a manifest store holding what `published`
+  // holds, on a clock the test moves.
+  const published: Record<string, string> = {};
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  globalThis.fetch = (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    return Promise.resolve(
+      url.pathname.endsWith("/o")
+        ? Response.json({ items: Object.keys(published).map((name) => ({ name })) })
+        : new Response(Object.values(published)[0]),
+    );
+  };
+  try {
+    const res = await handle(req(`/events?page=${encodeURIComponent("/test-selection")}`));
+    assertEquals(res.headers.get("content-type"), "text/event-stream");
+    const reader = res.body!.getReader();
+    assertEquals(await chunk(reader), ": connected\n\n");
+    const opened = await chunk(reader);
+    assertStringIncludes(opened, "event: page\n");
+    assertStringIncludes(opened, "No selection manifest has been published yet.");
+    assertEquals(clients.size, 0, "a page's stream is not the dashboard's");
+
+    const manifest = sampleManifest({ generatedAt: "2026-09-25T20:00:00.000Z" });
+    published[`${TEST_SELECTION_PREFIX}manifest-${manifest.generatedAt}-x.json.gz`] =
+      serializeManifest(manifest);
+    now += MANIFEST_SHARE_MS + 1;
+    await serveTick(() => {});
+    assertStringIncludes(await chunk(reader), "event: ping\n");
+    const updated = await chunk(reader);
+    assertStringIncludes(updated, "event: page\n");
+    assertStringIncludes(updated, "generated 2026-09-25 20:00 UTC");
+    await reader.cancel();
+  } finally {
+    globalThis.fetch = realFetch;
+    Date.now = realNow;
+  }
+});
+
+boardTest("sse: the CI jobs page is live", async () => {
+  const res = await handle(req(`/events?page=${encodeURIComponent("/ci")}`));
+  assertEquals(res.headers.get("content-type"), "text/event-stream");
+  const reader = res.body!.getReader();
+  assertEquals(await chunk(reader), ": connected\n\n");
+  const opened = await chunk(reader);
+  assertStringIncludes(opened, "event: page\n");
+  assertStringIncludes(opened, "has not finished a collection yet");
+  await reader.cancel();
 });
 
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {

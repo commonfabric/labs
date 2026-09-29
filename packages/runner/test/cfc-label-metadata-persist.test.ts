@@ -121,7 +121,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
       space: signer.did(),
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
+      path: ["field"],
     }, "v");
     // The link-write policy input a round-tripped write records: the source
     // address is authoritative (derived from the sigil link itself), but the
@@ -132,7 +132,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       },
       source: {
         space: signer.did(),
@@ -377,7 +377,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       }, "v");
       tx.recordCfcWritePolicyInput({
         kind: "link-write",
@@ -385,7 +385,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),

@@ -1,18 +1,19 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
 
 const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
 
 /**
- * Build a stock in-process memory server for loopback storage managers: the
- * principal-passthrough authorizer, an emulated audience, and optionally a
- * fan-out cadence — `"manual"` disables timer-driven fan-out entirely:
- * either explicit synchronization point (`flushSessions()`, or `idle()`,
- * which drains held fan-out to keep its quiescence contract) delivers it.
- * The controlled-staleness shape.
+ * Build a stock in-process memory server for loopback storage managers:
+ * {@link authorizeLoopbackSessionOpen} as its authorizer, an emulated
+ * audience, and optionally a fan-out cadence — `"manual"` disables
+ * timer-driven fan-out entirely: either explicit synchronization point
+ * (`flushSessions()`, or `idle()`, which drains held fan-out to keep its
+ * quiescence contract) delivers it. The controlled-staleness shape.
  */
 export const newLoopbackServer = (options?: {
   audience?: string;
@@ -28,11 +29,7 @@ export const newLoopbackServer = (options?: {
   sessions?: MemoryV2Server.SessionRegistry;
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: {
       audience: options?.audience ?? emulatedMemoryAudience,
     },

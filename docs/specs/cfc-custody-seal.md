@@ -173,11 +173,15 @@ attestations on their seat cells; a pattern, which reads neither DIDs nor
 attestations, gains from `D` only a test of a guess at the whole set of seat
 DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
 the pattern the entry's key: a pattern that held it could write down which
-member's entry it is. `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
-is such a room, and `packages/patterns/integration/cfc-custody-projector.test.ts`
-seals two members' stances through its cells and shows that a room reader sees
-its projector's answer and not a member's rating, under the room's own rule
-and under the same rule requiring the seal's witness.
+member's entry it is. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`
+is such a room, and `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
+is the same room demo-grade, its rule naming the projector alone.
+`packages/patterns/integration/cfc-custody-projector.test.ts` seals two
+members' stances through each room's cells and shows that a room reader sees
+its projector's answer and not a member's rating. For the answer room, whose
+rule requires the seal's witness, the host publishes that answer once and
+refuses the answer over a crafted box; for the demo-grade room it publishes
+nothing.
 
 ## What the seal writes
 
@@ -282,6 +286,117 @@ and scope. Once the seal has written it, the cell carries the seal's
 label, so a link other code writes over it must name a document that carries a
 label of its own.
 
+### One answer per instance
+
+A room's projector is reactive: pointed at other input, or run again, it
+computes again, and a room that rendered it would show each result its rule
+releases. Worse, an answer that does not change is not written again, so it
+keeps the stamp its earlier run left, and whether a projection pointed at a
+document of a member's choosing is still readable says whether that document
+yields the released answer. The consent a member gives is per instance, so the
+room releases one answer per instance, and the projection itself to no member:
+the room's rule releases it to the seal alone, adding the reader
+`Builtin{cfc-custody-seal}` (`CUSTODY_SEAL_READER`) to the policy's clause
+rather than dropping it. No render ceiling or deployment sink ceiling lists
+that atom, and an atom admits a clause only by equality, so no member's
+rendering or sink admits the clause. The seal declassifies
+the answer once, into the instance's answer slot, which is the one thing the
+room's readers can read. `publishCustodyAnswer(room, output)` is the host operation
+that publishes it, and `readCustodyAnswer(room)` the one that reads it back.
+A pattern reaches both through `cf-custody-answer` (`$terms`, `$policy`,
+`$output`), which asks the worker to publish each time the projected answer
+changes, and shows what the seal published. The refusals below are expected
+while an answer is not, or is already, published, and the component stays
+quiet on them; any other failure, such as a lost worker connection or a slot
+the seal did not write, it shows as an alert. Before the room has terms it
+asks nothing.
+
+The seal publishes only when all of these hold, read by the worker from the
+cells the host names, never from the request:
+
+- every exchange rule of the room's policy requires the seal's witness
+  (`witnessedRelease`), and releases only to the seal: its post-condition
+  adds `CUSTODY_SEAL_READER` and nothing else (`releasesOnlyToSeal`), so no
+  rule makes the projection readable by a member;
+- the instance's anchor and box are the seal's, and the box holds one entry
+  per seat;
+- the projected answer is a scalar of at most 1,024 characters whose stored
+  label carries the room's policy, a rule of the room's own policy fires on
+  that label, and every clause naming the policy is left admitting the seal
+  and every other clause the room space's readers. A value that never carried
+  the policy is not the room's answer, whatever its label admits, and a firing
+  of another policy's rule is not the room's release;
+- the seal's witness on the answer names this instance. The seal acts under
+  `{kind: "builtin", builtinId: "cfc-custody-seal", instance: D}`, so every
+  `TransformedBy` it mints names the instance it acted for, while a rule's
+  guard naming the seal alone still matches it. An answer computed over an
+  earlier instance's box, whose members may differ, is not this instance's
+  to release;
+- the room the seal inspected is the room it publishes for; and
+- the instance has no answer yet.
+
+It then writes `{instance, answer}` into the instance's answer slot, a
+create-only document in the room space at
+`{custodyAnswer: {policy: P, instance: D}}` labeled `Space(S)`. The
+transaction reads the anchor, as the entry transaction does, so the slot is
+stamped `TransformedBy{builtin cfc-custody-seal}` like the box. Both reading
+and publishing refuse a slot without that stamp: anyone who can compute `D` can
+compute the slot's address and write there first, which blocks publication but
+shows nothing. A host shows the slot's value through `readCustodyAnswer`, never
+a link a room holds, which the room's members could point anywhere. A later
+publication is refused, so the answer published for an instance never changes,
+whatever later points the projector at other input; which instance a room shows
+is another matter, below. The slot holds per instance: new terms are a
+new instance, with new consents, a slot of its own and an answer of its own.
+`cf-custody-answer` follows the room's terms, so it shows the answer of the
+instance the terms name.
+
+The shown answer is the slot of the instance the bound `terms` digest to, under
+the policy the bound `policy` cell names. What that guarantees depends on who is
+writing:
+
+- **Against everyone, the published answer.** The slot is create-only and the
+  seal's alone to write, so the answer published for an instance never
+  changes.
+- **Not against a member's own code, which instance a room shows.** A room's
+  bindings are pattern data in the room space, which its members can write.
+  The component's `$terms` and `$policy` sit in the room's result document and
+  its UI tree, and no writer claim covers either, so a member's code can write
+  there a link to another instance's terms: those of a one-seat room of the
+  same pattern the member sealed and published alone, whose answer the room
+  then shows as its own, or terms whose slot is empty. A writer claim does not
+  close this in general either. Write authority is keyed by code, not by piece
+  (normative CFC §8.15.8), so a member's own instance of the room's pattern,
+  bound beneath the room's cells, runs an authorized writer; and a source
+  update registers its successor as the predecessor's delegate
+  ([SC-45](cfc-spec-changes.md)), so the successor's writer satisfies the
+  claim.
+
+`custody-answer-room.tsx` keeps its argument `terms` and `policy` write-once as
+defense in depth. Each is `WriteAuthorizedBy` its `propose`, which writes each
+only while it reads as unwritten and reads nothing but the cell it writes, and
+the runtime stores the claim with the document from the piece's creation
+([#8212](https://github.com/commonfabric/labs/pull/8212)). That refuses a write
+to the room's argument document by any other code, through any schema, and
+nothing more. A writer claim on `T | null` sits on the `T` branch alone and
+does not refuse a write of `null`, so the room's terms are absent until
+proposed rather than `null`. The pattern's integration test,
+`packages/patterns/integration/cfc-custody-projector.test.ts`, pins a link
+written into the room's result document, and the room's own pattern bound
+beneath its terms, as known residuals.
+
+Holding which instance a room shows against its members needs a binding they
+cannot rewrite: a write-once or create-only primitive for it, or write
+authority bound to a piece. That is an open question for the CFC spec. A
+cheaper mitigation, suggested and not built: the component could show the
+seats and question of the terms it resolved, beside the answer, so that a room
+pointed at another instance shows that instance's seats.
+
+The seal writes a room's box link only into a document that exists: an absent
+document could be the address of a custody document the seal has yet to
+write, such as this instance's answer slot or a later instance's box, and a
+link the seal wrote there would pass for its own write.
+
 ### The blinded entry key
 
 An entry's key is `base64url(SHA-256(sign_actor(domain ‖ digest(P, D))))`: a
@@ -311,11 +426,6 @@ of it.
   the sealed values, and a modified client can read them, forge the builtin
   identity, or seal twice under different keys. One entry per actor is honest
   runtime enforcement, as the writer policy is.
-- **Replacing the whole box with a primitive.** Pattern code can write a
-  primitive over the root of a document whose writer claim is on that root,
-  and the runtime does not refuse the write. Such a write empties the box of
-  the seal's witness, so a later release has no witness to rely on: this is
-  denial of service, not laundering.
 - **A runtime read ceiling that withholds `P`.** The seal refuses to run on a
   runtime whose ceiling withholds the anchor. The room's releasing code needs
   to read the same labels on every member's runtime.
@@ -342,21 +452,47 @@ of it.
   requiring the seal's witness refuses these (see
   [Which box the room reads](#which-box-the-room-reads)), except the box of
   another instance under the same `P`, which the seal wrote and whose link the
-  seal may have written too; that is the multi-instance case above. The witness
+  seal may have written too; that is the multi-instance case above, and the
+  rule alone does not tell the instances apart. Publication does, since the
+  seal's witness names its instance (see
+  [One answer per instance](#one-answer-per-instance)), so a room that shows
+  only its published answer does not show another instance's. The witness
   still rests on writer policies on the box and on the releasing code's
   output, and on endorsed releasing code that takes no public selector
   parameters. The preview reports whether every rule of `P` requires the
-  witness on a guard naming its releasing code outright (`witnessedRelease`),
-  and when one does not, the confirmation shows a warning that a member's own
-  code can learn the actor's stance one answer at a time, in place of a bound
-  on what an answer reveals.
-- **An answer that does not change.** A stamp is replaced when its value is
-  written. When a member's code points the room's box at a document of its own
-  and the projector computes the answer it had already released, nothing is
-  written, and the answer keeps the stamp it had. A member can so learn whether
-  a document of their choosing yields the answer the room released, one such
-  comparison per change. This holds of every witnessed release, not of custody
-  alone.
+  witness on a guard naming its releasing code outright and releases only to
+  the seal (`witnessedRelease`), and when one does not, the confirmation shows
+  a warning that a member's own code can learn the actor's stance one answer
+  at a time, in place of a bound on what an answer reveals.
+- **An answer that does not change, through publication.** A stamp is
+  replaced when its value is written. When a member's code points the room's
+  box at a document of its own and the projector computes the answer it had
+  already computed, nothing is written, and the answer keeps the stamp it had;
+  and the other way, an honest run after one over other input that yields the
+  same answer keeps that run's unwitnessed stamp. The projection is read by
+  no member, but whether the seal publishes still depends on which stamp the
+  answer kept. Before the answer is published, a member who points the box at
+  a document of their choosing, a record repeating one member's entry say,
+  learns whether it yields the room's answer: the answer then publishes, or
+  it never does. That is at most one comparison per instance: once every
+  seat has sealed, the box link the member wrote over the seal's leaves every
+  later run unwitnessed, so an answer not published by then never is, a
+  denial of service that one write by any member causes and that lasts for
+  the instance. New terms start
+  a new instance. A transformation that re-stamps an output it recomputed
+  unchanged would close both; it is a runtime change to how a no-op write is
+  labeled.
+- **Cell-valued properties and bindings.** A confidentiality ceiling gates
+  what a render shows as text, but not a cell a pattern passes to an element
+  as a property or a `$` binding, and the worker answers a host's read of or
+  subscription to a cell without one. A member's own pattern that takes the
+  room as input can so show `choice`, or a rating read from the box, through
+  a property. This predates the answer slot and reaches every policy-labeled
+  value, not only custody; gating those paths belongs to the renderer and
+  the worker, not to this operation.
+- **A squatted answer slot.** A slot other code wrote first blocks the
+  instance's publication, as a squatted box or anchor blocks sealing. It
+  shows nothing, since a host reads only a slot the seal stamped.
 - **Freezing the room's readers.** Whoever can read `S` when a released value
   is rendered is its audience. Keeping the audience at the seats, whether with
   a room access list fixed at the first seal or with a render fact that admits

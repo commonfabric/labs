@@ -5,7 +5,7 @@
  * for interacting with cells across the worker boundary.
  */
 
-import type { CellScope } from "@commonfabric/api";
+import type { CellScope, JSONValue } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
@@ -14,7 +14,9 @@ import type {
   ApplyOpResolution,
   OpCursor,
   OperationFieldSnapshot,
+  PresenceRecord,
 } from "@commonfabric/memory/v2";
+import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
@@ -67,6 +69,8 @@ import {
   type PieceSourceRevisionSourceView,
   type PieceSourceView,
   type PieceUpdateSourceResponse,
+  type PresenceJoinResponse,
+  type PresenceUpdateNotification,
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
@@ -84,7 +88,7 @@ import {
   normalizeOrigin,
   normalizeSpaceHostMap,
 } from "./shared/security-context.ts";
-import { cellRefToInstanceId } from "./shared/utils.ts";
+import { cellRefToInstanceId, cellRefToKey } from "./shared/utils.ts";
 
 export interface RuntimeClientOptions
   extends Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity"> {
@@ -188,6 +192,107 @@ function assertRenderDeclassificationPolicy(policy: unknown): void {
 }
 
 /**
+ * A consumer's hold on one presence room, obtained from
+ * {@link RuntimeClient.joinPresenceRoom}. Every handle on one room shares
+ * the room's membership and its record: the name is the room's, and each
+ * handle owns the facets it sets, which leave the record when it leaves. A
+ * facet two handles both set is the focused handle's, and among handles
+ * alike in focus the one that set it last. Changes coalesce at the
+ * browser's animation-frame boundary into one publication.
+ */
+export interface PresenceRoomHandle {
+  /** The id the relay assigned this membership; changes on reconnect. */
+  readonly participantId: string;
+
+  /** The room joined, derived from the field or as requested. */
+  readonly room: string;
+
+  /** Every other member that has published, at its latest record. */
+  readonly participants: readonly PresenceRecord[];
+
+  /** Sets the display name the record carries. Empty publishes nothing. */
+  setName(name: string): void;
+
+  /** Sets one facet of this handle's, replacing its previous value. */
+  setFacet(facet: string, value: FabricPlainObject): void;
+
+  /** Removes one facet of this handle's. */
+  clearFacet(facet: string): void;
+
+  /**
+   * Marks this handle as the one holding the user's attention, which makes
+   * its facets win those another handle on the room sets under the same
+   * name. A room's record may carry one caret, and this is how two editors
+   * of one field on a page settle whose it is.
+   */
+  setFocused(focused: boolean): void;
+
+  /**
+   * Listens for the room's events after they are applied to
+   * `.participants`. A `failure` ends the room: nothing follows it, and a
+   * consumer that still wants the room leaves and joins again.
+   */
+  subscribe(listener: (event: PresenceEvent) => void): () => void;
+
+  /**
+   * Releases this handle. The room is left once its last handle has;
+   * calling it again does nothing.
+   */
+  leave(): Promise<void>;
+}
+
+/** One handle's share of a room: its facets and its listeners. */
+type PresenceHandleState = {
+  /** Each facet with when it was last set, on the client's single counter. */
+  facets: Map<string, { value: FabricPlainObject; revision: number }>;
+  focused: boolean;
+  listeners: Set<(event: PresenceEvent) => void>;
+  left: boolean;
+};
+
+/** What the client holds for one joined room. */
+type PresenceRoomState = {
+  /**
+   * The room's identity on this client: its space and room id. Empty while a
+   * derived room's join is in flight, since the worker names the room.
+   */
+  key: string;
+  subscriptionId: string;
+  room: string;
+  participantId: string;
+  participants: Map<string, PresenceRecord>;
+  handles: Set<PresenceHandleState>;
+  name: string;
+
+  /** The scheduled publication, or `undefined` when none is pending. */
+  frame: number | undefined;
+
+  /** Settles when the worker has responded to the join. */
+  joined: Promise<void>;
+
+  /** Set by a `failure`, after which nothing is published or delivered. */
+  ended: boolean;
+
+  /**
+   * The state this join settled on when the worker named a room another cell
+   * had already joined: the two cells are aliases of one field, and their
+   * handles share that room rather than racing it with two memberships.
+   */
+  resolved?: PresenceRoomState;
+};
+
+const presenceRoomKey = (space: string, room: string): string =>
+  `${space}\0${room}`;
+
+const scheduleAnimationFrame = (callback: () => void): number => {
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    return globalThis.requestAnimationFrame(() => callback());
+  }
+  queueMicrotask(callback);
+  return 0;
+};
+
+/**
  * RuntimeClient provides a main-thread interface to a Runtime running elsewhere.
  */
 export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
@@ -199,6 +304,18 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     string,
     (field: OperationFieldSnapshot) => void
   >();
+  #presenceRooms = new Map<string, PresenceRoomState>();
+  #presenceBySubscription = new Map<string, PresenceRoomState>();
+
+  /** Orders facet writes across every handle, for the merge to rank by. */
+  #presenceWrites = 0;
+
+  /**
+   * Derived-room joins by the cell each was made through, kept after the
+   * join settles so a second join through the same cell finds the room
+   * without asking the worker again.
+   */
+  #presenceByCell = new Map<string, PresenceRoomState>();
 
   private constructor(
     conn: InitializedRuntimeConnection,
@@ -215,6 +332,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
     this.#conn.on("operationupdate", this.#onOperationUpdate);
+    this.#conn.on("presenceupdate", this.#onPresenceUpdate);
     this.#conn.on("eventneedsattention", this.#onEventNeedsAttention);
   }
 
@@ -323,6 +441,45 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     };
   }
 
+  /**
+   * Asks the worker to publish a custody instance's answer once, from the
+   * room's projected answer, into the instance's answer slot. The seal
+   * publishes only when every exchange rule of the room's policy requires the
+   * seal's witness and releases only to the seal, a rule of that policy
+   * releases the projected answer to the seal, the answer is a string of at
+   * most 1,024 characters, a number or a boolean, and every seat has sealed.
+   * It refuses the request otherwise, when the room changes while it
+   * publishes, and once the instance's answer is published.
+   */
+  async publishCustodyAnswer(cells: {
+    terms: CellRef;
+    policy: CellRef;
+    output: CellRef;
+  }): Promise<{ instance: string; answer: JSONValue }> {
+    return await this.#conn.request<RequestType.CustodyAnswerPublish>({
+      type: RequestType.CustodyAnswerPublish,
+      terms: cells.terms,
+      policy: cells.policy,
+      output: cells.output,
+    });
+  }
+
+  /**
+   * Reads a custody instance's published answer, verified to be the seal's
+   * write, or `undefined` while none is published.
+   */
+  async readCustodyAnswer(cells: {
+    terms: CellRef;
+    policy: CellRef;
+  }): Promise<JSONValue | undefined> {
+    const response = await this.#conn.request<RequestType.CustodyAnswerRead>({
+      type: RequestType.CustodyAnswerRead,
+      terms: cells.terms,
+      policy: cells.policy,
+    });
+    return response.answer;
+  }
+
   /** Discards a custody seal preview the host closed or replaced. */
   async cancelCustodySeal(id: string): Promise<void> {
     await this.#conn.request<RequestType.CustodySealCancel>({
@@ -422,6 +579,123 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         type: RequestType.OperationUnsubscribe,
         subscriptionId,
       }).catch(() => undefined);
+    };
+  }
+
+  /**
+   * Joins the presence room of `cell`'s resolved field — or `options.room`,
+   * under the cell's space — and returns a handle on it. A second join of
+   * the same room shares its membership. Rejects when the runtime's storage
+   * or its server does not support presence.
+   */
+  async joinPresenceRoom<T>(
+    cell: CellHandle<T>,
+    options: { room?: string } = {},
+  ): Promise<PresenceRoomHandle> {
+    const ref = cell.ref();
+    const requested = options.room;
+    const cellKey = cellRefToKey(ref);
+    // A named room is known before the worker is asked, and a derived one
+    // only from its reply, so a derived join is found by the cell it was made
+    // through, and a named one by the room.
+    let state = requested === undefined
+      ? this.#presenceByCell.get(cellKey)
+      : this.#presenceRooms.get(presenceRoomKey(ref.space, requested));
+    if (state !== undefined && (state.resolved ?? state).ended) {
+      this.#forgetPresenceRoom(state);
+      state = undefined;
+    }
+    if (state === undefined) {
+      const created: PresenceRoomState = {
+        key: requested === undefined
+          ? ""
+          : presenceRoomKey(ref.space, requested),
+        subscriptionId: crypto.randomUUID(),
+        room: requested ?? "",
+        participantId: "",
+        participants: new Map(),
+        handles: new Set(),
+        name: "",
+        frame: undefined,
+        joined: Promise.resolve(),
+        ended: false,
+      };
+      created.joined = this.#joinPresence(created, ref, requested);
+      if (requested === undefined) {
+        this.#presenceByCell.set(cellKey, created);
+      } else {
+        this.#presenceRooms.set(created.key, created);
+      }
+      this.#presenceBySubscription.set(created.subscriptionId, created);
+      state = created;
+    }
+    try {
+      await state.joined;
+    } catch (error) {
+      if (state.handles.size === 0) this.#forgetPresenceRoom(state);
+      throw error;
+    }
+    const room = state.resolved ?? state;
+    if (room.ended) {
+      throw new Error("presence room ended while it was being joined");
+    }
+    const handle: PresenceHandleState = {
+      facets: new Map(),
+      focused: false,
+      listeners: new Set(),
+      left: false,
+    };
+    room.handles.add(handle);
+    return {
+      get participantId() {
+        return room.participantId;
+      },
+      get room() {
+        return room.room;
+      },
+      get participants() {
+        return [...room.participants.values()];
+      },
+      setName: (name) => {
+        if (handle.left || room.name === name) return;
+        room.name = name;
+        this.#schedulePresencePublish(room);
+      },
+      setFacet: (facet, value) => {
+        if (handle.left) return;
+        handle.facets.set(facet, { value, revision: ++this.#presenceWrites });
+        this.#schedulePresencePublish(room);
+      },
+      clearFacet: (facet) => {
+        if (handle.left || !handle.facets.delete(facet)) return;
+        this.#schedulePresencePublish(room);
+      },
+      setFocused: (focused) => {
+        if (handle.left || handle.focused === focused) return;
+        handle.focused = focused;
+        this.#schedulePresencePublish(room);
+      },
+      subscribe: (listener) => {
+        if (!handle.left) handle.listeners.add(listener);
+        return () => {
+          handle.listeners.delete(listener);
+        };
+      },
+      leave: async () => {
+        if (handle.left) return;
+        handle.left = true;
+        handle.listeners.clear();
+        room.handles.delete(handle);
+        if (room.handles.size > 0) {
+          if (handle.facets.size > 0) this.#schedulePresencePublish(room);
+          return;
+        }
+        this.#forgetPresenceRoom(room);
+        await this.#conn.request<RequestType.PresenceLeave>({
+          type: RequestType.PresenceLeave,
+          subscriptionId: room.subscriptionId,
+        }).catch(() => undefined);
+      },
     };
   }
 
@@ -1390,6 +1664,191 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       data.field,
     );
   };
+
+  #onPresenceUpdate = (data: PresenceUpdateNotification): void => {
+    const room = this.#presenceBySubscription.get(data.subscriptionId);
+    if (room === undefined || room.ended) return;
+    const wire = data.event;
+    let event: PresenceEvent;
+    switch (wire.kind) {
+      case "snapshot":
+        room.participantId = wire.participantId;
+        room.participants = new Map(
+          wire.participants.map((participant) => [
+            participant.participantId,
+            participant,
+          ]),
+        );
+        event = wire;
+        break;
+      case "upsert": {
+        const held = room.participants.get(wire.participant.participantId);
+        if (held !== undefined && held.revision >= wire.participant.revision) {
+          return;
+        }
+        room.participants.set(wire.participant.participantId, wire.participant);
+        event = wire;
+        break;
+      }
+      case "remove":
+        if (!room.participants.delete(wire.participantId)) return;
+        event = wire;
+        break;
+      case "failure": {
+        const error = new Error(wire.error.message);
+        error.name = wire.error.name;
+        event = { kind: "failure", error };
+        this.#endPresenceRoom(room);
+        break;
+      }
+    }
+    this.#deliverPresence(room, event);
+  };
+
+  async #joinPresence(
+    state: PresenceRoomState,
+    ref: CellRef,
+    requested: string | undefined,
+  ): Promise<void> {
+    let response: PresenceJoinResponse;
+    try {
+      response = await this.#conn.request<RequestType.PresenceJoin>({
+        type: RequestType.PresenceJoin,
+        subscriptionId: state.subscriptionId,
+        cell: ref,
+        ...(requested === undefined ? {} : { room: requested }),
+      });
+    } catch (error) {
+      // The worker may have joined and lost only its reply. A best-effort
+      // leave keeps a membership nobody holds from outliving the connection.
+      this.#leavePresence(state.subscriptionId);
+      throw error;
+    }
+    if (requested === undefined) {
+      const key = presenceRoomKey(ref.space, response.room);
+      const existing = this.#presenceRooms.get(key);
+      if (existing !== undefined && existing !== state && !existing.ended) {
+        // Another cell reached this room first: an alias of the same field.
+        // This membership is redundant and is given up; the handles that
+        // waited on it share the room already held.
+        state.resolved = existing;
+        this.#presenceBySubscription.delete(state.subscriptionId);
+        this.#leavePresence(state.subscriptionId);
+        await existing.joined;
+        return;
+      }
+      state.key = key;
+      this.#presenceRooms.set(key, state);
+    }
+    state.room = response.room;
+    state.participantId = response.participantId;
+    state.participants = new Map(
+      response.participants.map((participant) => [
+        participant.participantId,
+        participant,
+      ]),
+    );
+  }
+
+  #leavePresence(subscriptionId: string): void {
+    void this.#conn.request<RequestType.PresenceLeave>({
+      type: RequestType.PresenceLeave,
+      subscriptionId,
+    }).catch(() => undefined);
+  }
+
+  #schedulePresencePublish(room: PresenceRoomState): void {
+    if (room.frame !== undefined || room.ended) return;
+    room.frame = scheduleAnimationFrame(() => {
+      room.frame = undefined;
+      this.#publishPresence(room);
+    });
+  }
+
+  /**
+   * Sends the room's record as it stands: the room's name and every
+   * handle's facets merged. A facet two handles set is the focused
+   * handle's, and among handles alike in focus the one that set it last.
+   * Nothing is sent without a name. A refusal ends the room with a
+   * `failure`.
+   */
+  #publishPresence(room: PresenceRoomState): void {
+    if (
+      room.ended || room.name.length === 0 || room.handles.size === 0 ||
+      this.#presenceRooms.get(room.key) !== room
+    ) {
+      return;
+    }
+    const facets: Record<string, FabricPlainObject> = {};
+    const ranks = new Map<string, [number, number]>();
+    for (const handle of room.handles) {
+      for (const [facet, { value, revision }] of handle.facets) {
+        const rank: [number, number] = [handle.focused ? 1 : 0, revision];
+        const held = ranks.get(facet);
+        if (
+          held !== undefined &&
+          (held[0] > rank[0] || (held[0] === rank[0] && held[1] > rank[1]))
+        ) {
+          continue;
+        }
+        ranks.set(facet, rank);
+        facets[facet] = value;
+      }
+    }
+    void this.#conn.request<RequestType.PresencePublish>({
+      type: RequestType.PresencePublish,
+      subscriptionId: room.subscriptionId,
+      name: room.name,
+      facets,
+    }).catch((cause) => {
+      if (room.ended) return;
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.#endPresenceRoom(room);
+      this.#deliverPresence(room, { kind: "failure", error });
+    });
+  }
+
+  #deliverPresence(room: PresenceRoomState, event: PresenceEvent): void {
+    for (const handle of [...room.handles]) {
+      for (const listener of [...handle.listeners]) {
+        try {
+          listener(event);
+        } catch (cause) {
+          console.error("presence listener threw:", cause);
+        }
+      }
+    }
+  }
+
+  #endPresenceRoom(room: PresenceRoomState): void {
+    room.ended = true;
+    if (
+      room.frame !== undefined &&
+      typeof globalThis.cancelAnimationFrame === "function"
+    ) {
+      globalThis.cancelAnimationFrame(room.frame);
+    }
+    room.frame = undefined;
+  }
+
+  /**
+   * Drops the room from every index, and marks it ended so that a state an
+   * alias cell still points at is not joined again through this one.
+   */
+  #forgetPresenceRoom(room: PresenceRoomState): void {
+    room.ended = true;
+    if (this.#presenceRooms.get(room.key) === room) {
+      this.#presenceRooms.delete(room.key);
+    }
+    for (const [cellKey, state] of [...this.#presenceByCell]) {
+      if (state === room || state.resolved === room) {
+        this.#presenceByCell.delete(cellKey);
+      }
+    }
+    if (this.#presenceBySubscription.get(room.subscriptionId) === room) {
+      this.#presenceBySubscription.delete(room.subscriptionId);
+    }
+  }
 
   #onEventNeedsAttention = (
     data: EventNeedsAttentionNotification,

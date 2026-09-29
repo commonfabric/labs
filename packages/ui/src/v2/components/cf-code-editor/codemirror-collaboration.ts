@@ -284,6 +284,11 @@ export class CodeMirrorCollaborationController {
     return this.#canProcess() && !this.#closing;
   }
 
+  /** The Cell handle whose field this controller synchronizes. */
+  get cell(): CellHandle<string> {
+    return this.#cell;
+  }
+
   get synchronizationSnapshot(): CodeMirrorSynchronizationSnapshot | null {
     if (!this.active || this.#cursor === null || this.#field === null) {
       return null;

@@ -2,10 +2,10 @@
  * Test: Collaborative Note
  *
  * Verifies the example's shared editor contract: the note is writable, no room
- * override is required, profile setup is visible while wishes are unresolved,
- * and the profile-name sanitizer obeys the co-presence wire bounds. The
- * headless runtime does not resolve viewer identity, so live `#profileName`
- * propagation remains browser-integration coverage.
+ * override is required, and profile setup is visible while wishes are
+ * unresolved. The profile-name sanitizer is tested with its owner,
+ * `../shared-note/`. The headless runtime does not resolve viewer identity, so
+ * live `#profileName` propagation remains browser-integration coverage.
  *
  * Run: deno task cf test packages/patterns/collaborative-note/main.test.tsx
  */
@@ -17,9 +17,7 @@ import {
   propsOf,
   readValue,
 } from "../test/vnode-helpers.ts";
-import CollaborativeNote, {
-  normalizePresenceParticipantName,
-} from "./main.tsx";
+import CollaborativeNote from "./main.tsx";
 
 export default pattern(() => {
   const note = Writable.of("Starting point");
@@ -37,13 +35,6 @@ export default pattern(() => {
   const assert_profile_setup_visible = assert(() =>
     findNodeById(subject[UI], "collaborative-note-profile-setup") !== undefined
   );
-  const assert_profile_name_is_safe_for_presence = assert(() =>
-    normalizePresenceParticipantName("  Ada\u0000\u0085 Lovelace  ") ===
-      "Ada Lovelace" &&
-    normalizePresenceParticipantName("a".repeat(81)) === "a".repeat(80) &&
-    normalizePresenceParticipantName("😀".repeat(65)) === "😀".repeat(64) &&
-    normalizePresenceParticipantName("\ud800") === ""
-  );
   const action_edit = action(() => note.set("Edited together"));
   const assert_edit_visible = assert(() => {
     const editorProps = propsOf(findElement(subject[UI], "cf-code-editor"));
@@ -54,7 +45,6 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_editor_contract },
       { assertion: assert_profile_setup_visible },
-      { assertion: assert_profile_name_is_safe_for_presence },
       { action: action_edit },
       { assertion: assert_edit_visible },
     ],

@@ -15,8 +15,8 @@ deno task test
 
 **Important:** Always use `deno task test` from the root, NOT `deno test`, as the task includes necessary flags.
 
-A package's `test` task is no substitute for a type check: some packages' tests
-skip checking outright, and the rest check only the modules their tests reach.
+A package's `test` task is no substitute for a type check: every `deno test`
+runs under `--no-check`, and the type check is a suite of its own.
 `deno task check` at the root checks the whole workspace at once, so run both:
 
 ```bash
@@ -273,15 +273,27 @@ choose:
   than an accident of it.
 - The CLI's shell harnesses under `packages/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
+- `deno task integration pattern-tests` runs each `.test.tsx` file in a
+  `cf test` process of its own, five at a time. Each process has its own
+  store, so the order the files start in decides how long the run takes and
+  nothing else. The files a continuous-integration lane expects to take
+  longest start first, so the lane finishes close to the time it was charged
+  for. Files of equal expected time, and every file of a local run, which has
+  no such figures, start in the order the seed puts them in. A local run can
+  therefore start the files in a different order from a lane at the same
+  commit. That changes nothing a test sees, because each file runs alone in
+  its process and its steps run in the order they are written, so every step
+  runs locally in the order it ran in the lane.
 
 #### Writing a task that runs tests
 
 A `deno test` written anywhere in this repository takes the seed from the root
-`test-seed` task. In a package, that is its `deno-test` task, which its `test`
-task runs through `tasks/run-member-tests.ts`:
+`test-seed` task, and passes `--no-check`, since the type check is a suite of
+its own. In a package, that is its `deno-test` task, which its `test` task runs
+through `tasks/run-member-tests.ts`:
 
 ```json
-"deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read test/"
+"deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read test/"
 ```
 
 `deno task -q test-seed` resolves to the root task from any directory inside
@@ -290,6 +302,9 @@ standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
 `packages/test-support/src/shuffle.ts` holds the seed and the permutation.
+`tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
+workflow, or a shell script writes without `--no-check`; a lane passes the flag
+to every `deno test` it builds whatever the task says.
 
 ### Browser tests in agent sandboxes
 
@@ -433,7 +448,7 @@ TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno tas
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
@@ -661,6 +676,18 @@ the kill loses that child's coverage, but it cannot truncate a profile.
 `packages/memory/test/inbox-store.test.ts` ends its writer processes by closing
 their input, and `packages/memory/test/inbox-store-child-coverage.test.ts` fails
 when any of them loses its profile.
+
+A web worker that a test starts writes coverage profiles too, and it writes them
+while it shuts down, after `terminate()` has already returned. A process that
+exits before that write finishes loses the worker's profiles or leaves one
+truncated. A `Worker` object gives no signal when its shutdown is done, but in
+Deno a Web Lock that a web worker holds is released only when the worker's
+runtime is torn down, which comes after that write. So a test that terminates a
+web worker just before its process exits waits for it by requesting a lock the
+worker took for itself. `WebWorkerRuntimeTransport.dispose()` waits in that way
+for the runtime worker, and
+`packages/runtime-client/test/client/transport-web-worker-coverage.test.ts`
+fails when that worker loses its profile.
 
 ### Test Structure
 

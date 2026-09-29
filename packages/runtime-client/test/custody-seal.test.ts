@@ -66,4 +66,40 @@ describe("custody-seal", () => {
       { type: RequestType.CustodySealCommit, id: "prepared" },
     ]);
   });
+
+  it("asks the worker to publish an answer and to read it back", async () => {
+    const requests: unknown[] = [];
+    const answered: Record<string, unknown> = {
+      [RequestType.CustodyAnswerPublish]: {
+        instance: "instance",
+        answer: "sushi",
+      },
+      [RequestType.CustodyAnswerRead]: { answer: "sushi" },
+    };
+    const conn = {
+      on: () => {},
+      request: (request: { type: string }) => {
+        requests.push(request);
+        return Promise.resolve(answered[request.type]);
+      },
+    } as unknown as never;
+    const client = new (RuntimeClient as unknown as {
+      new (conn: never, principal: undefined): RuntimeClient;
+    })(conn, undefined);
+    const room = { terms: cells.terms, policy: cells.policy };
+    const output = ref("choice", "did:key:room");
+
+    expect(await client.publishCustodyAnswer({ ...room, output })).toEqual({
+      instance: "instance",
+      answer: "sushi",
+    });
+    expect(await client.readCustodyAnswer(room)).toBe("sushi");
+    answered[RequestType.CustodyAnswerRead] = {};
+    expect(await client.readCustodyAnswer(room)).toBeUndefined();
+    expect(requests).toEqual([
+      { type: RequestType.CustodyAnswerPublish, ...room, output },
+      { type: RequestType.CustodyAnswerRead, ...room },
+      { type: RequestType.CustodyAnswerRead, ...room },
+    ]);
+  });
 });

@@ -46,6 +46,7 @@ export const TIER_MARKERS: Readonly<Record<MarkedTier, string>> = {
  * cannot spill into a sibling whose name merely starts the same way.
  */
 export const TIER_DIRECTORIES: Readonly<Record<string, MarkedTier>> = {
+  "collaborative-note/": "legacy",
   "factory-outputs/": "legacy",
   "gideon-tests/": "fixture",
   "plain-array-callback-locals/": "fixture",

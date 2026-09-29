@@ -179,7 +179,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         space,
         scope: "space",
         id: id as `${string}:${string}`,
-        path: ["value"],
+        path: [],
       },
       schema: { type: "object" },
     });

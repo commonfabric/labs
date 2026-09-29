@@ -7,9 +7,12 @@
  * It renders the tile's own last collection rather than asking GitHub again,
  * so opening it costs nothing and shows exactly what the tile is showing.
  * The heading says when that collection was, since the two are the same age.
+ * The page is live (live-page.ts), so an open copy follows the tile's
+ * collections, in whatever order the reader has sorted it.
  */
 
-import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
+import type { LivePageContent } from "./live-page.ts";
+import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
 // From the render values rather than lib.ts, so the browser test that drives
 // this page's own sorting can bundle it without the server-side half of the
 // package coming with it.
@@ -21,11 +24,6 @@ import {
   STATUS_RANK,
 } from "./tile-render-values.ts";
 import { statusDotRules } from "./status-dot.ts";
-import {
-  DASHBOARD_THEME_CLIENT,
-  DASHBOARD_THEME_HEAD,
-  dashboardThemeToggle,
-} from "./theme.ts";
 import type { Status } from "./types.ts";
 
 /** Where the page lives, and what the tile links to. */
@@ -35,6 +33,8 @@ export const CI_JOBS_PATH = "/ci";
 export interface Job {
   repo: string; // the repository's own name, without the owner
   workflow: string; // the workflow's name
+  // The workflow's file, which no other workflow in its repository shares.
+  path: string;
   pinned: boolean; // kept in the tile's body even when it is passing
   // How the job reads: red for a failure somebody can still act on, orange for
   // one that has been failing too long to be news and for a job nothing could
@@ -63,7 +63,6 @@ export interface CiJobs {
 }
 
 const STYLES = `
-  ${DETAIL_PAGE_STYLES}
   .summary{display:flex;flex-wrap:wrap;gap:10px 34px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:4px}
   .summary div{display:flex;flex-direction:column;gap:2px}
   .summary dt{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle)}
@@ -122,7 +121,9 @@ function jobRow(job: Job, now: number): string {
   const severity = `${STATUS_RANK.bad - STATUS_RANK[job.status]} ${job.result}`;
   // A job with no measurement sorts to one end rather than among the measured.
   const missing = "-1";
-  return `<tr><td class="repo" data-sort="${
+  return `<tr data-served="${
+    escapeHtml(servedKey(job))
+  }"><td class="repo" data-sort="${
     escapeHtml(job.repo)
   }"><span class="dot ${STATUS_DOT[job.status]}"></span>${
     escapeHtml(job.repo)
@@ -153,13 +154,20 @@ function jobRow(job: Job, now: number): string {
   }</tr>`;
 }
 
+/**
+ * A key for `job` that puts it where `ordered` does and that no other job
+ * shares. A repository's name has no spaces in it. Each row carries its key,
+ * which says nothing about the rows around it, so a row that has not changed
+ * keeps its markup however the rows around it move.
+ */
+function servedKey(job: Job): string {
+  const rank = STATUS_RANK.bad - STATUS_RANK[job.status];
+  return `${rank} ${job.repo} ${job.workflow} ${job.path}`;
+}
+
 /** Worst first, and within one status by repository and then by workflow. */
 function ordered(jobs: readonly Job[]): Job[] {
-  return [...jobs].sort((a, b) =>
-    STATUS_RANK[b.status] - STATUS_RANK[a.status] ||
-    a.repo.localeCompare(b.repo) ||
-    a.workflow.localeCompare(b.workflow)
-  );
+  return [...jobs].sort((a, b) => servedKey(a).localeCompare(servedKey(b)));
 }
 
 const JOB_COLUMNS = [
@@ -182,91 +190,147 @@ function jobHead(): string {
   }</tr></thead>`;
 }
 
-/** The parts of a table cell `makeTableSortable()` reads. */
+/** The parts of a table cell `sortTable()` reads. */
 export interface SortableCell {
   getAttribute(name: string): string | null;
   readonly textContent: string | null;
 }
 
-/** The parts of a table row `makeTableSortable()` reads. */
+/** The parts of a table row `sortTable()` reads. */
 export interface SortableRow {
+  getAttribute(name: string): string | null;
   readonly cells: ArrayLike<SortableCell>;
 }
 
-/** The parts of a column heading's button `makeTableSortable()` uses. */
-export interface SortableHeading {
+/** The parts of a column heading's button the sorting functions use. */
+export interface SortableHeading<Row extends SortableRow> {
   getAttribute(name: string): string | null;
   readonly parentElement: {
     setAttribute(name: string, value: string): void;
   } | null;
   addEventListener(type: "click", listener: () => void): void;
+  closest(selectors: "table"): SortableTable<Row> | null;
 }
 
-/** The parts of a table `makeTableSortable()` uses. */
+/** The parts of a table the sorting functions use. */
 export interface SortableTable<Row extends SortableRow> {
   readonly tBodies: ArrayLike<{
     readonly rows: ArrayLike<Row>;
     appendChild(row: Row): unknown;
   }>;
-  querySelectorAll(selectors: string): ArrayLike<SortableHeading>;
+  hasAttribute(name: string): boolean;
+  querySelectorAll(selectors: string): ArrayLike<SortableHeading<Row>>;
+}
+
+/** The parts of a page, or of a rendering of it, `followSorting()` reads. */
+export interface SortableRoot<Row extends SortableRow> {
+  querySelectorAll(selectors: "table"): ArrayLike<SortableTable<Row>>;
+}
+
+/** The parts of a page `followSorting()` uses. */
+export interface SortablePage<Row extends SortableRow>
+  extends SortableRoot<Row> {
+  addEventListener(
+    type: typeof LIVE_PAGE_UPDATE,
+    listener: (event: { readonly detail: SortableRoot<Row> }) => void,
+  ): void;
+}
+
+/** The column a reader sorted a table by, and which way. */
+export interface SortOrder {
+  readonly column: number;
+  readonly descending: boolean;
 }
 
 /**
- * Makes `table` sortable by any of its columns, ascending on the first click
- * of a heading and descending on the next. A cell sorts on its `data-sort`,
- * or on its text when it has none, as a number when both sides read as one.
- * Each sort starts from the order the rows were in when this was called, so a
- * column of equal values keeps that order beneath it. It reads only the table
- * it is given, which the page hands it and a test can fake, and the page
- * carries it serialized.
+ * Puts the rows of `table` in `order` and marks its headings to say so. A cell
+ * sorts on its `data-sort`, or on its text when it has none, as a number when
+ * both sides read as one. Rows the column holds equal go in the order the page
+ * is served in, by the key each row carries as its `data-served`. It reads only
+ * the table it is given, which the page hands it and a test can fake, and the
+ * page carries it serialized.
  */
-export function makeTableSortable<Row extends SortableRow>(
+export function sortTable<Row extends SortableRow>(
   table: SortableTable<Row>,
+  order: SortOrder,
 ): void {
   const body = table.tBodies[0];
   if (body === undefined) throw new Error("a sortable table has a body");
-  const served = Array.from(body.rows);
-  const headings = Array.from(
-    table.querySelectorAll("th button[data-column]"),
-  );
-  let sortedBy = -1;
-  let descending = false;
-
-  const keyOf = (row: Row, column: number): string => {
-    const cell = row.cells[column];
+  const keyOf = (row: Row): string => {
+    const cell = row.cells[order.column];
     return cell.getAttribute("data-sort") ?? (cell.textContent ?? "").trim();
   };
-
-  const sortBy = (column: number): void => {
-    descending = sortedBy === column ? !descending : false;
-    sortedBy = column;
-    const rows = served.slice().sort((a, b) => {
-      const left = keyOf(a, column);
-      const right = keyOf(b, column);
-      const leftNumber = Number(left);
-      const rightNumber = Number(right);
-      const order = left !== "" && right !== "" &&
-          Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
-        ? leftNumber - rightNumber
-        : left.localeCompare(right);
-      return descending ? -order : order;
-    });
-    for (const row of rows) body.appendChild(row);
-    for (const heading of headings) {
-      const own = Number(heading.getAttribute("data-column")) === column;
-      heading.parentElement?.setAttribute(
-        "aria-sort",
-        own ? (descending ? "descending" : "ascending") : "none",
-      );
-    }
-  };
-
-  for (const heading of headings) {
-    heading.addEventListener("click", () => {
-      sortBy(Number(heading.getAttribute("data-column")));
-    });
+  const served = (row: Row) => row.getAttribute("data-served") ?? "";
+  const rows = Array.from(body.rows).sort((a, b) => {
+    const left = keyOf(a);
+    const right = keyOf(b);
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    const compared = left !== "" && right !== "" &&
+        Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+      ? leftNumber - rightNumber
+      : left.localeCompare(right);
+    return (order.descending ? -compared : compared) ||
+      served(a).localeCompare(served(b));
+  });
+  for (const row of rows) body.appendChild(row);
+  const headings = table.querySelectorAll("th button[data-column]");
+  for (const heading of Array.from(headings)) {
+    const own = Number(heading.getAttribute("data-column")) === order.column;
+    heading.parentElement?.setAttribute(
+      "aria-sort",
+      own ? (order.descending ? "descending" : "ascending") : "none",
+    );
   }
 }
+
+/**
+ * Sorts the sortable tables in `page` by a column when its heading is
+ * clicked, ascending on the first click and descending on the next, and sorts
+ * each fresh rendering of the page the same way before it is applied. The
+ * rendering arrives in the order the page was served in, and sorted like the
+ * page it compares equal wherever nothing changed, so those rows are kept.
+ * Every heading on the page came either with the page or with a rendering, so
+ * each is listened to as it arrives. It reads only the page it is given, which
+ * a test can fake, and the page carries it serialized.
+ */
+export function followSorting<Row extends SortableRow>(
+  page: SortablePage<Row>,
+): void {
+  let order: SortOrder | undefined;
+  const listen = (root: SortableRoot<Row>): SortableTable<Row>[] => {
+    const tables = Array.from(root.querySelectorAll("table"))
+      .filter((table) => table.hasAttribute("data-sortable"));
+    for (const table of tables) {
+      const headings = table.querySelectorAll("th button[data-column]");
+      for (const heading of Array.from(headings)) {
+        heading.addEventListener("click", () => {
+          const column = Number(heading.getAttribute("data-column"));
+          order = {
+            column,
+            descending: order?.column === column && !order.descending,
+          };
+          // The heading may have arrived in a rendering and been placed in
+          // the table the page already had.
+          sortTable(heading.closest("table") ?? table, order);
+        });
+      }
+    }
+    return tables;
+  };
+  listen(page);
+  page.addEventListener(LIVE_PAGE_UPDATE, (event) => {
+    const tables = listen(event.detail);
+    if (order === undefined) return;
+    for (const table of tables) sortTable(table, order);
+  });
+}
+
+/** The page's own script, which keeps its table sortable. */
+export const CI_JOBS_SCRIPT = `
+  const LIVE_PAGE_UPDATE = ${JSON.stringify(LIVE_PAGE_UPDATE)};
+  const sortTable = ${sortTable.toString()};
+  (${followSorting.toString()})(document);`;
 
 function summary(collected: CiJobs): string {
   const count = (status: Status) =>
@@ -293,27 +357,23 @@ function summary(collected: CiJobs): string {
   }</dl>`;
 }
 
-function frame(head: string, body: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CI jobs</title>
-${DASHBOARD_THEME_HEAD}
-<style>
-${STYLES}
-</style></head><body>
-  <div class="top"><a class="back" href="/">← dashboard</a><b>CI jobs</b><span>${head}</span></div>
-  ${body}
-${dashboardThemeToggle()}
-${DASHBOARD_THEME_CLIENT}
-<script>{const table = document.querySelector("table[data-sortable]"); if (table) (${makeTableSortable.toString()})(table);}</script>
-</body></html>`;
+function content(head: string, body: string): LivePageContent {
+  return {
+    title: "CI jobs",
+    styles: STYLES,
+    head,
+    body,
+    script: CI_JOBS_SCRIPT,
+  };
 }
 
-/** The whole page for one collection, or the page saying there is not one. */
+/** The page for one collection, or the page saying there is not one. */
 export function ciJobsPage(
   collected: CiJobs | undefined,
   now = Date.now(),
-): string {
+): LivePageContent {
   if (collected === undefined) {
-    return frame(
+    return content(
       "",
       `<p class="empty">The ci tile has not finished a collection yet. It reads every repository in the organization, which takes a few seconds, and this page shows what it last saw.</p>`,
     );
@@ -354,7 +414,7 @@ export function ciJobsPage(
       ).join("")
     }</tbody></table></div>`;
 
-  return frame(
+  return content(
     `collected ${minutePrecision(collected.collectedAt)} · ${
       escapeHtml(compactSpan(now - collected.collectedAt))
     } ago`,
@@ -364,14 +424,4 @@ export function ciJobsPage(
   ${unjudged}
   ${unreadable}`,
   );
-}
-
-/** The page as the response the tile's route answers with. */
-export function ciJobsResponse(
-  collected: CiJobs | undefined,
-  now?: number,
-): Response {
-  return new Response(ciJobsPage(collected, now), {
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
 }

@@ -11,6 +11,8 @@ import {
   seededOrder,
   type Selection,
   type SelectionReason,
+  suiteLoad,
+  testsOf,
 } from "./plan.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
 import type { WithheldReason } from "@commonfabric/test-support/records";
@@ -23,6 +25,7 @@ import {
 
 const NO_CAPABILITIES = new Map<string, readonly string[]>();
 const NO_WHOLE_UNITS: ReadonlySet<string> = new Set();
+const NO_PROCESSES: ReadonlyMap<string, string> = new Map();
 
 /** `count` identities of one suite, each in its own invocation unit. */
 function entries(
@@ -48,6 +51,7 @@ function run(
     mandatory: new Map(),
     capabilities: NO_CAPABILITIES,
     wholeUnits: NO_WHOLE_UNITS,
+    processes: NO_PROCESSES,
     ...overrides,
   });
 }
@@ -541,6 +545,7 @@ describe("plan", () => {
         "runner-unit": { overhead: 10, correction: 1, unitOverhead: 5 },
         "cli-deno": { overhead: 0, correction: 1, unitOverhead: 0 },
         "cli-core": { overhead: 0, correction: 1, unitOverhead: 0 },
+        "pattern-unit": { overhead: 0, correction: 0.8, unitOverhead: 0 },
       },
       prologue: 0,
     };
@@ -605,6 +610,158 @@ describe("plan", () => {
       expect(
         strangers.filter((s) => chosen.get(s.test.n) === "density").length,
       ).toBe(1);
+    });
+
+    it("takes the files of a process a lane has started ahead of files in processes it has not", () => {
+      // The same shape again, with the ten seconds charged for starting
+      // the process a file runs in rather than for opening the file. The
+      // siblings are each a file of their own, run in the process the
+      // mandatory test started, so each costs the lane one. Each stranger
+      // runs in a process of its own, and costs eleven.
+      const perProcess: Calibration = {
+        setupCost: {},
+        suites: {
+          "workspace-unit": {
+            overhead: 0,
+            correction: 1,
+            unitOverhead: 0,
+            process: { setup: 10, overhead: 0, correction: 1, unitOverhead: 0 },
+          },
+        },
+        prologue: 0,
+      };
+      const strangers = [1, 2, 3, 4].map((i) =>
+        test(`stranger ${i}`, `stranger-${i}.test.ts`)
+      );
+      const siblings = [2, 3, 4, 5].map((i) =>
+        test(`sibling ${i}`, `sibling-${i}.test.ts`)
+      );
+      const proven = test("proven", "proven.test.ts", {
+        cost: 49.5,
+        score: 0.9,
+      });
+      const processes = new Map([
+        ["workspace-unit\topen.test.ts", "near"],
+        ["workspace-unit\tproven.test.ts", "proven"],
+        ...siblings.map(({ unit }) => [`workspace-unit\t${unit}`, "near"]),
+        ...strangers.map(({ unit }) => [`workspace-unit\t${unit}`, unit]),
+      ] as [string, string][]);
+      const chosen = reasons(run(
+        sampleManifest({
+          entries: [opener, proven, ...strangers, ...siblings],
+          calibration: perProcess,
+        }),
+        { lanes: 1, budgetSeconds: 111, mandatory: opened, processes },
+      ));
+      for (const sibling of siblings) {
+        expect(chosen.get(sibling.test.n)).toBe("density");
+      }
+      expect(
+        strangers.filter((s) => chosen.get(s.test.n) === "density").length,
+      ).toBe(1);
+    });
+
+    it("moves a suite's shorter tests up once its lane holds a longer one", () => {
+      // The pattern unit suite runs its tests side by side. A mandatory
+      // test puts it in the lane, so taking the long test opens nothing
+      // but its own file. The long test is the densest there is, and
+      // costs the lane 13.9 of the 25.4 seconds the density pass has. The
+      // short test alone would cost nine, and the stranger costs eight,
+      // so the stranger is denser to start with. Once the long test is
+      // in, the short one's own time fits under it and it costs 4.48,
+      // which is denser than the stranger. There is room for one of the
+      // two.
+      const pattern = (name: string, cost: number, score = 0.05) =>
+        test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
+      const tiny = pattern("tiny", 0.1);
+      const chosen = reasons(packed(
+        [
+          tiny,
+          pattern("long", 14, 0.5),
+          pattern("short", 9),
+          test("stranger", "open.test.ts", { cost: 8 }),
+        ],
+        {
+          mandatory: new Map([
+            ...opened,
+            [testIdentityKey(tiny.test), "changed" as const],
+          ]),
+        },
+      ));
+      expect(chosen.get("long")).toBe("density");
+      expect(chosen.get("short")).toBe("density");
+      expect(chosen.get("stranger")).not.toBe("density");
+    });
+
+    it("moves a long test of a suite up as its lane's share of the suite grows", () => {
+      // The long test's own time is more than the suite's loads in the
+      // lane come to, so it is charged what its own time adds past them,
+      // and that falls with every short test the lane takes. The three
+      // short tests are the densest there are. After them the long test
+      // costs 16 seconds, and is denser than the stranger at 7.5; after
+      // only the first, it cost 18 and was not. The density pass has 20.6
+      // seconds left, which holds one of the two.
+      const pattern = (name: string, cost: number, score = 0.05) =>
+        test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
+      const tiny = pattern("tiny", 0.1);
+      const chosen = reasons(packed(
+        [
+          tiny,
+          pattern("short 1", 2, 0.5),
+          pattern("short 2", 2, 0.5),
+          pattern("short 3", 2, 0.5),
+          pattern("long", 20, 0.115),
+          test("stranger", "open.test.ts", { cost: 7.5 }),
+        ],
+        {
+          mandatory: new Map([
+            ...opened,
+            [testIdentityKey(tiny.test), "changed" as const],
+          ]),
+        },
+      ));
+      expect(chosen.get("short 3")).toBe("density");
+      expect(chosen.get("long")).toBe("density");
+      expect(chosen.get("stranger")).not.toBe("density");
+    });
+
+    it("moves a suite's long tests up once its longest unit sets the lane's charge", () => {
+      // One lane of 24 seconds, and a suite running its units side by side
+      // at a correction of a quarter. The value pass takes the files of
+      // 10, 5 and 11 seconds, so the lane is charged the 11 its longest
+      // unit takes. The density pass then takes the 18-second file for
+      // 7 seconds, and the lane is charged 18. That leaves the 19-second
+      // file costing 1 and the 20-second file costing 2, where before
+      // they cost 8 and 9, and there is room for one of the two: the
+      // 19-second one, which is now the denser.
+      const file = (name: string, cost: number, score: number) =>
+        sampleEntry({ k: "pattern", s: "patterns", n: name }, {
+          suite: "pattern-unit",
+          unit: `${name}.test.tsx`,
+          cost,
+          score,
+        });
+      const manifest = sampleManifest({
+        entries: [
+          file("ten", 10, 0.131),
+          file("twenty", 20, 0.115),
+          file("five", 5, 0.118),
+          file("nineteen", 19, 0.075),
+          file("eighteen", 18, 0.097),
+          file("eleven", 11, 0.11),
+        ],
+        calibration: {
+          setupCost: {},
+          suites: {
+            "pattern-unit": { overhead: 0, correction: 0.25, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const chosen = reasons(run(manifest, { lanes: 1, budgetSeconds: 24 }));
+      expect(chosen.get("eighteen")).toBe("density");
+      expect(chosen.get("nineteen")).toBe("density");
+      expect(chosen.get("twenty")).not.toBe("density");
     });
 
     it("charges a test the overhead of a suite its lane is not holding", () => {
@@ -1061,6 +1218,154 @@ describe("plan", () => {
       expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(18, 6);
     });
 
+    describe("a suite whose processes each pay a setup", () => {
+      const perProcess: Calibration = {
+        setupCost: {},
+        suites: {
+          "workspace-unit": {
+            overhead: 0,
+            correction: 1,
+            unitOverhead: 0,
+            process: { setup: 20, overhead: 0, correction: 1, unitOverhead: 0 },
+          },
+        },
+        prologue: 0,
+      };
+
+      /** Four one-second tests, each a file of its own. */
+      const four = () =>
+        entries(4, (i) => ({
+          cost: 1,
+          unit: `packages/memory/test/${i}.test.ts`,
+        }));
+
+      /** The processes that put the files of `four()` two to a process. */
+      const pairs = new Map(
+        [0, 1, 2, 3].map((i) => [
+          `workspace-unit\tpackages/memory/test/${i}.test.ts`,
+          i < 2 ? "first" : "second",
+        ]),
+      );
+
+      it("charges the setup once for each process a lane starts", () => {
+        const result = run(
+          sampleManifest({ entries: four(), calibration: perProcess }),
+          { lanes: 1, processes: pairs },
+        );
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(44, 6);
+      });
+
+      it("charges the setup again each time a process starts again to repeat a test", () => {
+        // A unit's runner starts its process again for each run.
+        const result = run(
+          sampleManifest({
+            entries: four().slice(0, 1).map((entry) => ({
+              ...entry,
+              repeats: 2,
+            })),
+            calibration: perProcess,
+          }),
+          { lanes: 1, processes: pairs },
+        );
+        expect(result.lanes[0]!.selections[0]!.repeats).toBe(2);
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(42, 6);
+      });
+
+      it("charges a suite's process fit in place of the figures beside it", () => {
+        // Those are for a packer that charges no process setup. The process
+        // fit's own intercept, correction and per-unit charge are what this
+        // one charges: 5 for the lane, twice 4 for the tests, 1 for each
+        // file, and 20 for each process.
+        const result = run(
+          sampleManifest({
+            entries: four(),
+            calibration: {
+              ...perProcess,
+              suites: {
+                "workspace-unit": {
+                  overhead: 100,
+                  correction: 3,
+                  unitOverhead: 50,
+                  process: {
+                    setup: 20,
+                    overhead: 5,
+                    correction: 2,
+                    unitOverhead: 1,
+                  },
+                },
+              },
+            },
+          }),
+          { lanes: 1, processes: pairs },
+        );
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(57, 6);
+      });
+
+      it("charges the figures beside a process fit where the topology names no process for the suite", () => {
+        // The process fit leaves its setup out of everything but the
+        // charge per process, so a suite no lane starts a process for
+        // would be charged that setup nowhere.
+        const result = run(
+          sampleManifest({
+            entries: four(),
+            calibration: {
+              ...perProcess,
+              suites: {
+                "workspace-unit": {
+                  overhead: 30,
+                  correction: 1,
+                  unitOverhead: 2,
+                  process: {
+                    setup: 20,
+                    overhead: 0,
+                    correction: 1,
+                    unitOverhead: 0,
+                  },
+                },
+              },
+            },
+          }),
+          { lanes: 1 },
+        );
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(42, 6);
+      });
+
+      it("charges no setup for a unit its suite puts in no process", () => {
+        const result = run(
+          sampleManifest({ entries: four(), calibration: perProcess }),
+          { lanes: 1 },
+        );
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(4, 6);
+      });
+
+      it("counts a process's setup in what a suite costs before any test", () => {
+        const result = run(
+          sampleManifest({
+            entries: four().map((entry) => ({ ...entry, cost: 0 })),
+            calibration: {
+              ...perProcess,
+              suites: {
+                "workspace-unit": {
+                  overhead: 0,
+                  correction: 1,
+                  unitOverhead: 0,
+                  process: {
+                    setup: 250,
+                    overhead: 0,
+                    correction: 1,
+                    unitOverhead: 0,
+                  },
+                },
+              },
+            },
+          }),
+          { lanes: 1, processes: pairs },
+        );
+        expect(result.crowding.map(({ suite, fixed }) => ({ suite, fixed })))
+          .toEqual([{ suite: "workspace-unit", fixed: 250 }]);
+      });
+    });
+
     it("charges a suite's per-unit overhead once for a shared unit", () => {
       const manifest = sampleManifest({
         entries: entries(3, () => ({
@@ -1117,6 +1422,264 @@ describe("plan", () => {
       });
       const result = run(manifest, { lanes: 1 });
       expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(12, 6);
+    });
+
+    describe("a unit that runs more than once", () => {
+      // A lane runs a suite's share in passes, one for each time its most
+      // repeated unit runs, and each pass invokes the suite's command
+      // afresh over the units still running.
+
+      /** A manifest of one suite whose tests all have to run. */
+      function repeated(
+        fit: Calibration["suites"][string],
+        tests: { cost: number; repeats: number; unit: string }[],
+      ) {
+        const manifest = sampleManifest({
+          entries: entries(tests.length, (i) => tests[i]!),
+          calibration: {
+            setupCost: {},
+            suites: { "workspace-unit": fit },
+            prologue: 0,
+          },
+        });
+        return run(manifest, {
+          lanes: 1,
+          budgetSeconds: 1000,
+          mandatory: everything(manifest),
+        }).lanes[0]!.projectedSeconds;
+      }
+
+      it("charges a suite's overhead once for each pass", () => {
+        // Three passes, for the unit that runs three times; the unit that
+        // runs once adds none.
+        expect(
+          repeated({ overhead: 10, correction: 1, unitOverhead: 0 }, [
+            { cost: 1, repeats: 3, unit: "packages/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+          ]),
+        ).toBeCloseTo(30 + 4, 6);
+      });
+
+      it("charges a unit's overhead once for each pass that opens it", () => {
+        expect(
+          repeated({ overhead: 0, correction: 1, unitOverhead: 5 }, [
+            { cost: 1, repeats: 2, unit: "packages/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+          ]),
+        ).toBeCloseTo(15 + 3, 6);
+      });
+
+      it("charges the loads every test of a unit for each run of the unit", () => {
+        // The repeated unit takes 20 a run and runs twice, so the loads
+        // come to 0.4 of 40 and 200, where the floor is 20 and 20.
+        expect(
+          repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
+            { cost: 10, repeats: 2, unit: "packages/memory/test/a.test.ts" },
+            { cost: 10, repeats: 1, unit: "packages/memory/test/a.test.ts" },
+            ...Array.from({ length: 10 }, (_, i) => ({
+              cost: 20,
+              repeats: 1,
+              unit: `packages/memory/test/${i}.test.ts`,
+            })),
+          ]),
+        ).toBeCloseTo(96, 6);
+      });
+
+      it("charges a unit's earlier tests again when a later one repeats it", () => {
+        // The test of 40 is placed first, as the dearer, and runs once.
+        // The test of 5 then makes its unit run three times, which runs the
+        // test of 40 twice more: the unit takes 135, and with the twelve
+        // other files of 20 the loads come to 0.4 of 375.
+        expect(
+          repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
+            { cost: 40, repeats: 1, unit: "packages/memory/test/a.test.ts" },
+            { cost: 5, repeats: 3, unit: "packages/memory/test/a.test.ts" },
+            ...Array.from({ length: 12 }, (_, i) => ({
+              cost: 20,
+              repeats: 1,
+              unit: `packages/memory/test/${i}.test.ts`,
+            })),
+          ]),
+        ).toBeCloseTo(150, 6);
+      });
+
+      it("charges the floor the longest unit of each pass", () => {
+        // The first pass takes the unit of 100, and the second the unit of
+        // 60, which is the only one still running.
+        expect(
+          repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
+            { cost: 100, repeats: 1, unit: "packages/memory/test/a.test.ts" },
+            { cost: 60, repeats: 2, unit: "packages/memory/test/b.test.ts" },
+          ]),
+        ).toBeCloseTo(160, 6);
+      });
+
+      it("reads a lane's share the way the packer charged it", () => {
+        const manifest = sampleManifest({
+          entries: entries(3, (i) => ({
+            cost: [100, 60, 30][i]!,
+            repeats: [1, 2, 3][i]!,
+            unit: `packages/memory/test/${i}.test.ts`,
+          })),
+          calibration: {
+            setupCost: {},
+            suites: {
+              "workspace-unit": {
+                overhead: 0,
+                correction: 0.4,
+                unitOverhead: 0,
+              },
+            },
+            prologue: 0,
+          },
+        });
+        const lane = run(manifest, {
+          lanes: 1,
+          budgetSeconds: 1000,
+          mandatory: everything(manifest),
+        }).lanes[0]!;
+        // The passes take 100, 60 and 30.
+        expect(suiteLoad(manifest, "workspace-unit", lane.selections))
+          .toBeCloseTo(190, 6);
+        expect(lane.projectedSeconds).toBeCloseTo(190, 6);
+        expect(testsOf(lane.selections)).toEqual({
+          ran: 100 + 120 + 90,
+          longest: [100, 60, 30],
+          opened: 6,
+        });
+      });
+    });
+
+    describe("testsOf()", () => {
+      it("returns the same figures whatever order the selections are listed in", () => {
+        // Added in this order, 0.1, 0.2 and 0.3 come to 0.6000000000000001,
+        // and in the other to 0.6.
+        const selections = entries(3, (i) => ({
+          cost: [0.1, 0.2, 0.3][i]!,
+          unit: "packages/memory/test/one.test.ts",
+        })).map((entry) => ({ entry, repeats: 1 }));
+        expect(testsOf(selections.toReversed())).toEqual(testsOf(selections));
+        expect(testsOf(selections).ran).toBe(0.6000000000000001);
+      });
+    });
+
+    describe("a suite running its units side by side", () => {
+      // Its correction is well below one, because a batch of many units
+      // spends a fraction of what they take between them. A batch still
+      // does not finish before its longest unit has.
+
+      const sideBySide: Calibration = {
+        setupCost: {},
+        suites: {
+          "workspace-unit": { overhead: 0, correction: 0.4, unitOverhead: 0 },
+        },
+        prologue: 0,
+      };
+
+      it("charges a lane no less than its longest test takes", () => {
+        const manifest = sampleManifest({
+          entries: entries(3, (i) => ({ cost: i === 0 ? 100 : 1 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(100, 6);
+      });
+
+      it("charges a lane no less than the unit it holds most of takes", () => {
+        // A unit's tests follow one another, so three tests of one file
+        // take their three costs added together.
+        const manifest = sampleManifest({
+          entries: entries(3, () => ({
+            cost: 40,
+            unit: "packages/memory/test/one.test.ts",
+          })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(120, 6);
+      });
+
+      it("charges a unit every test in it for each run its most repeated test asks for", () => {
+        // The runner runs the unit twice, with both tests each time, so it
+        // takes 40 seconds, where the two tests' own runs come to 30.
+        const manifest = sampleManifest({
+          entries: entries(2, (i) => ({
+            cost: 10,
+            repeats: i === 0 ? 2 : 1,
+            unit: "packages/memory/test/one.test.ts",
+          })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, {
+          lanes: 1,
+          budgetSeconds: 200,
+          mandatory: everything(manifest),
+        });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(40, 6);
+      });
+
+      it("charges a lane the corrected sum where that is more", () => {
+        const manifest = sampleManifest({
+          entries: entries(10, () => ({ cost: 20 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(80, 6);
+      });
+
+      it("reads a lane's share the way the packer charged it", () => {
+        const manifest = sampleManifest({
+          entries: entries(
+            6,
+            (i) =>
+              i < 2
+                ? { cost: 40, unit: "packages/memory/test/one.test.ts" }
+                : { cost: 10 },
+          ),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, budgetSeconds: 200 });
+        const selections = result.lanes[0]!.selections;
+        expect(selections.length).toBe(6);
+        expect(suiteLoad(manifest, "workspace-unit", selections)).toBeCloseTo(
+          result.lanes[0]!.projectedSeconds,
+          6,
+        );
+        expect(suiteLoad(manifest, "workspace-unit", selections)).toBeCloseTo(
+          80,
+          6,
+        );
+        expect(suiteLoad(manifest, "workspace-unit", selections.slice(2)))
+          .toBeCloseTo(16, 6);
+      });
+
+      it("charges a lane every run of a repeated test in full", () => {
+        // The runs of one unit follow one another, so none of them is
+        // shared out among the rest of the batch.
+        const manifest = sampleManifest({
+          entries: entries(1, () => ({ cost: 50, repeats: 2 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, {
+          lanes: 1,
+          budgetSeconds: 200,
+          mandatory: everything(manifest),
+        });
+        expect(result.lanes[0]!.selections[0]!.repeats).toBe(2);
+        expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(100, 6);
+      });
+
+      it("reports a test no lane can hold on its own time rather than the corrected one", () => {
+        // Corrected, the test would cost the lane 160 seconds, well inside
+        // the bound. It takes 400.
+        const manifest = sampleManifest({
+          entries: entries(1, () => ({ cost: 400 })),
+          calibration: sideBySide,
+        });
+        const result = run(manifest, { lanes: 1, boundSeconds: 300 });
+        expect(result.unschedulable.map(({ cost }) => cost)).toEqual([400]);
+        expect(selected(result)).toEqual([]);
+      });
     });
 
     it("applies the suite's fitted correction to a measured cost", () => {
@@ -1560,6 +2123,7 @@ describe("how many lanes the full run needs", () => {
       manifest,
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
+      processes: NO_PROCESSES,
       ...overrides,
     });
   }
@@ -1582,6 +2146,7 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
+      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });
@@ -1630,6 +2195,7 @@ describe("how many lanes the full run needs", () => {
         mandatory: new Map(),
         capabilities,
         wholeUnits: NO_WHOLE_UNITS,
+        processes: NO_PROCESSES,
         policy: "everything",
         budgetSeconds: 100,
         lanes: count,
@@ -1641,15 +2207,19 @@ describe("how many lanes the full run needs", () => {
     // The fewest lanes the raw work could fit in is not enough lanes,
     // because a lane loses part of its budget to the overhead of the
     // suite it opens. The search has to climb past that starting point,
-    // and this is the case that makes it: three lanes hold 1,440
-    // seconds of tests only if their overheads are free, and they are
-    // not.
+    // and this is the case that makes it: three lanes hold eight tests
+    // of a ninth of a budget each only if their overheads are free, and
+    // they are not.
     const manifest = sampleManifest({
-      entries: entries(24, () => ({ cost: 60 })),
+      entries: entries(24, () => ({ cost: FULL_LANE_BUDGET_SECONDS / 9 })),
       calibration: {
         setupCost: {},
         suites: {
-          "workspace-unit": { overhead: 150, correction: 1, unitOverhead: 0 },
+          "workspace-unit": {
+            overhead: FULL_LANE_BUDGET_SECONDS * 0.3,
+            correction: 1,
+            unitOverhead: 0,
+          },
         },
         prologue: 0,
       },
@@ -1663,6 +2233,7 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
+      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });
@@ -1693,6 +2264,7 @@ describe("how many lanes the full run needs", () => {
         mandatory: new Map(),
         capabilities,
         wholeUnits: NO_WHOLE_UNITS,
+        processes: NO_PROCESSES,
         policy: "everything",
         lanes: n,
       });
@@ -1716,10 +2288,12 @@ describe("how many lanes the full run needs", () => {
     // is what decides the count.
     const manifest = sampleManifest({
       entries: [
-        ...entries(40, () => ({ cost: 100 })),
+        ...entries(40, () => ({
+          cost: Math.floor(FULL_LANE_BUDGET_SECONDS / 5.3),
+        })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
           unit: "packages/memory/test/vast.test.ts",
-          cost: 900,
+          cost: FULL_LANE_BUDGET_SECONDS * 1.7,
         }),
       ],
     });
@@ -1729,6 +2303,7 @@ describe("how many lanes the full run needs", () => {
       mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
+      processes: NO_PROCESSES,
       policy: "everything",
       lanes,
     });

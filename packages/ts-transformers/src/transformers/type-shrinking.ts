@@ -871,7 +871,9 @@ export function printTypeNode(
  * Returns a type node for the part of `type` that `paths` reach, or
  * `undefined` when there is none to build. The node keeps the scope wrapper
  * that the alias of `type` names and the default its `Default` brand carries,
- * and so does each part of it the node retains.
+ * and so does each part of it the node retains. It is recorded as narrowing
+ * `type`, and so is each part of it built from part of another value
+ * (`recordNarrowing()`).
  */
 function buildShrunkTypeNodeFromType(
   type: ts.Type,
@@ -883,6 +885,36 @@ function buildShrunkTypeNodeFromType(
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
   visiting: ReadonlySet<string> = new Set(),
+): ts.TypeNode | undefined {
+  return recordNarrowing(
+    shrinkTypeToNode(
+      type,
+      paths,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      state,
+      fullShapePaths,
+      visiting,
+    ),
+    type,
+    undefined,
+    state,
+  );
+}
+
+/** Helper for `buildShrunkTypeNodeFromType()`, which builds its node. */
+function shrinkTypeToNode(
+  type: ts.Type,
+  paths: readonly (readonly string[])[],
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+  fullShapePaths: readonly (readonly string[])[],
+  visiting: ReadonlySet<string>,
 ): ts.TypeNode | undefined {
   const typeToNodeFlags = ts.NodeBuilderFlags.NoTruncation |
     ts.NodeBuilderFlags.UseStructuralFallback;
@@ -1470,6 +1502,12 @@ function restoreDefault(
   return wrapTypeNodeWithRestoredDefault(node, value, factory);
 }
 
+/**
+ * Returns a node for the part of the value `node` spells that `paths` reach,
+ * `node` itself where that is all of it, or `undefined` when there is none to
+ * build. A node other than `node` is recorded as narrowing it, and so is each
+ * part of it built from part of another value (`recordNarrowing()`).
+ */
 function buildShrunkTypeNodeFromTypeNode(
   node: ts.TypeNode,
   paths: readonly (readonly string[])[],
@@ -1479,6 +1517,108 @@ function buildShrunkTypeNodeFromTypeNode(
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
   sourceFile?: ts.SourceFile,
+): ts.TypeNode | undefined {
+  const shrunk = shrinkTypeNode(
+    node,
+    paths,
+    factory,
+    checker,
+    typeRegistry,
+    state,
+    fullShapePaths,
+    sourceFile,
+  );
+  if (!checker || !shrunk || shrunk === node) return shrunk;
+  return recordNarrowing(
+    shrunk,
+    state?.printedFrom(node) ??
+      getTypeFromTypeNodeWithFallback(node, checker, typeRegistry),
+    node,
+    state,
+  );
+}
+
+/**
+ * `narrowed`, a node built from part of the value `type` is, recorded as
+ * narrowing it (`CrossStageState.recordNarrowedFrom()`), with `typeNode`
+ * where a node spells that value. A value keeps its CFC labels however little
+ * of it is read, and only its own type, or the node spelling it, says which
+ * labels it has.
+ */
+function recordNarrowing(
+  narrowed: ts.TypeNode | undefined,
+  type: ts.Type,
+  typeNode: ts.TypeNode | undefined,
+  state: CrossStageState | undefined,
+): ts.TypeNode | undefined {
+  if (narrowed && state && narrowed !== typeNode) {
+    state.recordNarrowedFrom(narrowed, {
+      type,
+      ...(typeNode && { typeNode }),
+    });
+  }
+  return narrowed;
+}
+
+/**
+ * Records each part of `result`, a node built from `base` or from the type it
+ * spells, as narrowing what the part of `base` in the same place narrows, or
+ * stands for: a property by its name, and an element by its array. A node
+ * built from a type, or rebuilt afresh, keeps no trace of the node it stands
+ * for, and only that node's record says which value it narrows, or which
+ * declaration spells what a print of its type cannot
+ * (`CrossStageState.recordNarrowedFrom()`, `recordDeclaredValue()`).
+ */
+function carryNarrowing(
+  base: ts.TypeNode,
+  result: ts.TypeNode | undefined,
+  state: CrossStageState | undefined,
+): void {
+  if (!result || !state || result === base) return;
+  const from = unwrapTypeParentheses(base);
+  const to = unwrapTypeParentheses(result);
+  const value = state.narrowedFrom(from) ?? state.declaredValue(from);
+  if (value) state.recordNarrowedFrom(to, value);
+  // A print rebuilt as a print of the same type is read as the annotation the
+  // print it rebuilds was read as.
+  const spelledBy = state.lookupSchemaHint(from)?.spelledBy;
+  const printed = state.printedFrom(to);
+  if (spelledBy && printed && printed === state.printedFrom(from)) {
+    state.recordSchemaHint(to, { spelledBy });
+  }
+  const carry = (fromPart: ts.TypeNode, toPart: ts.TypeNode | undefined) =>
+    carryNarrowing(fromPart, toPart, state);
+  if (ts.isTypeLiteralNode(from) && ts.isTypeLiteralNode(to)) {
+    for (const member of to.members) {
+      const name = ts.isPropertySignature(member) && member.type &&
+        getPropertyNameText(member.name);
+      const source = name &&
+        from.members.find((candidate) =>
+          ts.isPropertySignature(candidate) && candidate.type &&
+          getPropertyNameText(candidate.name) === name
+        );
+      if (source) {
+        carry(
+          (source as ts.PropertySignature).type!,
+          (member as ts.PropertySignature).type,
+        );
+      }
+    }
+  } else if (ts.isArrayTypeNode(from) && ts.isArrayTypeNode(to)) {
+    carry(from.elementType, to.elementType);
+  }
+}
+
+/** Helper for `buildShrunkTypeNodeFromTypeNode()`, which builds its node. */
+function shrinkTypeNode(
+  node: ts.TypeNode,
+  paths: readonly (readonly string[])[],
+  factory: ts.NodeFactory,
+  checker: ts.TypeChecker | undefined,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+  fullShapePaths: readonly (readonly string[])[],
+  sourceFile: ts.SourceFile | undefined,
 ): ts.TypeNode | undefined {
   const printedType = state?.printedFrom(node);
   // A scoped cell's print is kept whole: only its alias names its scope.
@@ -4619,6 +4759,7 @@ export function applyShrinkAndWrap(
         context?.state,
         fullShapePaths,
       );
+      carryNarrowing(shrinkBaseTypeNode, typeDriven, context?.state);
       const nodeDriven = buildShrunkTypeNodeFromTypeNode(
         shrinkBaseTypeNode,
         retainedPaths,
@@ -4664,6 +4805,7 @@ export function applyShrinkAndWrap(
           fullShapePaths,
         )
         : undefined;
+      carryNarrowing(shrinkBaseTypeNode, typeDriven, context?.state);
       shrunk = choosePreferredShrinkCandidate(
         "node",
         nodeDriven,
@@ -4678,18 +4820,27 @@ export function applyShrinkAndWrap(
       next = shrunk;
     }
   }
+  // Each pass below rebuilds the node it is handed, so each part of what it
+  // returns narrows what the part it rebuilt narrowed.
+  const carried = (from: ts.TypeNode, to: ts.TypeNode): ts.TypeNode => {
+    carryNarrowing(from, to, context?.state);
+    return to;
+  };
   if (!identityOnlyRoot && identityPaths.length > 0) {
-    next = applyIdentityOnlyPathsToTypeNode(
+    next = carried(
       next,
-      identityPaths,
-      appliedIdentityCellPaths,
-      appliedComparableCellPaths,
-      factory,
-      checker,
-      baseType,
-      context?.state.typeRegistry,
-      sourceFile,
-      context?.state,
+      applyIdentityOnlyPathsToTypeNode(
+        next,
+        identityPaths,
+        appliedIdentityCellPaths,
+        appliedComparableCellPaths,
+        factory,
+        checker,
+        baseType,
+        context?.state.typeRegistry,
+        sourceFile,
+        context?.state,
+      ),
     );
     shrunk = next;
   }
@@ -4706,25 +4857,31 @@ export function applyShrinkAndWrap(
     );
   }
 
-  next = applyCapabilityDefaultsToTypeNode(
+  next = carried(
     next,
-    paramSummary.defaults,
-    baseType,
-    retainedPaths,
-    paramSummary.wildcard,
-    checker,
-    sourceFile,
-    factory,
-    context?.state,
+    applyCapabilityDefaultsToTypeNode(
+      next,
+      paramSummary.defaults,
+      baseType,
+      retainedPaths,
+      paramSummary.wildcard,
+      checker,
+      sourceFile,
+      factory,
+      context?.state,
+    ),
   );
-  next = applyCellCapabilityPathsToTypeNode(
+  next = carried(
     next,
-    cellCapabilityPaths,
-    factory,
-    checker,
-    sourceFile,
-    context?.state.typeRegistry,
-    context?.state,
+    applyCellCapabilityPathsToTypeNode(
+      next,
+      cellCapabilityPaths,
+      factory,
+      checker,
+      sourceFile,
+      context?.state.typeRegistry,
+      context?.state,
+    ),
   );
 
   if (!shouldWrap) {

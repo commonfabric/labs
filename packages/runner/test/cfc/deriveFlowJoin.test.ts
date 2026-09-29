@@ -50,13 +50,23 @@ function scan(
   const template = (entry: LabelMapEntry) =>
     (entry.origin === "structure" || entry.origin === "derived") &&
     entry.path.includes("*");
+  // A standalone probe asks which reference sits at the slot it names, so it
+  // drops the runtime-minted templates strictly beneath that slot.
+  const beneathProbe = (entry: LabelMapEntry) =>
+    shape === "followRef" && template(entry) &&
+    entry.path.length > path.length && isPrefix(path, entry.path);
   const selected = entries.filter((entry) =>
-    readConsumesEntry(shape, entry) && !(machinery && template(entry))
+    readConsumesEntry(shape, entry) && !(machinery && template(entry)) &&
+    !beneathProbe(entry)
   );
+  // A concrete structure entry and an enumerate entry label a container
+  // node, so they apply to a read of that node and not to a read beneath it.
+  const atItsNodeOnly = (entry: LabelMapEntry) =>
+    entry.observes === "enumerate" ||
+    (entry.origin === "structure" && !template(entry));
   const ancestors = selected.filter((entry) =>
     isPrefix(entry.path, path) &&
-    (entry.origin !== "structure" || template(entry) ||
-      entry.path.length === path.length)
+    (!atItsNodeOnly(entry) || entry.path.length === path.length)
   );
   const buckets = new Map<string, LabelMapEntry[]>();
   for (const entry of ancestors) {

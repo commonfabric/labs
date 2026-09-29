@@ -78,11 +78,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [
           {
-            path: ["value", "body"],
+            path: ["body"],
             label: { confidentiality: ["prompt-influenced"] },
           },
           {
-            path: ["value", "body", "summary"],
+            path: ["body", "summary"],
             label: { integrity: ["summarized-by-trusted-pattern"] },
           },
           {
@@ -194,11 +194,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [
           {
-            path: ["value", "*"],
+            path: ["*"],
             label: { integrity: ["trusted-item"] },
           },
           {
-            path: ["value", "*", "title"],
+            path: ["*", "title"],
             label: { integrity: ["trusted-title"] },
           },
         ],
@@ -1824,6 +1824,79 @@ describe("CFC label view helpers", () => {
       // The first delivered label carried alice, the last carries bob.
       expect(JSON.stringify(fires[0].label)).toContain("authored-by-alice");
       expect(JSON.stringify(fires.at(-1)!.label)).toContain("authored-by-bob");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("delivers an includeConsumedLabel sink the labels its read followed a link to", async () => {
+    const signer = await Identity.fromPassphrase(
+      "cfc consumed label sink",
+    );
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const target = runtime.getCell<string>(
+        signer.did(),
+        "cfc-consumed-label-target",
+      );
+      const writeTarget = (atom: string) => {
+        const tx = runtime.edit();
+        writeSeedEnvelopeDoc(tx, signer.did());
+        seedStoredEnvelope(tx, {
+          space: signer.did(),
+          id: parseLink(target.getAsLink()).id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: "held",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [atom] } }],
+            },
+          },
+        });
+        runtime.prepareTxForCommit(tx);
+        return tx.commit();
+      };
+      await writeTarget("first-secret");
+      const holder = runtime.getCell<{ inner: string }>(
+        signer.did(),
+        "cfc-consumed-label-holder",
+      );
+      {
+        const tx = runtime.edit();
+        holder.withTx(tx).setRawUntyped({ inner: target.getAsLink() });
+        runtime.prepareTxForCommit(tx);
+        await tx.commit();
+      }
+      await runtime.idle();
+
+      const consumed: unknown[] = [];
+      const plain: unknown[] = [];
+      const cancel = holder.sink((_value, _label, read) => {
+        consumed.push(read?.confidentiality);
+      }, { includeConsumedLabel: true });
+      const cancelPlain = holder.sink((_value, _label, read) => {
+        plain.push(read);
+      });
+
+      // A label-only write to the linked document re-fires the sink.
+      await writeTarget("second-secret");
+      await runtime.idle();
+      cancel();
+      cancelPlain();
+
+      expect(consumed[0]).toEqual(["first-secret"]);
+      expect(consumed.at(-1)).toEqual(["second-secret"]);
+      expect(plain.every((read) => read === undefined)).toBe(true);
     } finally {
       await runtime.dispose();
       await storageManager.close();

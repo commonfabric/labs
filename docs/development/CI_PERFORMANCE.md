@@ -330,24 +330,30 @@ anchors, which GitHub Actions has accepted since September 2025:
 env:
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
+  LANE_WORK_TIMEOUT_MINUTES: &lane-work-timeout 60
+  LANE_JOB_TIMEOUT_MINUTES: &lane-job-timeout 70
 ```
 
-Every job then reads `timeout-minutes: *job-timeout` and every work step
-`timeout-minutes: *work-timeout`. Changing either bound is one edit. The
-environment variables are how a workflow declares a value an anchor can name;
-nothing reads them, and merge keys (`<<:`) remain unsupported, so an anchor
-cannot carry a block that a job then overrides.
+Every bounded job but the lanes' then reads `timeout-minutes: *job-timeout` and
+every work step `timeout-minutes: *work-timeout`. Changing either bound is one
+edit. The environment variables are how a workflow declares a value an anchor
+can name; nothing reads them, and merge keys (`<<:`) remain unsupported, so an
+anchor cannot carry a block that a job then overrides.
 
-The lanes take the same two bounds as every other bounded job, and neither is a
-lane's budget. A lane packs its work against a budget derived from
-`LANE_BOUND_SECONDS`, five minutes, for a pull request, and from
-`FULL_LANE_BOUND_SECONDS`, ten, for the full run. The step bound only stops a
-lane that hangs. A lane's mandatory work can exceed its budget, for example when
+The lanes take a pair of bounds of their own, `*lane-work-timeout` at 60 minutes
+and `*lane-job-timeout` at 70, and neither is a lane's budget. A lane packs its
+work against a budget derived from `LANE_BOUND_SECONDS`, five minutes, for a
+pull request, and from `FULL_LANE_BOUND_SECONDS`, thirty, for the full run. The
+step bound only stops a lane that hangs, so it sits above both, and
+`tasks/ci-workflow.test.ts` holds it there. A pull request's lanes are instances
+of the same job definition and take the same bounds, so a pull-request lane that
+hangs is stopped only at the lane step's bound, although it is packed to finish
+in five minutes. A lane's mandatory work can exceed its budget, for example when
 a change forces a large measured set or the full run is capped at
 `FULL_LANES_MAX`. Such a lane runs long rather than being stopped with its later
 batches unrun and unmeasured, and its job log says how far its plan was
 projected past the budget. So moving either lane bound in `policy.ts` moves
-nothing in the workflow.
+nothing in the workflow, unless it moves past the lane step's bound.
 
 A lane its step bound does stop loses little. The lane appends each batch's
 records to its spool as the batch ends, and the ship step runs whatever the lane

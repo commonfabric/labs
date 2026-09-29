@@ -22,9 +22,12 @@ import {
   LANES,
 } from "./policy.ts";
 import type {
+  Calibration,
   Manifest,
   ManifestEntry,
+  ProcessFit,
   ScoreInputs,
+  SuiteFit,
   UnschedulableEntry,
 } from "./manifest.ts";
 import { value } from "./score.ts";
@@ -138,14 +141,14 @@ export interface Plan {
   /**
    * Suites a lane cannot fill around, and the fixed charge that says so.
    *
-   * A lane pays a suite's overhead, its per-unit charge and its
-   * capabilities' setup before it runs anything of that suite. Where
-   * those alone pass what a lane holding two things may take, nothing
-   * can share a lane with one of its identities, so the suite takes a
-   * whole lane per identity it places and the lanes around it hold
-   * everything else. Where they pass the bound a lane is packed to finish
-   * inside as well, no lane can hold it at all and every discretionary
-   * identity it has is in `unschedulable`.
+   * A lane pays a suite's overhead, its per-unit charge, its process's
+   * setup and its capabilities' setup before it runs anything of that
+   * suite. Where those alone pass what a lane holding two things may
+   * take, nothing can share a lane with one of its identities, so the
+   * suite takes a whole lane per identity it places and the lanes around
+   * it hold everything else. Where they pass the bound a lane is packed to
+   * finish inside as well, no lane can hold it at all and every
+   * discretionary identity it has is in `unschedulable`.
    *
    * Neither reading changes what the packer does; both are what makes it
    * answerable. A lane holding one test, and four lanes holding the rest
@@ -158,7 +161,10 @@ export interface Plan {
 export interface CrowdingSuite {
   suite: string;
 
-  /** Overhead, per-unit charge and capability setup, without any test. */
+  /**
+   * Overhead, per-unit charge, process setup and capability setup, without
+   * any test.
+   */
   fixed: number;
 
   /** Discretionary identities of the suite, which is what this costs. */
@@ -215,6 +221,14 @@ export interface PlanInput {
    * topology.
    */
   wholeUnits: ReadonlySet<string>;
+
+  /**
+   * The process each unit runs in, where its suite names one, against the
+   * unit written as `<suite>\t<unit>`. `unitProcesses()` builds this map
+   * from the topology. A lane pays a suite's process setup for each
+   * process it starts, whichever of the process's units it runs.
+   */
+  processes: ReadonlyMap<string, string>;
 }
 
 /**
@@ -249,17 +263,89 @@ interface Filling {
   /** The suites whose overheads this lane has paid. */
   suites: Set<string>;
 
+  /** What this lane's selections of each suite take, by suite. */
+  tests: Map<string, SuiteTests>;
+
   /**
-   * The invocation units whose overheads this lane has paid, each named
-   * by its suite as well as its path. Two suites name the same path where
-   * they run the same file two ways — the two postures of a pattern
-   * integration test, a package built for two targets — and each of those
-   * is a runner started and a module loaded of its own.
+   * The invocation units this lane has opened, against what its
+   * selections in each take, by suite and then by path. Two suites
+   * name the same path where they run the same file two ways — the two
+   * postures of a pattern integration test, a package built for two
+   * targets — and each of those is a runner started and a module loaded of
+   * its own.
    */
-  units: Set<string>;
+  unitTime: Map<string, Map<string, UnitRun>>;
+
+  /**
+   * The processes this lane starts, as `processOf()` names them, against
+   * how many times each is started: a unit's runner starts its process
+   * again for each run of it, so as many times as the most any unit in it
+   * runs.
+   */
+  processes: Map<string, number>;
 
   /** Seconds of work placed here so far. */
   load: number;
+}
+
+/**
+ * What a unit's selections in a lane take: a unit's runner runs it as many
+ * times as the most any selection in it asks for, and every selection in
+ * it each time.
+ */
+interface UnitRun {
+  /** The selections' own costs, added together. */
+  once: number;
+
+  /** How many times the unit runs. */
+  runs: number;
+}
+
+/** What a unit's selections take once it holds `entry` as well. */
+function withIdentity(
+  unit: UnitRun | undefined,
+  entry: ManifestEntry,
+  repeats: number,
+): UnitRun {
+  return {
+    once: (unit?.once ?? 0) + entry.cost,
+    runs: Math.max(unit?.runs ?? 1, repeats),
+  };
+}
+
+/**
+ * What a lane's selections of one suite take, as the lane runs them.
+ *
+ * A lane runs a suite's share in passes, one for each time its most
+ * repeated unit runs. Each pass invokes the suite's command afresh over
+ * every unit that runs at least that many times, and runs every selection
+ * in each of those units. So a pass pays the suite's overhead, each unit
+ * it opens pays the unit's overhead, and the passes follow one another.
+ */
+export interface SuiteTests {
+  /** The selections' own costs, once for each time their unit runs. */
+  ran: number;
+
+  /**
+   * What the unit taking longest in each pass takes, first pass first. A
+   * unit runs in as many of the first passes as it runs times, so no pass
+   * takes longer than the one before it.
+   */
+  longest: readonly number[];
+
+  /** How many times the passes open a unit between them. */
+  opened: number;
+}
+
+/** What a lane holding nothing of a suite is charged for its tests. */
+const NO_TESTS: SuiteTests = { ran: 0, longest: [], opened: 0 };
+
+/**
+ * The least the passes can take between them, whatever their units run
+ * side by side: what the longest unit of each pass takes, added together.
+ */
+function floorOf(tests: SuiteTests): number {
+  return tests.longest.reduce((sum, seconds) => sum + seconds, 0);
 }
 
 /** What one identity costs a lane that is running nothing else. */
@@ -277,12 +363,65 @@ function loneCost(
       selections: [],
       capabilities: new Set(),
       suites: new Set(),
-      units: new Set(),
+      tests: new Map(),
+      unitTime: new Map(),
+      processes: new Map(),
       load: 0,
     },
     entry,
     repeats,
   );
+}
+
+/**
+ * What a lane is charged for a suite beyond its tests: the fit's
+ * `process`, where it carries one, and otherwise its own figures with no
+ * process setup. A suite with no fit is charged no setup, a correction of
+ * one, and nothing per lane or per unit.
+ */
+export function chargesOf(fitted: SuiteFit | undefined): ProcessFit {
+  if (fitted === undefined) {
+    return { setup: 0, overhead: 0, correction: 1, unitOverhead: 0 };
+  }
+  return fitted.process ?? {
+    setup: 0,
+    overhead: fitted.overhead,
+    correction: fitted.correction,
+    unitOverhead: fitted.unitOverhead,
+  };
+}
+
+/**
+ * `calibration` with each suite's process fit dropped where `processes`
+ * names no process for any unit of the suite. A process fit charges the
+ * suite's setup for each process a lane starts and fits the rest without
+ * it, so read for a suite whose topology here names no process, it would
+ * charge that setup nowhere.
+ */
+export function calibrationFor(
+  calibration: Calibration,
+  processes: ReadonlyMap<string, string>,
+): Calibration {
+  const starting = new Set(
+    [...processes.keys()].map((key) => key.slice(0, key.indexOf("\t"))),
+  );
+  const named = (fits: Record<string, SuiteFit>) =>
+    Object.fromEntries(
+      Object.entries(fits).map(([suite, { process, ...fit }]) => [
+        suite,
+        process === undefined || !starting.has(suite)
+          ? fit
+          : { ...fit, process },
+      ]),
+    );
+  const { suitesWithCoverage } = calibration;
+  return {
+    ...calibration,
+    suites: named(calibration.suites),
+    ...(suitesWithCoverage === undefined
+      ? {}
+      : { suitesWithCoverage: named(suitesWithCoverage) }),
+  };
 }
 
 function capabilityCost(manifest: Manifest, capability: string): number {
@@ -303,8 +442,17 @@ function fixedCost(
   return loneCost(manifest, input, { ...entry, cost: 0 });
 }
 
+/**
+ * How a lane names the process the unit of `entry` runs in among the
+ * processes it starts, or `undefined` where its suite names none.
+ */
+function processOf(input: PlanInput, entry: ManifestEntry): string | undefined {
+  const process = input.processes.get(openedUnit(entry));
+  return process === undefined ? undefined : `${entry.suite}\t${process}`;
+}
+
 /** How a lane names one unit of one suite among the units it has opened. */
-function openedUnit(entry: ManifestEntry): string {
+function openedUnit(entry: Pick<ManifestEntry, "suite" | "unit">): string {
   return `${entry.suite}\t${entry.unit}`;
 }
 
@@ -438,32 +586,126 @@ export function foldWholeUnits(
 }
 
 /**
- * The part of a lane's load one identity's own cost decides: that cost
- * times its suite's correction times the times it runs. What a lane pays
- * around it — its suite's overhead, its unit's, and its capabilities'
- * setup — is charged once per lane rather than per identity, so none of
- * that is here.
+ * What `selections` of one suite take, all of them in one lane.
  *
- * Exported because a reader asking how much of a lane's projected time a
- * given set of identities accounts for has to read it the way the packer
- * charged it, and a second reading of the same quantity would answer a
- * share of one total in the units of another.
+ * Each unit is summed from its selections cheapest first and the units
+ * are added up smallest first, so that the figures are the same numbers
+ * however the selections were listed, since floating-point addition
+ * rounds differently in a different order.
  */
-export function ownLoad(
-  manifest: Manifest,
-  entry: ManifestEntry,
-  repeats: number,
-): number {
-  return entry.cost *
-    (manifest.calibration.suites[entry.suite]?.correction ?? 1) * repeats;
+export function testsOf(
+  selections: readonly Pick<Selection, "entry" | "repeats">[],
+): SuiteTests {
+  const units = new Map<string, UnitRun>();
+  for (
+    const { entry, repeats } of selections.toSorted((a, b) =>
+      a.entry.cost - b.entry.cost
+    )
+  ) {
+    const key = openedUnit(entry);
+    units.set(key, withIdentity(units.get(key), entry, repeats));
+  }
+  const runs = [...units.values()];
+  const longest: number[] = [];
+  for (const unit of runs) {
+    for (let pass = 0; pass < unit.runs; pass++) {
+      longest[pass] = Math.max(longest[pass] ?? 0, unit.once);
+    }
+  }
+  return {
+    ran: runs.map((unit) => unit.once * unit.runs)
+      .toSorted((a, b) => a - b)
+      .reduce((sum, seconds) => sum + seconds, 0),
+    longest,
+    opened: runs.reduce((sum, unit) => sum + unit.runs, 0),
+  };
 }
 
 /**
- * What adding this identity to this lane would cost: its own time times
- * its suite's correction, plus its suite's overhead where the lane is not
- * holding that suite already and its suite's per-unit overhead where the
- * lane has not opened that unit already, plus any capability setup this
- * lane has not opened yet.
+ * What a lane is charged for the time its selections of one suite take:
+ * what they take between them through the suite's correction, or the
+ * least the passes can take, where that is more. The calibration reads
+ * what a batch's tests took the same way, so the two agree about what a
+ * batch of the suite costs.
+ */
+export function chargedTests(correction: number, tests: SuiteTests): number {
+  return Math.max(correction * tests.ran, floorOf(tests));
+}
+
+/**
+ * What the packer charges a lane for the time its selections of `suite`
+ * take, by the suite's correction in `manifest`. Every selection is to be
+ * one of that suite's.
+ */
+export function suiteLoad(
+  manifest: Manifest,
+  suite: string,
+  selections: readonly Pick<Selection, "entry" | "repeats">[],
+): number {
+  const other = selections.find(({ entry }) => entry.suite !== suite);
+  if (other !== undefined) {
+    throw new Error(
+      `${suite} was charged for a selection of ${other.entry.suite}`,
+    );
+  }
+  return chargedTests(
+    chargesOf(manifest.calibration.suites[suite]).correction,
+    testsOf(selections),
+  );
+}
+
+/**
+ * What `lane`'s selections of the suite of `entry` take once it holds
+ * `entry` as well, and what its unit then takes. `ran` and `floor` are
+ * what the two figures the lane is charged the larger of grow by, worked
+ * out from what changed rather than as the difference of two sums, so that
+ * where the loads set the charge the identity adds exactly its own cost
+ * for each time its unit runs.
+ */
+function withSelection(
+  lane: Filling,
+  entry: ManifestEntry,
+  repeats: number,
+): {
+  held: SuiteTests;
+  tests: SuiteTests;
+  unit: UnitRun;
+  ran: number;
+  floor: number;
+} {
+  const held = lane.tests.get(entry.suite) ?? NO_TESTS;
+  const was = lane.unitTime.get(entry.suite)?.get(entry.unit);
+  const unit = withIdentity(was, entry, repeats);
+  const before = was ?? { once: 0, runs: 0 };
+  const longest = [...held.longest];
+  let floor = 0;
+  for (let pass = 0; pass < unit.runs; pass++) {
+    const other = longest[pass] ?? 0;
+    floor += Math.max(0, unit.once - other);
+    longest[pass] = Math.max(other, unit.once);
+  }
+  const ran = entry.cost * unit.runs +
+    before.once * (unit.runs - before.runs);
+  return {
+    held,
+    tests: {
+      ran: held.ran + ran,
+      longest,
+      opened: held.opened + unit.runs - before.runs,
+    },
+    unit,
+    ran,
+    floor,
+  };
+}
+
+/**
+ * What adding this identity to this lane would cost: what it raises the
+ * lane's charge for its suite's tests by, plus its suite's overhead for
+ * each pass it adds to the lane's batch of the suite and its suite's
+ * per-unit overhead for each time it adds its unit to a pass, plus its
+ * suite's process setup for each time more its process starts, plus any
+ * capability setup this lane has not opened yet.
  */
 function marginalCost(
   manifest: Manifest,
@@ -472,10 +714,25 @@ function marginalCost(
   entry: ManifestEntry,
   repeats: number,
 ): number {
-  const fitted = manifest.calibration.suites[entry.suite];
-  let cost = ownLoad(manifest, entry, repeats);
-  if (!lane.suites.has(entry.suite)) cost += fitted?.overhead ?? 0;
-  if (!lane.units.has(openedUnit(entry))) cost += fitted?.unitOverhead ?? 0;
+  const fitted = chargesOf(manifest.calibration.suites[entry.suite]);
+  const correction = fitted.correction;
+  const { held, tests, ran, floor } = withSelection(lane, entry, repeats);
+  // Each term is taken past the old charge before the larger is chosen,
+  // so that where the loads are the charge, what is added is exactly the
+  // identity's own share of them, however large the lane's loads have
+  // grown.
+  const was = chargedTests(correction, held);
+  let cost = Math.max(
+    correction * held.ran - was + correction * ran,
+    floorOf(held) - was + floor,
+  );
+  cost += fitted.overhead * (tests.longest.length - held.longest.length);
+  cost += fitted.unitOverhead * (tests.opened - held.opened);
+  const process = processOf(input, entry);
+  if (process !== undefined) {
+    cost += fitted.setup *
+      Math.max(0, repeats - (lane.processes.get(process) ?? 0));
+  }
   for (const capability of input.capabilities.get(entry.suite) ?? []) {
     if (!lane.capabilities.has(capability)) {
       cost += capabilityCost(manifest, capability);
@@ -555,16 +812,60 @@ function spotsFor(
 
 /**
  * What placing one identity opened in its lane: whether the lane was not
- * yet holding its suite, whether the lane had not yet opened its unit,
- * and which of the capabilities its suite needs the lane had not set up.
- * Each is charged once per lane, so what the lane charges for anything
- * else sharing one of them falls.
+ * yet holding its suite, whether another test of its unit may now cost the
+ * lane less, the process the lane had not yet started, and which of the
+ * capabilities its suite needs the lane had not set up. What the lane
+ * charges for anything sharing one of those can fall.
  */
 interface Opened {
   lane: Filling;
   suite: boolean;
+
+  /**
+   * Whether the lane had not yet opened the unit, or now runs it more
+   * times than it did. Adding to a unit that runs no more often than it
+   * did lowers what nothing else in that unit costs, since what the lane
+   * charges for a suite's tests only grows faster the more one unit holds.
+   * Running the unit more often can: the reruns can raise the loads past
+   * the floor, and a test of the unit that was charged against the floor
+   * is then charged its share of the loads, which can be less.
+   */
   unit: boolean;
+
+  /** The process as `processOf()` names it, where it was not started. */
+  process: string | undefined;
   capabilities: string[];
+
+  /**
+   * Which tests of its suite may now cost this lane less: every one of
+   * them; or those whose own cost is more than `outside`, together with
+   * those in a unit open in this lane whose own cost is more than
+   * `within()` of that unit's `UnitRun` here; or none, where this is
+   * `undefined`. `outside` covers a unit not open here, which takes
+   * nothing and runs once. Neither covers the unit the placement went in,
+   * whose tests `unit` says may cost less where they can.
+   *
+   * A lane holding a suite's tests is charged the larger of their loads
+   * `cL` and their floor `P`; call that `C`. One run of a test costing `k`
+   * in a unit taking `t` a run and running `r` times adds `ckr` to the
+   * loads, and to the floor what the unit's `t + k` takes past the longest
+   * unit of each of its passes, which is no more than `r(t + k - m)` where
+   * `m` is the longest unit of its last pass. Its cost against the charge
+   * is whichever of `cL + ckr - C` and `P` plus that addition `- C` is
+   * larger. A placement that leaves `C` as it was lowers neither, and one
+   * that raises it lowers each by no more than it raises `C`. Where the
+   * loads set `C` after, the first is exactly `ckr`, so a test's cost
+   * falls only where the second was more than that before, which needs
+   * `k > (C - P + r(m - t)) / (r(1 - c))`, and never so where `c` is one
+   * or more, since then the loads are never less than the floor. Where
+   * the floor sets it after, a test's cost falls only where it was
+   * positive before, which needs `k > (C - cL) / (cr)` or
+   * `k > (C - P) / r + m - t`.
+   */
+  cheaper:
+    | "all"
+    | { outside: number; within: (unit: UnitRun) => number }
+    | undefined;
 }
 
 function place(
@@ -575,22 +876,78 @@ function place(
   repeats: number,
 ): Opened {
   const lane = spot.lane;
+  const was = lane.unitTime.get(entry.suite)?.get(entry.unit);
+  const { held, tests, unit } = withSelection(lane, entry, repeats);
+  const suite = !lane.suites.has(entry.suite);
+  const process = processOf(input, entry);
   const opened: Opened = {
     lane,
-    suite: !lane.suites.has(entry.suite),
-    unit: !lane.units.has(openedUnit(entry)),
+    suite,
+    unit: was === undefined || unit.runs > was.runs,
+    process: process !== undefined && !lane.processes.has(process)
+      ? process
+      : undefined,
     capabilities: (input.capabilities.get(entry.suite) ?? []).filter(
       (capability) => !lane.capabilities.has(capability),
     ),
+    cheaper: suite ? "all" : cheaperIn(
+      chargesOf(input.manifest.calibration.suites[entry.suite]).correction,
+      held,
+      tests,
+    ),
   };
   lane.selections.push({ entry, reason, repeats });
+  lane.tests.set(entry.suite, tests);
+  lane.unitTime.set(
+    entry.suite,
+    (lane.unitTime.get(entry.suite) ?? new Map()).set(entry.unit, unit),
+  );
+  if (process !== undefined) {
+    lane.processes.set(
+      process,
+      Math.max(lane.processes.get(process) ?? 0, repeats),
+    );
+  }
   lane.load += spot.cost;
   lane.suites.add(entry.suite);
-  lane.units.add(openedUnit(entry));
   for (const capability of opened.capabilities) {
     lane.capabilities.add(capability);
   }
   return opened;
+}
+
+/**
+ * Helper for `place()`, which says what `Opened.cheaper` says for a suite
+ * of correction `correction` whose tests in a lane took `held` and now
+ * take `tests`.
+ */
+function cheaperIn(
+  correction: number,
+  held: SuiteTests,
+  tests: SuiteTests,
+): Opened["cheaper"] {
+  const was = chargedTests(correction, held);
+  if (chargedTests(correction, tests) <= was) return undefined;
+  const pastLoads = was - correction * held.ran;
+  const pastFloor = was - floorOf(held);
+  /** The longest unit of the last pass a unit running `runs` times is in. */
+  const last = (runs: number) => held.longest[runs - 1] ?? 0;
+  let past: (once: number, runs: number) => number;
+  if (correction * tests.ran >= floorOf(tests)) {
+    if (correction >= 1) return undefined;
+    past = (once, runs) =>
+      (pastFloor + runs * (last(runs) - once)) / (runs * (1 - correction));
+  } else {
+    past = (once, runs) =>
+      Math.min(
+        pastLoads / (correction * runs),
+        pastFloor / runs + last(runs) - once,
+      );
+  }
+  return {
+    outside: past(0, 1),
+    within: (unit) => past(unit.once, unit.runs),
+  };
 }
 
 /**
@@ -629,7 +986,14 @@ function oncePerIdentity(
  * which is the number the pull request waits on. The mandatory pass is
  * bounded by neither, and reports how far past a lane it went.
  */
-export function plan(input: PlanInput): Plan {
+export function plan(given: PlanInput): Plan {
+  const input: PlanInput = {
+    ...given,
+    manifest: {
+      ...given.manifest,
+      calibration: calibrationFor(given.manifest.calibration, given.processes),
+    },
+  };
   const folding = foldWholeUnits(
     { ...input.manifest, entries: oncePerIdentity(input.manifest.entries) },
     input.wholeUnits,
@@ -654,7 +1018,9 @@ export function plan(input: PlanInput): Plan {
     selections: [],
     capabilities: new Set<string>(),
     suites: new Set<string>(),
-    units: new Set<string>(),
+    tests: new Map<string, SuiteTests>(),
+    unitTime: new Map<string, Map<string, UnitRun>>(),
+    processes: new Map<string, number>(),
     load: 0,
   }));
 
@@ -698,8 +1064,10 @@ export function plan(input: PlanInput): Plan {
   // reported rather than placed in a lane it would take past that bound.
   // A mandatory one is placed anyway: the change is not tested without it,
   // and a lane running long says so, where dropping it leaves the run
-  // reporting a pass over a test that never ran. Its suite's correction is
-  // applied first, because that is what the time will actually be.
+  // reporting a pass over a test that never ran. It is charged what a
+  // lane holding nothing else is charged for it, which is its time through
+  // its suite's correction or its own time, whichever is more, because
+  // that is what the time will actually be.
   const unschedulable: UnschedulableEntry[] = [];
   // Per suite, the identities its own charge is the whole of what stops,
   // and how many of those no lane can hold. One held back for a reason of
@@ -721,8 +1089,9 @@ export function plan(input: PlanInput): Plan {
       seen.all += held;
       discretionary.set(entry.suite, seen);
     }
-    // What an empty lane would pay for it: its own corrected time plus
-    // every overhead and setup that lane would open. Charging only the
+    // What an empty lane would pay for it: what its own time comes to in
+    // a lane holding nothing else, plus every overhead and setup that
+    // lane would open. Charging only the
     // test's own time would schedule an identity whose suite, unit, and
     // capabilities together put the lane past the bound it is packed to
     // finish inside.
@@ -805,11 +1174,12 @@ export function plan(input: PlanInput): Plan {
       // chosen, edited, pulled in by the coverage gate, or required
       // because the run is the whole corpus.
       runs: entry.repeats,
-      // What an empty lane would pay for every one of those runs. The
-      // setup and overheads a lane opens are paid once however many
-      // times the item runs, so multiplying one run's whole figure
-      // would charge them again per repeat and order the pass by a cost
-      // no lane pays.
+      // What an empty lane would pay for every one of those runs. Each
+      // run is a pass of its own, paying its suite's overhead and its
+      // unit's again, while the capabilities' setup is paid once however
+      // many times the item runs, so multiplying one run's whole figure
+      // would charge the setup again per repeat and order the pass by a
+      // cost no lane pays.
       cost: loneCost(manifest, input, entry, entry.repeats),
     });
   }
@@ -1048,16 +1418,21 @@ export function unholdableSuites(
 export function fullLaneCount(
   input: Omit<PlanInput, "policy" | "lanes" | "mandatory">,
 ): number {
+  const calibration = calibrationFor(
+    input.manifest.calibration,
+    input.processes,
+  );
   const manifest = input.manifest;
   const budget = input.budgetSeconds ?? FULL_LANE_BUDGET_SECONDS;
   // The tests' own corrected time, with no lane overhead in it, charged
-  // once per execution: an identity the packer repeats costs the lane
-  // that holds it once per repeat, and counting one would put the search
-  // below a packing that cannot fit.
+  // once for each run an identity asks for: counting one would put the
+  // search below a packing that cannot fit. It leaves out the runs a
+  // repeated identity's unit makes of the tests beside it and what each
+  // pass pays to start, which is why the search moves both ways.
   const work = manifest.entries.reduce(
     (total, entry) =>
       total + entry.cost * entry.repeats *
-        (manifest.calibration.suites[entry.suite]?.correction ?? 1),
+        chargesOf(calibration.suites[entry.suite]).correction,
     0,
   );
   const most = Math.max(1, manifest.entries.length);
@@ -1197,12 +1572,18 @@ function density(entry: ManifestEntry, cost: number): number {
  * and places each the way `fill` does.
  *
  * What an identity costs a lane falls once that lane has opened its unit,
- * its suite, or a capability its suite needs, since each of those is
- * charged once per lane. So choosing one test of a file moves the file's
- * other tests up the ordering, and choosing the first test of a suite
- * moves the rest of the suite. Nothing else raises a candidate's density:
- * lanes and the run only fill up, which can only move it to a lane
- * charging more or leave it nowhere to go.
+ * its process, its suite, or a capability its suite needs, since a lane
+ * already running them charges one run of a test nothing more for any of
+ * them. So choosing one test of a file moves the file's other tests up the
+ * ordering, choosing the first file a process runs moves the process's
+ * other files, and choosing the first test of a suite moves the rest of
+ * the suite. It falls too where a placement raises what the lane charges
+ * for the suite, which is the larger of the suite's loads and the time the
+ * longest unit of each pass takes, and the test is one that
+ * `Opened.cheaper` names, and where a placement makes its unit run more
+ * times than it did. Nothing else raises a candidate's density: lanes and
+ * the run only fill up, which can only move it to a lane charging more or
+ * leave it nowhere to go.
  *
  * So each candidate waits in a queue at the density it was last offered
  * at, which is never below its density now. A placement offers again,
@@ -1214,15 +1595,31 @@ function density(entry: ManifestEntry, cost: number): number {
  * cost.
  *
  * Each candidate is offered once to start with, again for each lane that
- * opens its unit, its suite, or one of its capabilities, and again for
- * each lane that fills too far to hold it. The work therefore grows with
- * the candidates times the lanes, times the logarithm of the queue's
- * length.
+ * opens its unit, its process, its suite, or one of its capabilities,
+ * again for each placement that runs its unit more times, again for each
+ * placement that lowers what it costs against its suite's charge, and
+ * again for each lane that fills too far to hold it. A placement is
+ * weighed against its own lane alone, since no other lane changed. A suite
+ * whose correction is one or more lowers nothing against the charge.
+ * Otherwise a placement raising the suite's charge in a lane can lower the
+ * cost there of many of its candidates at once, and those are offered
+ * again. On the published
+ * manifest that adds about half to planning. Where one unit of such a
+ * suite holds tens of thousands of candidates and sets what its lanes are
+ * charged, each placement in it lowers what most of the rest cost, and
+ * planning takes a hundred times as long.
  */
 function fillDensest(pass: Pass, candidates: readonly ManifestEntry[]): void {
   const { input, taken } = pass;
-  const bySuite = groupBy(candidates, (entry) => entry.suite);
-  const byUnit = groupBy(candidates, openedUnit);
+  const costliestFirstBy = (by: (entry: ManifestEntry) => string) =>
+    new Map(
+      [...groupBy(candidates, by)].map((
+        [key, entries],
+      ) => [key, entries.toSorted((a, b) => b.cost - a.cost)]),
+    );
+  const bySuite = costliestFirstBy((entry) => entry.suite);
+  const byUnit = costliestFirstBy(openedUnit);
+  const byProcess = costliestFirstBy((entry) => processOf(input, entry) ?? "");
   /** The suites among the candidates needing each capability. */
   const needing = new Map<string, string[]>();
   for (const suite of bySuite.keys()) {
@@ -1260,29 +1657,77 @@ function fillDensest(pass: Pass, candidates: readonly ManifestEntry[]): void {
     }
     const opened = take(pass, entry, once);
     const lowered = [
-      ...(opened.suite
-        ? bySuite.get(entry.suite)
-        : opened.unit
-        ? byUnit.get(openedUnit(entry))
-        : undefined) ?? [],
+      ...cheaperOf(opened, entry, bySuite, byUnit),
+      ...(opened.unit ? byUnit.get(openedUnit(entry)) ?? [] : []),
+      ...(opened.process === undefined
+        ? []
+        : byProcess.get(opened.process) ?? []),
       ...opened.capabilities.flatMap((capability) =>
         (needing.get(capability) ?? []).flatMap((suite) =>
           bySuite.get(suite) ?? []
         )
       ),
     ];
+    // Only the lane the placement went in has changed, so a candidate's
+    // best lane is either the one it was offered for, at no more than
+    // its offered density, or this one.
+    const load = laneLoad(pass.lanes);
     for (const other of lowered) {
       const otherKey = testIdentityKey(other.test);
       if (taken.has(otherKey)) continue;
-      const cheapest = oneRun(pass, other);
+      const was = offered.get(otherKey) ?? -Infinity;
+      if (was >= density(other, 0)) continue;
+      const cost = marginalCost(input.manifest, input, opened.lane, other, 1);
       if (
-        cheapest !== undefined &&
-        density(other, cheapest.cost) > (offered.get(otherKey) ?? -Infinity)
+        opened.lane.load + cost <=
+          capacity(opened.lane, 1, pass.laneBudget, pass.bound) &&
+        load + cost <= pass.ceiling && density(other, cost) > was
       ) {
-        offer(other, otherKey, density(other, cheapest.cost));
+        offer(other, otherKey, density(other, cost));
       }
     }
   }
+}
+
+/**
+ * Helper for `fillDensest()`, which lists the candidates of the suite of
+ * `entry` that `opened`, the placement of `entry`, says may now cost its
+ * lane less. Both maps hold their entries
+ * costliest first.
+ */
+function cheaperOf(
+  opened: Opened,
+  entry: ManifestEntry,
+  bySuite: ReadonlyMap<string, readonly ManifestEntry[]>,
+  byUnit: ReadonlyMap<string, readonly ManifestEntry[]>,
+): readonly ManifestEntry[] {
+  const { cheaper } = opened;
+  const suite = entry.suite;
+  if (cheaper === undefined) return [];
+  if (cheaper === "all") return bySuite.get(suite) ?? [];
+  const found = [...costliestFirst(bySuite.get(suite) ?? [], cheaper.outside)];
+  for (const [unit, run] of opened.lane.unitTime.get(suite) ?? []) {
+    if (unit === entry.unit) continue;
+    found.push(
+      ...costliestFirst(
+        byUnit.get(openedUnit({ suite, unit })) ?? [],
+        cheaper.within(run),
+      ),
+    );
+  }
+  return found;
+}
+
+/**
+ * Helper for `fillDensest()`, which takes the leading entries of a list
+ * sorted costliest first, as far as the ones costing more than `above`.
+ */
+function costliestFirst(
+  entries: readonly ManifestEntry[],
+  above: number,
+): readonly ManifestEntry[] {
+  const end = entries.findIndex((entry) => entry.cost <= above);
+  return end === -1 ? entries : entries.slice(0, end);
 }
 
 function groupBy(

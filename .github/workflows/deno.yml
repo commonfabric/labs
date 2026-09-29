@@ -56,6 +56,10 @@ env:
   TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
+  # A lane of the full run is packed to finish inside FULL_LANE_BOUND_SECONDS
+  # in tasks/test-selection/policy.ts, so the lanes' bounds sit above that.
+  LANE_WORK_TIMEOUT_MINUTES: &lane-work-timeout 60
+  LANE_JOB_TIMEOUT_MINUTES: &lane-job-timeout 70
 
 # Every step name must begin with a phase-marker emoji (setup / work / shutdown).
 # scripts/ci-gantt.ts reads that emoji to split each job bar by phase. See the
@@ -132,7 +136,7 @@ jobs:
       !cancelled() &&
       (needs.plan-full.result == 'success' || needs.plan-full.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: *job-timeout
+    timeout-minutes: *lane-job-timeout
     permissions:
       contents: read
     env:
@@ -225,7 +229,7 @@ jobs:
             cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
 
       - name: 🧪 Run the lane
-        timeout-minutes: *work-timeout
+        timeout-minutes: *lane-work-timeout
         # The token is what the `github-api` capability hands to the suites
         # that declared it, so only this step holds it. The lane takes it out
         # of its own environment before it starts anything, so no other child
@@ -258,18 +262,17 @@ jobs:
       # sits beside the reports. A re-run of the lane replaces what the
       # attempt before it uploaded, so Status reads each lane once.
       #
-      # An artifact is rooted at the directory its paths share, and the
+      # An artifact is rooted at the directory its path names, and the
       # readers find a set's report by the layout under the coverage
-      # directory, so the paths name that directory and leave out the raw
-      # profiles below it rather than naming the reports' own directory.
+      # directory, so the path names that directory rather than the
+      # reports' own. The lane keeps its raw profiles beside it, in
+      # `coverage-raw/`, where this does not walk them.
       - name: 📤 Upload the lane's coverage reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lane-coverage-${{ github.job }}-${{ matrix.lane }}
-          path: |
-            coverage/
-            !coverage/raw/
+          path: coverage/
           overwrite: true
           retention-days: 90
           if-no-files-found: ignore
@@ -458,54 +461,10 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
-      # The co-presence endpoint the shell EMBEDDED IN THIS BINARY offers to
-      # collaborative editors. `SHELL_PRESENCE_URL` is the repository variable
-      # holding the value; `PRESENCE_URL` is the process variable
-      # packages/shell/felt.config.ts reads and bakes in as the
-      # `$PRESENCE_URL` define — the same mapping deploy-shell-staging makes
-      # for the bucket shell, from its own variable. This binary is the one
-      # both estuary and rapids deploy, so both carry whatever is baked here,
-      # and changing the variable takes a rebuild before it reaches either.
-      # Unset omits the define and co-presence stays disabled, which is why
-      # this does not fail the way an unset API URL does: a shell with no
-      # presence endpoint is a working shell. The job then succeeds either way,
-      # so which of the two shells a binary carries would leave no trace in it;
-      # the step says which, and the log is where that answer is.
-      - name: 🔎 Validate the embedded shell's presence endpoint
-        timeout-minutes: *work-timeout
-        env:
-          PRESENCE_URL: ${{ vars.SHELL_PRESENCE_URL }}
-        run: |
-          if [ -n "$PRESENCE_URL" ]; then
-            # `deno eval` holds every permission implicitly, so the module read
-            # and the environment lookup need no flags; the subcommand takes no
-            # `--allow-read` or `--allow-env` and fails on either as an unknown
-            # argument. What reaches GITHUB_ENV is `URL.href`, so it is the
-            # normalized spelling the bundle carries and the grep below matches.
-            PRESENCE_URL="$(deno eval '
-              import { optionalPresenceUrl } from "./packages/shell/src/lib/presence-url.ts";
-              console.log(optionalPresenceUrl(Deno.env.get("PRESENCE_URL"))?.href ?? "");
-            ')"
-            echo "PRESENCE_URL=$PRESENCE_URL" >> "$GITHUB_ENV"
-            echo "The embedded shell gets presence service $PRESENCE_URL."
-          else
-            echo "SHELL_PRESENCE_URL is unset: the embedded shell gets no presence endpoint, so editor co-presence is off in every deployment of this binary."
-          fi
-
       - name: 🏗️ Build toolshed binary
         timeout-minutes: *work-timeout
         run: |
           deno task build-binaries toolshed
-
-          # shell-frontend is what the binary serves in production. An endpoint
-          # that was configured but did not reach the bundle would deploy a
-          # shell whose co-presence is silently off, and nothing downstream
-          # looks, so confirm the define landed before the binary is uploaded.
-          if [ -n "$PRESENCE_URL" ] && \
-            ! grep -rqF -e "$PRESENCE_URL" packages/toolshed/shell-frontend/scripts; then
-            echo "::error::The embedded shell does not reference $PRESENCE_URL."
-            exit 1
-          fi
         env:
           COMMIT_SHA: ${{ github.sha }}
 
@@ -794,7 +753,6 @@ jobs:
       - name: 🔎 Validate staging shell endpoints
         env:
           API_URL: ${{ vars.STAGING_SHELL_API_URL }}
-          PRESENCE_URL: ${{ vars.STAGING_SHELL_PRESENCE_URL }}
         run: |
           # An empty API_URL builds a shell that falls back to its own origin,
           # which serves static assets and no API. Require a value up front, so
@@ -802,13 +760,6 @@ jobs:
           if [ -z "$API_URL" ]; then
             echo "::error::API_URL is empty: the STAGING_SHELL_API_URL variable is unset."
             exit 1
-          fi
-          if [ -n "$PRESENCE_URL" ]; then
-            PRESENCE_URL="$(deno eval '
-              import { optionalPresenceUrl } from "./packages/shell/src/lib/presence-url.ts";
-              console.log(optionalPresenceUrl(Deno.env.get("PRESENCE_URL"))?.href ?? "");
-            ')"
-            echo "PRESENCE_URL=$PRESENCE_URL" >> "$GITHUB_ENV"
           fi
 
       - name: 🏗️ Build shell with staging API URL
@@ -820,10 +771,6 @@ jobs:
           # `$API_URL` token. Confirm it landed before anything is uploaded.
           if ! grep -rqF -e "$API_URL" dist/scripts; then
             echo "::error::The built shell does not reference $API_URL."
-            exit 1
-          fi
-          if [ -n "$PRESENCE_URL" ] && ! grep -rqF -e "$PRESENCE_URL" dist/scripts; then
-            echo "::error::The built shell does not reference $PRESENCE_URL."
             exit 1
           fi
         env:
@@ -863,10 +810,3 @@ jobs:
             exit 1
           fi
           echo "Published shell targets $API_URL"
-          if [ -n "$PRESENCE_URL" ] && ! grep -qF -e "$PRESENCE_URL" published-scripts.js; then
-            echo "::error::The published shell does not reference $PRESENCE_URL."
-            exit 1
-          fi
-          if [ -n "$PRESENCE_URL" ]; then
-            echo "Published shell targets presence service $PRESENCE_URL"
-          fi

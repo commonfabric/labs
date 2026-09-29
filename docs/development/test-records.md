@@ -330,23 +330,26 @@ report tool and the dashboard collector already do. A duration a consumer
 reports or fits comes from passing records alone, for the reason the
 specification gives; run, failure and skip counts come from every record.
 
-Not every record in the store is a test. A lane measures its own setup
-and each of its batches through the same machinery, so those
-measurements sit alongside the tests, on kind `gate` and scope `ci` with
-a name opening `ci-lane `. A consumer building anything per test leaves
-them out: `isLaneMeasurement` from `@commonfabric/test-support/records`
-recognizes one, and it is asked of `record.test` before any alias is
-resolved. The report tool, the dashboard collector, the test-selection
-fold and the topology check all do this. Leaving them in does more than
-add an identity to the output. The figures are not all durations: of the
-three a lane writes per batch, one says what the batch was packed to
-spend and one counts the units it opened, so a sum over them is a number
-that means nothing. `Status`, the job that scores a push run's coverage, writes
-its figures as measurements too, named `ci-lane coverage …`, each holding a
-count of uncovered lines, and three things read them back: the test-selection
+Not every record in the store is a test. A lane measures its own setup and
+each of its batches through the same machinery, so those measurements sit
+alongside the tests, on kind `gate` and scope `ci` with a name opening
+`ci-lane `. A consumer building anything per test leaves them out:
+`isLaneMeasurement` from `@commonfabric/test-support/records` recognizes
+one, and it is asked of `record.test` before any alias is resolved. The
+report tool, the dashboard collector, the test-selection fold and the
+topology check all do this. Leaving them in does more than add an identity
+to the output. The figures are not all durations: of the seven a lane writes
+per batch, three are counts, of the times it opened a unit, of its passes and
+of the processes it started, and two hold time another already counts, since
+the longest units' time is part of what the batch's tests took and the
+processes' setup is part of what the batch spent, so a sum over them is a
+number that means nothing.
+`Status`, the job that scores a push run's coverage, writes its figures as
+measurements too, named `ci-lane coverage …`, each holding a count of
+uncovered lines, and three things read them back: the test-selection
 publisher's coverage baselines, the dashboard's coverage debt tile, and the
-report a `main` run posts on its pull request. ["Coverage figures in the record
-store"](COVERAGE.md#coverage-figures-in-the-record-store) says how.
+report a `main` run posts on its pull request. ["Coverage figures in the
+record store"](COVERAGE.md#coverage-figures-in-the-record-store) says how.
 `tasks/lane-measurement.ts` composes the lane's names this recognizes. The
 normative account is ["Recording" in the
 specification](../specs/test-records.md#recording).

@@ -49,6 +49,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
   type ScopeKey,
@@ -68,6 +69,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -126,6 +128,7 @@ import {
   IMergedChanges,
   IOperationStorageCapability,
   IPreconditionFailedError,
+  IPresenceStorageCapability,
   IReadActivity,
   IRemoteStorageProviderSettings,
   ISpaceReplica,
@@ -3216,13 +3219,35 @@ type ProviderOperationSubscription = {
 };
 
 /**
+ * One presence membership the provider holds across replica replacements:
+ * the room and observer the consumer gave it, and the membership on the
+ * current replica's session. The record the replacement's session is given
+ * again is the room's, held by the provider, since every membership of a
+ * room shares one.
+ */
+type ProviderPresenceMembership = {
+  room: string;
+  observer: (event: MemoryV2Client.PresenceEvent) => void;
+
+  /** The membership on the current replica, until a replacement retires it. */
+  inner?: MemoryV2Client.PresenceMembership;
+
+  install?: Promise<void>;
+  closed: boolean;
+};
+
+/**
  * Minimal marker sink — structurally the Runtime's `RuntimeTelemetry`.
  * Kept structural (type-only import) so the storage layer takes no runtime
  * dependency on the telemetry module.
  */
 type TelemetrySink = { submit(marker: RuntimeTelemetryMarker): void };
 
-class Provider implements IStorageProvider, IOperationStorageCapability {
+class Provider
+  implements
+    IStorageProvider,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   replica: SpaceReplica;
 
   /**
@@ -3240,6 +3265,14 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
   #destroyed = false;
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #presenceMemberships = new Set<ProviderPresenceMembership>();
+
+  /**
+   * The last publication per room, republished on a replacement's session.
+   * Kept per room rather than per membership: every membership of a room
+   * shares one record, so the latest across them is what stands.
+   */
+  #presencePublications = new Map<string, PresencePublication>();
 
   constructor(
     readonly options: ProviderOptions,
@@ -3376,6 +3409,120 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
     );
   }
 
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    if (this.#destroyed) throw new Error("memory provider closed");
+    const membership: ProviderPresenceMembership = {
+      room,
+      observer,
+      closed: false,
+    };
+    this.#presenceMemberships.add(membership);
+    try {
+      await this.#ensurePresenceMembership(membership);
+    } catch (error) {
+      this.#forgetPresenceMembership(membership);
+      throw error;
+    }
+    if (membership.closed || this.#destroyed) {
+      throw new Error("memory provider closed");
+    }
+    return {
+      get participantId() {
+        return membership.inner?.participantId ?? "";
+      },
+      publish: (publication) => {
+        if (membership.closed) return;
+        validatePresencePublication(publication);
+        this.#presencePublications.set(room, publication);
+        membership.inner?.publish(publication);
+      },
+      leave: async () => {
+        if (membership.closed) return;
+        this.#forgetPresenceMembership(membership);
+        await membership.inner?.leave();
+      },
+    };
+  }
+
+  /**
+   * Closes the membership and drops it, and with the room's last membership
+   * the room's record, so that a later join does not republish a record no
+   * member of the room made.
+   */
+  #forgetPresenceMembership(membership: ProviderPresenceMembership): void {
+    membership.closed = true;
+    this.#presenceMemberships.delete(membership);
+    if (
+      ![...this.#presenceMemberships].some((other) =>
+        other.room === membership.room
+      )
+    ) {
+      this.#presencePublications.delete(membership.room);
+    }
+  }
+
+  #ensurePresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    if (membership.install !== undefined) return membership.install;
+    const install = this.#installPresenceMembership(membership);
+    membership.install = install;
+    const clear = () => {
+      if (membership.install === install) membership.install = undefined;
+    };
+    install.then(clear, clear);
+    return install;
+  }
+
+  async #installPresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    while (!membership.closed && !this.#destroyed) {
+      const replica = this.replica;
+      let inner: MemoryV2Client.PresenceMembership;
+      try {
+        inner = await replica.joinPresenceRoom(
+          membership.room,
+          (event) => this.#forwardPresence(membership, replica, event),
+        );
+      } catch (error) {
+        if (replica !== this.replica && !this.#destroyed) continue;
+        throw error;
+      }
+      if (membership.closed || this.#destroyed) {
+        void inner.leave();
+        return;
+      }
+      if (replica !== this.replica) {
+        void inner.leave();
+        continue;
+      }
+      membership.inner = inner;
+      const latest = this.#presencePublications.get(membership.room);
+      if (latest !== undefined) inner.publish(latest);
+      return;
+    }
+  }
+
+  /**
+   * Forwards a room event to the consumer. Nothing from a replica that has
+   * been replaced is forwarded: its failure is the replacement's to make
+   * good, with the snapshot its own join delivers, and any other event of
+   * its would be a view the replacement's snapshot has superseded.
+   */
+  #forwardPresence(
+    membership: ProviderPresenceMembership,
+    replica: SpaceReplica,
+    event: MemoryV2Client.PresenceEvent,
+  ): void {
+    if (membership.closed) return;
+    if (replica !== this.replica && !this.#destroyed) return;
+    membership.observer(event);
+  }
+
   async subscribeOperationField(
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
     callback: (snapshot: OperationFieldSnapshot) => void,
@@ -3467,6 +3614,11 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
       subscription.cancel?.();
       subscription.cancel = undefined;
     }
+    // The old session's memberships end with it; each is joined again on
+    // the replacement, which hands the consumer a fresh snapshot.
+    for (const membership of this.#presenceMemberships) {
+      membership.inner = undefined;
+    }
     previous.redirectOverlappingReadsTo((uri, selector, scope, instance) =>
       this.#replaySync(replacement, uri, selector, scope, instance)
     );
@@ -3480,6 +3632,9 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
       ),
       ...[...this.#operationSubscriptions].map((subscription) =>
         this.#ensureOperationSubscription(subscription)
+      ),
+      ...[...this.#presenceMemberships].map((membership) =>
+        this.#ensurePresenceMembership(membership)
       ),
     ]);
   }
@@ -3716,7 +3871,10 @@ type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
  * class.
  */
 export class SpaceReplica
-  implements ISpaceReplica, IOperationStorageCapability {
+  implements
+    ISpaceReplica,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   readonly #space: MemorySpace;
   readonly #subscription: IStorageSubscription;
   readonly #scopeKeyIdentity: () => ScopeKeyIdentity;
@@ -4498,7 +4656,9 @@ export class SpaceReplica
    * `#memoizedSessionHandle()`, and the serving loop already re-attempts a
    * deferred event's load every drain (see the scheduler's `failHeadEventLoadPark`
    * and the SpaceServer's deferral backstop), so the heal arrives on the
-   * cadence the deferral machinery already runs at.
+   * cadence the deferral machinery already runs at. A watch request in
+   * flight when the revocation lands consumes it as the request fails, and
+   * is made once more on the remounted session.
    */
   noteAclChanged(): void {
     if (this.#closed) return;
@@ -4749,6 +4909,14 @@ export class SpaceReplica
       });
       this.#operationWatchRemovals.set(watchId, removal);
     };
+  }
+
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    const { session } = await this.#activeSessionHandle();
+    return session.joinPresenceRoom(room, observer);
   }
 
   async #removeOperationWatch(watchId: string): Promise<void> {
@@ -6121,7 +6289,7 @@ export class SpaceReplica
   ): Promise<Result<Unit, PullError>> {
     const refreshStart = performance.now();
     try {
-      const { session } = await this.#activeSessionHandle();
+      let { session } = await this.#activeSessionHandle();
       // Per-session (no global): mirror the storage setting onto the session so
       // its watch-mutation family (set + add) uses the ordered-issue concurrent
       // path. Idempotent; cheap to re-assert each refresh. Optional-chained so
@@ -6202,6 +6370,18 @@ export class SpaceReplica
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
         mutation = await session.watchAddSync(watches);
+      } catch (error) {
+        // An ACL verdict can terminate the session while this request is in
+        // flight, and the request may be the only load the space sees, so its
+        // failure is what consumes the remount. The request is made once more
+        // on the remounted session, which admits or refuses it against the
+        // ACL as it now stands.
+        if (!this.#remountedSince(session)) throw error;
+        ({ session } = await this.#activeSessionHandle());
+        session.setConcurrentWatchRefresh?.(
+          this.#settings.experimentalConcurrentWatchRefresh === true,
+        );
+        mutation = await session.watchAddSync(watches);
       } finally {
         logger.time(watchAddStart, "watchRefresh", "watchAddSync");
       }
@@ -6238,6 +6418,15 @@ export class SpaceReplica
     } finally {
       logger.time(refreshStart, "watchRefresh", "total");
     }
+  }
+
+  /**
+   * Helper for `#refreshWatchSet()`, which consumes any session remount owed
+   * and returns whether `session` has been replaced as this replica's session.
+   */
+  #remountedSince(session: MemoryV2Client.SpaceSession): boolean {
+    this.#consumeOwedSessionRemount();
+    return this.#sessionSession !== session;
   }
 
   #consumeWatchView(view: MemoryV2Client.WatchView): void {

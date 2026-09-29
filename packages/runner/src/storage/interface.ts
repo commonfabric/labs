@@ -50,6 +50,10 @@ import type {
   ViewInterest,
   ViewPlan,
 } from "@commonfabric/memory/v2";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { Immutable } from "@commonfabric/utils/types";
 
@@ -860,6 +864,33 @@ export const hasOperationStorageCapability = (
     typeof candidate.applyOperation === "function" &&
     typeof candidate.releaseOperationField === "function" &&
     typeof candidate.subscribeOperationField === "function";
+};
+
+/**
+ * A storage provider that reaches the memory server's presence rooms
+ * (memory-v2 `04-protocol.md` §4.13) through its space session. The
+ * membership outlives the session it was joined through: a reconnect rejoins
+ * it, and a replacement of the provider's replica rejoins it on the
+ * replacement's session, each time delivering a fresh `snapshot` with the id
+ * the relay assigned there and republishing the last record.
+ */
+export interface IPresenceStorageCapability {
+  /**
+   * Joins `room` under this provider's space, delivering the room's events
+   * to `observer`, and returns the membership.
+   */
+  joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership>;
+}
+
+export const hasPresenceStorageCapability = (
+  value: unknown,
+): value is IPresenceStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<IPresenceStorageCapability>;
+  return typeof candidate.joinPresenceRoom === "function";
 };
 
 /**
@@ -1809,6 +1840,24 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI;
 
+  /**
+   * Mints the runtime secret called `name` in `space` when no trusted value
+   * is stored: a random value, written under the secret's label and writer
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
+   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
+   * one writer of the reserved namespace, which refuses every unprivileged
+   * write, and callable only with the runtime's authorization, since code
+   * that minted a secret in its own transaction could read it back there
+   * before its label is stored.
+   *
+   * @throws Error without the runtime's authorization.
+   */
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
+
   tx: IStorageTransaction;
 
   /**
@@ -2145,7 +2194,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
-   * Runs the same preparation with cooperative yields between targets.
+   * Runs the same preparation with cooperative yields between targets and
+   * within staged-reference label derivation.
    * Cancellation aborts the uncommitted transaction. The caller must await
    * completion before committing; activity during a yield aborts the attempt.
    */

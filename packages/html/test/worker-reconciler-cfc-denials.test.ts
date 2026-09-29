@@ -184,6 +184,30 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       expect(said).not.toContain("OncologyReferralLetter");
     });
 
+    // A property is decided on what its read consumed, so the explanation of
+    // one it withholds names those labels, and only at debug.
+    await t.step("explains a property it withholds", async () => {
+      const property: WorkerVNode = {
+        type: "vnode",
+        name: "span",
+        props: { title: confidential as never },
+        children: [],
+      };
+      const quiet = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+      });
+      expect(quiet).toContain(CEILING_BLOCK);
+      expect(quiet).not.toContain("OncologyReferralLetter");
+      const said = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+        debug: true,
+      });
+      expect(said).toContain("OncologyReferralLetter");
+      expect(said).toContain("consumed");
+    });
+
     await t.step(
       "names the label beside the ceiling once raised to debug",
       async () => {

@@ -7,17 +7,17 @@
  * a position of its own, and this is it: `xcd` moves it and `xpwd` prints
  * it.
  *
- * A location is a {@link URL}, which is what lets one position stand for a
- * place on either plane and what gives a relative move its arithmetic on the
- * plane that has no paths of its own.
+ * The position stands on {@link FILE_SCHEME} and nowhere else, so it is
+ * always a directory on this machine. A location is a {@link URL} all the
+ * same: that is the form `where` prints, the form that reads back as the
+ * same place, and the form the rest of the family will arrive in if a scheme
+ * with a listing ever joins.
  *
- * On the `file:` plane a token is a path rather than a URL reference, and the
- * two are not the same language: a URL reads `#` as a fragment, `?` as a
- * query and a leading blank as nothing at all, where a directory may be named
- * with any of them. So a token there is resolved as a path and converted at
- * the end ({@link toFileUrl}), which is the conversion's one home. On every
- * other plane a token is a URL reference and is resolved as one, because
- * that is the language those planes are written in.
+ * A token is a path rather than a URL reference, and the two are not the
+ * same language: a URL reads `#` as a fragment, `?` as a query and a leading
+ * blank as nothing at all, where a directory may be named with any of them.
+ * So a token is resolved as a path and converted at the end
+ * ({@link toFileUrl}), which is the conversion's one home.
  *
  * Nothing here opens anything: where a token lands is decided before any of
  * it reaches disk, and the reading is the same whether the place is there or
@@ -38,21 +38,17 @@ import { holdsControlCharacter } from "./place.ts";
 import { type RecordEntry } from "./record.ts";
 
 /**
- * The plane a `~` is written out against, which is the one that has a home.
+ * The one plane a location may stand on.
  *
- * A location is held as a URL and so is not confined to it —
- * `xcd https://foo.com/a/b/` sets one — but `~` is a path the operating
- * system spells, and only the plane that reads a path off disk has one.
+ * `xcd` is a navigation verb, and a plane it can move through is one that
+ * answers what stands under a path. `file:` is the only member of the family
+ * that does: `https:` has no listing primitive and no traversal for `..` to
+ * mean anything against, so a location set there could never be moved
+ * through (`docs/plans/shuttle/README.md`, decision 30). A location is
+ * therefore always a directory on this machine — which is also what gives a
+ * local program somewhere to run.
  */
-const HOME_SCHEME = "file";
-
-/**
- * The character a URL parser drops from either end of a reference before it
- * reads anything else, and the only one of those that reaches this module:
- * the rest of that set is the characters a terminal acts on, which
- * {@link ExternalLocation.xcd} refuses before anything reads them.
- */
-const BLANK = " ";
+const FILE_SCHEME = "file";
 
 /**
  * What moving the external location did: it landed somewhere, or it was
@@ -144,6 +140,22 @@ function spellsNoPlace(token: string): string {
 }
 
 /**
+ * The refusal a scheme that is not {@link FILE_SCHEME} gets from `xcd`.
+ *
+ * It says what the plane cannot answer rather than that shuttle has not got
+ * to it, because the two are different and only one of them will ever
+ * change. A place is stood in by moving through it, and a plane with no
+ * listing has nothing for a move to land on or climb out of; `https:` is a
+ * read end, and a read names its place whole
+ * (`docs/plans/shuttle/futures.md`).
+ */
+function cannotBeStoodIn(scheme: string): string {
+  return `\`${scheme}:\` names no place to stand in: it answers a read ` +
+    `and not what stands under a path, so there is nothing to move through. ` +
+    `\`${FILE_SCHEME}:\` is the plane a location stands on.`;
+}
+
+/**
  * The refusal a `file:` token carrying a host gets.
  *
  * `file:` names a file on this machine, and `file://server/share` names one
@@ -157,28 +169,6 @@ function spellsNoPlace(token: string): string {
 const NAMES_ANOTHER_MACHINE =
   "`file:` names a file on this machine, so a host after the separator " +
   "names a place shuttle does not reach. Write the path on its own.";
-
-/**
- * Returns `path` with the blanks at either end written as their own
- * characters, so a URL reference cannot be read past them.
- *
- * A URL parser drops the blanks at both ends before it reads anything else.
- * At the front that turns ` file:out.json` into a schemed reference — past
- * the check that would have refused the scheme, and onto another plane; at
- * the back it quietly renames `a ` to `a`. Encoding them leaves the token
- * naming what it says it names, which is what the same token does on the
- * plane that reads a path.
- */
-function withBlanksKept(path: string): string {
-  let opens = 0;
-  while (opens < path.length && path[opens] === BLANK) opens += 1;
-  if (opens === path.length) return "%20".repeat(opens);
-  let closes = path.length;
-  while (closes > opens && path[closes - 1] === BLANK) closes -= 1;
-  return `${"%20".repeat(opens)}${path.slice(opens, closes)}${
-    "%20".repeat(path.length - closes)
-  }`;
-}
 
 /**
  * The refusal a token holding a character a terminal acts on gets.
@@ -205,14 +195,21 @@ const NAMES_NO_HOME =
   "at all where this run was given no home.";
 
 /**
- * Returns `path` ending in a separator, which is what makes a location read
- * as the container a relative path is resolved against rather than as a file
+ * Returns `at` ending in a separator, which is what makes a location read as
+ * the container a relative path is resolved against rather than as a file
  * beside it.
+ *
+ * Always a copy, never the argument. A {@link URL} is mutable, so a location
+ * holding the one it was handed is a location whoever handed it over can
+ * still change — and the checks it passed on the way in were made once, of
+ * the value it had then. Copying is what turns those checks into something
+ * that holds.
  */
 function asContainer(at: URL): URL {
-  if (at.pathname.endsWith("/")) return at;
   const container = new URL(at.href);
-  container.pathname = `${at.pathname}/`;
+  if (!container.pathname.endsWith("/")) {
+    container.pathname = `${container.pathname}/`;
+  }
   return container;
 }
 
@@ -237,8 +234,35 @@ export class ExternalLocation {
    * module with a home of its own. A run that was given none passes
    * `undefined`, and every `~` it is handed is refused rather than expanded
    * against a guess.
+   *
+   * @throws Error if `at` is not on {@link FILE_SCHEME}, names a host, or
+   * holds an escape no path can be made of. Every move below reads the location as a path,
+   * so one that cannot be read that way would fail on a later line naming a
+   * token the person did not type. `xcd` turns both down at the door, which
+   * leaves only a caller building one directly, and that is a mistake in
+   * this process rather than in a line somebody typed.
    */
   constructor(at: URL, home: string | undefined) {
+    // One invariant asked three ways, because every move below converts the
+    // location back to a path and each of these is a way that conversion
+    // stops meaning what it says. A foreign plane has no path to convert
+    // to; a host has one, and it is the wrong machine's — `fromFileUrl`
+    // drops the host rather than refusing it, so a location on `server`
+    // would quietly become the local path of the same name; and an escape
+    // no character can be made of converts to nothing at all.
+    if (at.protocol !== `${FILE_SCHEME}:`) {
+      throw new Error(
+        `An external location stands on \`${FILE_SCHEME}:\`, and ` +
+          `\`${at.protocol}\` is not one.`,
+      );
+    }
+    if (at.host !== "") {
+      throw new Error(
+        `An external location is on this machine, and ` +
+          `\`${at.href}\` names the host \`${at.host}\`.`,
+      );
+    }
+    fromFileUrl(at);
     this.#at = asContainer(at);
     this.#home = home;
   }
@@ -257,11 +281,11 @@ export class ExternalLocation {
    * Moves as `token` says, and returns what that did. The location changes
    * only where the move lands, so a refusal leaves it where it was.
    *
-   * `token` is read on the external plane already, which is what lets a plain
-   * path move the location without naming a scheme — `xcd ../foo` and
-   * `xcd /tmp` both land on whatever plane the location stands on. A scheme
-   * moves it to another plane, and is legal only on an absolute complete
-   * path.
+   * `token` is read on the external plane already, which is what lets a
+   * plain path move the location without naming a scheme — `xcd ../foo` and
+   * `xcd /tmp`. A scheme may be written, and must then name this plane and
+   * an absolute path: there is nowhere else a location may stand, a place
+   * being stood in by moving through it.
    *
    * A token holding a character a terminal acts on is refused first, as a
    * place refuses a part holding one (`place.ts`). It is the same rule for
@@ -298,39 +322,56 @@ export class ExternalLocation {
    * Helper for {@link ExternalLocation.#landing}, which lands a token that
    * named a scheme.
    *
-   * The scheme-absolute rule is checked here and not by the URL parser, which
-   * does not enforce it: `new URL("file:out.json")` answers with a path of
-   * `/out.json`, turning a relative spelling into a place at the root. What
-   * makes a path absolute is the separator the family writes, and an
-   * authority (`file://localhost/tmp`, `https://foo.com/a`) carries one after
-   * it.
+   * A scheme that is not {@link FILE_SCHEME} is refused here rather than
+   * held: `xcd` moves through a plane, and the rest of the family answers no
+   * question a move is made of (decision 30).
+   *
+   * What makes a path absolute is checked here and not by the URL parser,
+   * which does not enforce it: `new URL("file:out.json")` answers with a
+   * path of `/out.json`, turning a relative spelling into a place at the
+   * root. A leading `/` is the whole of the test, and an authority carries
+   * one after it.
    */
   #absolute(
     token: string,
     { scheme, rest }: { scheme: string; rest: string },
   ): Landing {
-    // An authority is a URL's own spelling wherever it appears, so the `//`
-    // form is read as one on either plane and `~` has no meaning inside it.
     // A scheme is case-insensitive, so the comparison is made on one case.
-    // The token keeps its own spelling into the URL, which normalizes it.
-    const onFilePlane = scheme.toLowerCase() === HOME_SCHEME &&
-      !rest.startsWith("//");
-    const path = onFilePlane ? expandHome(rest, this.#home) : rest;
+    if (scheme.toLowerCase() !== FILE_SCHEME) {
+      return { kind: "refused", reason: cannotBeStoodIn(scheme) };
+    }
+    // An authority is a URL's own spelling, and `~` has no meaning inside
+    // one, so that form is read by the parser rather than as a path.
+    if (rest.startsWith("//")) {
+      try {
+        const at = new URL(`${scheme}:${rest}`);
+        if (at.host !== "") {
+          return { kind: "refused", reason: NAMES_ANOTHER_MACHINE };
+        }
+        // Read back as a path before it is taken. A URL may hold an escape
+        // no path can be made of — `%FF` is well formed as an escape and
+        // names no character — and every move from this location reads it
+        // as a path, so one taken here would fail on the next line instead,
+        // naming a token the person did not type.
+        fromFileUrl(at);
+        return { kind: "external", at };
+      } catch {
+        return { kind: "refused", reason: spellsNoPlace(token) };
+      }
+    }
+    const path = expandHome(rest, this.#home);
     if (path === undefined) {
       return { kind: "refused", reason: NAMES_NO_HOME };
     }
     if (!path.startsWith("/")) {
       return { kind: "refused", reason: notAbsolute(token) };
     }
-    try {
-      if (onFilePlane) return { kind: "external", at: toFileUrl(path) };
-      const at = new URL(`${scheme}:${path}`);
-      return at.protocol === `${HOME_SCHEME}:` && at.host !== ""
-        ? { kind: "refused", reason: NAMES_ANOTHER_MACHINE }
-        : { kind: "external", at };
-    } catch {
-      return { kind: "refused", reason: spellsNoPlace(token) };
-    }
+    // Total from here: the path opens with a separator by the check above,
+    // and holds no character a terminal acts on, those being refused at the
+    // door. A conversion that threw anyway would be reported by the prompt
+    // as the line failing, which says more than a refusal this could not
+    // name.
+    return { kind: "external", at: toFileUrl(path) };
   }
 
   /**
@@ -341,26 +382,16 @@ export class ExternalLocation {
    * nothing after it means.
    */
   #rooted(path: string): Landing {
-    try {
-      if (this.#at.protocol !== `${HOME_SCHEME}:`) {
-        return {
-          kind: "external",
-          at: new URL(withBlanksKept(path), this.#at),
-        };
-      }
-      const expanded = expandHome(path, this.#home);
-      if (expanded === undefined) {
-        return { kind: "refused", reason: NAMES_NO_HOME };
-      }
-      return {
-        kind: "external",
-        at: toFileUrl(resolve(fromFileUrl(this.#at), expanded)),
-      };
-    } catch {
-      return {
-        kind: "refused",
-        reason: `\`${path}\` names no place under \`${this.render()}\`.`,
-      };
+    const expanded = expandHome(path, this.#home);
+    if (expanded === undefined) {
+      return { kind: "refused", reason: NAMES_NO_HOME };
     }
+    // Total for the same reason, plus the one the constructor holds: the
+    // location is on this plane, so reading it back as a path is a
+    // conversion that has its input.
+    return {
+      kind: "external",
+      at: toFileUrl(resolve(fromFileUrl(this.#at), expanded)),
+    };
   }
 }

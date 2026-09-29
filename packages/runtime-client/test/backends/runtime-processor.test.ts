@@ -56,7 +56,10 @@ import {
   linkCfcLabelView,
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
@@ -133,16 +136,7 @@ const createRuntime = (
   actingPrincipal?: string,
   apiUrl = new URL("http://localhost/"),
 ) => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: {
-      audience: testSessionOpenAudience,
-    },
-  });
+  const server = newLoopbackServer();
   const storageManager = new SharedV2StorageManager({
     as: cfcSigner,
     memoryHost: new URL("memory://"),
@@ -4207,14 +4201,7 @@ describe("runtime-processor", () => {
         `direct-scoped-cell-initialize-${crypto.randomUUID()}`,
       );
       const space = signer.did();
-      const server = new MemoryV2Server.Server({
-        authorizeSessionOpen(message) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string" ? principal : undefined;
-        },
-        sessionOpenAuth: { audience: testSessionOpenAudience },
-      });
+      const server = newLoopbackServer();
       const managerOptions = {
         as: signer,
         memoryHost: new URL("memory://"),

@@ -114,6 +114,7 @@ import {
   redactCaveatSourcesForDisplay,
 } from "./cfc/label-view.ts";
 import { withLinkCfcLabelView } from "./cfc/link-label-view.ts";
+import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -190,6 +191,7 @@ import type {
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
   allowMutableTransactionRead,
+  excludeReadFromConflict,
   internalVerifierRead,
   markReadAsAttemptedWrite,
   mergeableOpRead,
@@ -222,7 +224,19 @@ type SinkOptions = {
    * reactive label delivery over a subscription. Off by default.
    */
   includeCfcLabel?: boolean;
+
+  /**
+   * Join the CFC labels of everything the sink's read consumed, following
+   * links, as `collectConsumedLabel()` joins them for a transaction, and pass
+   * the join to the callback as a third argument. The label metadata is read
+   * on the sink's transaction, so a label-only write to anything the read
+   * reached re-fires the sink. Off by default.
+   */
+  includeConsumedLabel?: boolean;
 };
+
+/** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
+export type SinkConsumedLabel = ReturnType<typeof collectConsumedLabel>;
 
 export type RawCellReadOptions = IReadOptions & {
   /**
@@ -360,6 +374,92 @@ export const recordRelevantSchemaWritePolicyInput = (
     schemaHasIfc(resolvedSchema) ? resolvedSchema : undefined,
     schemaRole,
   );
+};
+
+/** Whether `schema` declares an array: by type, or by describing items. */
+const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
+  isObjectOrArray(schema) &&
+  (schema.type === "array" ||
+    (Array.isArray(schema.type) && schema.type.includes("array")) ||
+    schema.items !== undefined || schema.prefixItems !== undefined);
+
+/**
+ * The schema write-policy input for a write landing at an item of an array:
+ * the array itself, with the item's schema as its `items`. A candidate
+ * envelope spells each segment of an input's path as a named property, and
+ * the stored envelope spells the array as an array, so an input recorded at
+ * the index alone could never merge with it — and a claim on the items is
+ * declared at `*`, which an input at the array reaches and one at the index
+ * would answer for by a type clash instead.
+ *
+ * The item's schema is the writer's where it holds one, else the stored
+ * envelope's at the item — a writer through a bare link answers to the
+ * stored claim as any routed write does. The slot is an item of an array
+ * where the parent holds one, or holds nothing yet and the stored envelope
+ * declares one there: an absent container's first item write is still an
+ * item write. A numeric key of an object stays a property. `undefined`
+ * where none of that holds, or where no schema for the item is known; the
+ * parent read propagates what `readValueOrThrow` throws, since an absent or
+ * mismatched parent reads as `undefined` and anything else is a failure a
+ * policy decision must not be built on. The item's own definitions move to
+ * the array's root, where the envelope's references to them point. An item
+ * of an item lifts through every index to the outermost array.
+ */
+const arrayItemPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+): { link: NormalizedFullLink; schema: JSONSchema } | undefined => {
+  const index = link.path[link.path.length - 1];
+  if (index === undefined || !/^(0|[1-9][0-9]*)$/.test(index)) {
+    return undefined;
+  }
+  const parent: NormalizedFullLink = {
+    ...link,
+    path: link.path.slice(0, -1),
+    schema: undefined,
+  };
+  // What the parent holds decides how a policy input is spelled, not what
+  // the write depends on, so the read is a SHAPE read kept out of the
+  // commit's conflict set: `nonRecursive` with `excludeReadFromConflict`,
+  // which is the one form the commit leaves out (storage v2 keeps every
+  // recursive read as a value dependency, however it is marked). A
+  // recursive read here made a concurrent write to the container reject a
+  // commit whose body never read it (collection-naming-concurrency). Only a
+  // parent that holds nothing yet is asked of the stored envelope, whose
+  // read of the label path is a policy observation the commit leaves out
+  // too.
+  const held = tx.readValueOrThrow(parent, {
+    nonRecursive: true,
+    meta: {
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+      ...excludeReadFromConflict,
+    },
+  });
+  if (
+    !Array.isArray(held) &&
+    (held !== undefined ||
+      !schemaDeclaresArray(storedSchemaForWritePolicyInput(tx, parent)))
+  ) {
+    return undefined;
+  }
+  const itemSchema = resolveSchema(schema) ??
+    storedSchemaForWritePolicyInput(tx, link);
+  if (!isObjectOrArray(itemSchema)) return undefined;
+  const { $defs, ...items } = itemSchema;
+  const lifted = {
+    link: parent,
+    schema: {
+      type: "array",
+      items,
+      ...($defs !== undefined ? { $defs } : {}),
+    } as JSONSchema,
+  };
+  // An item of an item lifts again, to the outermost array a run of indexes
+  // reaches: each level is spelled as the one below, so a write at
+  // `grid/0/0` is recorded at `grid`.
+  return arrayItemPolicyInput(tx, lifted.link, lifted.schema) ?? lifted;
 };
 
 /**
@@ -556,6 +656,7 @@ declare module "@commonfabric/api" {
       callback: (
         value: Readonly<T>,
         cfcLabel?: CfcLabelView | undefined,
+        consumed?: SinkConsumedLabel,
       ) => Cancel | undefined | void,
       options?: SinkOptions,
     ): Cancel;
@@ -1822,6 +1923,14 @@ export class CellImpl<T extends FabricValue>
     );
 
     // Check if we're dealing with a stream
+    //
+    // A write-destination read (spec §18.6.2): the marker read is the write
+    // path asking which of two ways to write. No written value or address is
+    // taken from its result: the event or stored value is the caller's
+    // `newValue`. A stored write lands at `resolvedToValueLink`, and an
+    // event goes to the scheduler's queue or the stream's entries document,
+    // each addressed from `resolvedToValueLink`, which the unmarked
+    // resolution above produced.
     if (
       this.isStream(resolvedToValueLink, {
         ...ignoreReadForScheduling,
@@ -2342,17 +2451,41 @@ export class CellImpl<T extends FabricValue>
       // retry on conflict.
       if (!this.#synced) this.sync();
 
-      recordRelevantSchemaWritePolicyInput(
-        this.tx,
-        resolvedToValueLink,
-        resolvedToValueLink.schema ?? this.schema,
-      );
-
       const writeLink = resolveLink(
         this.runtime,
         this.tx,
         this.#link,
         "writeRedirect",
+      );
+
+      // The policy input describes the write, so it is recorded where the
+      // write lands: `writeLink`, which follows write redirects and stops at
+      // a plain link, as the diff below does. `resolvedToValueLink` follows
+      // the plain link too, to the document it names, and this write does
+      // not touch that document — it replaces the link at the slot, or
+      // writes the same link again. Recording there put the SLOT's schema,
+      // a writer claim on it included, on the linked document as a
+      // candidate envelope: a room's `box` slot claimed for the custody seal
+      // had the room's idea of an entry merged into the box's own schema on
+      // the second seal, and refused the seal's commit as an incompatible
+      // migration. The schema is the slot's own where the resolution left
+      // it none (a redirect carries its target's). An object the diff
+      // anchors into an element's own document gets that document's input
+      // from the diff itself (`anchorValueAsEntity`), on every visit.
+      //
+      // A slot that is an item of an array is recorded as the array with the
+      // item's schema as its `items`: a candidate envelope spells a path
+      // segment as a named property, and the stored schema spells the array
+      // as one, so an input at the index alone could never merge with it.
+      const policyInput = arrayItemPolicyInput(
+        this.tx,
+        writeLink,
+        writeLink.schema ?? this.schema,
+      );
+      recordRelevantSchemaWritePolicyInput(
+        this.tx,
+        policyInput?.link ?? writeLink,
+        policyInput?.schema ?? writeLink.schema ?? this.schema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj
@@ -3212,6 +3345,7 @@ export class CellImpl<T extends FabricValue>
     callback: (
       value: Readonly<T>,
       cfcLabel?: CfcLabelView | undefined,
+      consumed?: SinkConsumedLabel,
     ) => Cancel | undefined | void,
     options: SinkOptions = {},
   ): Cancel {
@@ -4255,6 +4389,7 @@ function subscribeToReferencedDocs<T>(
   callback: (
     value: T,
     cfcLabel?: CfcLabelView | undefined,
+    consumed?: SinkConsumedLabel,
   ) => Cancel | undefined | void,
   runtime: Runtime,
   ref: CellViewRef,
@@ -4300,7 +4435,10 @@ function subscribeToReferencedDocs<T>(
           kickCrossSpaceTargets: false,
         })
         : undefined;
-      sink.cleanup = callback(newValue, cfcLabel);
+      const consumed = options.includeConsumedLabel
+        ? collectConsumedLabel(tx)
+        : undefined;
+      sink.cleanup = callback(newValue, cfcLabel, consumed);
 
       // no async await here, but that also means no retry. TODO(seefeld): Should
       // we add a retry? So far all sinks are read-only, so they get re-triggered

@@ -801,6 +801,7 @@ export const runHarnessInteractiveChatStdioCli = async (
   const provisioning = await resolveInteractiveProvisioning(
     options,
     cwd ?? Deno.cwd(),
+    Deno.env.toObject(),
   );
   await run({
     ...(options.sessionDbPath !== undefined

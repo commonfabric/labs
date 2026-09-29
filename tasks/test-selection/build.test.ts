@@ -818,7 +818,7 @@ describe("build", () => {
       expect(finished.observations).toBe(1);
       const state = finished.states.get(KEY)!;
       expect(state.runsByDay["2026-08-20"]).toBe(1);
-      expect(state.costByDay["2026-08-20"]!.count).toBe(1);
+      expect(state.costByDay["2026-08-20"]!.counts).toEqual([1]);
       expect(finished.aggregate.folded).toEqual([CI_NAME]);
     });
 
@@ -1004,12 +1004,35 @@ describe("build", () => {
       const aggregate = emptyAggregate("2026-08-20");
       const held = emptyState();
       (held.costByDay as Record<string, unknown>)["2026-08-20"] = {
-        p90: 4000,
+        p90: 4096,
         count: 45,
       };
       aggregate.states[KEY] = held;
       const parsed = parseAggregate(JSON.stringify(aggregate))!;
-      expect(costSeconds(parsed.states[KEY]!, "2026-08-20")).toBe(4);
+      expect(costSeconds(parsed.states[KEY]!, "2026-08-20")).toBe(4.096);
+    });
+
+    it("keeps a day these rules stored as its slowest runs", () => {
+      // Stored before days were counted by bucket, and sealed by the
+      // rules in force, so a fold sealing a later day counts it too.
+      const aggregate = emptyAggregate("2026-08-20");
+      const held = emptyState();
+      (held.costByDay as Record<string, unknown>)["2026-08-19"] = {
+        slowest: [8192, 8192],
+        count: 2,
+        rule: COST_RULE,
+      };
+      aggregate.states[KEY] = held;
+      const fold = new Fold(
+        parseAggregate(JSON.stringify(aggregate))!,
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      fold.add([stored(CI_NAME, context(), [record({ durationMs: 1024 })])]);
+      const state = fold.finish().states.get(KEY)!;
+      expect(Object.keys(state.costByDay).sort())
+        .toEqual(["2026-08-19", "2026-08-20"]);
+      expect(costSeconds(state, "2026-08-20")).toBe(8.192);
     });
 
     it("drops an identity whose state is not one, and reads the rest", () => {
@@ -1135,6 +1158,30 @@ describe("build", () => {
       ];
       expect(parseAggregate(JSON.stringify(aggregate))?.lanes)
         .toEqual(aggregate.lanes);
+    });
+
+    it("carries a figure a later reader stored in a batch", () => {
+      // What a later reader stored beside the figures this one knows is
+      // left as it was, so that reader finds it again.
+      const later = { ...emptyAggregate("2026-08-20") } as Record<
+        string,
+        unknown
+      >;
+      const lanes = [{
+        day: "2026-08-20",
+        suite: "runner-unit",
+        measured: false,
+        ran: 10,
+        spent: 30,
+        units: 4,
+        invocations: 3,
+      }];
+      later.lanes = lanes;
+      const parsed = parseAggregate(JSON.stringify(later));
+      expect(parsed?.lanes).toEqual(lanes);
+      expect(
+        new Fold(parsed!, NO_ALIASES, "2026-08-20").finish().aggregate.lanes,
+      ).toEqual(lanes);
     });
 
     it("drops a stored lane measurement it cannot read", () => {
@@ -1861,7 +1908,10 @@ describe("a batch read one shard at a time", () => {
     expect(shards.declined).toBe(1);
     expect(aggregate.folded.length).toBe(3);
     expect(Object.keys(aggregate.files)).toEqual([KEY]);
-    expect(aggregate.states[KEY]?.costByDay["2026-08-20"]?.count).toBe(2);
+    expect(
+      aggregate.states[KEY]?.costByDay["2026-08-20"]?.counts
+        .reduce((sum, each) => sum + each, 0),
+    ).toBe(2);
     expect(aggregate).toEqual(ordered.finish().aggregate);
   });
 
@@ -2011,11 +2061,11 @@ describe("the days a fold keeps a lane's measurements over", () => {
 });
 
 describe("a fold reading cost days another set of rules sealed", () => {
-  /** A stored aggregate holding one five-minute day under no stamp. */
+  /** A stored aggregate holding one slow day under no stamp. */
   function aggregateSealedBefore(): string {
     const aggregate = emptyAggregate("2026-08-20");
     const held = emptyState();
-    held.costByDay["2026-08-20"] = samplesOf([300_000, 300_000]);
+    held.costByDay["2026-08-20"] = samplesOf([262_144, 262_144]);
     aggregate.states[KEY] = held;
     return JSON.stringify(aggregate);
   }
@@ -2032,9 +2082,9 @@ describe("a fold reading cost days another set of rules sealed", () => {
 
   it("charges the day it sealed once it has one", () => {
     const run = folded([
-      stored(CI_NAME, context(), [record({ durationMs: 1000 })]),
+      stored(CI_NAME, context(), [record({ durationMs: 1024 })]),
     ]);
-    expect(costSeconds(run.states.get(KEY)!, "2026-08-20")).toBe(1);
+    expect(costSeconds(run.states.get(KEY)!, "2026-08-20")).toBe(1.024);
     // And the aggregate it writes says so, so the next run reads it as a
     // day these rules sealed rather than dropping it again.
     const next = parseAggregate(JSON.stringify(run.aggregate))!;
@@ -2045,7 +2095,8 @@ describe("a fold reading cost days another set of rules sealed", () => {
     // A test that has not passed since the rules changed has nothing
     // else to be charged, and charging it nothing is the direction that
     // overruns a lane.
-    expect(costSeconds(folded([]).states.get(KEY)!, "2026-08-20")).toBe(300);
+    expect(costSeconds(folded([]).states.get(KEY)!, "2026-08-20"))
+      .toBe(262.144);
   });
 });
 

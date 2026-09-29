@@ -49,6 +49,8 @@ dashboard/
   dashboard-message.ts  shared message storage and fade timing
   render.ts     renderTile(label, view) + the page shell/CSS
   detail-page.ts  the frame, navigation and type a drill-down page starts from
+  live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
+  live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
@@ -176,6 +178,32 @@ which is the one case the browser reports nothing about at all. A background
 tab's timers are throttled to about one a minute and a sleeping machine's stop
 altogether, so the page checks its stream on becoming visible and on the browser
 regaining the network as well as on its own tick.
+
+A drill-down page can be kept current the same way. A route that declares
+`live: true` serves a page built by `livePage` in `live-page.ts`, which carries
+the client script and keeps everything that changes inside its `<main>` element.
+The page opens `/events?page=<its path and query>`. On every serving tick the
+server sends a heartbeat down that stream and renders the page again by calling
+the route's handler, and it sends the new markup when that differs from what it
+last sent. A page that connects is sent the current markup whether or not it
+changed. The browser keeps every element whose tags, attributes, and text
+between its children match the new markup's, and whose children match in number,
+and compares those children the same way; any other element that differs is
+replaced whole. So when the header's age ticks over, only the text giving the
+age is replaced, and the rest of the page keeps a reader's focus and selection.
+A manifest that adds or removes a section of the page replaces the whole of
+`<main>`. Before it compares, the page sends its `<main>` a `live-page-update`
+event carrying the new `<main>`, which bubbles to the document. A page the
+reader can rearrange listens for it and arranges the new markup the same way, so
+a rearranged part that did not change still compares equal and is kept. Every
+rendering it sends names the version being served, and a page built by another
+version reloads instead. The page follows its stream with the dashboard's own
+code (`followUpdates` in `stream-client.ts`), reopens it once it has heard
+nothing for three heartbeat periods, and its badge reads OFFLINE while it cannot
+hear the server. A page is rendered only while some browser is showing it. The
+test selection page and the CI jobs page are live, so a screen left on either
+follows the manifests as the publisher writes them, or the ci tile's collections
+as it makes them.
 
 The tab favicon follows the most urgent visible tile. It is red when any tile is
 red, orange when there are no red tiles but at least one orange tile, and green
@@ -348,7 +376,7 @@ to the next; a view supplies everything under it.
 | tile | source | needs |
 |---|---|---|
 | ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
-| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | your metric here | a place in the grid for a metric nobody has chosen yet. It reads nothing, so it carries no figure, and it is green because there is nothing wrong with an empty slot | none |
@@ -358,7 +386,7 @@ to the next; a view supplies everything under it.
 | CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
 | test selection | what share of the corpus the newest selection manifest would have a pull request run, read from the same manifest. The manifest's packing is built with nothing mandatory, so the share is the one a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to. Both of the last two take the sub line off the corpus count, the red one first. The sparkline plots the selected percentage across every available manifest, using each manifest's own corpus size. Gray on the same conditions as the flaky tests tile, including an empty latest corpus | optional `GH_TOKEN` for publisher activity |
-| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: every lane against its budget and how many tests it holds, every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section | none |
+| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: every lane against its budget and how many tests it holds, every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
 | coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | none |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
@@ -368,7 +396,7 @@ to the next; a view supplies everything under it.
 | all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
 | key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
-| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, `ANTHROPIC_ADMIN_KEY`, `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
+| model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
 | dau | distinct identities active per UTC day on one named service, counted from the `user.did` attribute on the `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has no such spans — which is the resting state until a deployment's tracing is switched on. It counts keypairs rather than people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `DAU_EXCLUDE_DIDS`, `SIGNOZ_UI_URL` |
 | github users | organization members plus outside collaborators, with each roster's size charted over about two months. The headline counts unique users across both rosters | `GH_TOKEN` (with org Members read) |
@@ -771,76 +799,87 @@ on the costs endpoint.
 3. Copy it (`sk-admin-…`, distinct from `sk-proj-…`, shown once). Treat it like a
    root credential — it grants full org management.
 
-### `ANTHROPIC_ADMIN_KEY`
+### Anthropic: `ANTHROPIC_FEDERATION_*`, or `ANTHROPIC_ADMIN_KEY` locally
 
-Powers the Anthropic share of **model spend**. Needs an **Admin** key
-(`sk-ant-admin01-…`), created by an org admin/owner; a normal API key is rejected
-by the cost-report endpoint. Console admin keys have no selectable scopes — they
-carry full Admin API access, so guard one like a root credential.
+Powers the Anthropic share of **model spend**, which reads the organization
+cost report from the Admin API. In the cluster the dashboard holds no Anthropic
+credential. It uses Workload Identity Federation: the GKE metadata server signs
+a Google identity token for the pod's service account, and Anthropic exchanges
+it for a bearer token that expires in minutes
+([anthropic-auth.ts](./anthropic-auth.ts)). A copy of that token taken out of
+the pod stops working when it expires, and a new one can only be minted as the
+dashboard's Google service account.
 
-1. Open [Claude Console → Settings → Admin keys](https://platform.claude.com/settings/admin-keys).
-   You must be an organization admin.
+The Admin API has no read-only scope. The federated token carries `org:admin`,
+the same reach as an Admin key, for as long as it lives. Federation limits
+where the credential comes from and how long it lasts, not what it can do.
+Anyone who can mint a Google identity token as the dashboard's service account
+can also get one. That covers the pod itself, and any project member who can
+act as the account: owners, and holders of a project-wide Service Account User
+role, who can attach it to a VM and ask that VM's metadata server.
 
-2. Click **Create key**, name it `dashboard-reader`, and choose an expiration.
-   The key must begin with `sk-ant-admin01-`. Copy it immediately; Anthropic
-   shows it only once.
-   [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/admin-api-keys)
+The pod reads these settings, which are identifiers, not secrets:
 
-   The dashboard does not rotate this key automatically. A longer lifetime
-   reduces how often an operator must replace the secret and restart the
-   dashboard. Record the expiration and replace the key before that date.
+| env var | value |
+|---|---|
+| `ANTHROPIC_FEDERATION_RULE_ID` | the federation rule, `fdrl_…` |
+| `ANTHROPIC_ORGANIZATION_ID` | the organization UUID, from **Settings → Organization** |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | the rule's target service account, `svac_…` |
+| `ANTHROPIC_WORKSPACE_ID` | optional; only when the rule is enabled in more than one workspace |
 
-3. Store it without putting it in shell history:
+Setting any of the three required settings selects federation, even if
+`ANTHROPIC_ADMIN_KEY` is also set, so a leftover key cannot mask a broken or
+half-finished federation setup. A failed exchange or a missing setting shows
+`Anthropic $???` and grays the tile, and the server log names the cause.
 
-   ```zsh
-   read -s "new_anthropic_key?Paste the new key: "
-   echo
-   if [[ "$new_anthropic_key" != sk-ant-admin01-* ]]; then
-     echo "The key must begin with sk-ant-admin01-." >&2
-   else
-     printf %s "$new_anthropic_key" |
-       gcloud secrets versions add \
-         k8s-stage-dashboard-anthropic-admin-key \
-         --project=commontools-core \
-         --data-file=-
-   fi
-   unset new_anthropic_key
-   ```
+To set it up, an organization admin creates the rule in the Claude Console.
+Anthropic allows `org:admin` rules to be created only there, not through the
+API. [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/wif-providers/gcp)
 
-4. Confirm that `kubectl` addresses the stage cluster:
-
-   ```zsh
-   kubectl config current-context
-   ```
-
-   It must print
-   `gke_commontools-core_us-central1_gke-cluster-stage`. Then force the
-   Kubernetes secret to refresh:
+1. Look up the numeric unique ID of the dashboard's Google service account:
 
    ```zsh
-   kubectl annotate externalsecret dev-dashboard-anthropic \
-     -n dev-dashboard \
-     force-sync="$(date +%s)" \
-     --overwrite
+   gcloud iam service-accounts describe \
+     dev-dashboard-stage@commontools-core.iam.gserviceaccount.com \
+     --project=commontools-core \
+     --format='value(uniqueId)'
    ```
 
-5. Watch the ExternalSecret and wait for its `REFRESHED` timestamp to change.
-   Stop the watch with Control-C after it reports `READY` as `True`:
+2. Open [Claude Console → Settings → Workload identity](https://platform.claude.com/settings/workload-identity-federation),
+   select **Connect workload**, and choose **Google Cloud**. Enter:
+   - issuer URL `https://accounts.google.com`, with JWKS discovery
+   - audience `https://api.anthropic.com`
+   - claim `sub` equal to the unique ID from step 1
+   - claim `email` equal to `dev-dashboard-stage@commontools-core.iam.gserviceaccount.com`
+   - names such as `dev-dashboard-stage` for the service account and rule
+   - under **Advanced rule options**, OAuth scope `org:admin`, which makes the
+     new service account an Admin
+   - token lifetime `600` seconds
 
-   ```zsh
-   kubectl get externalsecret dev-dashboard-anthropic \
-     -n dev-dashboard \
-     --watch \
-     -o 'custom-columns=REFRESHED:.status.refreshTime,READY:.status.conditions[0].status'
-   ```
+   Do not use a subject prefix. Google subjects have no stable prefix, so a
+   wildcard would admit service accounts in other projects.
 
-6. Restart the dashboard so its environment reloads, then wait for the rollout
-   to finish:
+3. Copy the rule ID, the service account ID, and the organization ID into the
+   stage overlay's `dev-dashboard-anthropic-wif` ConfigMap in the infra
+   repository, land that change, and deploy it.
 
-   ```zsh
-   kubectl rollout restart deployment/dev-dashboard -n dev-dashboard
-   kubectl rollout status deployment/dev-dashboard -n dev-dashboard
-   ```
+4. The wizard waits 15 minutes for a successful exchange. The tile exchanges on
+   its first collection after the pod starts. If the wizard window has passed,
+   re-run the test from the rule's page, or check the
+   [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history)
+   for the denial reason. Every denial is the same opaque 401 from the API.
+
+5. Once the tile reads Anthropic again, delete any old `dashboard-reader`
+   Admin key under **Settings → Admin keys**. The infra repository's
+   dashboard deploy removes the key's in-cluster copy, and dropping its Secret
+   Manager container from OpenTofu removes the stored copy.
+
+To revoke the dashboard's access, archive the rule in the Console.
+
+For local development, set `ANTHROPIC_ADMIN_KEY` to an Admin key
+(`sk-ant-admin01-…`) from **Settings → Admin keys** instead. It is sent as
+`x-api-key`. Give it a short expiration and delete it when you are done,
+because it carries full Admin API access.
 
 ### `OPENROUTER_KEY`
 

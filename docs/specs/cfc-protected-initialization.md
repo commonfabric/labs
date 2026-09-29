@@ -80,6 +80,19 @@ staged in the transaction. The link carries its source's label and the
 `LinkReference` a link write mints, so a reader reaching the entry through the
 link sees the entry's own authorship.
 
+When deriving a pending reference source, schema labels are minted at their
+declaration paths, with wildcard segments bound to the projected source path.
+Covering declarations join their confidentiality and static integrity, including
+when the reference slot has its own nonempty confidentiality declaration. A
+declaration at or below an initialized reference mints no integrity for the
+referenced content. Principal claims, including `authored-by` and
+`represents-principal`, come from the most specific source label covering the
+projected path: a container's author does not become the author of a reference
+it holds. This applies to both pending and stored source labels, and to floors
+checked against them. Inline data without a more specific label keeps its
+container's authorship. An empty declaration without a persistent gate does not
+shadow an ancestor during this derivation.
+
 When a link's source is a reference staged in the same transaction, or a value
 holding one, preparation derives that reference's labels through the recorded
 chain. A reference at or above the source path supplies the label there. One
@@ -96,6 +109,15 @@ requires. This keeps the persisted view finite; reads beyond it follow the
 stored references and consume the labels at each hop. A carried view is checked
 in full at the link's first occurrence, and a repeated occurrence supplies the
 entries covering the requested paths.
+
+Within one derivation, sibling branches can reuse a complete result when the
+pending document graph has shared sources and no cycles, and the result carries
+no caller-specific projection request. The cache belongs to that derivation:
+preparation can persist source metadata between calls, so later calls derive
+against the current snapshot. Graphs with document cycles retain their
+branch-local expansion rules. Ordinary chains need no shared-result cache.
+The persisted view still contains every distinct labeled path; sharing work
+does not reduce the size of a flat label map for a branching graph.
 
 ## Setup replay over a stored argument
 

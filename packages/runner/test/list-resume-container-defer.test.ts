@@ -19,7 +19,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -453,14 +453,7 @@ describe("list builtin resume container defer", () => {
     sm2Hold = undefined;
     heldDeliveries = [];
     withheldDocIds.clear();
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     sm1 = RewritingStorageManager.make(signer, server, {
       redirectSends: true,
       onWithheldCommitOp: (n) => redirected += n,

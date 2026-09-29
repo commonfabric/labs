@@ -18,6 +18,7 @@ import {
   selectDocHead,
 } from "@commonfabric/memory/v2/engine";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   type Options,
   type SessionFactory,
@@ -92,11 +93,7 @@ const createServer = (
 ): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     store: options.store ?? new URL(`memory://${label}`),
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
     acl: { mode: options.mode ?? "enforce" },
     subscriptionRefreshDelayMs: 0,

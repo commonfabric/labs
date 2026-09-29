@@ -510,7 +510,19 @@ export type CfcLabelMetadataObservation = Immutable<{
 }>;
 
 export type ImplementationIdentity =
-  | { kind: "builtin"; builtinId: string }
+  | {
+    kind: "builtin";
+    builtinId: string;
+
+    /**
+     * The one instance a builtin that acts per instance acted for, as the
+     * custody seal acts for one custody instance. It rides into the
+     * `TransformedBy` the builtin's writes carry, so a witness over them names
+     * the instance, while a guard that names the builtin alone still matches
+     * by subset.
+     */
+    instance?: string;
+  }
   | {
     kind: "verified";
 
@@ -1126,5 +1138,7 @@ export type CfcPreparationWork =
   | "overlapWildcardQueries"
   | "overlapConcreteQueries"
   | "authoritativeCoverCalls"
+  | "stagedReferenceDerivations"
+  | "stagedReferenceCacheHits"
   | "flowTemplateEntriesMinted"
   | "flowTemplateContainers";
