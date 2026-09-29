@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { type Stub, stub } from "@std/testing/mock";
 
 import { CfHarnessEngine } from "../../src/engine.ts";
 import type {
@@ -19,11 +20,17 @@ import type {
   ProcessRunResult,
   ProcessSpawnRequest,
 } from "../../src/sandbox/process-runner.ts";
+import { ProcessTimeoutError } from "../../src/sandbox/process-runner.ts";
 import {
   resolveRunscSandboxConfig,
+  RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
 } from "../../src/sandbox/runsc.ts";
-import { BASH_SESSION_UNAVAILABLE_EXIT_CODE } from "../../src/tools/bash.ts";
+import { SandboxSessionUnavailableError } from "../../src/sandbox/types.ts";
+import {
+  BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+  BASH_TIMEOUT_EXIT_CODE,
+} from "../../src/tools/bash.ts";
 
 const RUNSC_SUBCOMMANDS = ["run", "exec", "state", "delete", "kill"];
 
@@ -45,6 +52,12 @@ class FakeRunscRunner implements ProcessRunner {
 
   /** What an exec in a session returns. */
   execResult: ProcessRunResult = { stdout: "", stderr: "", exitCode: 0 };
+
+  /** When set, an exec in a session throws this. */
+  execError: Error | undefined;
+
+  /** When set, starting a session's container throws this. */
+  spawnError: Error | undefined;
 
   readonly #exits = new Map<string, (exitCode: number) => void>();
 
@@ -70,12 +83,17 @@ class FakeRunscRunner implements ProcessRunner {
     }
     if (subcommand === "exec") {
       this.execCount += 1;
-      return Promise.resolve(this.execResult);
+      return this.execError !== undefined
+        ? Promise.reject(this.execError)
+        : Promise.resolve(this.execResult);
     }
     return Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
   }
 
   spawn(request: ProcessSpawnRequest): ProcessHandle {
+    if (this.spawnError !== undefined) {
+      throw this.spawnError;
+    }
     const containerId = request.args[request.args.length - 1];
     this.sessionContainerIds.push(containerId);
     const { promise: exited, resolve } = Promise.withResolvers<
@@ -102,13 +120,22 @@ class FakeRunscRunner implements ProcessRunner {
   }
 }
 
+const SESSION_LOST_TEXT =
+  "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`";
+
 describe("bash session refusals", () => {
   let scratchDir: string;
   let runner: FakeRunscRunner;
   let runtime: RunscSandboxRuntime;
   let engine: CfHarnessEngine;
+  let logged: Stub<Console>;
+
+  /** Everything written to the operator's log, one line per call. */
+  const loggedLines = (): string[] =>
+    logged.calls.map((call) => call.args.join(" "));
 
   beforeEach(async () => {
+    logged = stub(console, "error");
     scratchDir = await Deno.makeTempDir({ prefix: "bash-session-refusal-" });
     runner = new FakeRunscRunner();
     runtime = new RunscSandboxRuntime(
@@ -132,6 +159,7 @@ describe("bash session refusals", () => {
   afterEach(async () => {
     await runtime.close();
     await Deno.remove(scratchDir, { recursive: true }).catch(() => undefined);
+    logged.restore();
   });
 
   /** The invocation records the run holds for one tool output. */
@@ -215,6 +243,195 @@ describe("bash session refusals", () => {
       expect(runner.sessionContainerIds).toEqual([]);
       expect(output.cwd).toBe("/workspace/first");
       expect(engine.getRunState().currentDir).toBe("/workspace/first");
+    });
+  });
+
+  describe("the reason the runtime gives", () => {
+    it("is `invalid-name` for a name the tool would have refused first", async () => {
+      // The one refusal of the runtime's that no bash call reaches, since
+      // the tool checks the name by the same pattern before it asks.
+
+      const refusal = await runtime.run({
+        argv: ["/bin/true"],
+        session: "not a name",
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(SandboxSessionUnavailableError);
+      expect((refusal as SandboxSessionUnavailableError).reason).toBe(
+        "invalid-name",
+      );
+    });
+  });
+
+  describe("what the model is shown", () => {
+    it("says a session whose container exited starts empty when named again", async () => {
+      await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "build",
+      });
+      await runner.endLatestSession();
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command: "make test",
+        session: "build",
+      });
+
+      expect(output).toEqual({
+        outputId: output.outputId,
+        stdout: "",
+        stderr: SESSION_LOST_TEXT,
+        exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+        cwd: "/workspace",
+      });
+      // Named again, as the text says, it is a second container.
+      const again = await engine.invokeBuiltinTool("bash", {
+        command: "make test",
+        session: "build",
+      });
+      expect(again.output.exitCode).toBe(0);
+      expect(runner.sessionContainerIds.length).toBe(2);
+    });
+
+    it("says the same of a session that went with a command that timed out", async () => {
+      await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "build",
+      });
+      runner.execError = new ProcessTimeoutError(
+        "/bin/sh -c exec /opt/operator/bin/runsc exec",
+        1500,
+      );
+      const timedOut = await engine.invokeBuiltinTool("bash", {
+        command: "sleep 99",
+        session: "build",
+        timeoutMs: 1500,
+      });
+      expect(timedOut.output.exitCode).toBe(BASH_TIMEOUT_EXIT_CODE);
+      runner.execError = undefined;
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command: "make test",
+        session: "build",
+      });
+
+      expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+      expect(output.stderr).toBe(SESSION_LOST_TEXT);
+    });
+
+    it("says the same of a session `runsc` no longer knows at the call", async () => {
+      await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "build",
+      });
+      // The container is gone and its child has not been reaped: the exec
+      // is what finds out.
+      runner.absent.add(runner.sessionContainerIds[0]);
+      runner.execResult = {
+        stdout: "",
+        stderr:
+          "loading container: file does not exist: /run/operator/runsc/state",
+        exitCode: 128,
+      };
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command: "make test",
+        session: "build",
+      });
+
+      expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+      expect(output.stderr).toBe(SESSION_LOST_TEXT);
+    });
+
+    it("says a run at its bound of sessions may reuse one, and names none", async () => {
+      for (let index = 0; index < RUNSC_MAX_SESSIONS; index += 1) {
+        const started = await engine.invokeBuiltinTool("bash", {
+          command: "true",
+          session: `held-${index}`,
+        });
+        expect(started.output.exitCode).toBe(0);
+      }
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "one-too-many",
+      });
+
+      expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+      expect(output.stderr).toBe(
+        "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
+      );
+      expect(runner.sessionContainerIds.length).toBe(RUNSC_MAX_SESSIONS);
+      // The runtime's own account, names included, is the operator's.
+      expect(loggedLines().join("\n")).toContain("held-0, held-1");
+    });
+
+    it("says a session that could not start is not to be retried, and nothing of why", async () => {
+      runner.spawnError = new Error(
+        "Failed to spawn '/opt/operator/bin/runsc': No such file or directory (os error 2)",
+      );
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "build",
+      });
+
+      expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+      expect(output.stderr).toBe(
+        "the sandbox session could not be started; the command did not run; rerun it without `session`; a start that failed is likely to fail again, so do not retry the session in a loop",
+      );
+      expect(output.stdout).toBe("");
+      // Why it failed is the operator's to read.
+      const lines = loggedLines();
+      expect(lines.length).toBe(1);
+      expect(lines[0]).toContain("start-failed");
+      expect(lines[0]).toContain("/opt/operator/bin/runsc");
+    });
+
+    it("says an enforcing run has no sessions", async () => {
+      // A runtime with a policy, since one without refuses an enforcing
+      // call before it looks at the session.
+
+      const enforcingScratchDir = await Deno.makeTempDir({
+        prefix: "bash-session-refusal-",
+      });
+      const enforcingRuntime = new RunscSandboxRuntime(
+        resolveRunscSandboxConfig({
+          workspaceHostPath: "/tmp/workspace",
+          rootfs: "/images/kitchensink",
+          scratchDir: enforcingScratchDir,
+          runId: "run-enforcing",
+          platform: "linux",
+          cfcPolicyPath: "/policy.json",
+        }),
+        runner,
+      );
+      const enforcingEngine = new CfHarnessEngine({
+        runId: "run-enforcing",
+        sandboxRuntime: enforcingRuntime,
+        cfcEnforcementMode: "enforce-explicit",
+      });
+      try {
+        const { output } = await enforcingEngine.invokeBuiltinTool("bash", {
+          command: "make",
+          session: "build",
+        });
+
+        expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+        expect(output.stderr).toBe(
+          "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
+        );
+        expect(runner.sessionContainerIds).toEqual([]);
+        expect(
+          (enforcingEngine.getRunState().cfcInvocationContexts ?? []).filter((
+            record,
+          ) => record.toolOutputId === output.outputId).length,
+        ).toBe(1);
+      } finally {
+        await enforcingRuntime.close();
+        await Deno.remove(enforcingScratchDir, { recursive: true }).catch(() =>
+          undefined
+        );
+      }
     });
   });
 });

@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import {
@@ -16,6 +17,7 @@ import {
   SANDBOX_SESSION_NAME_PATTERN,
   type SandboxRuntimeDescription,
   SandboxSessionUnavailableError,
+  type SandboxSessionUnavailableReason,
 } from "../sandbox/types.ts";
 import { SandboxPathEscapeError } from "../sandbox/errors.ts";
 import type { HarnessToolDefinition } from "./types.ts";
@@ -41,9 +43,10 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 export const BASH_TIMEOUT_EXIT_CODE = 124;
 /**
  * The command did not run: it named a sandbox session the runtime cannot
- * honour (no sessions, or not for this call), or a name that is not a
- * session name. Recoverable — the model reruns without the session, or with
- * a name that is one.
+ * honor (no sessions, or not for this call), or a name that is not a
+ * session name. Recoverable, and what the model does next depends on which
+ * refusal it was, so the text beside this exit code says: rerun without the
+ * session, with a name that is one, or with the same name to start over.
  */
 export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
 
@@ -166,6 +169,47 @@ const sessionRefusal = (
   cwd,
 });
 
+const INVALID_SESSION_NAME_REFUSAL =
+  "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
+
+/**
+ * What the model is shown for each reason a runtime refuses a session. Every
+ * text is written here and none is taken from the error, whose message is
+ * the runtime's account for an operator: it can carry host paths, container
+ * ids and the text of the error a session failed to start with.
+ *
+ * Each text ends in what to do next, which is where the reasons differ. A
+ * session that was lost starts empty under the same name. A run at its bound
+ * of sessions has sessions to reuse. A session that did not start is not
+ * worth starting again.
+ */
+const SESSION_REFUSAL_BY_REASON: Readonly<
+  Record<SandboxSessionUnavailableReason, string>
+> = {
+  "invalid-name": INVALID_SESSION_NAME_REFUSAL,
+  "enforcing-mode":
+    "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
+  "session-lost":
+    "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
+  "session-limit":
+    "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
+  "start-failed":
+    "the sandbox session could not be started; the command did not run; rerun it without `session`; a start that failed is likely to fail again, so do not retry the session in a loop",
+};
+
+/**
+ * The text for a reason outside the set. A runtime is handed to a run
+ * through an interface, so what arrives as `reason` is checked and not
+ * assumed.
+ */
+const SESSION_REFUSAL_FOR_UNKNOWN_REASON =
+  "the sandbox runtime refused the `session` of this call; the command did not run; rerun it without `session`";
+
+const sessionRefusalForReason = (reason: unknown): string =>
+  typeof reason === "string" && Object.hasOwn(SESSION_REFUSAL_BY_REASON, reason)
+    ? SESSION_REFUSAL_BY_REASON[reason as SandboxSessionUnavailableReason]
+    : SESSION_REFUSAL_FOR_UNKNOWN_REASON;
+
 export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
   descriptor: bashToolDescriptor,
   descriptorForRuntime: bashToolDescriptorForRuntime,
@@ -237,7 +281,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         return sessionRefusal(
           outputId,
           context.currentDir,
-          "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`",
+          INVALID_SESSION_NAME_REFUSAL,
         );
       }
     }
@@ -290,8 +334,12 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
       if (error instanceof SandboxSessionUnavailableError) {
         // The runtime has sessions but not for this call (an enforcing
         // mode, a session that ended, too many sessions): recoverable, and
-        // the message tells the model which.
-        //
+        // the model is told which in this file's words, selected by the
+        // error's reason. The runtime's message goes to the operator's log
+        // and nowhere the model reads.
+        console.error(
+          debugStr`cf-harness: bash: the sandbox runtime refused a session, reason $quote${error.reason}: $quote,xlong${error.message}`,
+        );
         // This refusal is the runtime's, so it arrives after the invocation
         // record above was made, and the record stays. It says the call was
         // prepared and handed to the runtime, which is what happened, and
@@ -302,9 +350,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         return sessionRefusal(
           outputId,
           context.currentDir,
-          // The runtime's message says what to do next: for a lost session
-          // that is naming it again, not dropping it.
-          error.message,
+          sessionRefusalForReason(error.reason),
         );
       }
       // Anything else from runShell — docker spawn/infra, CFC transport — is not

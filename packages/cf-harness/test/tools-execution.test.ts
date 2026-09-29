@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
 
@@ -56,6 +57,7 @@ import type {
 import {
   SANDBOX_SESSION_NAME_PATTERN,
   SandboxSessionUnavailableError,
+  type SandboxSessionUnavailableReason,
 } from "../src/sandbox/types.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
@@ -3605,18 +3607,74 @@ Deno.test("bash tool refuses a session on a runtime without sessions, recoverabl
   assertEquals(context.currentDir, "/workspace");
 });
 
-Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
-  class RefusingSessions extends FakeSandboxRuntime {
-    override describe(): SandboxRuntimeDescription {
-      return { ...super.describe(), sessions: true };
-    }
-    override runShell(): Promise<SandboxCommandResult> {
-      return Promise.reject(
-        new SandboxSessionUnavailableError("sessions need observe mode here"),
-      );
-    }
+/**
+ * A runtime with sessions whose every shell call is refused with `refusal`.
+ */
+class RefusingSessionsRuntime extends FakeSandboxRuntime {
+  constructor(readonly refusal: SandboxSessionUnavailableError) {
+    super();
   }
-  const context = createContext(new RefusingSessions());
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+  override runShell(): Promise<SandboxCommandResult> {
+    return Promise.reject(this.refusal);
+  }
+}
+
+/**
+ * A message of the kind a runtime writes for its operator: a host path, a
+ * container id and what `runsc` wrote to stderr, all in one.
+ */
+const RUNTIME_REFUSAL_MESSAGE =
+  'sandbox session "build" could not start: open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container; run without a session, or try again';
+
+/** What must not reach the model out of {@link RUNTIME_REFUSAL_MESSAGE}. */
+const RUNTIME_REFUSAL_LEAKS = [
+  "/Users/operator",
+  "s-run-1-0a1b2c3d-0001",
+  "runsc",
+  "FATAL",
+  "permission denied",
+  '"build"',
+];
+
+/** The text the bash tool shows the model for each reason, written out. */
+const SESSION_REFUSAL_TEXTS: Array<
+  [SandboxSessionUnavailableReason, string]
+> = [
+  [
+    "invalid-name",
+    "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`",
+  ],
+  [
+    "enforcing-mode",
+    "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
+  ],
+  [
+    "session-lost",
+    "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
+  ],
+  [
+    "session-limit",
+    "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
+  ],
+  [
+    "start-failed",
+    "the sandbox session could not be started; the command did not run; rerun it without `session`; a start that failed is likely to fail again, so do not retry the session in a loop",
+  ],
+];
+
+Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
   const contexts = countInvocationContexts(context);
   const output = await bashTool.invoke(context, {
     command: "echo hi",
@@ -3624,16 +3682,91 @@ Deno.test("bash tool turns the runtime's session refusal into a recoverable resu
     session: "build",
   });
   assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
-  assertStringIncludes(
-    String(output.stderr),
-    "sessions need observe mode here",
-  );
+  assertEquals(output.stdout, "");
+  assertStringIncludes(output.stderr, "could not be started");
   // The call was handed to the runtime, so the run holds the record it was
   // prepared with. Nothing ran, so the working directory is the one the run
   // had and not the one the call asked for.
   assertEquals(contexts.created, 1);
   assertEquals(output.cwd, "/workspace");
   assertEquals(context.currentDir, "/workspace");
+  assertEquals(logged.calls.length, 1);
+});
+
+Deno.test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
+  using _logged = stub(console, "error");
+  for (const [reason, text] of SESSION_REFUSAL_TEXTS) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(RUNTIME_REFUSAL_MESSAGE, reason),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, reason);
+    assertEquals(output.stderr, text, reason);
+    for (const leak of RUNTIME_REFUSAL_LEAKS) {
+      assertEquals(output.stderr.includes(leak), false, `${reason}: ${leak}`);
+    }
+  }
+  // Every reason is covered, and no two read the same to the model.
+  assertEquals(
+    new Set(SESSION_REFUSAL_TEXTS.map(([, text]) => text)).size,
+    SESSION_REFUSAL_TEXTS.length,
+  );
+});
+
+Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
+  using _logged = stub(console, "error");
+  // A runtime is injected, and tests run unchecked: a reason outside the
+  // set, or none, can arrive whatever the type says.
+  for (const reason of [undefined, "out-of-memory", "toString"]) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(
+          RUNTIME_REFUSAL_MESSAGE,
+          reason as SandboxSessionUnavailableReason,
+        ),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(
+      output.exitCode,
+      BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+      String(reason),
+    );
+    assertEquals(
+      output.stderr,
+      "the sandbox runtime refused the `session` of this call; the command did not run; rerun it without `session`",
+      String(reason),
+    );
+  }
+});
+
+Deno.test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  const line = logged.calls[0].args.join(" ");
+  assertStringIncludes(line, "start-failed");
+  // The log renders the message quoted, so its parts are what is looked for.
+  assertStringIncludes(
+    line,
+    "open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container",
+  );
 });
 
 class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {

@@ -1006,6 +1006,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         `invalid sandbox session name ${
           JSON.stringify(session)
         }: use 1 to 32 letters, digits, '_', '.' or '-', starting with a letter or digit`,
+        "invalid-name",
       );
     }
     const lost = this.#lostSessions.get(session);
@@ -1015,6 +1016,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       this.#lostSessions.delete(session);
       throw new SandboxSessionUnavailableError(
         `sandbox session "${session}" ended (${lost}) and its state is lost; name it again to start an empty session`,
+        "session-lost",
       );
     }
     const existing = this.#sessions.get(session);
@@ -1027,6 +1029,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         `this run already holds ${RUNSC_MAX_SESSIONS} sandbox sessions (${
           [...this.#sessions.keys()].join(", ")
         }); reuse one of them, or run without a session`,
+        "session-limit",
       );
     }
     const state: SessionState = {
@@ -1099,6 +1102,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         `sandbox session "${session}" could not start: ${
           error instanceof Error ? error.message : String(error)
         }; run without a session, or try again`,
+        "start-failed",
       );
     });
     // Awaited by every caller; marked handled so a session nobody awaits
@@ -1121,6 +1125,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       // the call's output, so an enforcing run gets no session at all.
       throw new SandboxSessionUnavailableError(
         `sandbox sessions are not available under cfc enforcement mode '${mode}': a session's CFC result cannot vouch for everything that reaches its output; run this command without a session`,
+        "enforcing-mode",
       );
     }
     const cwd = this.#cwd(request.cwd);
@@ -1133,6 +1138,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await this.#dropSession(state);
       throw new SandboxSessionUnavailableError(
         `sandbox session "${session}" ended (its container exited) and its state is lost; name it again to start an empty session`,
+        "session-lost",
       );
     }
     // Per call, the same transport a fresh container gets: the context on
@@ -1213,6 +1219,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         if (neverRan) {
           throw new SandboxSessionUnavailableError(
             `sandbox session "${session}" ended (its container exited) and its state is lost; name it again to start an empty session`,
+            "session-lost",
           );
         }
       }

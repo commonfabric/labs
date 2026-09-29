@@ -187,15 +187,40 @@ export interface SandboxCommandResult {
 }
 
 /**
- * A tool call named a sandbox session the runtime cannot honour right now:
- * the runtime has no sessions, or the run's enforcement mode forbids them.
- * Recoverable: the bash tool turns it into a result the model can act on
- * (drop the session), rather than a run-fatal error.
+ * Why a runtime refused a sandbox session, as a closed set. What a model
+ * should do next differs by reason, so a caller that tells a model about the
+ * refusal selects its text by this and never by reading the message.
+ *
+ * - `invalid-name`: the name is not a session name.
+ * - `enforcing-mode`: the run's CFC enforcement mode allows no session.
+ * - `session-lost`: the session ended and what it held is gone. Naming it
+ *   again starts an empty one.
+ * - `session-limit`: the run holds as many sessions as it may.
+ * - `start-failed`: the session's sandbox did not start.
+ */
+export type SandboxSessionUnavailableReason =
+  | "invalid-name"
+  | "enforcing-mode"
+  | "session-lost"
+  | "session-limit"
+  | "start-failed";
+
+/**
+ * A tool call named a sandbox session the runtime cannot honor right now.
+ * Recoverable: the bash tool turns it into a result the model can act on,
+ * rather than a run-fatal error.
+ *
+ * `message` is written for an operator. It can carry host paths, container
+ * ids and the text of an underlying runtime error, so it is not shown to a
+ * model; `reason` is what a model-facing caller goes by.
  */
 export class SandboxSessionUnavailableError extends Error {
-  constructor(message: string) {
+  readonly reason: SandboxSessionUnavailableReason;
+
+  constructor(message: string, reason: SandboxSessionUnavailableReason) {
     super(message);
     this.name = "SandboxSessionUnavailableError";
+    this.reason = reason;
   }
 }
 
