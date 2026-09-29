@@ -291,6 +291,7 @@ const uiContractsFromSchemaInternal = (
   path: string[],
   seenRefs: Set<string>,
   conditional = false,
+  includeAlternatives = false,
 ): UiContractEntry[] => {
   const branchRefs = new Set(seenRefs);
   const resolvedSchema = followSchemaRef(schema, root, branchRefs);
@@ -306,6 +307,7 @@ const uiContractsFromSchemaInternal = (
       path,
       seenRefsBelow(branchRefs, root, resolvedRoot),
       conditional,
+      includeAlternatives,
     );
   }
   if (!isObjectOrArray(resolvedSchema)) {
@@ -329,6 +331,27 @@ const uiContractsFromSchemaInternal = (
         conditional,
       ),
     );
+  }
+  if (
+    includeAlternatives && isObjectOrArray(resolvedSchema.ifc) &&
+    Array.isArray(resolvedSchema.ifc.writePolicyAnyOf)
+  ) {
+    for (const policy of resolvedSchema.ifc.writePolicyAnyOf) {
+      const alternative = isObjectOrArray(policy)
+        ? uiContractFromSchemaInternal({ ifc: policy }, childRoot, new Set())
+        : undefined;
+      if (alternative !== undefined) {
+        entries.push(
+          uiContractEntry(
+            [...path],
+            alternative,
+            resolvedSchema,
+            childRoot,
+            conditional,
+          ),
+        );
+      }
+    }
   }
 
   const hasProperties = isObjectOrArray(resolvedSchema.properties);
@@ -358,6 +381,8 @@ const uiContractsFromSchemaInternal = (
           definition as JSONSchema,
           [],
           new Set(),
+          false,
+          includeAlternatives,
         )
       )
       .map((entry) => entry.contract);
@@ -383,6 +408,7 @@ const uiContractsFromSchemaInternal = (
           [...path, key],
           seenRefs,
           conditional,
+          includeAlternatives,
         ),
       );
     }
@@ -407,6 +433,7 @@ const uiContractsFromSchemaInternal = (
         path,
         seenRefs,
         childConditional,
+        includeAlternatives,
       ),
     );
   }
@@ -428,6 +455,7 @@ const uiContractsFromSchemaInternal = (
         [...path, "*"],
         seenRefs,
         conditional,
+        includeAlternatives,
       ),
     );
   }
@@ -441,6 +469,7 @@ const uiContractsFromSchemaInternal = (
           [...path, String(index)],
           seenRefs,
           conditional,
+          includeAlternatives,
         ),
       );
     }
@@ -453,6 +482,17 @@ export const uiContractsFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContractEntry[] =>
   uiContractsFromSchemaInternal(schema, schema, [], new Set());
+
+/**
+ * Like {@link uiContractsFromSchema}, except that it also returns the contract
+ * of each `writePolicyAnyOf` alternative. A trusted event matching any of them
+ * is evidence for the write: which alternative, if any, admits the write is
+ * decided at commit.
+ */
+const uiContractCandidatesFromSchema = (
+  schema: JSONSchema | undefined,
+): UiContractEntry[] =>
+  uiContractsFromSchemaInternal(schema, schema, [], new Set(), false, true);
 
 export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
@@ -623,7 +663,7 @@ const storedContractsAroundWrite = (
   write: NormalizedFullLink,
   storedSchemaFor: StoredSchemaResolver,
 ): UiContractEntry[] =>
-  uiContractsFromSchema(storedSchemaFor(write)).filter((entry) =>
+  uiContractCandidatesFromSchema(storedSchemaFor(write)).filter((entry) =>
     !pathPatternMatches(entry.path, write.path) &&
     pathsOverlap(entry.path, write.path)
   );
@@ -646,7 +686,7 @@ const contractCandidatesForWrite = (
 ): UiContract[] => {
   const contracts: UiContract[] = [];
   if (write.schema !== undefined) {
-    for (const entry of uiContractsFromSchema(write.schema)) {
+    for (const entry of uiContractCandidatesFromSchema(write.schema)) {
       if (
         pathsEqual(entry.path, []) || pathPatternMatches(entry.path, write.path)
       ) {
@@ -658,7 +698,7 @@ const contractCandidatesForWrite = (
   // whose own schema declares a label without restating the contract, and
   // the commit boundary verifies the write against it. Matching the event
   // here is what records the evidence that check looks for.
-  for (const entry of uiContractsFromSchema(storedSchemaFor(write))) {
+  for (const entry of uiContractCandidatesFromSchema(storedSchemaFor(write))) {
     if (pathPatternMatches(entry.path, write.path)) {
       contracts.push(entry.contract);
     }
@@ -670,7 +710,7 @@ const contractCandidatesForWrite = (
       sameDocument(input.target, write) &&
       pathHasPrefix(write.path, input.target.path)
     ) {
-      for (const entry of uiContractsFromSchema(input.schema)) {
+      for (const entry of uiContractCandidatesFromSchema(input.schema)) {
         if (
           pathPatternMatches([...input.target.path, ...entry.path], write.path)
         ) {
@@ -794,7 +834,7 @@ const contractCandidatesFromEventContext = (
       ) {
         continue;
       }
-      for (const entry of uiContractsFromSchema(link.schema)) {
+      for (const entry of uiContractCandidatesFromSchema(link.schema)) {
         if (pathPatternMatches([...link.path, ...entry.path], write.path)) {
           contracts.push(entry.contract);
         }

@@ -46,6 +46,7 @@ const IFC_KEYS = [
   "maxConfidentiality",
   "ownerPrincipal",
   "writeAuthorizedBy",
+  "writePolicyAnyOf",
   "exactCopyOf",
   "projection",
   "collection",
@@ -312,6 +313,8 @@ const mergeSetLikeIfcArray = (
       }
       return mergeArraySet(candidateArray);
     }
+    case "writePolicyAnyOf":
+      return mergeWritePolicyAnyOf(existing, candidate, path, adoptsStamp);
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -329,6 +332,49 @@ const mergeSetLikeIfcArray = (
     default:
       return candidate;
   }
+};
+
+/**
+ * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
+ * lists. The alternatives stay as stored — the same ones, in the same order,
+ * each with the same contract — so a later schema can neither admit a writer
+ * nor drop one. Each alternative's writer claim reconciles as a lone
+ * `writeAuthorizedBy` does, which is how an alternative gains its stamp.
+ */
+const mergeWritePolicyAnyOf = (
+  existing: unknown,
+  candidate: unknown,
+  path: string,
+  adoptsStamp?: (claim: unknown) => boolean,
+): unknown => {
+  const unstable = () =>
+    new Error(`writePolicyAnyOf must remain stable at ${path || "/"}`);
+  if (
+    !Array.isArray(existing) || !Array.isArray(candidate) ||
+    existing.length !== candidate.length
+  ) {
+    throw unstable();
+  }
+  return existing.map((policy, index) => {
+    const other = candidate[index];
+    if (
+      !isObjectNotArray(policy) || !isObjectNotArray(other) ||
+      !deepEqual(Object.keys(policy).sort(), Object.keys(other).sort()) ||
+      !deepEqual(policy.uiContract, other.uiContract)
+    ) {
+      throw unstable();
+    }
+    if (deepEqual(policy.writeAuthorizedBy, other.writeAuthorizedBy)) {
+      return policy;
+    }
+    const writer = reconcileWriterClaimStamp(
+      policy.writeAuthorizedBy,
+      other.writeAuthorizedBy,
+      adoptsStamp,
+    );
+    if (writer === undefined) throw unstable();
+    return { ...policy, writeAuthorizedBy: writer };
+  });
 };
 
 const mergeIfc = (

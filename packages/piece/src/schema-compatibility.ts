@@ -361,9 +361,15 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * authorization evidence, which `comparableIfc` keeps.
  *
  * `writerIdentity` is the write authorization, compared except for the parts of
- * its claim that move without the authorization moving.
+ * its claim that move without the authorization moving. `writerAlternatives`
+ * is a list of such authorizations, each with the contract beside it, and each
+ * claim in it is compared the same way.
  */
-type IfcKeyRole = "declared" | "derived" | "writerIdentity";
+type IfcKeyRole =
+  | "declared"
+  | "derived"
+  | "writerIdentity"
+  | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -384,6 +390,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "writerIdentity",
+  writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
   // `AuthoredByCurrentUser` spellings that expand to it. It names atoms the
@@ -496,7 +503,10 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (role === "derived" || role === "writerIdentity") {
+    if (
+      role === "derived" || role === "writerIdentity" ||
+      role === "writerAlternatives"
+    ) {
       handled = true;
       break;
     }
@@ -524,6 +534,22 @@ const comparableIfc = (ifc: unknown): unknown => {
     if (role === "writerIdentity") {
       const normalized = writerClaimWithoutVolatileIdentity(value);
       if (normalized !== value) changed = true;
+      keep(kept, key, normalized);
+      continue;
+    }
+    if (role === "writerAlternatives" && Array.isArray(value)) {
+      const normalized = value.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const writer = writerClaimWithoutVolatileIdentity(
+          policy.writeAuthorizedBy,
+        );
+        return writer === policy.writeAuthorizedBy
+          ? policy
+          : { ...policy, writeAuthorizedBy: writer };
+      });
+      if (normalized.some((policy, index) => policy !== value[index])) {
+        changed = true;
+      }
       keep(kept, key, normalized);
       continue;
     }

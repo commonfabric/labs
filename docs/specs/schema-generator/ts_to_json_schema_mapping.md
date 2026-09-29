@@ -910,6 +910,7 @@ inside those payloads.
 | `WriteAuthorizedBy<T, typeof b>` | `{ writeAuthorizedBy: { __ctWriterIdentityOf: { file, path: [binding], moduleIdentity? } } }` |
 | `TrustedActionWriteWithIntegrity<…>` | writeAuthorizedBy metadata + `uiContract { helper: "UiAction", action, trustedPattern, requiredEventIntegrity }` |
 | `TrustedActionWrite<…>` | same, with `requiredEventIntegrity` defaulting to `[trustedPattern]` |
+| `WritePolicyAnyOf<T, [P, …]>` | `{ writePolicyAnyOf: [p, …] }`, each `p` the lowering of one member `P` — a `WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` over `unknown`, directly or through a user alias. The tuple must be written in place and nonempty, and each member must lower to a writer; otherwise generation throws |
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
@@ -1237,9 +1238,9 @@ helpers part of the supported authoring surface.
 The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
 (`packages/api/index.ts`): `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
-`ownerPrincipal` and `observes` have no direct producing alias in this package
-as of this writing.
+`writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
+`observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
+producing alias in this package as of this writing.
 
 ## 12. Doc Comments → `description` / `tags` / `$comment`
 

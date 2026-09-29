@@ -244,8 +244,9 @@ onSchemaRegistryClear(() => {
 });
 
 /**
- * Reports whether a `writeAuthorizedBy` claim in `schema`, rooted at
- * `basePath`, covers `targetPath` for every value that can land there. The
+ * Reports whether a writer claim in `schema` — a `writeAuthorizedBy` or a
+ * `writePolicyAnyOf` — rooted at `basePath`, covers `targetPath` for every
+ * value that can land there. The
  * claims are those {@link cfcSchemaEntries} finds, references resolved. A claim
  * inside an `anyOf` or `oneOf` branch is not counted, because it holds only
  * for the values that branch matches; a location protected only by such a
@@ -265,7 +266,8 @@ export const writeAuthorizationCoversPath = (
       .filter((entry) =>
         entry.conditional !== true &&
         isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
-        entry.schema.ifc.writeAuthorizedBy !== undefined
+        (entry.schema.ifc.writeAuthorizedBy !== undefined ||
+          entry.schema.ifc.writePolicyAnyOf !== undefined)
       )
       .map((entry) => entry.path);
     if (

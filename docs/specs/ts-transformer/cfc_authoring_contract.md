@@ -85,6 +85,7 @@ Canonical alias set:
 - `AnyOf`
 - `PolicyOf`
 - `WriteAuthorizedBy`
+- `WritePolicyAnyOf`
 - `TrustedActionWriteWithIntegrity`
 - `TrustedActionWrite`
 - `TrustedActionUiContract`
@@ -241,6 +242,34 @@ One valid marker shape is:
 identities and for aged stored claims. The marker is an implementation detail,
 but the implementation still needs an equivalent cross-stage identity channel.
 
+### `WritePolicyAnyOf<T, [P, …]>`
+
+`WritePolicyAnyOf` admits a write through any one of several complete writer
+policies, for a record that more than one handler writes. Each member `P` is a
+`WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity`
+over `unknown`, written directly or through a user alias.
+
+Normative behavior:
+
+1. It lowers to `ifc.writePolicyAnyOf`, a list holding, for each member in
+   order, the `writeAuthorizedBy` and any `uiContract` that member lowers to on
+   its own. Each member's binding follows every rule above for
+   `WriteAuthorizedBy`, and `WriteAuthorizedByValidationTransformer` reports a
+   member's binding exactly as it reports a lone one's.
+2. The tuple must be written in place, nonempty. A tuple named through an
+   alias, an empty one, a member that is not a writer policy, and a member
+   whose writer does not lower each fail compilation.
+3. The runtime admits a write when one member admits it whole: its writer
+   wrote, and a trusted event matching its contract, if it names one, was
+   recorded for the write. Writer and gesture are of the same member, so one
+   member's gesture never admits another's writer.
+4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
+   `writeAuthorizedBy` or `uiContract`, and refuses a later schema that adds,
+   drops, reorders, or changes a stored member. Each member's claim is stamped
+   by its own writer's first write, as a lone claim is.
+5. An `AuthoredByCurrentUser` label beside it requires every member to name a
+   contract, so every write the position admits carries a reviewed gesture.
+
 ## Pipeline Contract
 
 The CFC authoring path is not owned by one transformer. The relevant stage
@@ -309,6 +338,9 @@ Required failure modes:
 
 - `WriteAuthorizedBy` only supports bindings the checker resolves to a
   declaration in an authored module; dynamic lookup is rejected.
+- `WritePolicyAnyOf` takes its members as a tuple written in place, and has no
+  form beside an `ownerPrincipal`, which still requires a lone
+  `writeAuthorizedBy`.
 - Exchange-rule declarations use a closed static expression grammar and must be
   module-level exports.
 - `PolicyOf` supports local, direct imported, and pinned `cf:` bindings; general
@@ -327,3 +359,5 @@ coverage exists:
 
 - `packages/ts-transformers/test/cfc-authoring.test.ts`
 - `packages/schema-generator/test/schema/cfc-authoring.test.ts`
+- `packages/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `packages/runner/test/cfc-write-policy-any-of.test.ts`
