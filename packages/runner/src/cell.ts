@@ -363,6 +363,54 @@ export const recordRelevantSchemaWritePolicyInput = (
 };
 
 /**
+ * The schema write-policy input for a write landing at an item of an array:
+ * the array itself, with the item's schema as its `items`. A candidate
+ * envelope spells each segment of an input's path as a named property, and
+ * the stored envelope spells the array as an array, so an input recorded at
+ * the index alone could never merge with it. `undefined` where the slot is
+ * not an item of an array — a numeric key of an object stays a property, and
+ * a parent this transaction cannot read decides nothing — or where the
+ * writer holds no schema for it. The item's own definitions move to the
+ * array's root, where the envelope's references to them point.
+ */
+const arrayItemPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+): { link: NormalizedFullLink; schema: JSONSchema } | undefined => {
+  const index = link.path[link.path.length - 1];
+  if (
+    !isObjectOrArray(schema) || index === undefined ||
+    !/^(0|[1-9][0-9]*)$/.test(index)
+  ) {
+    return undefined;
+  }
+  const parent: NormalizedFullLink = {
+    ...link,
+    path: link.path.slice(0, -1),
+    schema: undefined,
+  };
+  let held: unknown;
+  try {
+    held = tx.readValueOrThrow(parent, {
+      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    });
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(held)) return undefined;
+  const { $defs, ...items } = schema;
+  return {
+    link: parent,
+    schema: {
+      type: "array",
+      items,
+      ...($defs !== undefined ? { $defs } : {}),
+    } as JSONSchema,
+  };
+};
+
+/**
  * Internal-only stream-send options.
  *
  * `eventId` is a caller-supplied durable event id (verb contract WS-D): a
@@ -2361,10 +2409,20 @@ export class CellImpl<T extends FabricValue>
       // the second seal, and refused the seal's commit as an incompatible
       // migration. The schema is the slot's own where the resolution left
       // it none (a redirect carries its target's).
-      recordRelevantSchemaWritePolicyInput(
+      //
+      // A slot that is an item of an array is recorded as the array with the
+      // item's schema as its `items`: a candidate envelope spells a path
+      // segment as a named property, and the stored schema spells the array
+      // as one, so an input at the index alone could never merge with it.
+      const policyInput = arrayItemPolicyInput(
         this.tx,
         writeLink,
         writeLink.schema ?? this.schema,
+      );
+      recordRelevantSchemaWritePolicyInput(
+        this.tx,
+        policyInput?.link ?? writeLink,
+        policyInput?.schema ?? writeLink.schema ?? this.schema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj
