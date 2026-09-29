@@ -21,8 +21,10 @@ import {
 import {
   type CfcGrantCandidate,
   cfcGrantCandidateOf,
+  cfcGrantDocId,
   type CfcGrantWriteInput,
   createRuntimeCfcGrantSource,
+  verifyCfcGrantDocument,
 } from "../src/cfc/grants.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { atomsOutsideCeiling } from "../src/cfc/observation.ts";
@@ -1374,6 +1376,92 @@ describe("CFC render resolver — grants at the display boundary", () => {
         await writeGrant(runtime);
         const other = shareRefFor("did:key:z6MkAnotherOwnerOfAnAnswer");
         expect(resolveAsViewer(runtime, { label: [other] })).toEqual([other]);
+      });
+    });
+
+    it("keeps the clause sealed under a rule that binds the grant's `space` to a DID other than the owner's, whatever that space holds", async () => {
+      // A grant lives in its owner's identity space, so a rule binding
+      // `space` elsewhere names no document. The record planted here sits
+      // in that other space at the address such a rule would otherwise
+      // name, and verifies against it, so the addressing is the only thing
+      // refusing it.
+      const ELSEWHERE = "did:key:z6MkASpaceThatIsNotTheOwners";
+      const elsewhereManifest = buildCfcPolicyArtifactManifest({
+        formatVersion: 1,
+        moduleIdentity: "sha256:share-grant-elsewhere-module",
+        symbol: "shareGrantElsewhereRules",
+        template: {
+          templateVersion: 1,
+          exchangeRules: [{
+            name: "releaseToGranteeElsewhere",
+            preCondition: {
+              confidentiality: [{ thisPolicy: true }],
+              integrity: [],
+            },
+            guard: {
+              policyState: [{
+                kind: "ShareGrant",
+                space: ELSEWHERE,
+                owner: { thisPolicyField: "subject" },
+                resource: ANSWER,
+                audience: {
+                  type: CFC_ATOM_TYPE.User,
+                  subject: { var: "$grantee" },
+                },
+              }],
+            },
+            postCondition: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { var: "$grantee" },
+              }],
+              integrity: [],
+            },
+          }],
+          dependencies: { authorityOnly: [], dataBearing: [] },
+          integrityRequirements: {},
+        },
+      });
+      const elsewhereRef = cfcAtom.modulePolicyRef(
+        elsewhereManifest.manifest.moduleIdentity,
+        elsewhereManifest.manifest.symbol,
+        elsewhereManifest.policyDigest,
+        OWNER,
+      );
+      const planted = {
+        version: 1,
+        space: ELSEWHERE,
+        kind: "ShareGrant",
+        owner: OWNER,
+        resource: ANSWER,
+        audience: [userViewer],
+        grantedAt: 1000,
+      };
+      const plantedId = cfcGrantDocId({
+        space: ELSEWHERE,
+        kind: "ShareGrant",
+        owner: OWNER,
+        resource: ANSWER,
+      });
+      expect(
+        verifyCfcGrantDocument(ELSEWHERE, plantedId, planted as never),
+      ).toBeDefined();
+      await withGrantRuntime(async (runtime) => {
+        const tx = runtime.storageManager.edit();
+        tx.write({
+          space: ELSEWHERE as never,
+          id: plantedId,
+          type: "application/json",
+          path: ["value"],
+        }, planted as never);
+        expect((await tx.commit()).error).toBeUndefined();
+        await runtime.idle();
+        const resolved = createRenderConfidentialityResolver({
+          actingPrincipal: VIEWER,
+          modulePolicyResolver: () => elsewhereManifest,
+          grantResolver: createRuntimeCfcGrantSource(runtime).resolve,
+        })({ confidentiality: [elsewhereRef] });
+        expect(resolved).toEqual([elsewhereRef]);
       });
     });
 
