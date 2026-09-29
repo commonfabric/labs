@@ -138,6 +138,13 @@ const trustedClick = () => {
  * unreadable as terms, so the room's own guard reads them as unwritten too,
  * and the room shows the one-seat room's answer. The case asserts that, so it
  * fails, visibly, when the runtime closes the gap.
+ *
+ * `result` is a known residual too. The member's code, which is not
+ * `propose`, writes a link to the one-seat room's terms over the room's
+ * result document's `terms`, where the host and the component find them. No
+ * writer claim covers the result document, so the write commits, and the room
+ * shows the one-seat room's answer while its argument document still holds
+ * the terms its members sealed under. The case asserts that too.
  */
 type Repoint =
   | "propose"
@@ -147,7 +154,8 @@ type Repoint =
   | "clear"
   | "policy"
   | "early"
-  | "copy";
+  | "copy"
+  | "result";
 
 /**
  * Two members seal their stances into a room of `file`, and a reader of the
@@ -601,16 +609,40 @@ const sealAndRelease = async (
           proposeAlone();
           break;
         }
+        case "result": {
+          // A link to the one-seat room's terms written over the room's
+          // result document's `terms`, in place of the link there now: a
+          // write through that link would land in the argument document,
+          // where the claim refuses it.
+          const { schema: _schema, ...link } = room.getAsNormalizedFullLink();
+          const loneTerms = lone.key("terms").resolveAsCell()
+            .getAsWriteRedirectLink();
+          expect(
+            (await asMember((tx) =>
+              tx.writeValueOrThrow(
+                { ...link, path: [...link.path, "terms"] },
+                loneTerms as never,
+              )
+            )).error,
+          ).toBeUndefined();
+          break;
+        }
       }
       await host.idle();
       await host.storageManager.synced();
-      if (repoint === "copy") {
+      if (repoint === "copy" || repoint === "result") {
         // Known residual: the room shows the one-seat room's answer, under
         // terms that seat the member alone.
         expect(await readCustodyAnswer(hostRoom)).toBe("sushi");
         expect(
           (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
         ).toHaveLength(1);
+        // The link in the result document leaves the argument document
+        // holding the terms the room's members sealed under.
+        const argumentSeats = (argument.getRaw() as
+          | { terms?: { seats?: unknown[] } }
+          | undefined)?.terms?.seats;
+        if (repoint === "result") expect(argumentSeats).toHaveLength(2);
         return;
       }
       // What the room shows is still the answer its members sealed: not the
@@ -753,6 +785,10 @@ describe("sealed custody through a pattern", () => {
 
   it("known residual: shows the one-seat room's answer once a member's own instance of the room, bound beneath its terms, runs `propose`", async () => {
     await sealAndRelease(ANSWER_ROOM, "copy");
+  });
+
+  it("known residual: shows the one-seat room's answer once a member's code writes a link to its terms into the room's result document", async () => {
+    await sealAndRelease(ANSWER_ROOM, "result");
   });
 
   it("stores the room's writer claims from its creation, and refuses a member's terms and policy written before `propose`", async () => {
