@@ -55,10 +55,10 @@ client that can't learn it MUST treat the container as admitting others.
     each read through the link. They're empty unless `state` is `"member"`.
 
 A placement offers no stream that sends or reacts. A client sends to the room's
-own `sendMessage` and `react` streams, reached through `room`. If a placement
-relayed a send, the reviewed surface would be the placement's, in another space,
-and the room's write policy would have to trust it. Leaving the placement out of
-the write path keeps the room's policy about the room alone.
+own `sendMessage` and `sendReaction` streams, reached through `room`. If a
+placement relayed a send, the reviewed surface would be the placement's, in
+another space, and the room's write policy would have to trust it. Leaving the
+placement out of the write path keeps the room's policy about the room alone.
 
 ## Creating and removing it
 

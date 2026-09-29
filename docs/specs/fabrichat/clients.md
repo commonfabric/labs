@@ -64,7 +64,11 @@ A client that draws natively MUST:
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
-- **Use each message's entity as its id.**
+- **Use each message's entity as its id**, or its `sentAt`, which is unique in
+  its room.
+- **Show edits and deletions.** A client shows a deleted message as deleted,
+  never with text from its history, and marks a message with `editedAt` as
+  edited. Whether it shows `earlierVersions` is its choice.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
@@ -83,7 +87,10 @@ gesture on the reviewed surface its policy names:
 | Act | Pattern | Stream | Reviewed surface |
 | --- | --- | --- | --- |
 | send a message | room | `sendMessage` | `ChatSendSurface` |
-| add or remove a reaction | room | `react` | `ChatReactSurface` |
+| edit a message | room | `editMessage` | `ChatEditSurface` |
+| delete a message | room | `deleteMessage` | `ChatDeleteSurface` |
+| add a reaction | room | `sendReaction` | `ChatReactSurface` |
+| remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
 
@@ -94,8 +101,12 @@ A room refuses a bad event silently, so a client MUST check each event against
 its stream's rules before sending it: a non-empty body, a reply whose target is
 in the same room and allowed for its `shownIn`, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
-`canSend` to tell the person when they can't send at all. A client that resumes
-an interrupted `createGroup` MUST resend it with its original `requestId`, and
+`canSend` to tell the person when they can't send at all. A client proposes a
+version's `sentAt` from its own clock when the person sends or edits a message,
+keeps that proposal for every retry of the same send or edit, and never reuses
+it for another: the proposal is what makes a retry harmless, and what keeps two
+messages, or two edits, with the same text apart. A client that resumes an
+interrupted `createGroup` MUST resend it with its original `requestId`, and
 SHOULD do the same for `openDirect` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#creating-a-room-partial-states)).
 

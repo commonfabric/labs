@@ -19,6 +19,8 @@ requires of the runtime and of the programs that use it.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
+  - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
+    message.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatAbout`](ChatAbout.md)
   - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
@@ -97,9 +99,11 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
-   [`ChatReply.md`](ChatReply.md), [`ChatReaction.md`](ChatReaction.md),
-   [`ChatAbout.md`](ChatAbout.md), and [`ChatProfile.md`](ChatProfile.md), the
-   part of a person's profile the room reads.
+   [`ChatReply.md`](ChatReply.md),
+   [`ChatMessageVersion.md`](ChatMessageVersion.md),
+   [`ChatReaction.md`](ChatReaction.md), [`ChatAbout.md`](ChatAbout.md), and
+   [`ChatProfile.md`](ChatProfile.md), the part of a person's profile the room
+   reads.
 7. The record a manager holds: [`ChatIndexEntry.md`](ChatIndexEntry.md).
 8. [`clients.md`](clients.md): the requirements on a separate program that uses
    FabriChat, including one that renders natively.
@@ -141,10 +145,11 @@ provide, the document says so, under the heading "Prerequisites".
 2. **Membership is the room space's access list**, read through the space's
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
-3. **History is attested, and messages are append-only.** Messages and reactions
-   are `AuthoredByCurrentUser` and `TrustedActionWrite`, as in today's
-   FabriChat. A message is never edited or deleted, and a reaction is removed
-   only by its own reactor.
+3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
+   and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
+   edit or delete it, each change recorded as a new version, and a reaction is
+   removed only by its own reactor. Every recorded version has a time unique in
+   its room.
 4. **Each user has one manager, in their home space**, found with a well-known
    `wish` target. A user's index of conversations is private to that user.
 5. **A direct room is keyed by the other member's principal**, not by a profile.
@@ -261,7 +266,6 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
 ## Non-goals
 
 - Bridges to outside messaging networks.
-- Editing, retracting, or deleting messages.
 - Typing indicators, presence, and read receipts.
 - Notifications and push delivery.
 - Encryption beyond what a space's access list provides.

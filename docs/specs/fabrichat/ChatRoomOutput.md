@@ -14,11 +14,8 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatAbout;
 
-  /** The conversation, oldest first. */
+  /** The conversation, oldest first, each with its reactions and history. */
   messages: ChatMessage[];
-
-  /** Every reaction, in no particular order. */
-  reactions: ChatReaction[];
 
   /** Members' profiles, as claims; only until the space has a member set. */
   roster: Cell<ChatProfile>[];
@@ -26,11 +23,17 @@ interface ChatRoomOutput {
   /** `roster`, plus any author with no roster entry. */
   participants: Cell<ChatProfile>[];
 
-  /** Whether the viewer can send, react, and join right now. */
+  /** Whether the viewer can send, edit, delete, react, and join now. */
   canSend: boolean;
 
-  sendMessage: Stream<{ body: string; replyTo?: ChatReply }>;
-  react: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
+  sendMessage: Stream<{ version: ChatMessageVersion; replyTo?: ChatReply }>;
+  editMessage: Stream<{
+    message: Cell<ChatMessage>;
+    version: ChatMessageVersion;
+  }>;
+  deleteMessage: Stream<{ message: Cell<ChatMessage> }>;
+  sendReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
+  deleteReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   join: Stream<void>;
   /** Group rooms of their own only. */
   add?: Stream<{ principal: string; access: "WRITE" | "OWNER" }>;
@@ -90,25 +93,30 @@ them.
 
 - **`about`** is a [`ChatAbout`](ChatAbout.md), set once when the room is
   created.
-- **`messages`** are [`ChatMessage`](ChatMessage.md)s, oldest first, each
-  labeled `authored-by` the principal who sent it. Messages are append-only:
-  never edited or deleted.
-- **`reactions`** are [`ChatReaction`](ChatReaction.md)s, each labeled
-  `authored-by` its reactor. A reaction is removed only by its own reactor.
+- **`messages`** are [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`,
+  which is unique in the room. Each version of a message is labeled
+  `authored-by` the principal who recorded it. A message changes only through
+  `editMessage` and `deleteMessage`, which keep its earlier versions (see
+  [`ChatMessage`](ChatMessage.md#open-questions) for what they keep), and is
+  never removed from `messages`.
+- **Reactions** live on their messages, as each message's `reactions`
+  ([`ChatReaction`](ChatReaction.md)), each labeled `authored-by` its reactor. A
+  reaction is removed only by its own reactor.
 - The room stores no names or avatars. Messages, reactions, and the roster link
   people's profiles ([`ChatProfile`](ChatProfile.md)) and copy nothing from
   them.
 - **`roster`** and **`participants`** are links to profiles, compared with
   `equals()`. `participants` is `roster` plus any author without a roster entry.
   Neither is proof of access.
-- **`canSend`** says whether the viewer can send, react, and join right now:
-  their access is WRITE or OWNER, and their profile resolves. It is computed for
-  each viewer, so a READ-only member's client can tell them why their gestures
-  would be refused before they make one.
+- **`canSend`** says whether the viewer can send, edit, delete, react, and join
+  right now: their access is WRITE or OWNER, and their profile resolves. It is
+  computed for each viewer, so a READ-only member's client can tell them why
+  their gestures would be refused before they make one.
 - **`outgoingNotices`**, on group rooms of their own, holds a notice for each
   person `add` admitted, until a client reports it delivered.
-- The lists here are projections. An implementation may keep reactions and the
-  roster as keyed collections, as long as what it offers satisfies these rules.
+- The lists here are projections. An implementation may keep the roster, and
+  each message's reactions, as keyed collections, as long as what it offers
+  satisfies these rules.
 
 ## Streams
 
@@ -119,7 +127,8 @@ the room's space, so sending needs write access there, and the room acts on it
 later, possibly in another runtime.
 
 Each stream below is written as a call, with its event's keys as the parameters:
-`react(message: Cell<ChatMessage>, emoji: string)` sends `{ message, emoji }`.
+`sendReaction(message: Cell<ChatMessage>, emoji: string)` sends `{ message,
+emoji }`.
 
 No event names its sender. The room learns who sent it from the event's actor:
 the principal the memory server stamps on the appended event from its
@@ -127,11 +136,11 @@ authenticated commit, beside the payload rather than in it (`firedAt.user`, see
 [events](../server-side-execution/events.md)), or, for a handler that runs in
 the sender's own runtime, that runtime's user. Below, **the sender** is that
 principal, and **the sender's profile** is the profile
-`wish({ query: "#profile" })` resolves to for it (see
-[per-demanding-identity wish resolution](../server-side-execution/builtins.md)):
-the sender's default profile, or their most recently used one. The sender can't
-choose which, and when it resolves to none, as when they have several profiles
-and no default, the event is refused.
+`wish({ query: "#profile" })` resolves to for it (see [per-demanding-identity
+wish resolution](../server-side-execution/builtins.md)): the sender's default
+profile, or their most recently used one. The sender can't choose which, and
+when it resolves to none, as when they have several profiles and no default, the
+event is refused.
 
 These rules hold for every stream:
 
@@ -148,17 +157,26 @@ These rules hold for every stream:
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| [`sendMessage`](#sendmessagebody-string-replyto-chatreply) | `ChatSendSurface` | appends a message from the sender |
-| [`react`](#reactmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, or removes it |
+| [`sendMessage`](#sendmessageversion-chatmessageversion-replyto-chatreply) | `ChatSendSurface` | appends a message from the sender, once |
+| [`editMessage`](#editmessagemessage-cellchatmessage-version-chatmessageversion) | `ChatEditSurface` | records a new version of the sender's message, once |
+| [`deleteMessage`](#deletemessagemessage-cellchatmessage) | `ChatDeleteSurface` | records the sender's message as deleted |
+| [`sendReaction`](#sendreactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, if it isn't there |
+| [`deleteReaction`](#deletereactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | removes the sender's reaction, if it's there |
 | [`join`](#join) | none | adds the sender's profile to `roster` |
 | [`add`](#addprincipal-string-access-write--owner) | `ChatMembersSurface` | grants a principal access |
 | [`remove`](#removeprincipal-string) | `ChatMembersSurface` | revokes a principal's access |
 | [`delivered`](#deliveredid-string) | none | the notice removed from `outgoingNotices` |
 
-### `sendMessage(body: string, replyTo?: ChatReply)`
+### `sendMessage(version: ChatMessageVersion, replyTo?: ChatReply)`
 
-- `body: string` — The message's text, exactly as the person saw it when they
-  sent it. Must not be empty, or only whitespace.
+- `version: ChatMessageVersion` — The message to send, as a
+  [`ChatMessageVersion`](ChatMessageVersion.md):
+  - `version.body` is the message's text, exactly as the person saw it when they
+    sent it. It must be a string, not empty or only whitespace.
+  - `version.sentAt` is the time the sender's client proposes for the message,
+    chosen once when the person sends it and kept for every retry. It is the
+    send's idempotency token, and a hint to the room about when the message was
+    sent.
 - `replyTo?: ChatReply` — What the message replies to, and where it is shown
   (see [`ChatReply`](ChatReply.md)). Absent for a message that isn't a reply,
   which is shown in the main conversation. `replyTo.message` must be a message
@@ -168,14 +186,104 @@ These rules hold for every stream:
 Sends a message from the sender.
 
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
-- **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
-  sender's profile as `authorProfile` and the handler clock as `sentAt` (see
-  [`ChatMessage`](ChatMessage.md#fields)).
-- **Refused:** an empty or whitespace-only `body`, a `replyTo` whose `message`
-  is in another room, a `shownIn` other than `"main"`, `"thread"`, or `"both"`,
-  or a `"main"` reply to a message shown only in a thread.
+- **Effect:** if the room has already recorded a message from the sender with
+  this `version.sentAt` as its proposed time, nothing changes. Otherwise,
+  appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the sender's
+  profile as `authorProfile`, `version.body` as `body`, no `earlierVersions`,
+  and no reactions. Its `sentAt` is chosen as [recorded times](#recorded-times)
+  describes, then made unique as [unique times](ChatMessage.md#unique-times)
+  states.
+- **Refused:** a `version.body` that isn't a non-empty string, a
+  `version.sentAt` the room finds implausible (see [recorded
+  times](#recorded-times)), a `replyTo` whose `message` is in another room, a
+  `shownIn` other than `"main"`, `"thread"`, or `"both"`, or a `"main"` reply to
+  a message shown only in a thread.
 
-### `react(message: Cell<ChatMessage>, emoji: string)`
+Sending the same `version` twice has the same effect as sending it once, so a
+client that can't tell whether a send arrived can safely send it again. Two
+messages with the same text are two sends with two proposed times, so sending
+"YES!" three times makes three messages.
+
+#### Recorded times
+
+A room decides the time it records for a send (`sentAt`) or an edit (`editedAt`)
+from the sender's proposed time and its own handler clock, by a policy it
+documents:
+
+- A proposal the room finds plausible, close enough to its handler clock, MAY be
+  recorded as the time. The room MAY adjust it first, for example to coarsen it
+  to the system's clock resolution.
+- A proposal the room doesn't accept, the room MAY replace with its handler
+  clock.
+- A proposal so far out of range that the event is likely a very stale retry, or
+  a forgery, the room MAY refuse, silently, like any refusal.
+
+Whatever the proposal, a room MUST NOT record a time later than its own current
+time, meaning its handler clock's reading when it makes the record. It MAY
+accept a send or edit whose proposal is in the future, if the proposal is
+plausibly close, but it then records a time no later than the current time.
+
+The only thing that can carry a recorded time past the current time is the
+milliseconds added to make it unique (see
+[unique times](ChatMessage.md#unique-times)), and those never carry it past the
+end of the current clock tick. A handler clock reading stands for a whole tick
+of the system's clock resolution, so a reading of `t` with a resolution of `r`
+milliseconds covers `t` through `t + r - 1`, and a bumped time stays within that
+range.
+
+Accepting a sender's time lets a sender place a message earlier than it arrived,
+within the room's window of plausibility, but never later than it arrived. That
+is the cost of the window, and why the window is the room's to set.
+
+### `editMessage(message: Cell<ChatMessage>, version: ChatMessageVersion)`
+
+- `message: Cell<ChatMessage>` — The message to edit. Must be a message in this
+  room, sent by the sender, and not deleted.
+- `version: ChatMessageVersion` — The new version, as a
+  [`ChatMessageVersion`](ChatMessageVersion.md):
+  - `version.body` is the new text, exactly as the person saw it when they
+    edited it. It must be a string, not empty or only whitespace.
+  - `version.sentAt` is the time the sender's client proposes for the edit,
+    chosen once when the person makes it and kept for every retry. It is the
+    edit's idempotency token, and a hint to the room, as for `sendMessage`.
+
+Records a new version of one of the sender's messages.
+
+- **Admitted:** as a trusted gesture on `ChatEditSurface`, and only from the
+  message's sender (see [`ChatMessage`](ChatMessage.md#open-questions)).
+- **Effect:** if the room has already recorded an edit of this message from the
+  sender with this `version.sentAt` as its proposed time, nothing changes.
+  Otherwise, makes `version.body` the message's current version. Its `editedAt`
+  is chosen as [recorded times](#recorded-times) describes, then made unique as
+  [unique times](ChatMessage.md#unique-times) states. The version it replaces
+  goes to `earlierVersions`, as far as the room's policy on history keeps it.
+  `authorProfile`, `sentAt`, `replyTo`, and the reactions don't change.
+- **Refused:** a `message` in another room, sent by someone else, or deleted, a
+  `version.body` that isn't a non-empty string, or a `version.sentAt` the room
+  finds implausible.
+
+Sending the same edit twice has the same effect as sending it once. Two edits
+with the same text are two edits with two proposed times, so they record two
+versions.
+
+### `deleteMessage(message: Cell<ChatMessage>)`
+
+- `message: Cell<ChatMessage>` — The message to delete. Must be a message in
+  this room, sent by the sender, and not already deleted.
+
+Records one of the sender's messages as deleted.
+
+- **Admitted:** as a trusted gesture on `ChatDeleteSurface`, and only from the
+  message's sender (see [`ChatMessage`](ChatMessage.md#open-questions)).
+- **Effect:** makes the message's `body` exactly `{ deleted: true }`, recorded
+  at the handler clock as `editedAt`, made unique as [unique
+  times](ChatMessage.md#unique-times) states. What becomes of its earlier
+  versions, reactions, and replies is the room's policy. The message stays in
+  `messages`, so replies to it and threads rooted at it keep their links.
+- **Refused:** a `message` in another room, sent by someone else, or already
+  deleted.
+
+### `sendReaction(message: Cell<ChatMessage>, emoji: string)`
 
 - `message: Cell<ChatMessage>` — The message reacted to. Must be a message in
   this room.
@@ -185,14 +293,43 @@ Sends a message from the sender.
   a skin-tone modifier or a ZWJ-joined sequence, but it is one emoji. Not text,
   and not two emoji together.
 
-Adds the sender's reaction to a message, or removes it.
+Adds the sender's reaction to a message.
 
 - **Admitted:** as a trusted gesture on `ChatReactSurface`.
 - **Effect:** if the sender has no reaction with `emoji` on `message`, adds a
-  [`ChatReaction`](ChatReaction.md) to `reactions`. If they have one, removes
-  it. No one else's reaction changes.
+  [`ChatReaction`](ChatReaction.md) to that message's `reactions`, recorded at
+  the handler clock as its `sentAt`, made unique as [unique
+  times](ChatMessage.md#unique-times) states. If they already have one, nothing
+  changes, and it keeps its `sentAt`. No one else's reaction changes, and
+  neither does the message itself.
 - **Refused:** a `message` in another room, or an `emoji` that isn't a single
   emoji.
+
+Sending the same reaction twice has the same effect as sending it once, so a
+client that can't tell whether an event arrived can safely send it again.
+
+### `deleteReaction(message: Cell<ChatMessage>, emoji: string)`
+
+- `message: Cell<ChatMessage>` — The message whose reaction to remove. Must be a
+  message in this room.
+- `emoji: string` — A single emoji: exactly one emoji sequence that [Unicode
+  Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
+  general interchange (`RGI_Emoji`). It may be more than one code point, as with
+  a skin-tone modifier or a ZWJ-joined sequence, but it is one emoji. Not text,
+  and not two emoji together.
+
+Removes the sender's reaction to a message.
+
+- **Admitted:** as a trusted gesture on `ChatReactSurface`.
+- **Effect:** if the sender has a reaction with `emoji` on `message`, removes
+  it. If they don't, nothing changes. No one else's reaction changes, and
+  neither does the message itself.
+- **Refused:** a `message` in another room, or an `emoji` that isn't a single
+  emoji.
+
+Like `sendReaction`, sending it twice has the same effect as sending it once. A
+client never toggles: it sends whichever of the two the person asked for, so a
+repeated or delayed event can't undo what the person meant.
 
 ### `join()`
 
