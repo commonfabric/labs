@@ -14,7 +14,9 @@ import {
 } from "@commonfabric/html/worker";
 import { createSession, Identity } from "@commonfabric/identity";
 import { createRuntimeClientOptions } from "@commonfabric/lib-shell/runtime";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
+  type Cell,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -23,9 +25,12 @@ import {
   buildCfcPolicyArtifactManifest,
   type CfcGrantCandidate,
   cfcGrantCandidateOf,
-  prepareCfcGrantWrite,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../../../runner/src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -38,7 +43,14 @@ import {
   renderGrantSourceFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
+  RuntimeProcessor,
 } from "@/backends/runtime-processor.ts";
+import {
+  clientScopedKey,
+  type WorkerClient,
+} from "@/backends/worker-client.ts";
+import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
+import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
 /** Builds the worker's effective runtime from host options over local storage. */
 function createWorkerRuntime(
@@ -834,9 +846,99 @@ describe("render-audience", () => {
       },
     });
 
+    /** The one document the rule's guard names for `owner`'s answer. */
+    const candidateFor = (owner: string): CfcGrantCandidate =>
+      cfcGrantCandidateOf({
+        kind: "ShareGrant",
+        fields: { owner, resource: ANSWER },
+      })!;
+
+    /**
+     * Seeds the owner's grant-gated note in `space`, with the manifest
+     * installed beside the label, and returns the note's cell.
+     */
+    async function seedGrantedNote(
+      runtime: Runtime,
+      space: MemorySpace,
+    ): Promise<Cell<WorkerRenderNode>> {
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      const note = runtime.getCell<WorkerRenderNode>(
+        space,
+        "Granted note",
+        undefined,
+        seed,
+      );
+      seedStoredEnvelope(seed, {
+        space,
+        id: note.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Granted note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  grantReleaseManifest.manifest.moduleIdentity,
+                  grantReleaseManifest.manifest.symbol,
+                  grantReleaseManifest.policyDigest,
+                  space,
+                )],
+              },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+      const install = runtime.storageManager.edit();
+      install.write({
+        space,
+        id: `of:cfc-policy-manifest:${grantReleaseManifest.policyDigest}`,
+        type: "application/json",
+        path: ["value"],
+      }, grantReleaseManifest as never);
+      expect((await install.commit()).error).toBeUndefined();
+      return note;
+    }
+
+    /**
+     * Writes `owner`'s grant over the answer to `audience` through the
+     * trusted policy-writer path, acting as the owner for that transaction,
+     * revoked or standing.
+     */
+    async function writeGrantAs(
+      runtime: Runtime,
+      owner: string,
+      audience: string,
+      revoked: boolean,
+    ): Promise<void> {
+      const tx = runtime.edit();
+      setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(owner));
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "cfc-grant-writer",
+      });
+      tx.writeCfcGrant({
+        kind: "ShareGrant",
+        owner,
+        resource: ANSWER,
+        audience: [cfcAtom.user(audience)],
+        grantedAt: 1000,
+        ...(revoked ? { revoked: { at: 2000, by: owner } } : {}),
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+    }
+
     /**
      * A shell-configured worker rendering the owner's grant-gated note as a
-     * delegate sees it, with the manifest installed beside the label.
+     * delegate sees it, with the resolver and reconciler built by hand from
+     * the processor's helpers so the reconciler's subscriptions can be seen.
      */
     async function renderGrantedNote() {
       const identity = await Identity.generate({ implementation: "noble" });
@@ -855,49 +957,7 @@ describe("render-audience", () => {
         },
       });
       const runtime = createWorkerRuntime(options);
-      const seed = runtime.edit();
-      writeSeedEnvelopeDoc(seed, session.space);
-      const note = runtime.getCell<WorkerRenderNode>(
-        session.space,
-        "Granted note",
-        undefined,
-        seed,
-      );
-      seedStoredEnvelope(seed, {
-        space: session.space,
-        id: note.getAsNormalizedFullLink().id!,
-        type: "application/json",
-        path: [],
-      }, {
-        value: "Granted note",
-        cfc: {
-          version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
-            version: 1,
-            entries: [{
-              path: [],
-              label: {
-                confidentiality: [cfcAtom.modulePolicyRef(
-                  grantReleaseManifest.manifest.moduleIdentity,
-                  grantReleaseManifest.manifest.symbol,
-                  grantReleaseManifest.policyDigest,
-                  session.space,
-                )],
-              },
-            }],
-          },
-        },
-      });
-      expect((await seed.commit()).error).toBeUndefined();
-      const install = runtime.storageManager.edit();
-      install.write({
-        space: session.space,
-        id: `of:cfc-policy-manifest:${grantReleaseManifest.policyDigest}`,
-        type: "application/json",
-        path: ["value"],
-      }, grantReleaseManifest as never);
-      expect((await install.commit()).error).toBeUndefined();
+      const note = await seedGrantedNote(runtime, session.space);
 
       const ceiling = options.renderConfidentialityCeiling;
       const membership = renderMembershipProviderFor(
@@ -940,11 +1000,7 @@ describe("render-audience", () => {
       });
       return {
         watched,
-        /** The one document the rule's guard names. */
-        candidate: cfcGrantCandidateOf({
-          kind: "ShareGrant",
-          fields: { owner: identity.did(), resource: ANSWER },
-        })!,
+        candidate: candidateFor(identity.did()),
         /** Text emitted since the last call. */
         async settle(): Promise<string[]> {
           await runtime.storageManager.synced();
@@ -954,28 +1010,8 @@ describe("render-audience", () => {
           ops.length = 0;
           return text;
         },
-        /**
-         * Writes the owner's grant to the delegate the way the trusted
-         * writer leaves it, revoked or standing.
-         */
-        async writeGrant(revoked: boolean): Promise<void> {
-          const prepared = prepareCfcGrantWrite({
-            kind: "ShareGrant",
-            owner: identity.did(),
-            resource: ANSWER,
-            audience: [cfcAtom.user(delegate.did())],
-            grantedAt: 1000,
-            ...(revoked ? { revoked: { at: 2000, by: identity.did() } } : {}),
-          }, identity.did());
-          const tx = runtime.storageManager.edit();
-          tx.write({
-            space: prepared.space,
-            id: prepared.id,
-            type: "application/json",
-            path: ["value"],
-          }, prepared.value as never);
-          expect((await tx.commit()).error).toBeUndefined();
-        },
+        writeGrant: (revoked: boolean) =>
+          writeGrantAs(runtime, identity.did(), delegate.did(), revoked),
         async [Symbol.asyncDispose]() {
           cancel();
           await runtime[Symbol.asyncDispose]();
@@ -983,13 +1019,117 @@ describe("render-audience", () => {
       };
     }
 
-    it("shows a delegate the owner's note only while the owner's grant names them", async () => {
+    /**
+     * The same note rendered by a processor stood up from the host's
+     * initialization data and mounted the way a host mounts a cell, as the
+     * delegate sees it. The processor builds the grant source itself and
+     * hands it to its resolver and to the mount's reconciler; nothing here
+     * wires either.
+     */
+    async function renderGrantedNoteThroughProcessor() {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const delegate = await Identity.generate({ implementation: "noble" });
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+        trustSnapshot: {
+          id: `principal:${delegate.did()}`,
+          actingPrincipal: delegate.did(),
+        },
+      });
+      const storageManager = StorageManager.emulate({ as: identity });
+      const restoreBoot = stubWorkerBoot(() => storageManager);
+      // The processor's console and error bridges post through the worker
+      // global, which a main-thread test does not have; the mount's own ops
+      // reach `client`.
+      const hadPostMessage = "postMessage" in globalThis;
+      const originalPostMessage =
+        (globalThis as { postMessage?: unknown }).postMessage;
+      (globalThis as { postMessage?: unknown }).postMessage = () => {};
+      const posted: unknown[] = [];
+      const client: WorkerClient = {
+        id: 7,
+        post: (message) => {
+          posted.push(message);
+          return true;
+        },
+      };
+      const processor = await RuntimeProcessor.initialize({
+        ...options,
+        apiUrl: options.apiUrl.toString(),
+        identity: options.identity.keyPair,
+        spaceIdentity: options.spaceIdentity?.keyPair,
+      }, () => [client]);
+      const runtime = processor.accessForTestingOnly.runtime;
+      const note = await seedGrantedNote(runtime, session.space);
+      const mountId = 1;
+      await processor.handleVDomMount({
+        type: RequestType.VDomMount,
+        mountId,
+        cell: note.getAsNormalizedFullLink() as unknown as CellRef,
+      }, client);
+      const mount = processor.accessForTestingOnly.vdomMounts.get(
+        clientScopedKey(client, mountId),
+      )!;
+      const isBatch = (
+        message: unknown,
+      ): message is { type: NotificationType.VDomBatch; ops: VDomOp[] } =>
+        (message as { type?: unknown }).type === NotificationType.VDomBatch;
+      return {
+        /** Text the mount posted to its client since the last call. */
+        async settle(): Promise<string[]> {
+          await runtime.storageManager.synced();
+          await runtime.idle();
+          mount.reconciler.flush();
+          const text = posted.filter(isBatch).flatMap((batch) =>
+            emittedText(batch.ops)
+          );
+          posted.length = 0;
+          return text;
+        },
+        writeGrant: (revoked: boolean) =>
+          writeGrantAs(runtime, identity.did(), delegate.did(), revoked),
+        async [Symbol.asyncDispose]() {
+          processor.handleVDomUnmount(
+            { type: RequestType.VDomUnmount, mountId },
+            client,
+          );
+          await processor.dispose();
+          restoreBoot();
+          await storageManager.close();
+          if (hadPostMessage) {
+            (globalThis as { postMessage?: unknown }).postMessage =
+              originalPostMessage;
+          } else {
+            delete (globalThis as { postMessage?: unknown }).postMessage;
+          }
+        },
+      };
+    }
+
+    it("shows a delegate the owner's note only while the owner's grant names them, watching the grant the guard names", async () => {
       await using view = await renderGrantedNote();
       const before = await view.settle();
       expect(before).toContain("Content hidden by policy");
       expect(before).not.toContain("Granted note");
       // Watched through the worker's source: the grant the guard names.
       expect(view.watched).toEqual([view.candidate]);
+      await view.writeGrant(false);
+      expect(await view.settle()).toContain("Granted note");
+      await view.writeGrant(true);
+      expect(await view.settle()).toContain("Content hidden by policy");
+    });
+
+    it("renders the same through a processor's own mount, which hands its grant source to the resolver and the reconciler", async () => {
+      await using view = await renderGrantedNoteThroughProcessor();
+      const before = await view.settle();
+      expect(before).toContain("Content hidden by policy");
+      expect(before).not.toContain("Granted note");
       await view.writeGrant(false);
       expect(await view.settle()).toContain("Granted note");
       await view.writeGrant(true);
