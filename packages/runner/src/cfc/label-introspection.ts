@@ -157,14 +157,15 @@ export type ConfLabelQueryEvaluation = {
  * envelope entry, whose labelMap path is the logical `["body"]`; an explicit
  * `/value` prefix is accepted as the envelope spelling of the same path, so the
  * pointer is read as a document path (`canonicalizeDocumentPath`). A payload
- * field literally named `value` at the root is consequently not addressable
- * through this API: `/value/x` names payload `x`.
+ * field literally named `value` at the root is consequently reached only
+ * through that envelope spelling: `/value/x` names payload `x`, and
+ * `/value/value/x` names payload `value.x`.
  *
  * Returns `undefined` — the caller collapses to `notAvailable` — for the
  * envelope metadata subtree (`/cfc/...`): labels attached to label metadata
  * are runtime-enforced metadata, not introspectable payload (the §4.6.4.1
  * first-layer rule). A payload field literally named `cfc` at the root is
- * consequently not addressable through this API either; the collision with the
+ * consequently not addressable through this API; the collision with the
  * metadata sibling fails closed.
  */
 export const parseConfLabelTargetPath = (

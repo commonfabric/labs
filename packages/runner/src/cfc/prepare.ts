@@ -2096,9 +2096,8 @@ class VerifierMetadataResolver {
       }
       const logicalPath = canonicalizeLogicalPath(path);
       const matching = index.overlapping(logicalPath);
-      // Match claims in the view's logical coordinates, including stored
-      // paths spelled with a leading `value`. Preserve the stored spelling
-      // below: the view builder owns its own path normalization.
+      // Match claims in the view's logical coordinates, the ones the index
+      // keys each entry by.
       const projected = withoutShadowedPrincipalClaims(
         matching.map(({ entry, path }) => ({ ...entry, path })),
         logicalPath,

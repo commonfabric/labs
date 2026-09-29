@@ -478,9 +478,9 @@ export const canonicalizePreparedDigestInput = (
   // reaches, is silently dropped from the second read onward.
   //
   // Duplicates land adjacent because `compareDereferenceTrace` orders on
-  // every field, so comparing equal means equal. Dedupe follows the sort, and
-  // the sort follows canonicalization: two traces differing only in a leading
-  // `"value"` path element are the same record, but only once canonicalized.
+  // every field, so comparing equal means equal, and dedupe follows the sort.
+  // A trace's paths are logical: a leading `"value"` names a payload field, so
+  // two traces that differ in one are different dereferences.
   dereferenceTraces: dedupeSorted(
     [...input.dereferenceTraces].map(canonicalizeDereferenceTrace).sort(
       compareDereferenceTrace,
