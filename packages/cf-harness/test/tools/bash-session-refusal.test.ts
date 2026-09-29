@@ -249,7 +249,10 @@ describe("bash session refusals", () => {
       });
 
       expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
-      expect(output.stderr).toContain("invalid `session` name");
+      // The rule for a name, and nothing of the name that broke it.
+      expect(output.stderr).toBe(
+        "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`",
+      );
       expect(invocationRecordsFor(output.outputId)).toEqual([]);
       expect(runner.sessionContainerIds).toEqual([]);
       expect(output.cwd).toBe("/workspace/first");

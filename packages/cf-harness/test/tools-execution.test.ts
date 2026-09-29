@@ -3587,6 +3587,14 @@ Deno.test("view_image tool denies reserved artifact paths", async () => {
   assertEquals(sandbox.calls, []);
 });
 
+/** What the bash tool shows the model for a runtime without sessions. */
+const NO_SESSIONS_REFUSAL_TEXT =
+  "this sandbox runtime has no sessions; rerun the command without `session`";
+
+/** What the bash tool shows the model for a name that is not a session name. */
+const INVALID_SESSION_NAME_REFUSAL_TEXT =
+  "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
+
 Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
   const sandbox = new FakeSandboxRuntime([{
     stdout: "x\n",
@@ -3599,12 +3607,18 @@ Deno.test("bash tool refuses a session on a runtime without sessions, recoverabl
     cwd: "repo",
     session: "build",
   });
-  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
-  assertStringIncludes(String(output.stderr), "session");
+  // The whole of what the model is shown, so that nothing of the runtime's
+  // description, its mounts and host paths among it, is there beside it.
+  assertEquals(output, {
+    outputId: "run-1:bash:1",
+    stdout: "",
+    stderr: NO_SESSIONS_REFUSAL_TEXT,
+    exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+    cwd: "/workspace",
+  });
   // Nothing ran: the model is told rather than silently given a fresh sandbox,
   // and the working directory is the one it had, not the one it asked for.
   assertEquals(sandbox.calls, []);
-  assertEquals(output.cwd, "/workspace");
   assertEquals(context.currentDir, "/workspace");
 });
 
@@ -3644,10 +3658,7 @@ const RUNTIME_REFUSAL_LEAKS = [
 const SESSION_REFUSAL_TEXTS: Array<
   [SandboxSessionUnavailableReason, string]
 > = [
-  [
-    "invalid-name",
-    "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`",
-  ],
+  ["invalid-name", INVALID_SESSION_NAME_REFUSAL_TEXT],
   [
     "enforcing-mode",
     "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
@@ -3726,8 +3737,17 @@ Deno.test("bash tool shows the model its own text for each reason a runtime refu
 Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
   using _logged = stub(console, "error");
   // A runtime is injected, and tests run unchecked: a reason outside the
-  // set, or none, can arrive whatever the type says.
-  for (const reason of [undefined, "out-of-memory", "toString"]) {
+  // set, or none, can arrive whatever the type says. The last three are not
+  // strings, and each converts to the string of a reason in the set.
+  const reasons: unknown[] = [
+    undefined,
+    "out-of-memory",
+    "toString",
+    { toString: () => "session-lost" },
+    ["session-lost"],
+    new String("session-lost"),
+  ];
+  for (const reason of reasons) {
     const context = createContext(
       new RefusingSessionsRuntime(
         new SandboxSessionUnavailableError(
@@ -3881,6 +3901,33 @@ Deno.test("bash tool escapes what a run id holds that would break the log line",
   assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
 });
 
+Deno.test("bash tool logs nothing of the call's input for a refused session", async () => {
+  using logged = stub(console, "error");
+  const runtime = new RefusingSessionsRuntime(
+    new SandboxSessionUnavailableError(
+      RUNTIME_REFUSAL_MESSAGE,
+      "start-failed",
+    ),
+  );
+  const context = createContext(runtime);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo MARKER-IN-COMMAND",
+    cwd: "MARKER-IN-CWD",
+    session: "MARKER-IN-SESSION",
+  });
+
+  // The call reached the runtime and the refusal was logged, so there is a
+  // line for the input to be absent from.
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(logged.calls.length, 1);
+  const written = logged.calls[0].args.map(String).join(" ");
+  assertStringIncludes(written, "FATAL ERROR: loading container");
+  assertEquals(written.includes("MARKER-IN-COMMAND"), false);
+  assertEquals(written.includes("MARKER-IN-SESSION"), false);
+  assertEquals(written.includes("MARKER-IN-CWD"), false);
+});
+
 Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
   // A run id the output id does not hold, so each is found by itself.
   const line = await loggedSessionRefusal(
@@ -3976,7 +4023,8 @@ Deno.test("bash tool refuses a session name that is not an identifier, recoverab
 
     assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, what);
     assertEquals(output.stdout, "", what);
-    assertStringIncludes(String(output.stderr), "session", what);
+    // The text is the rule and nothing of the name that broke it.
+    assertEquals(output.stderr, INVALID_SESSION_NAME_REFUSAL_TEXT, what);
     // Nothing ran and nothing was recorded for it.
     assertEquals(sandbox.calls, [], what);
     assertEquals(contexts.created, 0, what);
@@ -3997,6 +4045,7 @@ Deno.test("bash tool refuses a session before it records an invocation", async (
   });
 
   assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(output.stderr, NO_SESSIONS_REFUSAL_TEXT);
   assertEquals(sandbox.calls, []);
   assertEquals(contexts.created, 0);
 
