@@ -1,5 +1,6 @@
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -70,12 +71,12 @@ const LABEL_KEYS = [
  * relative to the node it describes, so a first segment of `"value"` names a
  * payload field of that name and is kept.
  */
-export const canonicalizeCfcLogicalPath = (
-  path: readonly string[],
-): string[] => [...path];
+export const canonicalizeCfcLogicalPath = (path: NonDocumentPath): string[] => [
+  ...path,
+];
 
 /** Returns the key under which a label view files an entry at `path`. */
-export const cfcLabelViewPathKey = (path: readonly string[]): string =>
+export const cfcLabelViewPathKey = (path: NonDocumentPath): string =>
   encodePointer(path);
 
 export const cfcLabelPathPrefixMatches = (
@@ -354,7 +355,7 @@ export const mergeCfcLabelViews = (
 
 export const rebaseCfcLabelView = (
   view: CfcLabelView | undefined,
-  path: readonly string[],
+  path: NonDocumentPath,
 ): CfcLabelView | undefined => {
   if (!view) {
     return undefined;
