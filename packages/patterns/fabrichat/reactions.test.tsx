@@ -89,7 +89,6 @@ export default pattern(() => {
     { myProfile: aliceProfile, ...records } as RoomArg,
   );
   const rowRecords = {
-    threadReplies: 0,
     inThread: false,
     kind: "group" as const,
     composer: Writable.of<ComposerState>({}),

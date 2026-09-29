@@ -89,7 +89,6 @@ export default pattern(() => {
   const aliceOnFirst = FabriChatMessageRow({
     message: messages.key(0),
     myProfile: aliceProfile,
-    threadReplies: 0,
     inThread: false,
     kind: "group" as const,
     composer: Writable.of<ComposerState>({}),

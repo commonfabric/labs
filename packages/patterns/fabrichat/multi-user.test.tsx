@@ -147,7 +147,6 @@ export const bob = pattern<{ setup: { records: Records } }>(({ setup }) => {
   const onFirst = FabriChatMessageRow({
     message: setup.records.messages.key(0),
     myProfile: profile,
-    threadReplies: 0,
     inThread: false,
     kind: "group" as const,
     ownSpace: false,
