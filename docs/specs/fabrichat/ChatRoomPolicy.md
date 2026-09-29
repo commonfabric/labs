@@ -13,8 +13,8 @@ interface ChatRoomPolicy {
   /** Whether an OWNER may obliterate messages. */
   ownersMayObliterate: boolean;
 
-  /** Whether an edit keeps the version it replaces in `earlierVersions`. */
-  editKeepsHistory: boolean;
+  /** Whether an edit or a plain deletion keeps the version it replaces. */
+  keepsHistory: boolean;
 
   /** Whether a sender's deletion of their own message obliterates it. */
   deletionIsObliteration: boolean;
@@ -28,10 +28,10 @@ interface ChatRoomPolicy {
   /** How long an entry stays in `recentActivity`, in ns. */
   recentActivityWindowNsec: bigint;
 
-  /** The most messages a window of `messages` holds. */
+  /** The most messages a message window holds. */
   maxWindowCount: number;
 
-  /** The most windows of `messages` a session can have open. */
+  /** The most message windows a session can have open. */
   maxOpenWindows: number;
 }
 ```
@@ -56,8 +56,10 @@ wrote it (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)).
 
 - **`ownersMayObliterate`**: whether an OWNER may obliterate messages in a group
   room or a space's own chat. A room under a retention requirement may say no.
-- **`editKeepsHistory`**: whether an edit keeps the version it replaces in
-  `earlierVersions` ([`ChatMessage`](ChatMessage.md)).
+- **`keepsHistory`**: whether an edit, or a deletion that isn't obliteration,
+  keeps the version it replaces in `earlierVersions`
+  ([`ChatMessage`](ChatMessage.md)). A room under a retention requirement says
+  yes, and then keeps deleted text too.
 - **`deletionIsObliteration`**: whether a sender's `deleteMessage` of their own
   message obliterates it, removing its history and its author, as
   `obliterateMessage` does (see [obliterated
@@ -79,15 +81,18 @@ A proposal outside both bounds is refused.
 - **`recentActivityWindowNsec`**: how long, before the room's handler clock, an
   entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
   It MUST be at least `proposedTimeMaxAgeNsec`.
-- **`maxWindowCount`**: the most messages a window of `messages` holds (see
+- **`maxWindowCount`**: the most messages a message window holds (see
   [`ChatMessageList`](ChatMessageList.md#limits)). A request for more gets this
   many.
-- **`maxOpenWindows`**: the most windows of `messages` a session can have open
-  at once. Opening one more is refused.
+- **`maxOpenWindows`**: the most message windows a session can have open at
+  once. Opening one more is refused.
 
 ## When it changes
 
-`policy` states the room's settings when the room is created. If an
-implementation lets a room's settings change afterward, it MUST update `policy`
-in the same transaction that changes them, so the two never disagree. `policy`
-is the only part of `about` that can change.
+`about.policy` links the policy, which is a document of its own, so that
+changing it never touches `about` or the creator's label on it (see
+[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)). It states the room's
+settings when the room is created. If an implementation lets a room's settings
+change afterward, it MUST update the policy in the same transaction that changes
+them, so the two never disagree. The policy's own label names whoever last
+changed it.

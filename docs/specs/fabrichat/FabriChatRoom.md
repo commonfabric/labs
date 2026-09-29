@@ -59,9 +59,13 @@ and the composer event's time as the proposed `sentAt`.
 Every handler first checks its event's sender and `requestId` against a keyed
 collection of the requests the room has acted on, and does nothing for one it
 finds. It records the request there in the same transaction as its effect, and
-the collection drops requests older than `recentActivityWindowNsec`, as
-`recentActivity` drops its entries. The two bounds of its window for proposed
-times are constants of the pattern, documented beside it.
+the collection drops a request once it was recorded longer ago than the greater
+of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`, and
+`recentActivityWindowNsec`. The collection keeps a request even after its
+message is obliterated: it says only that the sender made a request, not what,
+and without it a late redelivery of the original send would send the message
+again. The two bounds of its window for proposed times are constants of the
+pattern, documented beside it.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
 `commitEdit` moves the current version into `earlierVersions` before recording
@@ -105,9 +109,32 @@ does: a mergeable set add, so concurrent additions all land and a profile is not
 listed twice.
 
 `commitLeave` asks the host to remove the sender's own entry from the room
-space's access list, granting OWNER to the remaining members first when the
-sender is the last OWNER. It also records the sender in a keyed collection of
-principals who have left, which `commitAdd` checks.
+space's access list. When the sender is the last OWNER, it first asks the host
+to grant OWNER to the remaining member admitted earliest. The room keeps each
+member's admission time, from the room's creation or their `add`, for that. It
+also records the sender in a keyed collection of principals who have left, which
+`commitAdd` checks.
+
+### Membership changes take more than one commit
+
+`add`, `remove`, and `leave` change the room space's access list, and the memory
+layer requires an access-list change to be its commit's only operation (INV-12
+in the [memory invariants](../memory-v2/09-invariants.md)). So none of them can
+change the access list and the room's own records in one transaction. Each runs
+in steps, in an order that keeps an interruption safe, and records its progress
+under its `requestId`:
+
+1. Record the intent in the room: the request, marked pending, and for `leave`
+   the sender in the set of principals who have left, so the room already
+   refuses to re-add them.
+2. Change the access list, in a commit of its own.
+3. Complete the record: the `recentActivity` entry, the notice for an `add`, and
+   the request marked done.
+
+A room finds any request left pending, and finishes its remaining steps, before
+it acts on another event. So an interruption leaves at most a short gap between
+the access list and the room's records, never a lasting one. Between steps 2 and
+3, a member added may already have access with no notice or activity yet.
 
 `commitAdd` and `commitRemove` ask the host to change the room space's access
 list. They are the only handlers that reach beyond the room's own record.
@@ -119,11 +146,12 @@ handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves,
 as today's room computes `cannotSend`.
 
-Every handler that changes the room appends its `recentActivity` entry in the
-same transaction as the change, so the log never disagrees with `messages`.
-Entries older than the window are dropped as new ones are appended.
-`commitObliterate`, and `commitDelete` when it obliterates, also remove the
-message's earlier entries.
+Every handler that changes the room's own record, except `commitDelivered`,
+appends its `recentActivity` entry in the same transaction as the change, so the
+log never disagrees with the messages. A membership change appends its entry in
+its last step (see above). Entries older than the window are dropped as new ones
+are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
+remove the message's earlier entries.
 
 The session's `messages` is a sub-pattern over the room's record: it computes
 `count`, `oldestAt`, and `newestAt`, keeps `windows` as a `PerSession` keyed
@@ -142,7 +170,7 @@ built at first. The first build fixes each setting at an initial value:
 | Setting | `ChatRoomPolicy` key | Initial value |
 | --- | --- | --- |
 | OWNERs may obliterate messages | `ownersMayObliterate` | yes |
-| An edit keeps the version it replaces in `earlierVersions` | `editKeepsHistory` | yes, every version |
+| An edit or a plain deletion keeps the version it replaces | `keepsHistory` | yes, every version |
 | A sender's deletion obliterates their message | `deletionIsObliteration` | no |
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
@@ -186,3 +214,13 @@ the room is created from the same settings the handlers read.
   [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
   policies can be split between writers this way is still to check. If not,
   reactions move to a record of their own, keyed by message.
+- **Redelivery ends.** A runtime delivers an event again when it can't tell
+  whether the first delivery took effect. The room's request memory covers that
+  only as long as it lasts (see [writers](#writers)). So a runtime MUST NOT
+  deliver an event again once the event is older than the request memory, such
+  as a send queued while offline and replayed much later. Whether the runtime's
+  append queue guarantees this is still to check.
+- **Admitting an access-list change atomically.** The steps above are the
+  pattern-level answer to INV-12. A host facility that changes an access list
+  and the room's records together would remove the gap between steps 2 and 3.
+

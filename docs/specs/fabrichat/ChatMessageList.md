@@ -37,9 +37,12 @@ interface ChatMessageList {
 
 A window is a run of consecutive messages from one of the two views of a
 conversation (see [`ChatReply`](ChatReply.md#the-two-views)): the main
-conversation, or one thread. A client can have any number of windows open at
-once, each under a `windowId` it chooses, such as one per panel it shows. Ten
-panels on ten threads are ten windows, which never interfere with one another.
+conversation, or one thread. A session also has one window it needs no request
+for: `latest`, the newest messages of the main conversation (see
+[`ChatRoomSession`](ChatRoomSession.md)). A client can have any number of
+windows open at once, each under a `windowId` it chooses, such as one per panel
+it shows. Ten panels on ten threads are ten windows, which never interfere with
+one another.
 
 - **`openWindow(requestId, windowId, root?, from, count)`** sets the window
   `windowId` to up to `count` messages of the thread rooted at `root`, or of the

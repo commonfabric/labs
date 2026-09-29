@@ -3,8 +3,8 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)), with its
-reactions and its edit history. A room offers its messages, oldest first, as
-`messages`.
+reactions and its edit history. A client reads a room's messages through its
+session's [`ChatMessageList`](ChatMessageList.md).
 
 ```ts
 // Shown for illustration only.
@@ -63,7 +63,7 @@ interface ChatMessage {
 - **`earlierVersions`** holds each version the message had before its current
   one, as a [`ChatMessageVersion`](ChatMessageVersion.md): its body and when it
   was recorded. It is empty for a message that has never changed. What the room
-  keeps here is the room's policy (`editKeepsHistory`, see
+  keeps here is the room's policy (`keepsHistory`, see
   [`ChatRoomPolicy`](ChatRoomPolicy.md)). It never holds `{ deleted: true }`
   (see [deleted messages](#deleted-messages)).
 - **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
@@ -129,11 +129,10 @@ room's reach.
 Every record a room makes has a time unique in that room: every message
 version's time (each `sentAt`, each `editedAt`, and each `sentAt` in
 `earlierVersions`), every reaction's `sentAt`, and every `recentActivity`
-entry's `at` that isn't one of those
-([`ChatRoomActivity`](ChatRoomActivity.md)), across the main conversation, every
-thread, and every message's history. One record keeps one time, so a message's
-`sentAt` and its first earlier version's `sentAt` are the same recording, not
-two.
+entry's `at` ([`ChatRoomActivity`](ChatRoomActivity.md)), across the main
+conversation, every thread, and every message's history. One record keeps one
+time, so a message's `sentAt` and its first earlier version's `sentAt` are the
+same recording, not two.
 
 Every recorded time is a
 [`FabricEpochNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
@@ -175,7 +174,7 @@ appears in `earlierVersions`: a deleted message is never edited again, so its
 deletion never becomes an earlier version.
 
 Whether an edit keeps the version it replaces is the room's policy
-(`editKeepsHistory`, see [`ChatRoomPolicy`](ChatRoomPolicy.md)).
+(`keepsHistory`, see [`ChatRoomPolicy`](ChatRoomPolicy.md)).
 
 ## Future directions
 

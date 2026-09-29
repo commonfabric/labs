@@ -30,13 +30,15 @@ a room to anyone its space doesn't admit.
 - **The people a client offers** when starting a conversation from a shared
   space are that space's member set.
 - **A notice** says the person has been admitted to a room. Its claim of who
-  sent it is unauthenticated, so a client shows who created the room from the
-  room's `about` label (see
-  [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), never from the
-  notice. The client follows it with `accept` to their manager, passing that
-  creator as `counterpart` for a direct room. Whether to add the room to their
-  list is the person's decision, so a client SHOULD accept only after showing
-  them who created the room, and what it is.
+  sent it is unauthenticated. Before sending `accept` for a direct room, a
+  client MUST read the principal the room's `about` is labeled `authored-by`
+  (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), as
+  `cf-cfc-authorship` reads a message's label, and pass that principal as
+  `counterpart`, never the notice's claim. The manager can't make this check
+  itself, since a pattern can't read a label's principal. A client shows who
+  created the room from the same label. Whether to add the room to their list is
+  the person's decision, so a client SHOULD accept only after showing them who
+  created the room, and what it is.
 
 ## Showing a room
 
@@ -118,23 +120,28 @@ its stream's rules before sending it: a non-empty body, a reply whose target is
 in the same room and allowed for its `shownIn`, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
 `canSend` to tell the person when they can't send at all. A client mints a fresh
-`requestId` for each request, such as a random 128-bit value, and keeps it for
-every retry of that request: the `requestId` is what makes a retry harmless, and
-what keeps two messages with the same text apart. It proposes a version's
-`sentAt` from its own clock when the person sends or edits, and keeps that too
-for every retry.
+`requestId` for each request, such as a random 128-bit value: it is what keeps
+two messages with the same text apart, and what lets the room ignore an event
+its runtime happens to deliver twice. It proposes a version's `sentAt` from its
+own clock when the person sends or edits.
+
+A client never sends an event again on its own. It can't re-issue a trusted
+gesture from its code (rule 2 below), so an event it sent again would be
+refused, and redelivery is its runtime's job: a runtime delivers an appended
+event, with its trusted mark, until the event is processed.
 
 A send can go unacknowledged: the room's `recentActivity` holds no entry with
 the send's `requestId`, labeled with the sender (see
 [`ChatRoomActivity`](ChatRoomActivity.md)). An entry that does match links, as
-its `what`, the message the send produced. While its proposal is within the
-room's `proposedTimeMaxAgeNsec`, the client can retry it with the same
-`requestId` and proposal, harmlessly. Once the proposal is older than that, the
-room would refuse it, so a client SHOULD show the message as not sent and offer
-the person an explicit retry, which sends it again as a new request, with a
-fresh `requestId` and a fresh proposal. The retry is the person's decision
-because it can duplicate the message, if the first send did arrive and the
-client never saw it. The same holds for an edit.
+its `what`, the message the send produced. While the send's proposal is within
+the room's `proposedTimeMaxAgeNsec`, its runtime may still be delivering it.
+Once the proposal is older than that, the room would refuse it, so a client
+SHOULD show the message as not sent and offer the person an explicit retry. A
+retry is the person pressing Send again: a new gesture, sent as a new request,
+with a fresh `requestId` and a fresh proposal, and showing exactly what it
+sends, as rule 3 requires. The retry is the person's decision because it can
+duplicate the message, if the first send did arrive and the client never saw it.
+The same holds for an edit.
 
 A client that resumes an interrupted `createGroup` MUST resend it with its
 original `requestId`, and SHOULD do the same for `openDirect` (see

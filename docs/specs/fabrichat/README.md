@@ -17,20 +17,20 @@ requires of the runtime and of the programs that use it.
   - [`ChatRoomSession`](ChatRoomSession.md): one session's view of a room.
   - [`ChatManagerOutput`](ChatManagerOutput.md): what `#chatManager` resolves
     to.
-- Records a room holds:
-  - [`ChatMessage`](ChatMessage.md)
+- Records a session holds:
   - [`ChatMessageList`](ChatMessageList.md): a room's messages, read a window at
     a time.
   - [`ChatMessageWindow`](ChatMessageWindow.md): one window of them.
   - [`ChatWindowAnchor`](ChatWindowAnchor.md): where a window sits: at either
     end, or around one message.
+- Records a room holds:
+  - [`ChatMessage`](ChatMessage.md)
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
     message.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatRoomAbout`](ChatRoomAbout.md)
-  - [`ChatRoomPolicy`](ChatRoomPolicy.md): what a room claims about its own
-    policy.
+  - [`ChatRoomPolicy`](ChatRoomPolicy.md): a room's policy, stated correctly.
   - [`ChatRoomActivity`](ChatRoomActivity.md): an entry in a room's recent
     activity.
   - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
@@ -127,9 +127,10 @@ provide, the document says so, under the heading "Prerequisites".
 
 - **Room.** One conversation: a `FabriChatRoom` piece, in a space created for it
   or in the shared space whose own chat it is.
-- **Member.** A principal the room space's access list admits, at any level. A
-  member with READ can read the room, WRITE is needed to send, and OWNER to add
-  or remove members. Membership is the access list, and nothing kept beside it.
+- **Member.** A principal the room space's access list admits. A room of its own
+  admits only WRITE and OWNER; a space's own chat can have READ members, who
+  read only its newest messages. OWNER is needed to add or remove members.
+  Membership is the access list, and nothing kept beside it.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
@@ -222,8 +223,9 @@ With a member set:
 
 - **Refusals are invisible.** A room refuses a bad event silently, so a sender
   learns of a refusal only by the absence of its effect. Streams are one-way,
-  and the system has no reply channel; a room can't have one of its own without
-  being inconsistent with everything else (see
+  and a room's record is shared by every member, so outcomes kept there would
+  tell everyone about each member's refused requests. The manager can keep
+  outcomes because it's private to its user (see
   [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
 - **Crossing creations.** Two managers each keep their own index. If two people
   each start a direct room with the other at the same moment, there are two

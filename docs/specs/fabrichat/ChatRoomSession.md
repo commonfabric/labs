@@ -17,6 +17,9 @@ interface ChatRoomSession {
    * profile now. */
   canSend: boolean;
 
+  /** The newest messages of the main conversation, kept current. */
+  latest: ChatMessageWindow;
+
   /** The room's messages, read through this session's windows. */
   messages: ChatMessageList;
 
@@ -47,6 +50,14 @@ is part of the room's record.
   react, and show a profile right now: their access is WRITE or OWNER, and their
   profile resolves. It is computed for the viewer, so a READ-only member's
   client can tell them why their gestures would be refused before they make one.
+  Knowing the viewer's access level needs the space's member set (see [shared
+  spaces](README.md#shared-spaces)).
+- **`latest`** is a [`ChatMessageWindow`](ChatMessageWindow.md) holding the
+  newest messages of the main conversation, up to the room's `maxWindowCount`.
+  Unlike the windows under `messages`, it needs no request, and it follows the
+  conversation as new messages arrive. So every member can read the room, even
+  one with only READ, who can't append the event that opens a window (see
+  [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): the room's
   messages, read through windows this session opens.
 - **`composer`** is the state of the room's own composer, which the room's

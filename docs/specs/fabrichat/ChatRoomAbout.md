@@ -4,8 +4,9 @@ Status: proposed design (see [`README.md`](README.md)).
 
 What a room says about itself: its kind, its title, when it was created, and its
 policy. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `about`,
-and sets it when the room is created. Only its `policy` can change after that
-(see [`ChatRoomPolicy`](ChatRoomPolicy.md#when-it-changes)).
+and sets it once, when the room is created. It never changes: its `policy` is a
+link to a document of its own, which can (see
+[`ChatRoomPolicy`](ChatRoomPolicy.md#when-it-changes)).
 
 ```ts
 // Shown for illustration only.
@@ -19,8 +20,8 @@ interface ChatRoomAbout {
   /** When the room was created. */
   createdAt: FabricEpochNsec;
 
-  /** The room's policy, stated correctly. */
-  policy: ChatRoomPolicy;
+  /** The room's policy, stated correctly, in a document of its own. */
+  policy: Cell<ChatRoomPolicy>;
 }
 ```
 
@@ -35,8 +36,9 @@ interface ChatRoomAbout {
 - **`createdAt`** comes from the handler clock, at whatever resolution the
   system provides (see the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)).
-- **`policy`** is a [`ChatRoomPolicy`](ChatRoomPolicy.md): how the room behaves
-  where its implementation decides. An implementation MUST state it correctly.
+- **`policy`** links a [`ChatRoomPolicy`](ChatRoomPolicy.md): how the room
+  behaves where its implementation decides. An implementation MUST state it
+  correctly.
 
 A space's own chat (see [shared spaces](README.md#shared-spaces)) is a group
 room with no title, and a client shows it by the space's own name.
@@ -45,16 +47,17 @@ room with no title, and a client shows it by the space's own name.
 
 `about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`: the runtime labels
 it `authored-by` the principal who created the room, as it labels a message with
-its sender. Since `policy` can be rewritten later by whoever changes the room's
-settings, the label that counts is the one on `about`'s other fields, which
-never change. That label is the authority on who created a room. A notice's
+its sender. `about` never changes, so the label stays the creator's: `policy`,
+the one thing about a room that can change, is a document of its own, with
+labels of its own. That label is the authority on who created a room. A notice's
 claim of who sent it is not (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). For a direct
-room, the label names the counterpart of the member who didn't create it, which
-is what `accept` checks
-([`ChatManagerOutput`](ChatManagerOutput.md#acceptrequestid-string-room-cellchatroomoutput-counterpart-string)).
-A pattern reads a stored label as the `loom` pattern reads a panel's adder
-(`packages/patterns/loom/README.md`).
+room, the label names the counterpart of the member who didn't create it.
+
+Reading a label's principal is something host code can do, through the runtime
+client, as `cf-cfc-authorship` does for messages; pattern code can't. So it is a
+client that checks a direct room's creator before it sends `accept` (see
+[`clients.md`](clients.md#finding-conversations)), and not the manager.
 
 ## Future directions
 

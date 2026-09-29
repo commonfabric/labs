@@ -35,12 +35,12 @@ can't find its message by its proposal among the messages. It can in
 
 ## Fields
 
-- **`at`** is the time the room recorded the entry. For an entry that made a
-  record (a message's version, or a reaction), it is that record's time: the
-  message's `sentAt` or `editedAt`, or the reaction's `sentAt`. Every other
-  entry gets a time of its own. Every `at` is unique in the room, like every
-  time a room records (see [unique times](ChatMessage.md#unique-times)), so it
-  identifies its entry.
+- **`at`** is the time the room recorded the entry: its own handler clock when
+  it made the record, never a sender's proposal. For a send, that can be later
+  than the message's `sentAt`, which may be the sender's proposed time. Every
+  `at` is unique in the room, like every time a room records (see [unique
+  times](ChatMessage.md#unique-times)), so it identifies its entry. Entries are
+  ordered by `at`, and expire by it.
 - **`requestId`** is the `requestId` of the event the entry records.
 - **`what`** links the thing the event changed or added:
 
@@ -65,11 +65,13 @@ obliteration would have to reach.
 
 ## Recent
 
-`recentActivity` holds entries no older than the room's
+`recentActivity` holds entries recorded no longer ago than the room's
 `recentActivityWindowNsec` (see [`ChatRoomPolicy`](ChatRoomPolicy.md)), measured
-from the room's handler clock. A room drops older entries. The window MUST be at
-least `proposedTimeMaxAgeNsec`, so a sender can still find the entry for any
-send the room could have accepted.
+from the room's handler clock. A room drops older entries. Since an entry
+expires by when it was recorded, not by a message's time, every entry stays for
+the whole window: a client away for less than the window misses nothing, and a
+sender finds the entry for its send for as long as the window lasts. The window
+MUST be at least `proposedTimeMaxAgeNsec`.
 
 A client that has been away longer than the window can't catch up from
 `recentActivity`, and reopens its windows instead.

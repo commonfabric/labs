@@ -92,13 +92,21 @@ chat takes the space's access list as it is, and adds nothing to it.
 
 ## Membership
 
-The room space's access list is the room's membership. A member is any principal
-it admits, at any level. A member with READ can read the room; sending,
-reacting, and showing a profile append to the room's streams, so they need
-WRITE; adding and removing members needs OWNER. Leaving needs only membership.
-The space's member set is how a room and its clients read the membership: who
-the members are, their access, and which profile shows each of them. A room
-keeps no membership of its own.
+The room space's access list is the room's membership, and a member is any
+principal it admits. Every action on a room, reading a window of its messages
+included, appends an event in the room's space, which needs WRITE. So:
+
+- **A room of its own** admits its members with WRITE or OWNER, and never with
+  READ. Every member can then act on the room, `leave` included.
+- **A space's own chat** takes the space's access list as it is, and some of its
+  members may have only READ. A READ member can read the newest messages,
+  through their session's `latest` window (see
+  [`ChatRoomSession`](ChatRoomSession.md)), which needs no event, but can't open
+  other windows, send, react, or show a profile.
+
+Adding and removing members needs OWNER. The space's member set is how a room
+and its clients read the membership: who the members are, their access, and
+which profile shows each of them. A room keeps no membership of its own.
 
 Until the runtime provides member sets, a room offers `roster`, a set of profile
 claims that members contribute with `showProfile`, and consumers combine it with
@@ -114,10 +122,11 @@ offer `leave`, `add`, `remove`, `delivered`, and `outgoingNotices`; the others
 have none of them. A person leaves a direct room's conversation by forgetting it
 in their manager, and a space's own chat by leaving the space.
 
-Any member of a group room of its own can always leave it. A room that someone
-can't leave lets anyone who can add them hold them there, so leaving never
-depends on another member, a reviewed gesture, or the room's last OWNER staying
-put (see [`leave`](#leaverequestid-string)).
+Any member of a group room of its own can always leave it, since every member
+holds at least WRITE. A room that someone can't leave lets anyone who can add
+them hold them there, so leaving never depends on another member, a reviewed
+gesture, or the room's last OWNER staying put (see
+[`leave`](#leaverequestid-string)).
 
 ## Facts
 
@@ -204,30 +213,38 @@ event is refused.
 These rules hold for every stream:
 
 - Every event carries a `requestId`, which the sender chooses, unique among its
-  requests, and keeps for every retry of the same request, such as a random
-  128-bit value. The room acts on a given sender's `requestId` at most once: an
-  event whose sender and `requestId` it has already acted on changes nothing. So
-  a client that can't tell whether an event arrived can safely send it again.
-  The room remembers a `requestId` for at least `recentActivityWindowNsec`,
-  where the `recentActivity` entry for the request also carries it (see
-  [`ChatRoomActivity`](ChatRoomActivity.md)). A repeat that arrives later still
-  does no harm: a `sendMessage` or `editMessage` is refused by then, since its
-  proposal is older than `proposedTimeMaxAgeNsec`, and every other stream's
-  effect, applied again, changes nothing.
+  requests, such as a random 128-bit value. The room acts on a given sender's
+  `requestId` at most once: an event whose sender and `requestId` it has already
+  acted on changes nothing. That protects against a runtime delivering the same
+  event twice, such as when it appends an event again because it couldn't tell
+  whether its first append committed. A client doesn't send an event again
+  itself: a trusted gesture can't be re-issued from a client's code (see
+  [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and a
+  person who tries again makes a new request.
+- The room remembers a `requestId` for at least `proposedTimeMaxAgeNsec` plus
+  `proposedTimeMaxLeadNsec`, and at least `recentActivityWindowNsec`, measured
+  from when it recorded the request. By then a repeated `sendMessage` or
+  `editMessage` is refused anyway, since its proposal is outside the window. A
+  runtime MUST NOT deliver an event again after that, since for other streams a
+  late repeat could undo a later request: a reaction removed and then restored,
+  or a member removed and then re-added (see
+  [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
 
 - A stream that names a reviewed surface admits an event only as a trusted
   gesture on that surface (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
   record it writes is labeled `authored-by` the principal who sent it.
-- An event that arrives before the sender's profile resolves is refused, except
-  `leave`, which never depends on a profile.
+- `sendMessage`, `editMessage`, `sendReaction`, and `showProfile` record the
+  sender's profile, and refuse an event that arrives before it resolves. The
+  other streams don't depend on a profile.
 - A refusal is silent: the room records no outcome, so a sender can't tell a
-  refused event from one that hasn't taken effect yet. That follows from streams
-  being one-way: the system has no reply channel, and passing one explicitly
-  here alone would be inconsistent with how everything else works. A client MUST
-  check an event against the stream's rules before sending it (see
+  refused event from one that hasn't taken effect yet. A room could record
+  outcomes, as the manager does in `requests`, but a room's record is shared by
+  every member, so an outcome there would tell everyone about each member's
+  refused requests. A room keeps them to itself instead. A client MUST check an
+  event against the stream's rules before sending it (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
-- A refused event is spent: it is not retried, and the sender sends again.
+- A refused event is spent: it is not retried.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
@@ -245,17 +262,16 @@ These rules hold for every stream:
 
 ### `sendMessage(requestId: string, version: ChatMessageVersion, replyTo?: ChatReply)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `version: ChatMessageVersion` — The message to send, as a
   [`ChatMessageVersion`](ChatMessageVersion.md):
   - `version.body` is the message's text, exactly as the person saw it when they
     sent it. It must be a string, not empty or only whitespace.
   - `version.sentAt` is the time the sender's client proposes for the message,
-    chosen once when the person sends it and kept for every retry. It is a hint
-    to the room about when the message was sent, not an identifier: two sends
-    can propose the same time.
+    chosen once when the person sends it. It is a hint to the room about when
+    the message was sent, not an identifier: two sends can propose the same
+    time.
 - `replyTo?: ChatReply` — What the message replies to, and where it is shown
   (see [`ChatReply`](ChatReply.md)). Absent for a message that isn't a reply,
   which is shown in the main conversation. `replyTo.message` must be a message
@@ -265,10 +281,12 @@ These rules hold for every stream:
 Sends a message from the sender.
 
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
-- **Effect:** appends a [`ChatMessage`](ChatMessage.md) to `messages`, with the
-  sender's profile as `authorProfile`, `version.body` as `body`, no
+- **Effect:** appends a [`ChatMessage`](ChatMessage.md) to the room's messages,
+  with the sender's profile as `authorProfile`, `version.body` as `body`, no
   `earlierVersions`, and no reactions. Its `sentAt` is chosen as [recorded
-  times](#recorded-times) describes, then made unique as [unique
+  times](#recorded-times) describes. A reply's is then raised, if need be, to
+  later than its target's `sentAt`, so a reply never sorts before the message it
+  replies to. Last, it is made unique as [unique
   times](ChatMessage.md#unique-times) states.
 - **Refused:** a `version.body` that isn't a non-empty string, a
   `version.sentAt` outside the room's window (see [recorded
@@ -285,8 +303,16 @@ A room decides the time it records for a send (`sentAt`) or an edit (`editedAt`)
 from the sender's proposed time and its own handler clock, within a window its
 policy states (`proposedTimeMaxAgeNsec` and `proposedTimeMaxLeadNsec`, see
 [`ChatRoomPolicy`](ChatRoomPolicy.md)). Every time here is a `FabricEpochNsec`.
-The handler clock reads milliseconds, which a room converts by multiplying by
-10⁶, as conversion from a `Date` does.
+The handler clock reads a coarse time in milliseconds, which a room converts by
+multiplying by 10⁶, as conversion from a `Date` does.
+
+The handler clock is the time of the event that set the handler running (see the
+[timing side-channel mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)). When
+the room's handler runs on the room's side (served execution), that is when the
+room took the event, and the window below bounds how far a sender's clock can
+place a message. When the handler runs in the sender's own runtime, the handler
+clock is the sender's own clock, and the window bounds only a proposal against
+that same clock, which is a formality.
 
 The window reaches a different distance on each side of the handler clock,
 because a proposal lands on each side for a different reason:
@@ -322,9 +348,8 @@ cost of the window's older side, and why each room states it.
 
 ### `editMessage(requestId: string, message: Cell<ChatMessage>, version: ChatMessageVersion)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `message: Cell<ChatMessage>` — The message to edit. Must be a message in this
   room, sent by the sender, and not deleted.
 - `version: ChatMessageVersion` — The new version, as a
@@ -332,8 +357,8 @@ cost of the window's older side, and why each room states it.
   - `version.body` is the new text, exactly as the person saw it when they
     edited it. It must be a string, not empty or only whitespace.
   - `version.sentAt` is the time the sender's client proposes for the edit,
-    chosen once when the person makes it and kept for every retry. It is a hint
-    to the room, as for `sendMessage`.
+    chosen once when the person makes it. It is a hint to the room, as for
+    `sendMessage`.
 
 Records a new version of one of the sender's messages.
 
@@ -353,9 +378,8 @@ two versions.
 
 ### `deleteMessage(requestId: string, message: Cell<ChatMessage>)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `message: Cell<ChatMessage>` — The message to delete. Must be a message in
   this room, sent by the sender, and not already deleted.
 
@@ -369,21 +393,23 @@ Records one of the sender's messages as deleted.
     by its sender: a tombstone labeled with the sender, with no `authorProfile`,
     history, or reactions (see [obliterated
     messages](ChatMessage.md#obliterated-messages)).
-  - If it doesn't, the message's `body` becomes exactly `{ deleted: true }`,
-    recorded at the handler clock as `editedAt`, made unique as [unique
-    times](ChatMessage.md#unique-times) states, and its reactions are removed.
-    Its `authorProfile` and `earlierVersions` stay.
+  - If it doesn't, the version being deleted goes to `earlierVersions` first, as
+    `{ body, sentAt }` with the time it was recorded, where the room's policy
+    keeps history (`keepsHistory`). Then the message's `body` becomes exactly
+    `{ deleted: true }`, recorded at the handler clock as `editedAt`, made
+    unique as [unique times](ChatMessage.md#unique-times) states, and its
+    reactions are removed. Its `authorProfile` and history stay, so a room that
+    keeps history keeps the deleted text in it.
 
-  Either way, no reaction outlives the deletion, and the message stays in
-  `messages`, so replies to it and threads rooted at it keep their links.
+  Either way, no reaction outlives the deletion, and the message stays among the
+  room's messages, so replies to it and threads rooted at it keep their links.
 - **Refused:** a `message` in another room, sent by someone else, or already
   deleted.
 
 ### `obliterateMessage(requestId: string, message: Cell<ChatMessage>)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `message: Cell<ChatMessage>` — The message to obliterate. Must be a message in
   this room that the sender may obliterate: in a direct room, one the sender
   sent; elsewhere, anyone's, if the sender is an OWNER.
@@ -418,9 +444,8 @@ their own words completely.
 
 ### `sendReaction(requestId: string, message: Cell<ChatMessage>, emoji: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `message: Cell<ChatMessage>` — The message reacted to. Must be a message in
   this room.
 - `emoji: string` — A single emoji: exactly one emoji sequence that [Unicode
@@ -446,9 +471,8 @@ Adding a reaction that's already there changes nothing, even under a new
 
 ### `deleteReaction(requestId: string, message: Cell<ChatMessage>, emoji: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `message: Cell<ChatMessage>` — The message whose reaction to remove. Must be a
   message in this room.
 - `emoji: string` — A single emoji: exactly one emoji sequence that [Unicode
@@ -471,9 +495,8 @@ repeated or delayed event can't undo what the person meant.
 
 ### `showProfile(requestId: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 
 The profile added is always the sender's profile, as the room resolves it, never
 one the sender names.
@@ -492,24 +515,25 @@ which profile an existing member is to be shown by.
 
 ### `leave(requestId: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 
 The one leaving is always the sender.
 
 Gives up the sender's own access to a group room of its own.
 
-- **Admitted:** without a reviewed gesture, from any member at any level. It
-  acts on no one but the sender, and it has to work from any client acting as
-  them, including one that can't issue trusted gestures.
+- **Admitted:** without a reviewed gesture, from any member. It acts on no one
+  but the sender, and it has to work from any client acting as them, including
+  one that can't issue trusted gestures.
 - **Effect:** removes the sender from the room space's access list, and removes
   their roster entry. Their messages and reactions stay in the history. If the
   sender is the room's last OWNER and other members remain, the room first
-  grants OWNER to every remaining member, since a space's access list must keep
-  a concrete OWNER. If no one else remains, the sender's entry stays in the
-  access list only because the list can't be empty, and the room is otherwise
-  abandoned: no one else can read it or be added to it.
+  grants OWNER to one of them, since a space's access list must keep a concrete
+  OWNER: the one who has been a member longest, by the order the room admitted
+  them. That promotes one person, by a rule every member can see coming, rather
+  than everyone. If no one else remains, leaving is really abandoning: the
+  sender's entry stays in the access list only because the list can't be empty,
+  and no one else can read the room or be added to it.
 - **Afterward:** the room refuses to `add` the sender again (see
   [`add`](#addrequestid-string-principal-string-access-write--owner)), and the
   sender's client sends `forget` to their manager.
@@ -518,9 +542,8 @@ Gives up the sender's own access to a group room of its own.
 
 ### `add(requestId: string, principal: string, access: "WRITE" | "OWNER")`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `principal: string` — The DID of the person to admit.
 - `access: "WRITE" | "OWNER"` — What to grant. WRITE lets them send, react, and
   show a profile; OWNER also lets them add and remove members.
@@ -544,9 +567,8 @@ grants someone else access.
 
 ### `remove(requestId: string, principal: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `principal: string` — The DID of the member to remove. Must not be the room's
   last OWNER, since a space's access list always keeps one.
 
@@ -562,17 +584,18 @@ withdraws someone else's access.
 
 ### `delivered(requestId: string, id: string)`
 
-- `requestId: string` — Chosen by the sender, unique among its requests, and
-  kept for every retry of the same request. The room acts on a request at most
-  once (see [streams](#streams)).
+- `requestId: string` — Chosen by the sender, and unique among its requests. The
+  room acts on a request at most once (see [streams](#streams)).
 - `id: string` — The id of a notice in `outgoingNotices`. An id that isn't there
   is ignored.
 
 Reports that a notice from `add` has been delivered. Offered with `add`, on
 group rooms of their own.
 
-- **Admitted:** without a reviewed gesture, from any member with WRITE or above.
-- **Effect:** removes the notice from `outgoingNotices`.
+- **Admitted:** without a reviewed gesture, and only from a member the room
+  space's access list makes OWNER, like `add`.
+- **Effect:** removes the notice from `outgoingNotices`. It records no
+  `recentActivity` entry: it changes nothing a reader of the room follows.
 
 ## Renderings
 
@@ -600,7 +623,7 @@ these, and an implementation MUST state its choice for each in its rooms'
   chat, takes back what they said completely.
 - **Obliteration at all.** Whether an OWNER may obliterate messages.
 - **What an edit keeps** in a message's history.
-- **The limits on windows** of `messages`: how many messages a window holds
+- **The limits on message windows**: how many messages a window holds
   (`maxWindowCount`), and how many a session can have open (`maxOpenWindows`).
 - **The window of accepted proposed times**, on each side of the clock (see
   [recorded times](#recorded-times)).
