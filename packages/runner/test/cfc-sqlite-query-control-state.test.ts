@@ -33,6 +33,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+import { defer } from "@commonfabric/utils/defer";
 
 import {
   SQLITE_FOREIGN_SPACE_REFUSAL,
@@ -337,11 +338,10 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
 
   it("declares the parameter's clause on the request hash", async () => {
     // `/requestHash` rather than `/pending` because of which writes touch
-    // which path. The issuing transaction declares on both; the settle then
-    // rewrites `pending` from a transaction that reads only its own write
-    // destination, and the runtime re-derives that path's entry from what
-    // the writer carried, which is nothing. The hash does not change between
-    // the two writes, so the entry the issue declared is what stands.
+    // which path. The hash moves on every issue, so every labeled issue
+    // writes it and declares there. The flag is written only by a claim that
+    // finds it down, and whether this fixture's labeled claim does is the
+    // order two settles landed in. The reader cases below decide that order.
 
     const db = labeledDb();
     await seedMessages(db);
@@ -689,11 +689,14 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   });
 
   describe("what a reader of the control state carries", () => {
-    // The point of the change is a pane that renders from the query's state,
-    // so what that reader picks up decides whether the incident is closed.
-    // The two paths disagree, and the disagreement is the measurement: a
-    // reader of the settled `pending` flag carries nothing, a reader of the
-    // request hash carries everything the issues of this query brought.
+    // A reader of a control path carries what the route declared there, and
+    // the route declares where a labeled transaction WROTE. The request hash
+    // moves on every issue, so it carries everything the issues of this
+    // query brought. The pending flag is written only by an issue that finds
+    // it down, so what its reader carries turns on what each labeled issue
+    // found stored. Both histories are produced here by holding a request at
+    // the provider, which is the one place the order of two settles is the
+    // test's to decide.
 
     const readIntoAnUndeclaredStore = async (
       // deno-lint-ignore no-explicit-any -- the builtin's state
@@ -709,22 +712,104 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       return await tx.commit();
     };
 
-    it("lets a reader of the settled pending flag write to an undeclared store", async () => {
+    /**
+     * Runs `before` ahead of every query the provider is handed, and sends
+     * the query once it resolves. The builtin hands a request over from the
+     * flush of the transaction that claimed it, so a request arriving here
+     * is a claim that has committed.
+     */
+    const beforeEachQuery = (
+      before: (
+        sql: string,
+        params: SqliteParamsWire | undefined,
+      ) => Promise<void> | void,
+    ) => {
+      const provider = runtime.storageManager.open(space);
+      const send = provider.sqliteQuery!.bind(provider);
+      provider.sqliteQuery = async (db, sql, params, reader) => {
+        await before(sql, params);
+        return await send(db, sql, params, reader);
+      };
+    };
+
+    it("commits a write from a reader of a pending flag no labeled issue raised", async () => {
+      // The issue with the empty parameter is held at the provider until the
+      // labeled one has claimed, so the labeled claim finds the flag up. A
+      // write of the value a path already holds is no write, which leaves
+      // the labeled transaction declaring on the hash it moved and nowhere
+      // else. The held issue then settles nothing, because the store records
+      // another request's hash.
+
       const db = labeledDb();
       await seedMessages(db);
-      const { bodies } = await runDerivedParameterPattern(db, "reader-pending");
+      const labeledIssueClaimed = defer();
+      beforeEachQuery(async (sql, params) => {
+        if (sql !== BODIES_SQL) return;
+        if ((params as unknown[])[0] === "") await labeledIssueClaimed.promise;
+        else labeledIssueClaimed.resolve();
+      });
+      const { bodies } = await runDerivedParameterPattern(
+        db,
+        "reader-pending-standing",
+      );
       await waitForCellValue<QueryState<BodyRow>>(
         runtime,
         bodies,
         (value) => (value?.result ?? []).length === 2,
       );
 
+      expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+        .toBe(true);
+      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE))
+        .toBe(false);
       const wrote = await readIntoAnUndeclaredStore(
         bodies,
         "pending",
-        "reader-pending-probe",
+        "reader-pending-standing-probe",
       );
       expect(wrote.error).toBeUndefined();
+    });
+
+    it("refuses the same write once a labeled issue has raised the flag", async () => {
+      // The first query is held at the provider until the issue with the
+      // empty parameter has settled, so the labeled claim finds the flag
+      // down and raises it, and the route declares the parameter's clause
+      // there. The settle lowers the flag from a transaction that carries
+      // nothing, and the declaration stands: a declared component grows by
+      // clause and gives none back (CFC spec §8.12.1), whatever the
+      // transaction rewriting the path carried.
+
+      const db = labeledDb();
+      await seedMessages(db);
+      const unlabeledIssueSettled = defer();
+      beforeEachQuery(async (sql) => {
+        if (sql === KEYS_SQL) await unlabeledIssueSettled.promise;
+      });
+      const { bodies } = await runDerivedParameterPattern(
+        db,
+        "reader-pending-raised",
+      );
+      // On the sink rather than through `waitForCellValue()`: the held
+      // request is work the runtime is waiting on, so a wait that idles the
+      // runtime first would wait on the request this releases.
+      const cancel = bodies.sink((value: QueryState<BodyRow> | undefined) => {
+        if (value?.pending === false) unlabeledIssueSettled.resolve();
+      });
+      await waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        bodies,
+        (value) => (value?.result ?? []).length === 2,
+      );
+      cancel();
+
+      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE))
+        .toBe(true);
+      const wrote = await readIntoAnUndeclaredStore(
+        bodies,
+        "pending",
+        "reader-pending-raised-probe",
+      );
+      expect(wrote.error).toBeDefined();
     });
 
     it("refuses the same write from a reader of the request hash", async () => {
@@ -823,11 +908,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(refused.pending).toBe(false);
       expect(refused.result ?? []).toEqual([]);
       // The refusal is written by the issuing transaction, which carries the
-      // clause it is refusing over, so route 2 declares that clause here.
-      // This is the one path on which a reader of the control state carries
-      // the parameter's label — the success path's `pending` carries nothing,
-      // which the reader cases above assert — and a pattern that renders
-      // "this query was refused" inherits it.
+      // clause it is refusing over, so route 2 declares that clause on the
+      // paths it writes, and a pattern that renders "this query was refused"
+      // inherits it.
       expect(hasClause(declaredAt(bodies, ["error"]), KEY_CLAUSE)).toBe(true);
       expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
       // No request hash goes with the refusal, so an evaluation whose reads

@@ -1303,11 +1303,9 @@ export function sqliteQuery(
     if (crossSpace && requestConfidentiality().length > 0) {
       // On the issuing transaction, whose flow join is non-empty by
       // construction — that is the condition this fires on — so route 2
-      // declares that clause on `/pending` and `/error` here. The refusal
-      // path is the one place a reader of the control state carries the
-      // parameter's label, and a pattern rendering "this query was refused"
-      // inherits it; the suite pins that beside the success path, where such
-      // a reader carries nothing.
+      // declares that clause on the control paths this writes. A pattern
+      // rendering "this query was refused" inherits it, as a reader of the
+      // flag a labeled claim raised does.
       //
       // `nonReactive`, like the claim below: the write machinery's read of
       // the region it is about to write must not make this action depend on
