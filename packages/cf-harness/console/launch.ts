@@ -10,14 +10,22 @@
  *     --fabric-api-url http://localhost:8000 --store <dir>
  *
  * The console needs an identity, a space, a toolshed URL, the store that
- * toolshed serves, and the two `runsc-cfc` sidecar directories the sandbox's
- * mediation moves over. An operator transcribing those by hand gets a console
- * that starts cleanly and is wrong: a store keyed to a superseded labs pin
- * reads as "no data at cell", and sidecar directories no registered runtime
- * writes drop every input label in silence. So each value is derived from the
- * record that decides it, tagged with where it came from, and printed once
- * before the server binds. Anything that cannot be derived is a named flag
- * whose absence is an error naming it, never a default nobody chose.
+ * toolshed serves, and, on the Docker driver, the two `runsc-cfc` sidecar
+ * directories the sandbox's mediation moves over. An operator transcribing
+ * those by hand gets a console that starts cleanly and is wrong: a store keyed
+ * to a superseded labs pin reads as "no data at cell", and sidecar directories
+ * no registered runtime writes drop every input label in silence. So each
+ * value is derived from the record that decides it, tagged with where it came
+ * from, and printed once before the server binds. Anything that cannot be
+ * derived is a named flag whose absence is an error naming it, never a default
+ * nobody chose.
+ *
+ * Which driver the console's sandbox runs on is read from the environment,
+ * through the derivation every cf-harness entrypoint shares, and the server
+ * reads the same variables the same way. A console on the direct runsc driver
+ * reads no Docker runtime table and needs no sidecar directory; the launch
+ * prints the `runsc` binary, rootfs and CFC policy the environment named in
+ * their place.
  *
  * A loom instance is one source among several rather than the shape of this
  * module: `--instance` reads the identity, space and toolshed URL off that
@@ -43,6 +51,14 @@ import {
   registeredCfcSidecarHostDirs,
 } from "../src/sandbox/docker-runsc.ts";
 import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
+import {
+  resolveSandboxRuntimeSelection,
+  RUNSC_BINARY_ENV,
+  RUNSC_CFC_POLICY_ENV,
+  SANDBOX_ROOTFS_ENV,
+  SANDBOX_RUNTIME_ENV,
+  type SandboxRuntimeSelection,
+} from "../src/sandbox/runtime-selection.ts";
 import {
   connectorGrantLabel,
   connectorGrantName,
@@ -165,6 +181,22 @@ export interface ConsoleLaunchRecords {
   dockerRuntimes?: unknown;
   /** Why `dockerRuntimes` is absent, for error text. */
   dockerRuntimesUnreadable?: string;
+  /**
+   * The sandbox runtime the launch environment selects. Absent, or naming
+   * `docker`, the console runs on the Docker driver.
+   */
+  sandbox?: ConsoleLaunchSandbox;
+}
+
+/** The sandbox runtime a launch's environment selects. */
+export interface ConsoleLaunchSandbox {
+  /** As `resolveSandboxRuntimeSelection` derives it from the environment. */
+  selection: SandboxRuntimeSelection;
+  /**
+   * Whether `CF_HARNESS_RUNSC_CFC_POLICY` named the policy, rather than the
+   * selection finding the default one under `HOME`.
+   */
+  policyNamed: boolean;
 }
 
 /**
@@ -464,29 +496,53 @@ export const resolveConsoleLaunchPlan = (
     }
   }
 
-  const sidecars = registeredCfcSidecarHostDirs({
-    runtimeName: RUNSC_CFC_RUNTIME,
-    runtimes: records.dockerRuntimes,
-  });
-  const registrationSource = records.dockerRuntimesUnreadable ??
-    `no \`${RUNSC_CFC_RUNTIME}\` runtime \`docker info\` reports names it`;
-  const cfcResultDir = options.cfcResultDir ?? sidecars.resultDir;
-  if (cfcResultDir === undefined) {
-    throw new Error(
-      `no directory is registered for \`--cfc-result-dir\`: ` +
-        `${registrationSource}; set \`--cfc-result-dir\` to the directory ` +
-        `the runtime writes its result sidecars to`,
-    );
-  }
-  const cfcInvocationContextDir = options.cfcInvocationContextDir ??
-    sidecars.invocationContextDir;
-  if (cfcInvocationContextDir === undefined) {
-    throw new Error(
-      `no directory is registered for ` +
-        `\`--cfc-invocation-context-dir\`: ${registrationSource}; set ` +
-        `\`--cfc-invocation-context-dir\` to the directory the runtime ` +
-        `reads invocation contexts from`,
-    );
+  const runsc = records.sandbox?.selection.sandboxRuntimeKind === "runsc"
+    ? records.sandbox
+    : undefined;
+  let cfcResultDir: string | undefined;
+  let cfcInvocationContextDir: string | undefined;
+  if (runsc !== undefined) {
+    // The direct driver carries its CFC transport on descriptors, so a
+    // directory named here would be printed and exported while nothing reads
+    // it.
+    const named = options.cfcResultDir !== undefined
+      ? "--cfc-result-dir"
+      : options.cfcInvocationContextDir !== undefined
+      ? "--cfc-invocation-context-dir"
+      : undefined;
+    if (named !== undefined) {
+      throw new Error(
+        `\`${named}\` names a sidecar directory of the Docker driver, and ` +
+          `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct runsc ` +
+          `driver, which reads none; drop the flag, or unset ` +
+          `\`${SANDBOX_RUNTIME_ENV}\` to run on Docker`,
+      );
+    }
+  } else {
+    const sidecars = registeredCfcSidecarHostDirs({
+      runtimeName: RUNSC_CFC_RUNTIME,
+      runtimes: records.dockerRuntimes,
+    });
+    const registrationSource = records.dockerRuntimesUnreadable ??
+      `no \`${RUNSC_CFC_RUNTIME}\` runtime \`docker info\` reports names it`;
+    cfcResultDir = options.cfcResultDir ?? sidecars.resultDir;
+    if (cfcResultDir === undefined) {
+      throw new Error(
+        `no directory is registered for \`--cfc-result-dir\`: ` +
+          `${registrationSource}; set \`--cfc-result-dir\` to the directory ` +
+          `the runtime writes its result sidecars to`,
+      );
+    }
+    cfcInvocationContextDir = options.cfcInvocationContextDir ??
+      sidecars.invocationContextDir;
+    if (cfcInvocationContextDir === undefined) {
+      throw new Error(
+        `no directory is registered for ` +
+          `\`--cfc-invocation-context-dir\`: ${registrationSource}; set ` +
+          `\`--cfc-invocation-context-dir\` to the directory the runtime ` +
+          `reads invocation contexts from`,
+      );
+    }
   }
 
   if (
@@ -577,20 +633,22 @@ export const resolveConsoleLaunchPlan = (
       value: storeDirectoryPath(store.value),
       source: store.source,
     },
-    {
-      name: "cfc results",
-      value: cfcResultDir,
-      source: options.cfcResultDir === undefined
-        ? registrationSourceName
-        : NAMED,
-    },
-    {
-      name: "cfc contexts",
-      value: cfcInvocationContextDir,
-      source: options.cfcInvocationContextDir === undefined
-        ? registrationSourceName
-        : NAMED,
-    },
+    ...(runsc !== undefined ? runscResolvedValues(runsc) : [
+      {
+        name: "cfc results",
+        value: cfcResultDir!,
+        source: options.cfcResultDir === undefined
+          ? registrationSourceName
+          : NAMED,
+      },
+      {
+        name: "cfc contexts",
+        value: cfcInvocationContextDir!,
+        source: options.cfcInvocationContextDir === undefined
+          ? registrationSourceName
+          : NAMED,
+      },
+    ]),
     {
       name: "posture",
       value: `${posture}, flow labels ${flowLabels}, ${enforcementMode}`,
@@ -638,8 +696,12 @@ export const resolveConsoleLaunchPlan = (
     CF_HARNESS_FABRIC_CFC_POSTURE: posture,
     CF_HARNESS_FABRIC_CFC_FLOW_LABELS: flowLabels,
     CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: enforcementMode,
-    CF_HARNESS_RUNSC_CFC_RESULT_DIR: cfcResultDir,
-    CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: cfcInvocationContextDir,
+    ...(cfcResultDir !== undefined && cfcInvocationContextDir !== undefined
+      ? {
+        CF_HARNESS_RUNSC_CFC_RESULT_DIR: cfcResultDir,
+        CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: cfcInvocationContextDir,
+      }
+      : {}),
     MEMORY_DIR: storeDirectoryPath(store.value),
     ...(connectorGrants.length > 0
       ? { CF_HARNESS_CONNECTOR_GRANTS: JSON.stringify(connectorGrants) }
@@ -658,6 +720,43 @@ export const resolveConsoleLaunchPlan = (
     resolved,
     health: { resolved, connectors: connectorHealth },
   };
+};
+
+/**
+ * What a console on the direct runsc driver runs under, each value beside the
+ * variable that named it. These pass through to the console as inherited
+ * rather than being set by the launch, and are printed so the report
+ * accounts for them.
+ */
+const runscResolvedValues = (
+  sandbox: ConsoleLaunchSandbox,
+): ResolvedValue[] => {
+  const { selection } = sandbox;
+  const inherited = (variable: string) => `\`${variable}\`, inherited`;
+  return [{
+    name: "sandbox",
+    value: "runsc",
+    source: inherited(SANDBOX_RUNTIME_ENV),
+  }, {
+    name: "runsc",
+    value: selection.sandboxRunscBinary ?? "`runsc`, looked for on `PATH`",
+    source: selection.sandboxRunscBinary !== undefined
+      ? inherited(RUNSC_BINARY_ENV)
+      : "harness default",
+  }, {
+    name: "rootfs",
+    value: selection.sandboxRootfs ?? "(the driver's default)",
+    source: selection.sandboxRootfs !== undefined
+      ? inherited(SANDBOX_ROOTFS_ENV)
+      : "harness default",
+  }, {
+    name: "cfc policy",
+    value: selection.sandboxCfcPolicy ??
+      "(none: `runsc` runs without `--cfc`)",
+    source: sandbox.policyNamed
+      ? inherited(RUNSC_CFC_POLICY_ENV)
+      : "harness default",
+  }];
 };
 
 /** The lines the launcher prints before the server binds. */
@@ -870,13 +969,24 @@ export const prepareConsoleLaunch = async (
   const inheritedSpace = nonEmpty(env.CF_HARNESS_FABRIC_SPACE) ??
     nonEmpty(env.CF_SPACE);
 
-  // Not configurable: the sandbox runs `docker`, so a launcher reading the
-  // runtime table from anything else would print directories the runs never
-  // reach.
-  const docker = await io.readDockerRuntimes();
+  // Read the way the server reads it, from the same environment, so the
+  // launch and the console describe one sandbox.
+  const selection = await resolveSandboxRuntimeSelection(env, {}, {
+    cwd: Deno.cwd(),
+  });
+  // Only the Docker driver has a runtime table to read. Not configurable
+  // there: that sandbox runs `docker`, so a launcher reading the table from
+  // anything else would print directories the runs never reach.
+  const docker = selection.sandboxRuntimeKind === "runsc"
+    ? {}
+    : await io.readDockerRuntimes();
 
   const plan = resolveConsoleLaunchPlan({
     ...(instance !== undefined ? { instance } : {}),
+    sandbox: {
+      selection,
+      policyNamed: nonEmpty(env[RUNSC_CFC_POLICY_ENV]) !== undefined,
+    },
     ...(docker.runtimes !== undefined
       ? { dockerRuntimes: docker.runtimes }
       : {}),

@@ -890,6 +890,101 @@ describe("launch", () => {
       ).rejects.toThrow("daemon is not running");
     });
 
+    /** The selection Loom hands a console on the native runtime. */
+    const RUNSC_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+    };
+
+    it("reads no Docker runtime table for a console on the runsc runtime", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        RUNSC_ENV,
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ unreadable: "Docker is not running" });
+          },
+        }),
+      );
+
+      expect(reads).toBe(0);
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
+      );
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR",
+      );
+      const names = plan.resolved.map(({ name }) => name);
+      expect(names).not.toContain("cfc results");
+      expect(names).not.toContain("cfc contexts");
+      expect(plan.resolved).toEqual(expect.arrayContaining([
+        {
+          name: "sandbox",
+          value: "runsc",
+          source: "`CF_HARNESS_SANDBOX_RUNTIME`, inherited",
+        },
+        {
+          name: "runsc",
+          value: "/store/bin/runsc",
+          source: "`CF_HARNESS_RUNSC_BINARY`, inherited",
+        },
+        {
+          name: "rootfs",
+          value: "/store/images/kitchensink",
+          source: "`CF_HARNESS_SANDBOX_ROOTFS`, inherited",
+        },
+        {
+          name: "cfc policy",
+          value: "/store/policy.json",
+          source: "`CF_HARNESS_RUNSC_CFC_POLICY`, inherited",
+        },
+      ]));
+    });
+
+    it("reads the Docker runtime table for a console the environment puts on Docker", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+          },
+        }),
+      );
+
+      expect(reads).toBe(1);
+      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
+        "/store/runsc-cfc/sidecars/results",
+      );
+      expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
+    });
+
+    it("throws naming the sidecar flag a console on the runsc runtime has no use for", async () => {
+      await expect(
+        prepareConsoleLaunch(
+          [...NAMED_ARGS, "--cfc-result-dir", "/elsewhere/results"],
+          RUNSC_ENV,
+          io(),
+        ),
+      ).rejects.toThrow("`--cfc-result-dir`");
+    });
+
+    it("throws the shared derivation's refusal for a runtime it does not know", async () => {
+      await expect(
+        prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
+          io(),
+        ),
+      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
+    });
+
     it("ranks an instance's record above what the shell exported", async () => {
       // An exported variable is a fact about the shell; an instance that wrote
       // down its own store has said something more specific. Ranking them the

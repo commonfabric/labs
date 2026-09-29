@@ -5,7 +5,9 @@ import { Identity } from "@commonfabric/identity";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   consoleHealthRows,
+  consoleSandboxBanner,
   ConsoleServer,
+  createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   resolveConsoleConfig,
 } from "../../console/server.ts";
@@ -14,7 +16,12 @@ import {
   harnessSessionChatPolicy,
   harnessSessionEngineOptions,
 } from "../../src/session-assembly.ts";
-import type { CfHarnessEngine } from "../../src/engine.ts";
+import { CfHarnessEngine } from "../../src/engine.ts";
+import {
+  bashToolDescriptor,
+  bashToolDescriptorForRuntime,
+} from "../../src/tools/bash.ts";
+import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -593,6 +600,259 @@ describe("console/server", () => {
       } finally {
         await Deno.remove(directory, { recursive: true });
       }
+    });
+  });
+
+  describe("the sandbox runtime", () => {
+    /** The selection Loom hands a console on the native runtime. */
+    const RUNSC_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+    };
+
+    const ARGS = [
+      "--fabric-identity",
+      "key.pkcs8",
+      "--fabric-space",
+      "console-test",
+      "--session-db",
+      "none",
+    ];
+
+    /** A runner that runs nothing: these tests read what a turn would build. */
+    const inertRunner: ProcessRunner = {
+      run: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
+    };
+
+    /**
+     * The sandbox a turn of this console runs in, built by the engine from
+     * the options the console hands every turn.
+     */
+    const turnSandbox = async (env: Record<string, string>) => {
+      const resolved = await resolveConsoleConfig(ARGS, env, "/console");
+      const { basePromptLoopOptions } = createConsoleInteractiveServiceOptions(
+        resolved,
+        {
+          modelProvider: "openai-compatible-gateway",
+          modelAuthSource: "none",
+          gatewayAuthMode: "none",
+        },
+        () => {},
+      );
+      const engine = new CfHarnessEngine({
+        ...basePromptLoopOptions,
+        runId: "console-turn",
+        processRunner: inertRunner,
+      });
+      return engine.sandbox.describe();
+    };
+
+    it("builds the direct runsc driver from the runtime the environment selects", async () => {
+      const description = await turnSandbox(RUNSC_ENV);
+
+      expect(description.kind).toBe("runsc-cfc");
+      expect(description.sessions).toBe(true);
+      expect(description.cfc?.image).toBe("/store/images/kitchensink");
+      expect(description.cfc?.runtimeName).toBeUndefined();
+      expect(description.cfc?.invocationContextTransport).toBe("fd");
+      const { inputSchema } = bashToolDescriptorForRuntime(description);
+      expect(
+        Object.keys(
+          (inputSchema as { properties?: Record<string, unknown> })
+            .properties ?? {},
+        ),
+      ).toContain("session");
+    });
+
+    for (
+      const [name, env] of [
+        ["names no runtime", {}],
+        ["names `docker`", { CF_HARNESS_SANDBOX_RUNTIME: "docker" }],
+      ] as const
+    ) {
+      it(`builds the Docker driver, with its sidecar transports, when the environment ${name}`, async () => {
+        const description = await turnSandbox(env);
+
+        expect(description).toEqual({
+          kind: "docker-runsc-cfc",
+          defaultWorkingDirectory: "/workspace",
+          cfc: {
+            runtimeRequested: true,
+            runtimeName: "runsc-cfc",
+            image:
+              "us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest",
+            workspaceMountPath: "/workspace",
+            mounts: [{
+              kind: "workspace",
+              hostPath: "/console/.cf-harness-console/workspace",
+              sandboxPath: "/workspace",
+              readOnly: false,
+            }],
+            networkMode: "bridge",
+            extraDockerArgsCount: 0,
+            invocationContextTransport: "sidecar",
+            invocationContextTransportReadiness: "unverified",
+            invocationContextConfiguredPath:
+              "/console/.cf-harness-console/cfc/invocation-context",
+          },
+        });
+        expect(bashToolDescriptorForRuntime(description)).toEqual(
+          bashToolDescriptor,
+        );
+      });
+    }
+
+    it("sites the Docker driver's sidecar directories only for a console on Docker", async () => {
+      const docker = await resolveConsoleConfig(ARGS, {}, "/console");
+      const runsc = await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console");
+
+      expect([docker.cfcResultDir, docker.cfcInvocationContextDir]).toEqual([
+        "/console/.cf-harness-console/cfc/results",
+        "/console/.cf-harness-console/cfc/invocation-context",
+      ]);
+      expect([runsc.cfcResultDir, runsc.cfcInvocationContextDir]).toEqual([
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("throws the shared derivation's refusal for a runtime it does not know", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
+          "/console",
+        ),
+      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
+    });
+
+    for (
+      const [flag, variable] of [
+        ["--sandbox-runtime", "CF_HARNESS_SANDBOX_RUNTIME"],
+        ["--sandbox-rootfs", "CF_HARNESS_SANDBOX_ROOTFS"],
+        ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
+      ] as const
+    ) {
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\``, async () => {
+        await expect(
+          resolveConsoleConfig([...ARGS, flag, "runsc"], {}, "/console"),
+        ).rejects.toThrow(variable);
+        await expect(
+          resolveConsoleConfig([...ARGS, `${flag}=runsc`], {}, "/console"),
+        ).rejects.toThrow(variable);
+      });
+    }
+
+    it("observes the runsc configuration, and asks Docker nothing, for a console on the runsc runtime", async () => {
+      let dockerReads = 0;
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => {
+          dockerReads += 1;
+          return Promise.resolve({ runtimes: { "runsc-cfc": {} } });
+        },
+      );
+
+      await health.refresh();
+
+      expect(dockerReads).toBe(0);
+      expect(
+        health.snapshot().rows.filter((row) => row.group === "sandbox").map((
+          { id, state, value },
+        ) => ({ id, state, value })),
+      ).toEqual([
+        { id: "config.sandbox", state: "ok", value: "runsc" },
+        { id: "sandbox.runsc", state: "failed", value: "missing" },
+        { id: "sandbox.runtime", state: "failed", value: "CFC policy missing" },
+      ]);
+    });
+
+    it("observes the Docker runtime table for a console on Docker", async () => {
+      let dockerReads = 0;
+      const health = createConsoleHealth(
+        await resolveConsoleConfig(ARGS, {}, "/console"),
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => {
+          dockerReads += 1;
+          return Promise.resolve({ runtimes: { "runsc-cfc": {} } });
+        },
+      );
+
+      await health.refresh();
+
+      expect(dockerReads).toBe(1);
+      expect(
+        health.snapshot().rows.filter((row) => row.group === "sandbox").map((
+          { id, state, value },
+        ) => ({ id, state, value })),
+      ).toEqual([
+        { id: "config.sandbox", state: "ok", value: "docker" },
+        { id: "sandbox.docker", state: "ok", value: "responding" },
+        {
+          id: "sandbox.runtime",
+          state: "ok",
+          value: "runsc-cfc registered",
+        },
+      ]);
+    });
+
+    it("returns the sidecar directories as its banner for a console on Docker", async () => {
+      expect(
+        consoleSandboxBanner(await resolveConsoleConfig(ARGS, {}, "/console")),
+      ).toEqual([
+        "  results:    /console/.cf-harness-console/cfc/results",
+        "  contexts:   /console/.cf-harness-console/cfc/invocation-context",
+      ]);
+    });
+
+    it("returns the runsc binary, rootfs and policy as its banner for a console on the runsc runtime", async () => {
+      expect(
+        consoleSandboxBanner(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        ),
+      ).toEqual([
+        "  sandbox:    runsc, the direct driver (no Docker)",
+        "  runsc:      /store/bin/runsc",
+        "  rootfs:     /store/images/kitchensink",
+        "  policy:     /store/policy.json",
+      ]);
+    });
+
+    it("reports the runsc runtime's rows, and no Docker row, for a console on the runsc runtime", async () => {
+      const runscServer = new ConsoleServer(
+        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+        () => server.service,
+      );
+
+      const response = await runscServer.handle(
+        getRequest("/api/health/detail"),
+      );
+      const { rows } = await response.json() as {
+        rows: readonly ConsoleHealthRow[];
+      };
+
+      expect(
+        rows.filter((row) => row.group === "sandbox").map((
+          { id, label, value },
+        ) => ({ id, label, value })),
+      ).toEqual([
+        { id: "config.sandbox", label: "Sandbox", value: "runsc" },
+        { id: "sandbox.runsc", label: "Runsc Binary", value: "not checked" },
+        {
+          id: "sandbox.runtime",
+          label: "Sandbox Runtime",
+          value: "not checked",
+        },
+      ]);
     });
   });
 

@@ -2,13 +2,40 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
+  type ConsolePathReading,
   consolePatternIndexHealthProbes,
+  consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  readConsolePath,
 } from "../../console/health-probes.ts";
+import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
+import { join } from "@std/path";
 import { ConsoleHealth } from "../../console/health.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
 
 const signer = await Identity.fromPassphrase("console health observations");
+
+/**
+ * Whether this process searches a directory whose mode forbids it, as a
+ * privileged one does. No mode makes a path unreadable to such a process, so
+ * the case needing one cannot be set up for it.
+ */
+const searchesDespiteMode = (): boolean => {
+  const dir = Deno.makeTempDirSync({ prefix: "cf-harness-path-mode-" });
+  try {
+    Deno.mkdirSync(join(dir, "in"));
+    Deno.chmodSync(dir, 0o000);
+    try {
+      Deno.statSync(join(dir, "in"));
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    Deno.chmodSync(dir, 0o700);
+    Deno.removeSync(dir, { recursive: true });
+  }
+};
 
 describe("health-probes", () => {
   describe("consoleSandboxHealthProbe()", () => {
@@ -58,6 +85,184 @@ describe("health-probes", () => {
         ]);
       });
     }
+  });
+
+  describe("consoleRunscHealthProbe()", () => {
+    /** The parts of a resolved configuration the probe reads. */
+    const config = (policy?: string) =>
+      ({
+        runscBinary: "/store/bin/runsc",
+        rootfs: "/store/images/kitchensink",
+        ...(policy !== undefined ? { cfcPolicyPath: policy } : {}),
+      }) as RunscSandboxConfig;
+
+    /** Answers each path from `readings`, and an executable file otherwise. */
+    const examine =
+      (readings: Record<string, ConsolePathReading>) =>
+      (path: string): ConsolePathReading =>
+        readings[path] ?? { found: "file", executable: true };
+
+    const observe = async (
+      resolve: () => RunscSandboxConfig,
+      readings: Record<string, ConsolePathReading> = {},
+    ) =>
+      (await consoleRunscHealthProbe(resolve, examine(readings)).read()).map((
+        { id, state, value },
+      ) => ({ id, state, value }));
+
+    it("returns both rows ok for an executable binary and a present policy", async () => {
+      const rows = await consoleRunscHealthProbe(
+        () => config("/store/policy.json"),
+        examine({}),
+      ).read();
+
+      expect(rows.map(({ id, state, value }) => ({ id, state, value })))
+        .toEqual([
+          { id: "sandbox.runsc", state: "ok", value: "executable" },
+          {
+            id: "sandbox.runtime",
+            state: "ok",
+            value: "direct runsc driver, CFC policy configured",
+          },
+        ]);
+      expect(rows[0]).toMatchObject({
+        label: "Runsc Binary",
+        group: "sandbox",
+        source: "runsc configuration",
+        detail: "/store/bin/runsc",
+      });
+      expect(rows[1]).toMatchObject({
+        label: "Sandbox Runtime",
+        detail:
+          "runsc /store/bin/runsc; rootfs /store/images/kitchensink; CFC policy /store/policy.json",
+      });
+      expect(rows.every((row) => Number.isFinite(Date.parse(row.checkedAt!))))
+        .toBe(true);
+    });
+
+    for (
+      const [what, reading, value] of [
+        ["nothing at the binary path", { found: "absent" }, "missing"],
+        [
+          "a file without execute permission",
+          { found: "file", executable: false },
+          "not executable",
+        ],
+        [
+          "a directory at the binary path",
+          { found: "other" },
+          "not executable",
+        ],
+      ] as const
+    ) {
+      it(`returns the binary row failed and \`${value}\` for ${what}`, async () => {
+        expect(
+          (await observe(() => config("/store/policy.json"), {
+            "/store/bin/runsc": reading,
+          }))[0],
+        ).toEqual({ id: "sandbox.runsc", state: "failed", value });
+      });
+    }
+
+    it("returns the binary row unknown when the binary could not be looked at", async () => {
+      expect(
+        (await observe(() => config("/store/policy.json"), {
+          "/store/bin/runsc": { found: "unreadable", reason: "EACCES" },
+        }))[0],
+      ).toEqual({
+        id: "sandbox.runsc",
+        state: "unknown",
+        value: "not verified",
+      });
+    });
+
+    it("returns the runtime row degraded when no CFC policy is configured", async () => {
+      expect((await observe(() => config()))[1]).toEqual({
+        id: "sandbox.runtime",
+        state: "degraded",
+        value: "direct runsc driver, no CFC policy",
+      });
+    });
+
+    it("returns the runtime row failed when the configured CFC policy is absent", async () => {
+      expect(
+        (await observe(() => config("/store/policy.json"), {
+          "/store/policy.json": { found: "absent" },
+        }))[1],
+      ).toEqual({
+        id: "sandbox.runtime",
+        state: "failed",
+        value: "CFC policy missing",
+      });
+    });
+
+    it("returns the runtime row failed with the driver's reason when the configuration is refused", async () => {
+      const rows = await consoleRunscHealthProbe(() => {
+        throw new Error("runsc sandbox needs a rootfs");
+      }, examine({})).read();
+
+      expect(rows.map(({ id, state, value }) => ({ id, state, value })))
+        .toEqual([
+          { id: "sandbox.runsc", state: "unknown", value: "not verified" },
+          {
+            id: "sandbox.runtime",
+            state: "failed",
+            value: "configuration refused",
+          },
+        ]);
+      expect(rows[1].reason).toBe("runsc sandbox needs a rootfs");
+    });
+  });
+
+  describe("readConsolePath()", () => {
+    it("returns what is at each path, and absent only for a path that is not there", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "cf-harness-path-" });
+      try {
+        const executable = join(dir, "runsc");
+        const plain = join(dir, "policy.json");
+        await Deno.writeTextFile(executable, "");
+        await Deno.chmod(executable, 0o755);
+        await Deno.writeTextFile(plain, "{}");
+        await Deno.chmod(plain, 0o644);
+
+        expect(readConsolePath(executable)).toEqual({
+          found: "file",
+          executable: true,
+        });
+        expect(readConsolePath(plain)).toEqual({
+          found: "file",
+          executable: false,
+        });
+        expect(readConsolePath(dir)).toEqual({ found: "other" });
+        expect(readConsolePath(join(dir, "missing"))).toEqual({
+          found: "absent",
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it({
+      name:
+        "returns unreadable, not absent, for a path it has no permission to look at",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        const dir = await Deno.makeTempDir({ prefix: "cf-harness-path-" });
+        const locked = join(dir, "locked");
+        try {
+          await Deno.mkdir(locked);
+          await Deno.writeTextFile(join(locked, "runsc"), "");
+          await Deno.chmod(locked, 0o000);
+
+          expect(readConsolePath(join(locked, "runsc")).found).toBe(
+            "unreadable",
+          );
+        } finally {
+          await Deno.chmod(locked, 0o700);
+          await Deno.remove(dir, { recursive: true });
+        }
+      },
+    });
   });
 
   describe("consolePatternIndexHealthProbes()", () => {

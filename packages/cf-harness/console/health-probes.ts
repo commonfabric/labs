@@ -10,6 +10,7 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { DEFAULT_DOCKER_BINARY } from "../src/sandbox/docker-runsc.ts";
 import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
+import type { RunscSandboxConfig } from "../src/sandbox/runsc.ts";
 import {
   type ConsoleHealthFact,
   type ConsoleHealthProbe,
@@ -78,6 +79,174 @@ export const consoleSandboxHealthProbe = (
             "Install the runsc-cfc runtime and reload Docker's runtime registration.",
         }),
       }];
+    },
+  };
+};
+
+/** What a look at one host path found. */
+export type ConsolePathReading =
+  | { found: "file"; executable: boolean }
+  | { found: "other" }
+  | { found: "absent" }
+  | { found: "unreadable"; reason: string };
+
+/**
+ * Looks at one host path without following it anywhere else. Only a path that
+ * is not there reads as absent; any other failure to look is unreadable,
+ * which leaves the fact it would have established unknown.
+ */
+export const readConsolePath = (path: string): ConsolePathReading => {
+  let info: Deno.FileInfo;
+  try {
+    info = Deno.statSync(path);
+  } catch (error) {
+    return error instanceof Deno.errors.NotFound ? { found: "absent" } : {
+      found: "unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return info.isFile
+    ? { found: "file", executable: ((info.mode ?? 0) & 0o111) !== 0 }
+    : { found: "other" };
+};
+
+/**
+ * Checks the direct runsc driver without starting a sandbox and without
+ * consulting Docker: that its configuration resolves the way a turn resolves
+ * it, that the `runsc` binary it names is an executable file, and whether a
+ * CFC policy is configured and present. An executable binary does not prove a
+ * sandbox can execute a task.
+ *
+ * `resolve` throws where a turn would be refused. `examine` looks at one
+ * path; both run synchronously, so an observation holds no operation open.
+ */
+export const consoleRunscHealthProbe = (
+  resolve: () => RunscSandboxConfig,
+  examine: (path: string) => ConsolePathReading = readConsolePath,
+): ConsoleHealthProbe => {
+  const source = "runsc configuration";
+  const initial: ConsoleHealthFact[] = [{
+    id: "sandbox.runsc",
+    group: "sandbox",
+    label: "Runsc Binary",
+    value: "not checked",
+    source,
+  }, {
+    id: "sandbox.runtime",
+    group: "sandbox",
+    label: "Sandbox Runtime",
+    value: "not checked",
+    source,
+  }];
+  const unavailable = (checkedAt: string): ConsoleHealthRow[] =>
+    initial.map((row) => ({
+      ...row,
+      state: "unknown",
+      checkedAt,
+      value: "not verified",
+      reason: "The runsc configuration could not be examined.",
+    }));
+  return {
+    id: "sandbox",
+    initial,
+    unavailable,
+    read: () => {
+      const checkedAt = new Date().toISOString();
+      let config: RunscSandboxConfig;
+      try {
+        config = resolve();
+      } catch (error) {
+        return Promise.resolve([{
+          ...initial[0],
+          state: "unknown",
+          checkedAt,
+          value: "not verified",
+          reason:
+            "The runsc configuration did not resolve, so no binary was examined.",
+        }, {
+          ...initial[1],
+          state: "failed",
+          checkedAt,
+          value: "configuration refused",
+          reason: error instanceof Error ? error.message : String(error),
+          remedy:
+            "Correct the runsc settings in the console's environment (CF_HARNESS_RUNSC_BINARY, CF_HARNESS_SANDBOX_ROOTFS, CF_HARNESS_RUNSC_CFC_POLICY) or its host mounts, then restart the console.",
+        }]);
+      }
+      const policy = config.cfcPolicyPath;
+      const detail = `runsc ${config.runscBinary}; rootfs ${config.rootfs}; ` +
+        `CFC policy ${policy ?? "none"}`;
+      const binary = examine(config.runscBinary);
+      const binaryRow: ConsoleHealthRow = binary.found === "unreadable"
+        ? {
+          ...initial[0],
+          detail: config.runscBinary,
+          state: "unknown",
+          checkedAt,
+          value: "not verified",
+          reason: binary.reason,
+        }
+        : binary.found === "file" && binary.executable
+        ? {
+          ...initial[0],
+          detail: config.runscBinary,
+          state: "ok",
+          checkedAt,
+          value: "executable",
+        }
+        : {
+          ...initial[0],
+          detail: config.runscBinary,
+          state: "failed",
+          checkedAt,
+          value: binary.found === "absent" ? "missing" : "not executable",
+          reason: binary.found === "absent"
+            ? "Nothing exists at the runsc binary path."
+            : "The runsc binary path is not an executable file.",
+          remedy:
+            "Install runsc there, or set CF_HARNESS_RUNSC_BINARY to an executable runsc, then restart the console.",
+        };
+      const policyReading = policy === undefined ? undefined : examine(policy);
+      const runtimeRow: ConsoleHealthRow = policyReading === undefined
+        ? {
+          ...initial[1],
+          detail,
+          state: "degraded",
+          checkedAt,
+          value: "direct runsc driver, no CFC policy",
+          reason:
+            "runsc runs without --cfc, so a command's output carries no CFC result.",
+          remedy:
+            "Install a CFC policy, or set CF_HARNESS_RUNSC_CFC_POLICY to one, then restart the console.",
+        }
+        : policyReading.found === "file"
+        ? {
+          ...initial[1],
+          detail,
+          state: "ok",
+          checkedAt,
+          value: "direct runsc driver, CFC policy configured",
+        }
+        : policyReading.found === "unreadable"
+        ? {
+          ...initial[1],
+          detail,
+          state: "unknown",
+          checkedAt,
+          value: "not verified",
+          reason: policyReading.reason,
+        }
+        : {
+          ...initial[1],
+          detail,
+          state: "failed",
+          checkedAt,
+          value: "CFC policy missing",
+          reason: "No file exists at the configured CFC policy path.",
+          remedy:
+            "Install the policy there, or set CF_HARNESS_RUNSC_CFC_POLICY to one, then restart the console.",
+        };
+      return Promise.resolve([binaryRow, runtimeRow]);
     },
   };
 };
