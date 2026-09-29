@@ -425,10 +425,10 @@ of it.
   still rests on writer policies on the box and on the releasing code's
   output, and on endorsed releasing code that takes no public selector
   parameters. The preview reports whether every rule of `P` requires the
-  witness on a guard naming its releasing code outright (`witnessedRelease`),
-  and when one does not, the confirmation shows a warning that a member's own
-  code can learn the actor's stance one answer at a time, in place of a bound
-  on what an answer reveals.
+  witness on a guard naming its releasing code outright and releases only to
+  the seal (`witnessedRelease`), and when one does not, the confirmation shows
+  a warning that a member's own code can learn the actor's stance one answer
+  at a time, in place of a bound on what an answer reveals.
 - **An answer that does not change, through publication.** A stamp is
   replaced when its value is written. When a member's code points the room's
   box at a document of its own and the projector computes the answer it had

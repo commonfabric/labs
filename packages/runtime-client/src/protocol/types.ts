@@ -1326,8 +1326,9 @@ export type CustodySealPreview = {
 
   /**
    * Whether every release rule of the room's policy requires the seal's input
-   * witness. When `false`, a member's own code can learn the actor's entry
-   * one answer at a time, and the confirmation says so.
+   * witness and releases only to the seal, which publishes the answer once
+   * per instance. When `false`, a member's own code can learn the actor's
+   * entry one answer at a time, and the confirmation says so.
    */
   witnessedRelease: boolean;
 
