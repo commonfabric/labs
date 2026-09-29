@@ -265,7 +265,11 @@ export interface BoundTypeParameters {
 export interface BoundTypeArgument {
   readonly type: ts.Type;
   readonly node?: ts.TypeNode;
-  /** The bindings `node` is written under, absent where it is under none. */
+  /**
+   * The bindings `node` is written under, or, for an argument with no node,
+   * the bindings of the place the checker gave `type` at; absent where it is
+   * under none.
+   */
   readonly bound?: BoundTypeParameters;
 }
 

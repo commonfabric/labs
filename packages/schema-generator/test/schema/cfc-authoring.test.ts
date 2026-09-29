@@ -2850,5 +2850,110 @@ describe("Schema: CFC authoring aliases", () => {
         required: ["inner"],
       });
     });
+
+    describe("a user's generic alias of one", () => {
+      // The checker names a `Pick` or an `Omit` over literal keys by a user's
+      // alias of it, and holds that alias's arguments. The alias is followed,
+      // down a chain of aliases, to the one its body writes, with each
+      // parameter read as the argument it is given, so it reads as that alias
+      // written out with the arguments in place: labeled where that is, and
+      // unlabeled where that is.
+
+      const DECLARATIONS = `
+        type Select<T extends { x?: string }> = Pick<T, "x">;
+        type SelectLabelled<L extends readonly unknown[]> = Pick<Confidential<Pair, L>, "x">;
+        type SelectSecond<A, B extends { x?: string }> = Pick<B, "x">;
+        type SelectDefault<T extends { x?: string } = Sec<Pair>> = Pick<T, "x">;
+        type SelectSec<T extends { x?: string }> = Pick<Sec<T>, "x">;
+        type SelectBoth<T extends { x?: string }, L extends readonly unknown[]> =
+          Pick<Confidential<Sec<T>, L>, "x">;
+        type SelectNothing<T> = Pick<Sec<T>, never>;
+        type Forward<T extends { x?: string }> = Select<T>;
+        type ForwardSec<T extends { x?: string }> = Select<Sec<T>>;
+        type SelectOrDefault<T extends { x?: string }, U extends { x?: string } = Sec<T>> =
+          Pick<U, "x">;
+        type ForwardDefault<T extends { x?: string }> = SelectOrDefault<T>;
+        type ForwardLabelled<T extends { x?: string }> =
+          SelectSec<Confidential<T, readonly ["c"]>>;
+        type Id<X> = X;
+        type ForwardThroughId<T extends { x?: string }> = SelectSec<Id<T>>;
+      `;
+
+      for (
+        const [alias, written, ifc] of [
+          ["Select<Sec<Pair>>", 'Pick<Sec<Pair>, "x">', secret],
+          [
+            'SelectLabelled<readonly ["b"]>',
+            'Pick<Confidential<Pair, readonly ["b"]>, "x">',
+            { confidentiality: ["b"] },
+          ],
+          ["SelectSecond<Pair, Sec<Pair>>", 'Pick<Sec<Pair>, "x">', secret],
+          ["SelectSecond<Sec<Pair>, Pair>", 'Pick<Pair, "x">', undefined],
+          ["SelectDefault", 'Pick<Sec<Pair>, "x">', secret],
+          [
+            'SelectSec<Confidential<Pair, readonly ["b"]>>',
+            'Pick<Sec<Confidential<Pair, readonly ["b"]>>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectBoth<Pair, readonly ["b"]>',
+            'Pick<Confidential<Sec<Pair>, readonly ["b"]>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          ["Forward<Sec<Pair>>", 'Pick<Sec<Pair>, "x">', secret],
+          ["ForwardSec<Pair>", 'Pick<Sec<Pair>, "x">', secret],
+          ["ForwardDefault<Pair>", 'Pick<Sec<Pair>, "x">', secret],
+          [
+            'ForwardLabelled<Confidential<Pair, readonly ["d"]>>',
+            'Pick<Sec<Confidential<Confidential<Pair, readonly ["d"]>, readonly ["c"]>>, "x">',
+            { confidentiality: ["d", "c", "a"] },
+          ],
+          [
+            'ForwardThroughId<Confidential<Pair, readonly ["d"]>>',
+            'Pick<Sec<Confidential<Pair, readonly ["d"]>>, "x">',
+            { confidentiality: ["d", "a"] },
+          ],
+          [
+            "SelectLabelled<readonly [string]>",
+            'Pick<Confidential<Pair, readonly [string]>, "x">',
+            undefined,
+          ],
+          ["SelectSec<never>", 'Pick<Sec<never>, "x">', undefined],
+          ["SelectSec<any>", 'Pick<Sec<any>, "x">', undefined],
+          [
+            "SelectNothing<null | undefined>",
+            "Pick<Sec<null | undefined>, never>",
+            undefined,
+          ],
+          ["SelectNothing<void>", "Pick<Sec<void>, never>", secret],
+        ] as const
+      ) {
+        it(`reads \`${alias}\` as \`${written}\`, ${ifc ? "labeled" : "unlabeled"}`, async () => {
+          const read = await generate(alias, DECLARATIONS);
+          const direct = await generate(written, DECLARATIONS);
+          expect(read.schema).toEqual(direct.schema);
+          expect((read.schema as Record<string, unknown>).ifc).toEqual(ifc);
+          expect(read.diagnostics).toEqual([]);
+        });
+      }
+
+      it("keeps the operand's own label for a union argument, which the alias written out distributes over", async () => {
+        // Every member of the union carries the operand's carrier. Written
+        // out, the intersection distributes over the union and is read as
+        // no one labeled operand.
+        const read = await generate(
+          "SelectSec<{ x: string } | { x: string; z: 1 }>",
+          DECLARATIONS,
+        );
+        const direct = await generate(
+          'Pick<Sec<{ x: string } | { x: string; z: 1 }>, "x">',
+          DECLARATIONS,
+        );
+        expect((read.schema as Record<string, unknown>).ifc).toEqual(secret);
+        expect((direct.schema as Record<string, unknown>).ifc)
+          .toBeUndefined();
+        expect(read.diagnostics).toEqual([]);
+      });
+    });
   });
 });
