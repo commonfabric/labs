@@ -2342,17 +2342,29 @@ export class CellImpl<T extends FabricValue>
       // retry on conflict.
       if (!this.#synced) this.sync();
 
-      recordRelevantSchemaWritePolicyInput(
-        this.tx,
-        resolvedToValueLink,
-        resolvedToValueLink.schema ?? this.schema,
-      );
-
       const writeLink = resolveLink(
         this.runtime,
         this.tx,
         this.#link,
         "writeRedirect",
+      );
+
+      // The policy input describes the write, so it is recorded where the
+      // write lands: `writeLink`, which follows write redirects and stops at
+      // a plain link, as the diff below does. `resolvedToValueLink` follows
+      // the plain link too, to the document it names, and this write does
+      // not touch that document — it replaces the link at the slot, or
+      // writes the same link again. Recording there put the SLOT's schema,
+      // a writer claim on it included, on the linked document as a
+      // candidate envelope: a room's `box` slot claimed for the custody seal
+      // had the room's idea of an entry merged into the box's own schema on
+      // the second seal, and refused the seal's commit as an incompatible
+      // migration. The schema is the slot's own where the resolution left
+      // it none (a redirect carries its target's).
+      recordRelevantSchemaWritePolicyInput(
+        this.tx,
+        writeLink,
+        writeLink.schema ?? this.schema,
       );
 
       // TODO(@ubik2) investigate whether i need to check confidential as i walk down my own obj
