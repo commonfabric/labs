@@ -27,7 +27,12 @@ import { join } from "@std/path";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { ACLManager, type Cell, Runtime } from "@commonfabric/runner";
+import {
+  ACLManager,
+  type Cell,
+  type IExtendedStorageTransaction,
+  Runtime,
+} from "@commonfabric/runner";
 import {
   cfcLabelViewForResolvedCell,
   type CfcTrustConfigInput,
@@ -95,13 +100,26 @@ const trustedClick = () => {
 };
 
 /**
+ * How a member's own code, after the answer room's answer is published, would
+ * have the room show another instance's slot: running `propose` again with
+ * the member's seat alone, writing the terms of a room the member sealed
+ * alone over the room's `terms`, clearing `terms` so that `propose` writes
+ * them again, or writing another policy's reference over the room's
+ * `policy`. The host shows the slot the room's bound `terms` and `policy`
+ * name, so the room must keep both as their first write left them.
+ */
+type Repoint = "propose" | "terms" | "clear" | "policy";
+
+/**
  * Two members seal their stances into a room of `file`, and a reader of the
  * room is shown the projector's answer and not a member's rating. The host
  * publishes that answer only for the room whose rule requires the seal's
- * witness.
+ * witness. With `repoint`, a member's code then repoints the answer room, and
+ * the room still shows the answer its members sealed.
  */
 const sealAndRelease = async (
   file: typeof PROJECTOR | typeof ANSWER_ROOM,
+  repoint?: Repoint,
 ): Promise<void> => {
   const witnessed = file === ANSWER_ROOM;
   const [alice, bob, roomKey] = await Promise.all(
@@ -147,19 +165,22 @@ const sealAndRelease = async (
     const compiled = await host.patternManager.compilePattern(program, {
       space: S,
     });
-    const start = host.edit();
-    const piece = host.getCell<Record<string, unknown>>(
-      S,
-      file,
-      undefined,
-      start,
-    );
-    host.run(start, compiled, {}, piece);
-    host.prepareTxForCommit(start);
-    expect((await start.commit()).error).toBeUndefined();
-    await host.idle();
-    await host.storageManager.synced();
-    const room = piece.withTx(undefined);
+    const startRoom = async (cause: string) => {
+      const start = host.edit();
+      const piece = host.getCell<Record<string, unknown>>(
+        S,
+        cause,
+        undefined,
+        start,
+      );
+      host.run(start, compiled, {}, piece);
+      host.prepareTxForCommit(start);
+      expect((await start.commit()).error).toBeUndefined();
+      await host.idle();
+      await host.storageManager.synced();
+      return piece.withTx(undefined);
+    };
+    const room = await startRoom(file);
 
     // Each member's runtime attests its own seat, as it attests a profile's
     // owner-protected fields: the runtime binds the subject to the acting
@@ -212,11 +233,21 @@ const sealAndRelease = async (
     // Each member seals a rating per option from a draft at home, through
     // the room's own `terms` and `policy` cells, and the seal links the box
     // it sealed into into the room's `box`, as `cf-custody-seal` binds it.
-    const seal = async (identity: Identity, ratings: string[]) => {
+    const seal = async (
+      identity: Identity,
+      ratings: string[],
+      into = room,
+      seated = [alice.did(), bob.did()],
+    ) => {
       const runtime = runtimeFor(identity, trust);
       const home = identity.did();
       const tx = runtime.edit();
-      const draft = runtime.getCell(home, "stance-draft", {
+      // A draft of its own per room, so a second seal does not rewrite the
+      // first's from a runtime that has not read it.
+      const draft = runtime.getCell(home, [
+        "stance-draft",
+        into.getAsNormalizedFullLink().id,
+      ], {
         type: "object",
         ifc: { confidentiality: [cfcAtom.user(home)] },
       } as never, tx);
@@ -224,14 +255,11 @@ const sealAndRelease = async (
       expect((await tx.commit()).error).toBeUndefined();
       const own = (cell: Cell<unknown>) => runtime.getCellFromLink(cell);
       const prepared = await prepareCustodySeal(draft.withTx(undefined), {
-        terms: own(room.key("terms")),
-        policy: own(room.key("policy")),
-        box: own(room.key("box")),
+        terms: own(into.key("terms")),
+        policy: own(into.key("policy")),
+        box: own(into.key("box")),
       }, { allowedSources: [] });
-      expect((prepared.terms as { seats: string[] }).seats).toEqual([
-        alice.did(),
-        bob.did(),
-      ]);
+      expect((prepared.terms as { seats: string[] }).seats).toEqual(seated);
       expect(prepared.policy).toEqual(declared);
       // A rule naming its projector by identity alone makes the
       // confirmation warn instead of bounding what an answer reveals.
@@ -310,6 +338,94 @@ const sealAndRelease = async (
     // The published slot is what a reader of the room is shown.
     await published.answer.sync();
     expect(shownTo(bob.did(), published.answer)).toBe(true);
+
+    if (repoint !== undefined) {
+      // A room of the same pattern in the same space, which Bob seals alone
+      // and publishes. Its policy is the answer room's, and so are its terms
+      // but for the seats: the instance whose slot a member would have the
+      // room show.
+      const lone = await startRoom(`${file}-lone`);
+      lone.key("propose").send({
+        seats: [host.getCellFromLink(seats[1])],
+      } as never);
+      await host.idle();
+      await host.storageManager.synced();
+      await seal(bob, ["no", "yes", "no"], lone, [bob.did()]);
+      await waitForCellValue<string>(
+        host,
+        lone.key("choice"),
+        (value) => value === "sushi",
+        { stuckLabel: "the one-seat room's answer" },
+      );
+      const loneRoom = { terms: lone.key("terms"), policy: lone.key("policy") };
+      expect(
+        (await publishCustodyAnswer(loneRoom, lone.key("choice"))).value,
+      ).toBe("sushi");
+
+      // Code of a member's own, which is not `propose`, writing to the room.
+      const asMember = (write: (tx: IExtendedStorageTransaction) => void) =>
+        host.editWithRetry((tx) => {
+          setCfcImplementationIdentity(tx, {
+            kind: "verified",
+            moduleIdentity: "sha256:member-code",
+            symbol: "repointRoom",
+            bindingPath: ["repointRoom"],
+          });
+          write(tx);
+        });
+      const proposeAlone = () =>
+        room.key("propose").send({
+          seats: [host.getCellFromLink(seats[1])],
+        } as never);
+      const refusals: unknown[] = [];
+      switch (repoint) {
+        case "propose":
+          // The room's own handler, run again with the member's seat alone.
+          proposeAlone();
+          break;
+        case "terms":
+          // The room's terms repointed at the one-seat room's.
+          refusals.push(
+            (await asMember((tx) =>
+              room.key("terms").withTx(tx).set(lone.key("terms") as never)
+            )).error,
+          );
+          break;
+        case "clear":
+          // The room's terms cleared, so that `propose` writes them again.
+          refusals.push(
+            (await asMember((tx) =>
+              room.key("terms").withTx(tx).set(null as never)
+            )).error,
+          );
+          await host.idle();
+          proposeAlone();
+          break;
+        case "policy":
+          // The room's policy cell holding another policy's reference, with
+          // the room space as its subject.
+          refusals.push(
+            (await asMember((tx) =>
+              room.key("policy").withTx(tx).set({
+                ...declared,
+                policyDigest: `sha256:${"0".repeat(64)}`,
+              } as never)
+            )).error,
+          );
+          break;
+      }
+      await host.idle();
+      await host.storageManager.synced();
+      // What the room shows is still the answer its members sealed: not the
+      // one-seat room's, and not a slot that is empty or refused.
+      expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
+      // The member's write was refused, and `propose` wrote nothing again.
+      for (const refusal of refusals) expect(refusal).toBeDefined();
+      expect(
+        (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
+      ).toHaveLength(2);
+      return;
+    }
 
     // The room's own result must not answer a question the published answer
     // does not. A member's code points the box at a record repeating
@@ -412,5 +528,21 @@ describe("sealed custody through a pattern", () => {
 
   it("releases the demo-grade room's answer, and publishes nothing under its rule naming the projector alone", async () => {
     await sealAndRelease(PROJECTOR);
+  });
+
+  it("shows the published answer still when a member's code runs `propose` again with its own seat alone", async () => {
+    await sealAndRelease(ANSWER_ROOM, "propose");
+  });
+
+  it("shows the published answer still when a member's code repoints the room's terms at a room it sealed alone", async () => {
+    await sealAndRelease(ANSWER_ROOM, "terms");
+  });
+
+  it("shows the published answer still when a member's code clears the room's terms and runs `propose` again", async () => {
+    await sealAndRelease(ANSWER_ROOM, "clear");
+  });
+
+  it("shows the published answer still when a member's code writes another policy's reference over the room's policy", async () => {
+    await sealAndRelease(ANSWER_ROOM, "policy");
   });
 });
