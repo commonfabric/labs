@@ -34,12 +34,12 @@ import {
   type DockerRunscAdditionalMount,
   type DockerRunscAdditionalMountConfig,
   SANDBOX_SESSION_NAME_PATTERN,
-  SandboxSessionUnavailableError,
   type SandboxCommandRequest,
   type SandboxCommandResult,
   type SandboxRuntime,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
+  SandboxSessionUnavailableError,
   type SandboxShellRequest,
 } from "./types.ts";
 
@@ -436,13 +436,58 @@ interface SessionState {
 }
 
 /**
+ * This user's id, or null where the platform has none (Windows).
+ *
+ * `Deno.uid` needs the sys permission, which the harness is not always run
+ * with: its own test task grants none, and the check below threw there. So
+ * where that permission is missing the id is asked of `id -u`, which needs
+ * the run permission every sandbox driver already depends on, as the docker
+ * driver does for the container's user. It is run by its full path, because
+ * what it answers decides whose directory is trusted. An id that cannot be
+ * had is an error and never null: null means "nothing to compare", and would
+ * pass a directory that belongs to someone else.
+ */
+export const currentUid = async (): Promise<number | null> => {
+  try {
+    return Deno.uid();
+  } catch (error) {
+    if (
+      !(error instanceof Deno.errors.NotCapable) &&
+      !(error instanceof Deno.errors.PermissionDenied)
+    ) {
+      throw error;
+    }
+  }
+  let text = "";
+  try {
+    const result = await new Deno.Command("/usr/bin/id", {
+      args: ["-u"],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    if (result.success) text = new TextDecoder().decode(result.stdout).trim();
+  } catch {
+    // Reported below, with the other ways of having no answer.
+  }
+  if (!/^\d+$/.test(text)) {
+    throw new Error(
+      "cannot tell which user this is: Deno.uid needs the sys permission and /usr/bin/id -u gave no id",
+    );
+  }
+  return Number(text);
+};
+
+/**
  * The scratch parent must be this user's alone. Created 0700 when absent;
  * when present it must be a real directory (not a symlink) owned by this
  * user with no group or other access, or the run is refused: whoever owns
- * the parent can swap a bundle or a result under the run.
+ * the parent can swap a bundle or a result under the run. `whoAmI` is how
+ * this user's id is had, for the tests.
  */
 export const verifyPrivateScratchParent = async (
   parent: string,
+  whoAmI: () => Promise<number | null> = currentUid,
 ): Promise<void> => {
   await Deno.mkdir(dirnameHost(parent), { recursive: true }).catch(() =>
     undefined
@@ -454,7 +499,7 @@ export const verifyPrivateScratchParent = async (
     if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
   }
   const info = await Deno.lstat(parent);
-  const uid = Deno.uid();
+  const uid = await whoAmI();
   if (
     !info.isDirectory || info.isSymlink ||
     (uid !== null && info.uid !== null && info.uid !== uid) ||
@@ -1028,7 +1073,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       while (Date.now() < deadline) {
         if (state.ended) {
           throw new Error(
-            `its container exited with code ${exitCode ?? "unknown"} before it was running`,
+            `its container exited with code ${
+              exitCode ?? "unknown"
+            } before it was running`,
           );
         }
         const st = await this.#control(["state", state.containerId]);

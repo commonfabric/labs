@@ -9,6 +9,7 @@ import { join } from "@std/path";
 
 import {
   assertRunscCfcPolicyForMode,
+  currentUid,
   defaultDarwinRootfs,
   realPathOfNearestExisting,
   resolveRunscSandboxConfig,
@@ -1507,6 +1508,29 @@ Deno.test("the default scratch parent must be this user's private directory", as
     const file = join(root, "file");
     await Deno.writeTextFile(file, "");
     await assertRejects(() => verifyPrivateScratchParent(file));
+
+    // Private in its mode, and someone else's: the mode says who may enter,
+    // not whose it is, and its owner can open it to anyone afterwards.
+    const mine = (await Deno.lstat(fresh)).uid!;
+    await verifyPrivateScratchParent(fresh, () => Promise.resolve(mine));
+    await assertRejects(
+      () => verifyPrivateScratchParent(fresh, () => Promise.resolve(mine + 1)),
+      Error,
+      "not a private directory of this user",
+    );
+    // Whose it is cannot be told: that is not a reason to take it.
+    await assertRejects(
+      () =>
+        verifyPrivateScratchParent(
+          fresh,
+          () => Promise.reject(new Error("cannot tell which user this is")),
+        ),
+      Error,
+      "cannot tell which user this is",
+    );
+    // And the way this process learns who it is gives the owner of what it
+    // has just made, with the sys permission or without it.
+    assertEquals(await currentUid(), mine);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
