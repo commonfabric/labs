@@ -216,6 +216,7 @@ describe("staleTableEntries", () => {
   it("accepts tables whose every entry matches something", () => {
     expect(
       staleTableEntries([
+        "collaborative-note/main.tsx",
         "factory-outputs/lot-watch/main.tsx",
         "gideon-tests/a.tsx",
         "plain-array-callback-locals/main.tsx",
