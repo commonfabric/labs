@@ -842,18 +842,19 @@ projects an `asCell` link column declares no existence label: a label at a
 row's root subjects every link written beneath it to the link write policy,
 which refuses a link to a cell that carries no label metadata.
 
-A row that neither its columns nor a row rule label stores no label, and
-declares an empty one. The link write policy governs the slots of a result
-store that carries a label, and refuses a link there to a document that
-stores no label and for which the writing transaction declares none. A settle
-that finds a row's document standing writes the slot and not the document, so
-the declaration cannot rest on what the document stores: every settle into a
-store that carries a label, or is written under one, declares the empty label
-at the root of each such row. The declaration stores nothing on the row
-document, and it does not subject a link written beneath the row's root to
-the link write policy, which counts a declaration by the atoms it holds. A
-settle into a store that carries no label declares nothing, and stays outside
-commit preparation.
+A row to which neither its columns nor a row rule assign a label stores none,
+and declares an empty one. The link write policy governs the slots of a
+result store that carries a label, and refuses a link there to a document
+that stores no label and for which the writing transaction declares none. A
+settle that finds a row's document standing writes the slot and not the
+document, so the declaration cannot rely on what the document stores: every
+settle into a store that carries a label, or is written under one, declares
+the empty label at the root of each such row. The declaration stores nothing
+on the row document, and it does not subject a link written beneath the
+row's root to the link write policy, which counts a declaration by the atoms
+it holds. Into a store that carries no label a row declares nothing, so the
+rows of an unlabeled result do not make its settle relevant to commit
+preparation.
 
 A row document's id is hashed with the space's row salt as well as the row
 key and the result cell's coordinates. The salt is a runtime secret

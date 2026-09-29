@@ -1915,24 +1915,25 @@ export function sqliteQuery(
                 const columnConfidentiality = staticConfidentialityOf(
                   labelSchema,
                 );
-                // A row that neither its columns nor its row rule label
-                // declares an empty label at its root when the store carries
-                // a label or is written under one. The link write policy
-                // governs the slots of such a store, and refuses a link
-                // there to a document that stores no label and that the
-                // transaction declares none for. A settle that finds a row's
-                // document standing writes the slot and not the document, so
-                // the declaration is made by every settle and does not rest
-                // on what the document stores. It stores nothing on the row
-                // document, and subjects no link written beneath the row's
-                // root to the policy, which counts a declaration only by the
-                // atoms it holds. Into a store carrying no label the row
-                // declares nothing, and the settle stays outside commit
-                // preparation.
+                // A row to which neither its columns nor its row rule assign
+                // a label declares an empty one at its root, when the store
+                // carries a label or is written under one. The link write
+                // policy governs the slots of such a store, and refuses a
+                // link there to a document that stores no label and for
+                // which the transaction declares none. A settle that finds a
+                // row's document standing writes the slot and not the
+                // document, so every settle makes the declaration, and none
+                // relies on what the document stores. The declaration stores
+                // nothing on the row document. It subjects no link written
+                // beneath the row's root to the policy, which counts a
+                // declaration only by the atoms it holds. Into a store
+                // carrying no label the row declares nothing, so the rows of
+                // an unlabeled result do not make its settle relevant to
+                // commit preparation.
                 const storeCarriesLabel = storedMetadata !== undefined ||
                   schemaHasIfc(writeSchema as JSONSchema | undefined);
                 const storedRows = resultRows.map((row, i) => {
-                  const labeled = {
+                  const assigned = {
                     ...rowSchemas[i],
                     ...(perRow[i] !== undefined
                       ? { ifc: perRow[i] }
@@ -1946,9 +1947,9 @@ export function sqliteQuery(
                         }),
                   };
                   const schema =
-                    storeCarriesLabel && !schemaHasIfc(labeled as JSONSchema)
-                      ? { ...labeled, ifc: {} }
-                      : labeled;
+                    storeCarriesLabel && !schemaHasIfc(assigned as JSONSchema)
+                      ? { ...assigned, ifc: {} }
+                      : assigned;
                   const rowCell = createCell(
                     runtime,
                     {

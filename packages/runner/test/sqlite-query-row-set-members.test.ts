@@ -844,6 +844,11 @@ describe("sqlite-query-row-set-members", () => {
         makeRuntime(flowLabels);
       });
 
+      /**
+       * Settles `c-alpha` under the labeled cell, and returns the row
+       * documents of that selection and of the unlabeled one settled ahead
+       * of it, which only a lift's output has.
+       */
       const labeledSelection = async (cause: string) => {
         const db = await seededDb();
         const source = await parameterSource(`${scope}-${flowLabels}-${cause}`);
