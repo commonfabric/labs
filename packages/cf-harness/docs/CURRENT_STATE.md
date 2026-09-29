@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-29\
-Revision: `d73caa85a8`
+Revision: `37971c23cd`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -224,24 +224,27 @@ where a CFC policy is configured, and that result is reported as the observation
 it is.
 
 A refusal over `session` is recoverable. The tool returns exit code 125 with
-empty standard output, no command has run, and the working directory is
-unchanged. The first two refusals below are the tool's own. They are made before
-the call's CFC invocation context is created, so the run holds no invocation
-context for them. The other four are raised by the runtime, after the call's
-invocation context was recorded. Each of the six is recorded as the call's tool
-output, as every tool output is. The refusal states its reason and the next step
-open to the model. Its text is the tool's own, chosen by the reason the runtime
-gives: the runtime's message, which can name host paths and carry the text of an
-underlying error, goes to the operator's log and is not shown to the model.
+empty standard output, and the working directory is unchanged. No command has
+run, except where the session ended while the call was in it: there the command
+may have run in whole or in part, and its output is not kept. The first two
+refusals below are the tool's own. They are made before the call's CFC
+invocation context is created, so the run holds no invocation context for them.
+The other five are raised by the runtime, after the call's invocation context
+was recorded. Each of the seven is recorded as the call's tool output, as every
+tool output is. The refusal states its reason and the next step open to the
+model. Its text is the tool's own, chosen by the reason the runtime gives: the
+runtime's message, which can name host paths and carry the text of an underlying
+error, goes to the operator's log and is not shown to the model.
 
-| Reason                          | What the model is told                                                                                                                                                                |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The runtime has no sessions     | To rerun the command without `session`.                                                                                                                                               |
-| The name is not a session name  | The rule for a name, and to rerun with a name that satisfies it or with none. The rejected name is not repeated.                                                                      |
-| The run is in an enforcing mode | That sessions are unavailable in that mode, and to run the command without one.                                                                                                       |
-| The session was lost            | That the session ended and its state is gone. This is reported once, on the next call that names the session; naming it again starts an empty one.                                    |
-| The session cap is reached      | That the run holds as many sessions as it may, and to reuse one of them or run without a session.                                                                                     |
-| The session failed to start     | That it could not start, to run the command without a session, and not to retry the session in a loop. A failed start is not retained, so a later call that names it starts it again. |
+| Reason                            | What the model is told                                                                                                                                                                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The runtime has no sessions       | To rerun the command without `session`.                                                                                                                                                                                                                   |
+| The name is not a session name    | The rule for a name, and to rerun with a name that satisfies it or with none. The rejected name is not repeated.                                                                                                                                          |
+| The run is in an enforcing mode   | That sessions are unavailable in that mode, and to run the command without one.                                                                                                                                                                           |
+| The session was lost              | That the session ended and its state is gone, and that the command did not run. This is reported once, on the next call that names the session; naming it again starts an empty one.                                                                      |
+| The session ended during the call | That the session ended while the call was in it and its state is gone, that the command may have run in whole or in part and its output was not kept, and to check what it changed before running it again. Naming the session again starts an empty one. |
+| The session cap is reached        | That the run holds as many sessions as it may, and to reuse one of them or run without a session.                                                                                                                                                         |
+| The session failed to start       | That it could not start, to run the command without a session, and not to retry the session in a loop. A failed start is not retained, so a later call that names it starts it again.                                                                     |
 
 ### Process lifecycle
 
