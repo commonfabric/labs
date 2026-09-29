@@ -218,7 +218,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     expect(tagsOf(join)).toEqual(["root-covering", "members-secret"]);
   });
 
-  it("consumes an enumerate entry on a read of its container or the container's length, and not on a read of one child", async () => {
+  it("consumes an enumerate entry on a read of its array or the array's length, and not on a read of one child", async () => {
     // An enumerate entry labels a container's membership, order and count.
     // Reading one addressed child observes that child, so it consumes the
     // child's own entries and not the membership's.
@@ -254,6 +254,31 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
       tx.readOrThrow(readAddress(id, ["items", "0"]));
     });
     expect(tagsOf(child)).toEqual(["element"]);
+  });
+
+  it("does not consume an enumerate entry on a read of an object's own length field", async () => {
+    // Only an array's native length observes its membership. An object's
+    // field named `length` is a child like any other.
+
+    const rt = makeRuntime();
+    const id = await seedDoc(rt, "occ-length-field", { box: { length: 3 } }, [
+      {
+        path: ["box"],
+        label: { confidentiality: [audience("members-secret")] },
+        origin: "declared",
+        observes: "enumerate",
+      },
+      {
+        path: ["box", "length"],
+        label: { confidentiality: [audience("field")] },
+        origin: "derived",
+      },
+    ]);
+
+    const join = await flowJoinOf(rt, "occ-length-field-out", (tx) => {
+      tx.readOrThrow(readAddress(id, ["box", "length"]));
+    });
+    expect(tagsOf(join)).toEqual(["field"]);
   });
 
   it("standalone probes consume the link-origin pointer label (SC-8 widening, the new wider join)", async () => {

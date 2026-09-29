@@ -139,17 +139,20 @@ Every result row is written into the space as a document of its own — which
 is what gives a per-row label somewhere to sit — so the row count of a
 statement is a durable cost of the space rather than the cost of one render. A
 query that returns a million distinct rows writes a million documents, and they
-stay written after the view that asked for them is gone. A row document is
-written once and never changed. It is keyed on the row's content and, for a
-row of a labeled database, on its label, beside a per-space secret that keeps
-the id from saying anything about the row. Equal rows share one document, a
-row the result held before takes its old document back, and a re-run whose
-rows are unchanged writes no row documents. A row whose data or label changed
-is another document, and the one it had stays in the space. A reference a
-pattern keeps to a row is therefore a snapshot of that row: read the query's
-`result` for the current rows. Two things re-key every row of a labeled
-database at once and write it again: changing the query's projection, and
-re-declaring the handle's `tables`. A row projecting a column name a Fabric
+stay written after the view that asked for them is gone. The query writes a
+row document once and never rewrites it. It is keyed on the row's content and,
+for a row of a labeled database, on its label, beside a per-space secret that
+keeps the id from saying anything about the row. Equal rows share one
+document, a row the result held before takes its old document back, and a
+re-run whose rows are unchanged writes no row documents. A row whose data or
+label changed is another document, and the one it had stays in the space. A
+reference a pattern keeps to a row therefore does not change when the query
+runs again: read the query's `result` for the current rows. The query is not
+the only writer that can reach a row document, though: other code holding a
+reference to one can write to it. Three things re-key every row of a labeled
+database at once and write it again: changing which database the query
+reads, changing the query's projection, and re-declaring the handle's
+`tables`. A row projecting a column name a Fabric
 record reserves (`constructor`, `__proto__`) crosses the wire as a list of
 entries and is stored the same way.
 

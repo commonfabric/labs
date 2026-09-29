@@ -60,17 +60,13 @@ function scan(
     !beneathProbe(entry)
   );
   // A concrete structure entry and an enumerate entry label a container
-  // node, so they apply to a read of that node and not to a read beneath it;
-  // a declared enumerate entry also applies to a read of the node's length.
+  // node, so they apply to a read of that node and not to a read beneath it.
   const atItsNodeOnly = (entry: LabelMapEntry) =>
     entry.observes === "enumerate" ||
     (entry.origin === "structure" && !template(entry));
-  const readsNode = (entry: LabelMapEntry) =>
-    entry.path.length === path.length ||
-    (entry.origin === "declared" && entry.observes === "enumerate" &&
-      path.length === entry.path.length + 1 && path.at(-1) === "length");
   const ancestors = selected.filter((entry) =>
-    isPrefix(entry.path, path) && (!atItsNodeOnly(entry) || readsNode(entry))
+    isPrefix(entry.path, path) &&
+    (!atItsNodeOnly(entry) || entry.path.length === path.length)
   );
   const buckets = new Map<string, LabelMapEntry[]>();
   for (const entry of ancestors) {

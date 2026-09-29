@@ -808,8 +808,9 @@ membership and count, so the length carries the same label: a value derived
 from the row count of a result over labeled columns carries the columns'
 labels, at every scope. A read of one slot, and of the row it leads to, does
 not consume the membership entry: an `enumerate` entry applies to a read of
-its container and of a declared container's `length`, and not to a read of
-one child ([`cfc-observation-classes.md`](../cfc-observation-classes.md)
+its container and not to a read of one child, and a read of an array's native
+`length` counts as a read of the array
+([`cfc-observation-classes.md`](../cfc-observation-classes.md)
 §6.1). A reader of row 0 therefore carries `S` and row 0's label, and not
 row 1's; code that enumerates or counts the rows carries all of them.
 
