@@ -36,7 +36,10 @@ export interface FabriChatAdapterInput {
 
 /** What an adapter offers. */
 export interface FabriChatAdapterOutput {
+  /** The placed room's title, for lists of pieces. */
   [NAME]: string;
+
+  /** The room's own rendering, or why there is none. */
   [UI]: VNode;
 
   /** The placement. */

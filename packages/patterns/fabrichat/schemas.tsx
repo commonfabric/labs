@@ -1,25 +1,18 @@
 /**
- * The FabriChat contracts and records: what a room and a chat manager offer,
- * and the records they hold. `docs/specs/fabrichat/` states each of them; the
- * names here are the spec's, so a client written against the spec reads these
- * types unchanged.
+ * The FabriChat records, and the parts of the contracts that don't depend on
+ * how a room stores its messages: the reviewed surfaces, recorded times,
+ * profiles, a room's records and requests, and the manager's records. `docs/specs/fabrichat/` states each of them, and the names here are
+ * the spec's. `room.tsx` defines the room's own output types, over the
+ * records it stores.
  *
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
  * compared through `nsecOf()`.
  */
-import {
-  type Cell,
-  FabricEpochNsec,
-  NAME,
-  type Stream,
-  UI,
-  VIEWS,
-  type VNode,
-} from "commonfabric";
+import { type Cell, FabricEpochNsec, VIEWS } from "commonfabric";
 
-// ---------------------------------------------------------------------------
+//
 // Reviewed surfaces
-// ---------------------------------------------------------------------------
+//
 
 /**
  * The reviewed surface every message write is made from: sending, editing,
@@ -40,12 +33,15 @@ export const CHAT_REACT_ACTION = "ChatReact";
 /** The reviewed surface members are added and removed from. */
 export const CHAT_MEMBERS_SURFACE = "ChatMembersSurface";
 
+/** The reviewed action adding or removing a member is, on its surface. */
+export const CHAT_MEMBERS_ACTION = "ChatMembers";
+
 /** The reviewed surface a conversation is started from. */
 export const CHAT_START_SURFACE = "ChatStartSurface";
 
-// ---------------------------------------------------------------------------
+//
 // Times
-// ---------------------------------------------------------------------------
+//
 
 /** Nanoseconds in one millisecond, the handler clock's unit. */
 export const NSEC_PER_MSEC = 1_000_000n;
@@ -68,9 +64,9 @@ export const epochNsec = (nsec: bigint): FabricEpochNsec =>
 export const epochNsecFromMsec = (msec: number): FabricEpochNsec =>
   epochNsec(BigInt(Math.floor(msec)) * NSEC_PER_MSEC);
 
-// ---------------------------------------------------------------------------
+//
 // Profiles
-// ---------------------------------------------------------------------------
+//
 
 /**
  * The part of a person's profile the room reads. It is a view of the person's
@@ -87,9 +83,9 @@ export interface ChatProfile {
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
 
-// ---------------------------------------------------------------------------
+//
 // Room records
-// ---------------------------------------------------------------------------
+//
 
 /** One version of a message: its body, and when the room recorded it. */
 export interface ChatMessageVersion {
@@ -259,18 +255,9 @@ export interface ChatRoomNotice {
   recipient: string;
 }
 
-/** The request that reports a notice delivered. */
-export interface DeliveredEvent {
-  /** Chosen by the sender, and unique among its requests. */
-  requestId: string;
-
-  /** The id of the notice delivered. */
-  id: string;
-}
-
-// ---------------------------------------------------------------------------
+//
 // Manager records
-// ---------------------------------------------------------------------------
+//
 
 /**
  * A room as a manager or a placement links it: only the part of
@@ -330,88 +317,4 @@ export interface ChatManagerNotice {
 
   /** The DID of the person admitted. */
   recipient: string;
-}
-
-/** The request that finds or creates the direct room with a person. */
-export interface OpenDirectEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
-  requestId: string;
-
-  /** The DID of the other person. */
-  counterpart: string;
-}
-
-/** The request that creates a group room. */
-export interface CreateGroupEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
-  requestId: string;
-
-  /** The DIDs of the people to admit besides this user. */
-  members: string[];
-
-  /** The room's title. */
-  title: string;
-}
-
-/** The request that records a room this user has been admitted to. */
-export interface AcceptEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
-  requestId: string;
-
-  /** The room, from the notice that announced it. */
-  room: Cell<ChatRoomLink>;
-
-  /** For a direct room, the DID of its creator, as `about`'s label names. */
-  counterpart?: string;
-}
-
-/** The request that removes a room from this user's list. */
-export interface ForgetEvent {
-  /** Chosen by the sender; the outcome is recorded under it. */
-  requestId: string;
-
-  /** The room to forget. */
-  room: Cell<ChatRoomLink>;
-}
-
-/** A chat manager's data face, for hosts that draw it natively. */
-export interface ChatManagerView {
-  /** Every room this user belongs to and hasn't forgotten, newest first. */
-  rooms: ChatIndexEntry[];
-
-  /** The direct room this user shares with each counterpart, by principal. */
-  direct: Record<string, ChatIndexEntry>;
-
-  /** The outcome of each request, by the `requestId` its caller chose. */
-  requests: Record<string, ChatRequestOutcome>;
-
-  /** Notices this user's requests have produced that no one has delivered. */
-  outgoingNotices: ChatManagerNotice[];
-
-  /** Finds or creates the direct room with a person. */
-  openDirect: Stream<OpenDirectEvent>;
-
-  /** Creates a group room. */
-  createGroup: Stream<CreateGroupEvent>;
-
-  /** Records a room this user has been admitted to. */
-  accept: Stream<AcceptEvent>;
-
-  /** Removes a room from this user's list. */
-  forget: Stream<ForgetEvent>;
-
-  /** Reports a notice delivered. */
-  delivered: Stream<DeliveredEvent>;
-}
-
-/** What `wish({ query: "#chatManager" })` resolves to. */
-export interface ChatManagerOutput extends ChatManagerView {
-  /** The manager's name, for lists of pieces. */
-  [NAME]: string;
-
-  /** The manager's rendering. */
-  [UI]: VNode;
-
-  /** The manager's data face, as one group. */
-  [VIEWS]: { chats: ChatManagerView };
 }

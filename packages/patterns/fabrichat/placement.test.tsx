@@ -131,11 +131,6 @@ export default pattern(() => {
       { assertion: assert(() => reactionCount(messages) === 1) },
       {
         assertion: assert(() =>
-          placement[VIEWS].chat.reactionTallies !== undefined
-        ),
-      },
-      {
-        assertion: assert(() =>
           placement[VIEWS].chat.recentActivity.length === 2
         ),
       },

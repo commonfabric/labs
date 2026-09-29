@@ -57,6 +57,7 @@ import {
   windowSlice,
 } from "./logic.ts";
 import {
+  CHAT_MEMBERS_ACTION,
   CHAT_MEMBERS_SURFACE,
   CHAT_MESSAGE_ACTION,
   CHAT_MESSAGE_SURFACE,
@@ -79,9 +80,9 @@ import {
   type WindowEvent,
 } from "./schemas.tsx";
 
-// ---------------------------------------------------------------------------
+//
 // Policy
-// ---------------------------------------------------------------------------
+//
 
 /** Nanoseconds in one second. */
 const NSEC_PER_SEC = 1_000_000_000n;
@@ -128,9 +129,9 @@ export const FABRICHAT_QUICK_REACTIONS = [
   "🎉",
 ] as const;
 
-// ---------------------------------------------------------------------------
+//
 // Stored records
-// ---------------------------------------------------------------------------
+//
 
 /**
  * A stored reaction: written only by `commitRoom`, from the reviewed
@@ -325,9 +326,9 @@ export interface AboutRecord {
 /** A space's own chat: a group room with no title. */
 const SPACE_CHAT_ABOUT = { kind: "group" } as const satisfies AboutRecord;
 
-// ---------------------------------------------------------------------------
+//
 // Helpers
-// ---------------------------------------------------------------------------
+//
 
 /** The entity a cell names, as a string, or `undefined` if it names none. */
 const entityKeyOf = (cell: unknown): string | undefined => {
@@ -549,9 +550,9 @@ const anchorOf = (
   return undefined;
 };
 
-// ---------------------------------------------------------------------------
+//
 // Writers
-// ---------------------------------------------------------------------------
+//
 
 /**
  * An event on one of the room's streams. Each stream's event carries the
@@ -641,15 +642,31 @@ export interface RoomActState {
   /** The room's creator, the one OWNER the room knows. */
   creatorProfile?: ProfileCell;
 
-  /** The room's stored records. */
+  /** The room's messages. */
   messages: MessagesCell;
+
+  /** Every message's reaction list. */
   reactionLists: ReactionListsCell;
+
+  /** The requests the room has acted on. */
   requests: RequestsCell;
+
+  /** The times the room has recorded something at. */
   usedTimes: UsedTimesCell;
+
+  /** The room's recent activity. */
   activity: ActivityCell;
+
+  /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
+
+  /** The members' profiles, as claims. */
   roster: RosterCell;
+
+  /** The profiles of members who have left. */
   left: LeftCell;
+
+  /** Notices from `add`, waiting for a client to deliver them. */
   notices: NoticesCell;
 
   /** A rendered control's message: the one acted on, or replied to. */
@@ -951,6 +968,13 @@ const performMembershipAct = (
   const clock = clockNsec();
 
   if (op === "showProfile") {
+    const listed = ((roster.get() as RosterValue | undefined)?.items ?? [])
+      .some((shown) => equals(shown, profile));
+    // A profile already shown changes nothing, so it records no activity.
+    if (listed) {
+      rememberRequest(requests, requestKey, clock);
+      return;
+    }
     roster.key("items").addUnique(profile);
     appendActivity(
       activity,
@@ -1008,6 +1032,10 @@ const performMembershipAct = (
   const notice = notices.elementById(id);
   notice.set({ id, recipient: principal });
   notices.addUnique(notice);
+  // The entry links the roster's list, which may not exist yet.
+  if ((roster.get() as RosterValue | undefined)?.items === undefined) {
+    roster.key("items").set([]);
+  }
   appendActivity(
     activity,
     counters,
@@ -1106,9 +1134,9 @@ export const commitWindow = handler<
   });
 });
 
-// ---------------------------------------------------------------------------
+//
 // Derived facts
-// ---------------------------------------------------------------------------
+//
 
 /** How one emoji stands on one message. */
 export interface ReactionTally {
@@ -1196,9 +1224,9 @@ const bodyText = (record: MessageRecord | undefined): string =>
     ? "This message was removed."
     : "This message was deleted.";
 
-// ---------------------------------------------------------------------------
+//
 // A message
-// ---------------------------------------------------------------------------
+//
 
 /** How a reaction's emoji is drawn. */
 const EMOJI_STYLE = { fontSize: "18px", lineHeight: "1" };
@@ -1230,20 +1258,37 @@ export interface FabriChatMessageRowInput {
   /** The session's composer state. */
   composer: PerSession<ComposerCell>;
 
-  /** The room's stored records. */
+  /** The room's messages. */
   messages: MessagesCell;
+
+  /** Every message's reaction list. */
   reactionLists: ReactionListsCell;
+
+  /** The requests the room has acted on. */
   requests: RequestsCell;
+
+  /** The times the room has recorded something at. */
   usedTimes: UsedTimesCell;
+
+  /** The room's recent activity. */
   activity: ActivityCell;
+
+  /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
+
+  /** The members' profiles, as claims. */
   roster: RosterCell;
+
+  /** The profiles of members who have left. */
   left: LeftCell;
+
+  /** Notices from `add`, waiting for a client to deliver them. */
   notices: NoticesCell;
 }
 
 /** What a message row provides: its rendering, and its controls' streams. */
 export interface FabriChatMessageRowOutput {
+  /** The message's rendering, hidden where the message doesn't belong. */
   [UI]: VNode;
 
   /** The message's reactions, tallied by emoji. */
@@ -1746,9 +1791,9 @@ export const FabriChatMessageRow = pattern<
   };
 });
 
-// ---------------------------------------------------------------------------
+//
 // The room
-// ---------------------------------------------------------------------------
+//
 
 /** A room's messages: facts, the newest, and this session's windows. */
 export interface ChatMessageList {
@@ -1824,13 +1869,23 @@ export interface ChatRoomView {
   /** Adds the sender's profile to `roster`. */
   showProfile: Stream<RoomStreamEvent>;
 
-  /** Gives up the sender's own access to a group room of its own. */
+  /**
+   * Leaves a group room of its own: removes the sender's roster entry and
+   * records them as having left. It changes no access list, which a pattern
+   * can't do.
+   */
   leave: Stream<RoomStreamEvent>;
 
-  /** Admits another person to a group room of its own. */
+  /**
+   * Adds a notice for a person to a group room of its own, for a client to
+   * deliver. It grants no access, which only the room space's host can do.
+   */
   add: Stream<RoomStreamEvent>;
 
-  /** Removes a person from a group room of its own. */
+  /**
+   * Removing a person from a group room of its own: refused, since no pattern
+   * can revoke access.
+   */
   remove: Stream<RoomStreamEvent>;
 
   /** Reports a notice from `add` delivered. */
@@ -1866,14 +1921,31 @@ export interface FabriChatRoomCoreInput {
   /** The room's creator, whom the room knows as its OWNER. */
   creatorProfile?: ProfileCell;
 
+  /** The room's messages. */
   messages: MessagesCell;
+
+  /** Every message's reaction list. */
   reactionLists: ReactionListsCell;
+
+  /** The requests the room has acted on. */
   requests: RequestsCell;
+
+  /** The times the room has recorded something at. */
   usedTimes: UsedTimesCell;
+
+  /** The room's recent activity. */
   activity: ActivityCell;
+
+  /** Where the activity's numbering stands. */
   counters: ActivityCountersCell;
+
+  /** The members' profiles, as claims. */
   roster: RosterCell;
+
+  /** The profiles of members who have left. */
   left: LeftCell;
+
+  /** Notices from `add`, waiting for a client to deliver them. */
   notices: NoticesCell;
 }
 
@@ -2237,11 +2309,13 @@ export const FabriChatRoomCore = pattern<
               >
                 <cf-vstack gap="2">
                   <cf-submit-input
+                    data-ui-action={CHAT_MEMBERS_ACTION}
                     placeholder="did:key:… to add"
                     buttonText="Add"
                     onClick={streams.add}
                   />
                   <cf-submit-input
+                    data-ui-action={CHAT_MEMBERS_ACTION}
                     placeholder="did:key:… to remove"
                     buttonText="Remove"
                     onClick={streams.remove}
@@ -2313,14 +2387,31 @@ export interface FabriChatRoomInput {
   /** The room's creator, whom the room knows as its OWNER. */
   creatorProfile?: ProfileCell;
 
+  /** The room's messages. */
   messages?: MessagesCell;
+
+  /** Every message's reaction list. */
   reactionLists?: ReactionListsCell;
+
+  /** The requests the room has acted on. */
   requests?: RequestsCell;
+
+  /** The times the room has recorded something at. */
   usedTimes?: UsedTimesCell;
+
+  /** The room's recent activity. */
   activity?: ActivityCell;
+
+  /** Where the activity's numbering stands. */
   counters?: ActivityCountersCell;
+
+  /** The members' profiles, as claims. */
   roster?: RosterCell;
+
+  /** The profiles of members who have left. */
   left?: LeftCell;
+
+  /** Notices from `add`, waiting for a client to deliver them. */
   notices?: NoticesCell;
 }
 

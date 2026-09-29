@@ -1,7 +1,7 @@
 /**
  * A FabriChat room shared by two people, each in a runtime of their own with
  * an identity of their own: each one's message, and each one's reaction,
- * reaches the other.
+ * reaches the other, and each one's windows stay their own session's.
  */
 import {
   type AddIntegrity,
@@ -11,8 +11,9 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import {
+import FabriChatRoom, {
   type ActivityCounters,
+  type ChatRoomOutput,
   FabriChatMessageRow,
   FabriChatRoomCore,
   type MessageRecord,
@@ -64,6 +65,12 @@ interface Records {
   notices: Writable<ChatRoomNotice[]>;
 }
 
+/** What every session receives from the setup. */
+interface Setup {
+  shared: ChatRoomOutput;
+  records: Records;
+}
+
 // The messages' bodies, in the order they were recorded.
 const bodies = (messages: Writable<MessagesValue>): string =>
   ((messages.get() ?? []) as MessageRecord[]).map((message) =>
@@ -75,7 +82,17 @@ const reactionsOnFirst = (messages: Writable<MessagesValue>): number => {
   return ((first?.reactions?.get() ?? []) as ChatReaction[]).length;
 };
 
+// The ids of a session's windows, as the room's output offers them.
+const windowIds = (windows: unknown): string[] => {
+  const cell = windows as { get?: () => unknown } | undefined;
+  const value = typeof cell?.get === "function" ? cell.get() : windows;
+  return Object.keys((value ?? {}) as Record<string, unknown>);
+};
+
+// One room instance both sessions share, for the windows: its default export
+// resolves no profile here, and opening a window needs none.
 export const setup = pattern(() => ({
+  shared: FabriChatRoom({}),
   records: {
     messages: Writable.of<MessagesValue>([] as MessagesValue),
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
@@ -89,7 +106,7 @@ export const setup = pattern(() => ({
   },
 }));
 
-export const alice = pattern<{ setup: { records: Records } }>(({ setup }) => {
+export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<TestProfile>({ name: "Alice" });
   const room = FabriChatRoomCore({
     myProfile: profile,
@@ -113,6 +130,21 @@ export const alice = pattern<{ setup: { records: Records } }>(({ setup }) => {
         event: typed("Hello from Alice"),
         trustedUi: messageGesture,
       },
+      // A window Alice's session opens is hers alone.
+      {
+        action: setup.shared.messages.openWindow,
+        event: {
+          requestId: "alice-w",
+          windowId: "alice-w",
+          from: { before: "end" },
+          count: 10,
+        },
+      },
+      {
+        assertion: assert(() =>
+          windowIds(setup.shared.messages.windows).includes("alice-w")
+        ),
+      },
       { label: "alice-sent" },
       { await: "bob-reacted" },
       {
@@ -128,7 +160,7 @@ export const alice = pattern<{ setup: { records: Records } }>(({ setup }) => {
   };
 });
 
-export const bob = pattern<{ setup: { records: Records } }>(({ setup }) => {
+export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<TestProfile>({ name: "Bob" });
   const room = FabriChatRoomCore({
     myProfile: profile,
@@ -165,6 +197,11 @@ export const bob = pattern<{ setup: { records: Records } }>(({ setup }) => {
   return {
     [TESTS]: [
       { await: "alice-sent" },
+      {
+        assertion: assert(() =>
+          !windowIds(setup.shared.messages.windows).includes("alice-w")
+        ),
+      },
       {
         assertion: assert(() =>
           bodies(setup.records.messages) === "Hello from Alice"

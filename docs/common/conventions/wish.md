@@ -286,7 +286,8 @@ This ensures the wish is established once. Conditional logic belongs in how you
 These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
 `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
-`#chatManager`, and the `#profile*` targets, which require a signed-in user and resolve from that user's home space.
+`#chatManager`, and the `#profile*` targets, which require a signed-in user and
+resolve from that user's home space.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |

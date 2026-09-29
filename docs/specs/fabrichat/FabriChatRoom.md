@@ -115,8 +115,8 @@ the opposite of what the person meant. `commitSendReaction` and
 asked.
 
 `commitSendReaction` keeps each reaction at an address within its message
-derived from its reactor's profile and its emoji. One person's one reaction to one message has a single
-address in every session, which is how the room meets
+derived from its reactor's profile and its emoji. One person's one reaction to
+one message has a single address in every session, which is how the room meets
 [`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
 the list. The reactions are a separately authorized part of the message:
 `commitSend` and `commitEdit` can't write them, and the reaction handlers can
@@ -261,9 +261,11 @@ runtime lacks a prerequisite:
   written only by `commitRoom`, with no gesture. `commitWindow` writes the
   sending session's windows.
 - **Reactions are a list the message links.** Each message links a list of its
-  own reactions, a document written only by reactions. A deletion, or an
-  obliteration, drops that link, which takes the reactions out of the room's
-  record.
+  own reactions, a document the send creates empty and only reactions write
+  after that. A deletion, or an obliteration, drops that link, which takes the
+  reactions out of the room's record as readers reach it. Their documents stay
+  in the room space's storage: they admit only a reaction's gesture, so a
+  deletion can't clear them.
 - **Keyed records.** Each message, each reaction, and each `recentActivity`
   entry is a document of its own, addressed by a key (`elementById`), so
   writing one never rewrites another, and a record keeps the label its own
@@ -287,6 +289,8 @@ runtime lacks a prerequisite:
   and takes the OWNER-only rules to mean the creator. A space's own chat knows
   no OWNER. `canSend` is whether the reader's profile resolves.
 - **Windows.** A window holds links to its messages, which stay live;
-  `hasOlder` and `hasNewer` are as of when the window was set.
+  `hasOlder` and `hasNewer` are as of when the window was set. A handler
+  writes the windows of the session that sent the event, wherever it runs; an
+  event the server itself emitted has no session, and can't open one.
 - **Notices.** A notice's id is `[principal, requestId]` as JSON, so the client
   that sent `add` can report it delivered without reading it back.

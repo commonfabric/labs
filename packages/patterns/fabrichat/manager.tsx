@@ -116,10 +116,16 @@ export interface ManagerActState {
   /** The user's profile, which holds no value until it resolves. */
   myProfile: ProfileCell | undefined;
 
-  /** The manager's stored records. */
+  /** The rooms this user belongs to. */
   rooms: RoomsCell;
+
+  /** The direct room shared with each counterpart. */
   direct: DirectCell;
+
+  /** Each request's outcome. */
   requests: RequestsCell;
+
+  /** Notices waiting for a client to deliver them. */
   outgoingNotices: NoticesCell;
 
   /** The session's group draft, which a rendered create reads. */
@@ -145,7 +151,10 @@ const freshRequestId = (): string =>
 const principalsIn = (text: string): string[] =>
   text.split(/[\s,]+/).filter((part) => part !== "");
 
-/** `members`, without duplicates, anything but a DID, or `self`. */
+/**
+ * `members`, without duplicates or anything but a DID. The user's own DID
+ * can't be told apart, so it stays if given.
+ */
 const otherMembers = (members: readonly unknown[]): string[] =>
   members.reduce<string[]>(
     (found, member) =>
@@ -204,7 +213,9 @@ const createRoom = (
         ...(title === undefined ? {} : { title }),
       },
       ownSpace: true,
-      creatorProfile: state.myProfile,
+      // The profile itself, not the link through this user's home space that
+      // reached it, which other members can't follow.
+      creatorProfile: state.myProfile?.resolveAsCell(),
     }),
   );
   members.forEach((recipient) => {
@@ -362,15 +373,25 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
 /** What a manager stores. Every field has a default. */
 export interface FabriChatManagerInput {
+  /** The rooms this user belongs to. */
   rooms?: RoomsCell;
+
+  /** The direct room shared with each counterpart. */
   direct?: DirectCell;
+
+  /** Each request's outcome. */
   requests?: RequestsCell;
+
+  /** Notices waiting for a client to deliver them. */
   outgoingNotices?: NoticesCell;
 }
 
 /** What a manager offers: `ChatManagerOutput`. */
 export interface FabriChatManagerOutput {
+  /** The manager's name, for lists of pieces. */
   [NAME]: string;
+
+  /** The manager's rendering. */
   [UI]: VNode;
 
   /** Every room this user belongs to and hasn't forgotten, newest first. */

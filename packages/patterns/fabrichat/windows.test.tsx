@@ -25,10 +25,12 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
+  CHAT_MEMBERS_ACTION,
   CHAT_MEMBERS_SURFACE,
   CHAT_MESSAGE_ACTION,
   CHAT_MESSAGE_SURFACE,
   type ChatProfile,
+  type ChatRoomActivity,
   type ChatRoomNotice,
   type ProfileCell,
 } from "./schemas.tsx";
@@ -45,7 +47,18 @@ const messageGesture = {
   surface: CHAT_MESSAGE_SURFACE,
   action: CHAT_MESSAGE_ACTION,
 };
-const membersGesture = { surface: CHAT_MEMBERS_SURFACE, action: "ChatMembers" };
+const membersGesture = {
+  surface: CHAT_MEMBERS_SURFACE,
+  action: CHAT_MEMBERS_ACTION,
+};
+
+// Enough windows, with the one already open, to pass the room's limit by one.
+const MORE_WINDOWS = Array.from({ length: 50 }, (_, index) => ({
+  requestId: `many-${index}`,
+  windowId: `many-${index}`,
+  from: { before: "end" as const },
+  count: 1,
+}));
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
 
@@ -64,11 +77,19 @@ const windowText = (window: ChatMessageWindow | undefined): string =>
     window.hasNewer ? ">" : "",
   ].filter((part) => part !== "").join(" ");
 
+// Whether the newest activity entry's `what` reads as a list.
+const newestLinksList = (activity: Writable<SentActivity[]>): boolean => {
+  const entries = (activity.get() ?? []) as ChatRoomActivity[];
+  const newest = entries[entries.length - 1];
+  return Array.isArray(newest?.what?.get());
+};
+
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const roster = Writable.of<RosterValue>({});
+  const activity = Writable.of<SentActivity[]>([]);
   const left = Writable.of<ProfileCell[]>([]);
   const notices = Writable.of<ChatRoomNotice[]>([]);
   const records = {
@@ -79,7 +100,7 @@ export default pattern(() => {
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
     requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
+    activity,
     counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
     roster,
     left,
@@ -163,24 +184,21 @@ export default pattern(() => {
           windowText(windowsOf(alice.messages.windows).x) === "One Two Three"
         ),
       },
-      // Windows are the session's own.
+      // A session holds at most `maxOpenWindows` windows; one beyond is
+      // refused.
+      ...MORE_WINDOWS.map((event) => ({
+        action: alice.messages.openWindow,
+        event,
+      })),
       {
         assertion: assert(() =>
-          Object.keys(windowsOf(bob.messages.windows)).length === 0
+          Object.keys(windowsOf(alice.messages.windows)).length === 50 &&
+          windowsOf(alice.messages.windows)["many-49"] === undefined
         ),
       },
 
-      // Showing a profile lists it once, however often it is shown.
-      { action: alice.showProfile, event: { requestId: "show-a" } },
-      { action: bob.showProfile, event: { requestId: "show-b" } },
-      { action: bob.showProfile, event: { requestId: "show-b2" } },
-      {
-        assertion: assert(() =>
-          alice.roster.length === 2 && equals(alice.roster[1], bobProfile)
-        ),
-      },
-
-      // Only an OWNER adds a member, and adding one leaves a notice for a
+      // Adding comes first, before anyone has shown a profile. Only an OWNER
+      // adds a member, and adding one leaves a notice for a
       // client to deliver.
       {
         action: bob.add,
@@ -202,6 +220,29 @@ export default pattern(() => {
           alice.outgoingNotices.length === 1 &&
           alice.outgoingNotices[0].recipient === "did:key:z6MkCarol"
         ),
+      },
+      // The add's activity entry links the roster's list, which it creates.
+      { assertion: assert(() => newestLinksList(activity)) },
+      // Showing a profile lists it once, however often it is shown.
+      { action: alice.showProfile, event: { requestId: "show-a" } },
+      { action: bob.showProfile, event: { requestId: "show-b" } },
+      { action: bob.showProfile, event: { requestId: "show-b2" } },
+      {
+        assertion: assert(() =>
+          alice.roster.length === 2 && equals(alice.roster[1], bobProfile)
+        ),
+      },
+
+      // Removing is refused, since nothing could revoke the access, and the
+      // room records nothing for it: its activity is still the three sends,
+      // the two profiles shown, and the one person added.
+      {
+        action: alice.remove,
+        event: { requestId: "remove-a", principal: "did:key:z6MkCarol" },
+        trustedUi: membersGesture,
+      },
+      {
+        assertion: assert(() => alice.recentActivity.length === 6),
       },
       // Only the OWNER reports the notice delivered.
       {

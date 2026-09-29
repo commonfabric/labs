@@ -1,3 +1,10 @@
+/**
+ * The real FabriChat manager, creating rooms in spaces of their own. A room is
+ * created with `inSpace()`, a cross-space commit, which works in this lane and
+ * not in the pattern-unit one; `packages/patterns/fabrichat/manager.test.tsx`
+ * covers the manager's refusals there.
+ */
+
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -10,10 +17,6 @@ import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
-// The real FabriChat manager, creating rooms in spaces of their own. A room is
-// created with `inSpace()`, a cross-space commit, which works in this lane and
-// not in the pattern-unit one; `packages/patterns/fabrichat/manager.test.tsx`
-// covers the manager's refusals there.
 const signer = await Identity.fromPassphrase("fabrichat-manager");
 const home = signer.did();
 
@@ -80,7 +83,7 @@ const roomSchema = {
   // deno-lint-ignore no-explicit-any
 } as any;
 
-describe("fabrichat manager", () => {
+describe("fabrichat-manager", () => {
   let server: MemoryV2Server.Server;
   let storageManager: EmulatedStorageManager;
   let runtime: Runtime;
@@ -185,5 +188,53 @@ describe("fabrichat manager", () => {
     // A request already decided changes nothing when it arrives again.
     await send("createGroup", { requestId: "g-1", title: "Team", members: [] });
     expect(rooms().length).toBe(1);
+  });
+  it("accepts a group room it was admitted to", async () => {
+    const { manager, send, rooms } = await startManager();
+
+    await send("createGroup", { requestId: "g-1", title: "Team", members: [] });
+    const room = rooms()[0].room;
+    await send("forget", { requestId: "f-1", room });
+    expect(rooms().length).toBe(0);
+
+    await send("accept", { requestId: "a-1", room });
+    expect(rooms().length).toBe(1);
+    expect(rooms()[0].kind).toBe("group");
+    expect(rooms()[0].room.equals(room)).toBe(true);
+    // deno-lint-ignore no-explicit-any
+    const requests = manager.key("requests").get() as any;
+    expect(requests["a-1"].status).toBe("done");
+  });
+
+  it("accepts a direct room only with its counterpart", async () => {
+    const { manager, send, rooms } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    const room = rooms()[0].room;
+    await send("forget", { requestId: "f-1", room });
+
+    await send("accept", { requestId: "a-1", room });
+    // deno-lint-ignore no-explicit-any
+    const refused = manager.key("requests").get() as any;
+    expect(refused["a-1"].status).toBe("refused");
+    expect(rooms().length).toBe(0);
+
+    await send("accept", { requestId: "a-2", room, counterpart: BOB });
+    expect(rooms().length).toBe(1);
+    expect(rooms()[0].counterpart).toBe(BOB);
+  });
+
+  it("drops a notice reported delivered", async () => {
+    const { manager, send } = await startManager();
+
+    await send("openDirect", { requestId: "d-1", counterpart: BOB });
+    // deno-lint-ignore no-explicit-any
+    const before = manager.key("outgoingNotices").get() as any[];
+    expect(before.length).toBe(1);
+
+    await send("delivered", { requestId: "n-1", id: before[0].id });
+    // deno-lint-ignore no-explicit-any
+    const after = manager.key("outgoingNotices").get() as any[];
+    expect(after.length).toBe(0);
   });
 });

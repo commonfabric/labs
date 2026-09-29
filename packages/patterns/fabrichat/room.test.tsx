@@ -162,6 +162,12 @@ export default pattern(() => {
     myProfile: aliceProfile,
     ...rowRecords,
   } as RowArg);
+  // The thread-only reply that the replies below send first.
+  const bobOnThreadReply = FabriChatMessageRow({
+    message: messages.key(3),
+    myProfile: bobProfile,
+    ...rowRecords,
+  } as RowArg);
 
   return {
     [TESTS]: [
@@ -357,6 +363,34 @@ export default pattern(() => {
             replies.map((reply) => reply.replyTo?.shownIn).join() ===
               "thread,both,main";
         }),
+      },
+
+      // Refused: a reply to a deleted message, a reply quoted in the main
+      // conversation to a message shown only in a thread, and an edit whose
+      // proposed time is far older than the room's window.
+      {
+        action: bobOnSecond.replyInThread,
+        event: typed("To the deleted one"),
+        trustedUi: messageGesture,
+      },
+      {
+        action: bobOnThreadReply.replyInMain,
+        event: typed("Quoting a thread reply"),
+        trustedUi: messageGesture,
+      },
+      {
+        action: aliceOnFirst.editMessage,
+        event: {
+          requestId: "alice-stale-edit",
+          version: { body: "Very late edit", sentAt: epochNsecFromMsec(1000) },
+        },
+        trustedUi: messageGesture,
+      },
+      {
+        assertion: assert(() =>
+          stored(messages).length === 6 &&
+          stored(messages)[0]?.body === "Hello, everyone"
+        ),
       },
 
       // Every recorded change has an activity entry, numbered without gaps

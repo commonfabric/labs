@@ -121,6 +121,7 @@ export interface FabriChatPlacementInput {
 
 /** What a placement offers. */
 export interface FabriChatPlacementOutput {
+  /** The placed room's title, for lists of pieces. */
   [NAME]: string;
 
   /** The room, so a client can reach its own streams. */
@@ -172,6 +173,8 @@ const FabriChatPlacement = pattern<
   FabriChatPlacementInput,
   FabriChatPlacementOutput
 >(({ room }) => {
+  // Wished for as a cell, which the tallies compare reactors against; the
+  // placement never tests it for absence, which a cell's handle would defeat.
   const profileWish = wish<ProfileCell>({ query: "#profile" });
   const viewer = profileWish.result;
   const about = computed(() => room.get()?.about);
@@ -197,10 +200,9 @@ const FabriChatPlacement = pattern<
           : [...found, message],
       [],
     );
-    const me = viewer === undefined ? undefined : viewer;
     return distinct.map((message) => ({
       message,
-      tallies: talliesOf(message.get()?.reactions ?? [], me),
+      tallies: talliesOf(message.get()?.reactions ?? [], viewer),
     }));
   });
   const chat = {
