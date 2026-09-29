@@ -96,9 +96,11 @@ import {
   SpaceHostValidationError,
 } from "@commonfabric/runner";
 import {
+  type CfcGrantSource,
   cfcLabelViewForResolvedCell,
   type CfcModulePolicySource,
   createRenderConfidentialityResolver,
+  createRuntimeCfcGrantSource,
   createRuntimeCfcModulePolicySource,
   createRuntimeSpaceMembershipProvider,
   markRendererTrustedEvent,
@@ -583,7 +585,10 @@ export function browserWorkerParamsFromInitializationData(
  * stored in, and the policy's subject space's membership looked up like a
  * `Space(...)` atom's. The source is required so the caller shares one with
  * the reconciler, which re-renders through its subscriptions; `undefined`
- * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
+ * resolves no manifest, and every `PolicyOf` label stays sealed. A rule
+ * guarded on a grant record reads the grant through `grantSource`, shared
+ * with the reconciler the same way; `undefined` resolves no grant, and every
+ * such guard stays unsatisfied. Service DIDs
  * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
  * and service principals — which rarely render — fail closed. Returns
  * undefined when no ceiling is configured (no render gating — today's
@@ -596,6 +601,7 @@ export function renderConfidentialityResolverFor(
   sessionSpace: string | undefined,
   membershipProvider: SpaceMembershipProvider | undefined,
   modulePolicySource: CfcModulePolicySource | undefined,
+  grantSource: CfcGrantSource | undefined,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -628,6 +634,9 @@ export function renderConfidentialityResolverFor(
     // the reconciler's, so the manifests it watches and the ones this
     // resolves are one cache.
     modulePolicyResolver: modulePolicySource?.resolve,
+    // The grant documents a `policyState` guard names are read through the
+    // reconciler's source too, so what it watches is what this read.
+    grantSource,
   });
 }
 
@@ -668,6 +677,23 @@ export function renderModulePolicySourceFor(
     return undefined;
   }
   return createRuntimeCfcModulePolicySource(runtime);
+}
+
+/**
+ * The grant source for a worker's renders, shared like
+ * {@link renderModulePolicySourceFor}'s source: the resolver reads the grant
+ * documents a `policyState` guard names through it, and the reconciler
+ * subscribes to each one a render consulted. Undefined when no ceiling is
+ * configured.
+ */
+export function renderGrantSourceFor(
+  runtime: Runtime,
+  ceiling: RenderConfidentialityCeiling | undefined,
+): CfcGrantSource | undefined {
+  if (ceiling === undefined) {
+    return undefined;
+  }
+  return createRuntimeCfcGrantSource(runtime);
 }
 
 /**
@@ -1018,6 +1044,7 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderModulePolicySource?: CfcModulePolicySource;
+  #renderGrantSource?: CfcGrantSource;
   #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
@@ -3694,6 +3721,7 @@ export class RuntimeProcessor {
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
+      grantSource: this.#renderGrantSource,
       spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
@@ -3996,6 +4024,10 @@ export class RuntimeProcessor {
       runtime,
       processor.#renderConfidentialityCeiling,
     );
+    processor.#renderGrantSource = renderGrantSourceFor(
+      runtime,
+      processor.#renderConfidentialityCeiling,
+    );
     processor.#renderConfidentialityResolver = renderConfidentialityResolverFor(
       runtime,
       identity,
@@ -4003,6 +4035,7 @@ export class RuntimeProcessor {
       space,
       processor.#renderMembershipProvider,
       processor.#renderModulePolicySource,
+      processor.#renderGrantSource,
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,

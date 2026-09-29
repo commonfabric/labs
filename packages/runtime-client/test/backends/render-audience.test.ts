@@ -19,7 +19,10 @@ import {
   runtimePresets,
   RuntimeTelemetry,
 } from "@commonfabric/runner";
-import { buildCfcPolicyArtifactManifest } from "@commonfabric/runner/cfc";
+import {
+  buildCfcPolicyArtifactManifest,
+  prepareCfcGrantWrite,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -30,6 +33,7 @@ import {
 import {
   browserWorkerParamsFromInitializationData,
   renderConfidentialityResolverFor,
+  renderGrantSourceFor,
   renderMembershipProviderFor,
   renderModulePolicySourceFor,
 } from "@/backends/runtime-processor.ts";
@@ -247,6 +251,7 @@ describe("render-audience", () => {
           options.spaceDid,
           membership,
           undefined,
+          undefined,
         );
         const ops: VDomOp[] = [];
         const allText: string[] = [];
@@ -385,6 +390,7 @@ describe("render-audience", () => {
           options.spaceDid,
           membership,
           manifests,
+          undefined,
         ),
         membershipProvider: membership,
         modulePolicySource: manifests,
@@ -579,6 +585,7 @@ describe("render-audience", () => {
           options.spaceDid,
           membership,
           manifests,
+          undefined,
         ),
         membershipProvider: membership,
         modulePolicySource: manifests,
@@ -739,6 +746,7 @@ describe("render-audience", () => {
           options.spaceDid,
           membership,
           manifests,
+          undefined,
         ),
         membershipProvider: membership,
         modulePolicySource: manifests,
@@ -779,6 +787,196 @@ describe("render-audience", () => {
       const text = await renderCarriedPolicyNote({ manifestSpace: "value" });
       expect(text).toContain("Content hidden by policy");
       expect(text).not.toContain("Carried note");
+    });
+  });
+
+  describe("grant-gated rendering", () => {
+    // A module rule guarded on the owner's grant record: the worker's grant
+    // source reads the grant from the owner's space, and the reconciler
+    // re-renders as it is written and revoked.
+
+    const ANSWER = "of:answer-q7";
+    const grantReleaseManifest = buildCfcPolicyArtifactManifest({
+      formatVersion: 1,
+      moduleIdentity: "sha256:grant-release-module",
+      symbol: "grantReleaseRules",
+      template: {
+        templateVersion: 1,
+        exchangeRules: [{
+          name: "releaseToGrantee",
+          preCondition: {
+            confidentiality: [{ thisPolicy: true }],
+            integrity: [],
+          },
+          guard: {
+            policyState: [{
+              kind: "ShareGrant",
+              owner: { thisPolicyField: "subject" },
+              resource: ANSWER,
+              audience: {
+                type: CFC_ATOM_TYPE.User,
+                subject: { var: "$grantee" },
+              },
+            }],
+          },
+          postCondition: {
+            confidentiality: [{
+              type: CFC_ATOM_TYPE.User,
+              subject: { var: "$grantee" },
+            }],
+            integrity: [],
+          },
+        }],
+        dependencies: { authorityOnly: [], dataBearing: [] },
+        integrityRequirements: {},
+      },
+    });
+
+    /**
+     * A shell-configured worker rendering the owner's grant-gated note as a
+     * delegate sees it, with the manifest installed beside the label.
+     */
+    async function renderGrantedNote() {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const delegate = await Identity.generate({ implementation: "noble" });
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+        trustSnapshot: {
+          id: `principal:${delegate.did()}`,
+          actingPrincipal: delegate.did(),
+        },
+      });
+      const runtime = createWorkerRuntime(options);
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, session.space);
+      const note = runtime.getCell<WorkerRenderNode>(
+        session.space,
+        "Granted note",
+        undefined,
+        seed,
+      );
+      seedStoredEnvelope(seed, {
+        space: session.space,
+        id: note.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Granted note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  grantReleaseManifest.manifest.moduleIdentity,
+                  grantReleaseManifest.manifest.symbol,
+                  grantReleaseManifest.policyDigest,
+                  session.space,
+                )],
+              },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+      const install = runtime.storageManager.edit();
+      install.write({
+        space: session.space,
+        id: `of:cfc-policy-manifest:${grantReleaseManifest.policyDigest}`,
+        type: "application/json",
+        path: ["value"],
+      }, grantReleaseManifest as never);
+      expect((await install.commit()).error).toBeUndefined();
+
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const manifests = renderModulePolicySourceFor(runtime, ceiling);
+      const grants = renderGrantSourceFor(runtime, ceiling);
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          manifests,
+          grants,
+        ),
+        membershipProvider: membership,
+        modulePolicySource: manifests,
+        grantSource: grants,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [note],
+      });
+      return {
+        /** Text emitted since the last call. */
+        async settle(): Promise<string[]> {
+          await runtime.storageManager.synced();
+          await runtime.idle();
+          reconciler.flush();
+          const text = emittedText(ops);
+          ops.length = 0;
+          return text;
+        },
+        /**
+         * Writes the owner's grant to the delegate the way the trusted
+         * writer leaves it, revoked or standing.
+         */
+        async writeGrant(revoked: boolean): Promise<void> {
+          const prepared = prepareCfcGrantWrite({
+            kind: "ShareGrant",
+            owner: identity.did(),
+            resource: ANSWER,
+            audience: [cfcAtom.user(delegate.did())],
+            grantedAt: 1000,
+            ...(revoked ? { revoked: { at: 2000, by: identity.did() } } : {}),
+          }, identity.did());
+          const tx = runtime.storageManager.edit();
+          tx.write({
+            space: prepared.space,
+            id: prepared.id,
+            type: "application/json",
+            path: ["value"],
+          }, prepared.value as never);
+          expect((await tx.commit()).error).toBeUndefined();
+        },
+        async [Symbol.asyncDispose]() {
+          cancel();
+          await runtime[Symbol.asyncDispose]();
+        },
+      };
+    }
+
+    it("shows a delegate the owner's note only while the owner's grant names them", async () => {
+      await using view = await renderGrantedNote();
+      const before = await view.settle();
+      expect(before).toContain("Content hidden by policy");
+      expect(before).not.toContain("Granted note");
+      await view.writeGrant(false);
+      expect(await view.settle()).toContain("Granted note");
+      await view.writeGrant(true);
+      expect(await view.settle()).toContain("Content hidden by policy");
     });
   });
 
@@ -879,6 +1077,7 @@ describe("render-audience", () => {
           ceiling,
           options.spaceDid,
           membership,
+          undefined,
           undefined,
         ),
         membershipProvider: membership,
