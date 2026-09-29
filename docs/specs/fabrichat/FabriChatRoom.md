@@ -17,17 +17,18 @@ example, today's `FabriChatMessage` and `FabriChatSendSurface` become
 ## State
 
 The room keeps five `PerSpace` values, shared by everyone the space admits:
-`about`, `messages`, `recentActivity`, `roster`, and `outgoingNotices`.
+`about`, its messages, `recentActivity`, `roster`, and `outgoingNotices`.
 `participants` is computed from `roster` and the messages' authors, keyed by
-profile cell. `messages` is a list ordered by `sentAt`. Each message's
+profile cell. The messages are a list ordered by `sentAt`. Each message's
 reactions, and `roster`, are keyed collections, projected as lists in the
 contract.
 
-The room also keeps its composer's state, `PerSession`: the draft, the message
-being replied to, and where the reply is to be shown. The composer is the room's
-own reviewed surface, so the state it shows, and sends, is the room's. Two
-placements of the same room open in one session show the same composer state, as
-one conversation shown twice should.
+`session` is a sub-pattern the room instantiates per session, as a `PerSession`
+value, over the same record: it computes `canSend` for its viewer, holds the
+composer's state, and holds the message list with the session's windows. The
+composer is the room's own reviewed surface, reading its state from the session,
+so two placements of the same room open in one session show the same composer
+state, as one conversation shown twice should.
 
 ## Writers
 
@@ -124,7 +125,7 @@ Entries older than the window are dropped as new ones are appended.
 `commitObliterate`, and `commitDelete` when it obliterates, also remove the
 message's earlier entries.
 
-`messages` is a sub-pattern the room instantiates over its record: it computes
+The session's `messages` is a sub-pattern over the room's record: it computes
 `count`, `oldestAt`, and `newestAt`, keeps `windows` as a `PerSession` keyed
 collection, and fulfills `openWindow` and `closeWindow` by setting and removing
 entries in it. A window is a computed selection over the record, so it stays

@@ -14,6 +14,7 @@ requires of the runtime and of the programs that use it.
   - [`FabriChatAdapter`](FabriChatAdapter.md): a placement's rendering.
 - Contracts, named for their roles:
   - [`ChatRoomOutput`](ChatRoomOutput.md): what a room offers.
+  - [`ChatRoomSession`](ChatRoomSession.md): one session's view of a room.
   - [`ChatManagerOutput`](ChatManagerOutput.md): what `#chatManager` resolves
     to.
 - Records a room holds:
@@ -21,6 +22,8 @@ requires of the runtime and of the programs that use it.
   - [`ChatMessageList`](ChatMessageList.md): a room's messages, read a window at
     a time.
   - [`ChatMessageWindow`](ChatMessageWindow.md): one window of them.
+  - [`ChatWindowAnchor`](ChatWindowAnchor.md): where a window sits: at either
+    end, or around one message.
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
     message.
@@ -102,13 +105,14 @@ provide, the document says so, under the heading "Prerequisites".
    another space, and what a viewer may see of it.
 4. [`FabriChatAdapter.md`](FabriChatAdapter.md): rendering a placement for hosts
    that render VDOM.
-5. The contracts: [`ChatRoomOutput.md`](ChatRoomOutput.md) and
+5. The contracts: [`ChatRoomOutput.md`](ChatRoomOutput.md),
+   [`ChatRoomSession.md`](ChatRoomSession.md), and
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
    [`ChatMessageList.md`](ChatMessageList.md),
    [`ChatMessageWindow.md`](ChatMessageWindow.md),
-   [`ChatReply.md`](ChatReply.md),
+   [`ChatWindowAnchor.md`](ChatWindowAnchor.md), [`ChatReply.md`](ChatReply.md),
    [`ChatMessageVersion.md`](ChatMessageVersion.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatRoomAbout.md`](ChatRoomAbout.md),
    [`ChatRoomPolicy.md`](ChatRoomPolicy.md),
@@ -272,8 +276,9 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
-   the user's home space. Drafts are `PerSession` in the room, whose composer
-   they belong to.
+   the user's home space. Drafts are `PerSession`, in the room's session
+   ([`ChatRoomSession`](ChatRoomSession.md)), since they belong to one
+   connection and not to the room.
 4. **A person is identified** by cell reference with `equals()` for display, and
    by principal for direct-room lookup. Never by display name.
 5. **Authorship is attested.** Every message and reaction carries an

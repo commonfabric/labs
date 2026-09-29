@@ -3,7 +3,9 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 A room's messages, offered for structured access rather than as one array. A
-room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `messages`. A client
+room's session ([`ChatRoomSession`](ChatRoomSession.md)) offers one, as
+`messages`. Like everything in a session it is `PerSession`: its facts describe
+the room's shared messages, and its windows are the session's own. A client
 reads the conversation through windows, each a run of messages it asked for, so
 a long history never has to arrive whole.
 
@@ -24,7 +26,7 @@ interface ChatMessageList {
     requestId: string;
     windowId: string;
     root?: Cell<ChatMessage>;
-    before?: FabricEpochNsec;
+    from: ChatWindowAnchor;
     count: number;
   }>;
   closeWindow: Stream<{ requestId: string; windowId: string }>;
@@ -39,19 +41,22 @@ conversation, or one thread. A client can have any number of windows open at
 once, each under a `windowId` it chooses, such as one per panel it shows. Ten
 panels on ten threads are ten windows, which never interfere with one another.
 
-- **`openWindow(requestId, windowId, root?, before?, count)`** sets the window
+- **`openWindow(requestId, windowId, root?, from, count)`** sets the window
   `windowId` to up to `count` messages of the thread rooted at `root`, or of the
-  main conversation when `root` is absent: the newest of them sent before
-  `before`, or the newest there are when `before` is absent. It opens the window
-  if it isn't open, and moves it if it is, so paging a window back is opening it
-  again with an earlier `before`. The result is a
-  [`ChatMessageWindow`](ChatMessageWindow.md) in `windows[windowId]`.
+  main conversation when `root` is absent, placed as `from` says: at the newest
+  end, at the earliest end, or around one message (see
+  [`ChatWindowAnchor`](ChatWindowAnchor.md)). It opens the window if it isn't
+  open, and moves it if it is, so paging is opening the same window again with a
+  new `from`. The result is a [`ChatMessageWindow`](ChatMessageWindow.md) in
+  `windows[windowId]`.
 - **`closeWindow(requestId, windowId)`** removes the window. Closing one that
   isn't open changes nothing.
 
-`sentAt` is unique in the room, so it works as a cursor: to read further back, a
-client opens the window again with `before` set to the `sentAt` of the oldest
-message it has. `hasOlder` says whether there is anything further back.
+`sentAt` is unique in the room, so it works as a cursor in both directions. To
+read further back, a client opens the window again with
+`{ before: <oldest sentAt it has> }`; to read further forward, with
+`{ after: <newest sentAt it has> }`. `hasOlder` and `hasNewer` say whether there
+is anything further in either direction.
 
 `windows` is kept per session (`PerSession`): each viewer's windows are their
 own, and a session's windows go when the session does. Two placements of the
@@ -77,11 +82,13 @@ A room states two limits in its policy (see
   `openWindow` for a new window beyond that is refused, silently, like any
   refusal, so a client closes the windows it no longer shows.
 
-An `openWindow` whose `root` isn't a thread's root in this room is refused, too.
+An `openWindow` whose `root` isn't a thread's root in this room is refused, too,
+as is one whose `from` is `{ around: t }` for a `t` that isn't a message in the
+view.
 
 ## Reaching it from a native client
 
-`messages` is a piece of the room's output with streams of its own. A native
-client reaches it, and sends to `openWindow` and `closeWindow`, through its
-link, as it reaches the room itself (see
+`messages` is part of a session, with streams of its own. A native client
+reaches it through the room's `session` link, and sends to `openWindow` and
+`closeWindow` through its link, as it reaches the room itself (see
 [`clients.md`](clients.md#showing-a-room)).

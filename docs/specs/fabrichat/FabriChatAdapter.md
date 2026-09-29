@@ -12,13 +12,15 @@ already say, and it holds only what a rendering needs.
 
 An adapter is a piece in the container's space, beside its placement. It holds:
 
-- **`placement`** (`PerSpace`): a link to one `FabriChatPlacement`. It is set
-  when the adapter is created, and never changes afterward.
+- **`placement`** (`PerSpace`, see
+  [scopes](../scoped-cell-instances.md#summary)): a link to one
+  `FabriChatPlacement`. It is set when the adapter is created, and never changes
+  afterward.
 
 That is all it holds. Like a placement, it MUST NOT hold anything read from the
 room. It holds no composer state either: the composer is the room's own reviewed
-surface, so the room keeps the draft and the reply target (see
-[`FabriChatRoom.md`](FabriChatRoom.md#state)).
+surface, so the room's `PerSession` session keeps the draft and the reply target
+(see [`ChatRoomSession`](ChatRoomSession.md)).
 
 ## How a container holds it
 

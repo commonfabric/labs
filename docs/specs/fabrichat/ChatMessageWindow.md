@@ -20,6 +20,9 @@ interface ChatMessageWindow {
 
   /** Whether the view has messages older than the window's first. */
   hasOlder: boolean;
+
+  /** Whether the view has messages newer than the window's last. */
+  hasNewer: boolean;
 }
 ```
 
@@ -31,8 +34,11 @@ interface ChatMessageWindow {
   window of the main conversation.
 - **`messages`** are the window's [`ChatMessage`](ChatMessage.md)s, oldest
   first: at most the request's `count`, and at most the room's `maxWindowCount`.
-- **`hasOlder`** says whether the view has messages older than the first one in
-  the window, so a client knows whether to offer to load more.
+- **`hasOlder`** and **`hasNewer`** say whether the view has messages older than
+  the first one in the window, and newer than the last one, so a client knows
+  whether to offer to load more in either direction. A window anchored at the
+  newest end has no newer messages when it's set, but a new message can change
+  that, so a client reads `hasNewer` rather than assuming.
 
 A window stays live as the messages in it change, and doesn't grow with new
 messages on its own (see [`ChatMessageList`](ChatMessageList.md#windows)).

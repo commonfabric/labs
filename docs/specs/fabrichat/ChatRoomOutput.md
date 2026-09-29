@@ -14,9 +14,6 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
-  /** The conversation, for access a window at a time. */
-  messages: ChatMessageList;
-
   /** What the room recorded recently, oldest first. */
   recentActivity: ChatRoomActivity[];
 
@@ -26,8 +23,8 @@ interface ChatRoomOutput {
   /** `roster`, plus any author with no roster entry. */
   participants: Cell<ChatProfile>[];
 
-  /** Whether the viewer can send, edit, delete, react, and show a profile. */
-  canSend: boolean;
+  /** This session's view of the room (`PerSession`). */
+  session: Cell<ChatRoomSession>;
 
   sendMessage: Stream<{
     requestId: string;
@@ -126,14 +123,14 @@ put (see [`leave`](#leaverequestid-string)).
 
 - **`about`** is a [`ChatRoomAbout`](ChatRoomAbout.md), set once when the room
   is created.
-- **`messages`** is a [`ChatMessageList`](ChatMessageList.md): the room's
-  [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`, which is unique in the
-  room, and read a window at a time. An obliterated message stays as a
-  tombstone. Each version of a message is labeled `authored-by` the principal
-  who recorded it. A message changes only through `editMessage`,
-  `deleteMessage`, and `obliterateMessage`, and is never removed from
-  `messages`. A deleted message accepts nothing further except obliteration (see
-  [deleted messages](ChatMessage.md#deleted-messages)).
+- **Messages.** The room holds its [`ChatMessage`](ChatMessage.md)s, ordered by
+  `sentAt`, which is unique in the room. A client reads them through its
+  session's [`ChatMessageList`](ChatMessageList.md), a window at a time. An
+  obliterated message stays as a tombstone. Each version of a message is labeled
+  `authored-by` the principal who recorded it. A message changes only through
+  `editMessage`, `deleteMessage`, and `obliterateMessage`, and is never removed.
+  A deleted message accepts nothing further except obliteration (see [deleted
+  messages](ChatMessage.md#deleted-messages)).
 - **Reactions** live on their messages, as each message's `reactions`
   ([`ChatReaction`](ChatReaction.md)), each labeled `authored-by` its reactor. A
   reaction is removed only by its own reactor, or with its message when it is
@@ -144,15 +141,15 @@ put (see [`leave`](#leaverequestid-string)).
 - **`roster`** and **`participants`** are links to profiles, compared with
   `equals()`. `participants` is `roster` plus any author without a roster entry.
   Neither is proof of access.
-- **`canSend`** says whether the viewer can send, edit, delete, react, and show
-  a profile right now: their access is WRITE or OWNER, and their profile
-  resolves. It is computed for each viewer, so a READ-only member's client can
-  tell them why their gestures would be refused before they make one.
+- **`session`** is the reading session's
+  [`ChatRoomSession`](ChatRoomSession.md): its view of the room, holding
+  `canSend`, its windows onto the messages, and its composer's state. Each
+  session reading the room gets its own.
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, each reaction added or removed, and
   each change to the roster or membership, as a
   [`ChatRoomActivity`](ChatRoomActivity.md), oldest first. A client follows a
-  room by reading it, rather than by comparing `messages` with what it had, and
+  room by reading it, rather than by comparing messages with what it had, and
   finds the message a send of its own produced there. It holds entries within
   the room's `recentActivityWindowNsec`.
 - **`outgoingNotices`**, on group rooms of their own, holds a notice for each
@@ -160,6 +157,25 @@ put (see [`leave`](#leaverequestid-string)).
 - The lists here are projections. An implementation may keep the roster, and
   each message's reactions, as keyed collections, as long as what it offers
   satisfies these rules.
+
+## Scopes
+
+A room's fields fall into two [scopes](../scoped-cell-instances.md#summary), and
+the difference matters to a client:
+
+- **`PerSpace`**: one instance for the whole room, the same for everyone the
+  room's space admits. That is `about`, the messages, `recentActivity`,
+  `roster`, `participants`, and `outgoingNotices`, and the streams. These are
+  the room: a link to the room names them, and passing the link around, to
+  another component or another person, passes the room.
+- **`PerSession`**: one instance per memory session in the room's space. That is
+  `session` and everything under it (see
+  [`ChatRoomSession`](ChatRoomSession.md)): `canSend`, the windows onto the
+  messages, and the composer's state. Reading `session` gives the reader's own
+  session. Passing the room's link to someone else never passes a session: they
+  read their own.
+
+Nothing in a room is `PerUser`.
 
 ## Streams
 
@@ -560,14 +576,14 @@ group rooms of their own.
 
 ## Renderings
 
-- **`[UI]`** is the room's own rendering, with its reviewed surfaces and its
-  composer's state: the draft, and the reply being composed. An adapter's
+- **`[UI]`** is the room's own rendering, with its reviewed surfaces. Its
+  composer's state is the reading session's (`session.composer`). An adapter's
   rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. Its `messages` is the list itself, whose windows and
-  request streams a client reaches through the list's link. A client uses it to
-  show a room outside any container. Inside a container, it reads the
-  placement's `chat` group instead
+  that draw natively. It includes `session`, through whose link a client reaches
+  its own session: `canSend`, and the message list with its windows and window
+  streams. A client uses it to show a room outside any container. Inside a
+  container, it reads the placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
 
 ## Implementation-defined behavior

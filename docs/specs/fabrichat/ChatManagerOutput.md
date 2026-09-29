@@ -81,6 +81,13 @@ and every stream below. A native client drives the manager through that group as
 it drives a room through the room's `room` group (see
 [`clients.md`](clients.md#showing-a-room)).
 
+## Scopes
+
+Everything a manager holds is `PerSpace` in the user's home space (see
+[scopes](../scoped-cell-instances.md#summary)). A home space admits only its
+user, so `PerSpace` there means one instance for that user, which is why nothing
+in it needs to be `PerUser` or `PerSession`.
+
 ## Facts
 
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this

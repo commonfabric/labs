@@ -11,9 +11,10 @@ placements, in any number of containers, and there is still one conversation.
 
 ## What it holds
 
-A placement is a piece in the container's space. It holds one `PerSpace` value,
-**`room`**: a link to one `FabriChatRoom`. The link is set when the placement is
-created, and never changes afterward.
+A placement is a piece in the container's space. It holds one `PerSpace` value
+(see [scopes](../scoped-cell-instances.md#summary)), shared by everyone the
+container admits, **`room`**: a link to one `FabriChatRoom`. The link is set
+when the placement is created, and never changes afterward.
 
 It MUST NOT hold anything read from the room: no copied messages, titles,
 rosters, or counts. A link carries the room's label across the space boundary,
@@ -22,9 +23,9 @@ integrity, readable by everyone the container admits ([cross-space
 integrity](../cfc-cross-space-integrity.md), §1). Everything the placement
 offers is computed from the link when it is read, under the viewer's own access.
 
-It holds no presentation state either. The draft and the reply target are the
-room's, since its composer is the room's surface, and whatever draws a placement
-keeps the rest, such as its scroll position.
+It holds no presentation state either. The draft and the reply target are in the
+room's `PerSession` session, since its composer is the room's surface, and
+whatever draws a placement keeps the rest, such as its scroll position.
 
 ## Viewers who aren't members
 
@@ -48,13 +49,12 @@ client that can't learn it MUST treat the container as admitting others.
     `"not-member"`, or `"unavailable"` (the room can't be read right now). A
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
-  - `canSend`: the room's, for the viewer (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
-  - `about`, `messages` (the room's [`ChatMessageList`](ChatMessageList.md),
-    read a window at a time), `recentActivity`, `participants`, and
-    `reactionTallies` (per message in the windows: emoji, count, whether the
-    viewer is among them, and the reactors' profiles), each read through the
-    link. They're empty unless `state` is `"member"`.
+  - `session`: the reader's own [`ChatRoomSession`](ChatRoomSession.md), through
+    the room: its `canSend`, and its message list, read a window at a time.
+  - `about`, `recentActivity`, `participants`, and `reactionTallies` (per
+    message in the session's windows: emoji, count, whether the viewer is among
+    them, and the reactors' profiles), each read through the link. They're empty
+    unless `state` is `"member"`.
 
 A placement offers no stream that sends or reacts. A client sends to the room's
 own `sendMessage` and `sendReaction` streams, reached through `room`. If a

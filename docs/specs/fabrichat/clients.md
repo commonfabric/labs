@@ -69,9 +69,9 @@ A client that draws natively MUST:
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
 - **Follow the room through `recentActivity`** (see
-  [`ChatRoomActivity`](ChatRoomActivity.md)) rather than by comparing `messages`
-  with what it had, and read `messages` afresh after being away longer than the
-  room's `recentActivityWindowNsec`.
+  [`ChatRoomActivity`](ChatRoomActivity.md)) rather than by comparing the
+  messages with what it had, and reopen its windows after being away longer than
+  the room's `recentActivityWindowNsec`.
 - **Use each message's entity as its id**, or its `sentAt`, which is unique in
   its room.
 - **Show edits and deletions.** A client shows a deleted message as deleted,

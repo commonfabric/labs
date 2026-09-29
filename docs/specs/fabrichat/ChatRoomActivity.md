@@ -23,14 +23,14 @@ interface ChatRoomActivity {
 ## What it's for
 
 `recentActivity` lets a client follow a room by reading what changed, rather
-than by comparing `messages` with what it had before. An entry doesn't describe
-the change: it points at the thing that changed, and a client reads that thing
-afresh.
+than by comparing the room's messages with what it had before. An entry doesn't
+describe the change: it points at the thing that changed, and a client reads
+that thing afresh.
 
-It also tells a client something `messages` can't: which message a send
+It also tells a client something the messages can't: which message a send
 produced. The room may record a message at a time other than the one its sender
 proposed (see [recorded times](ChatRoomOutput.md#recorded-times)), so a sender
-can't find its message by its proposal in `messages`. It can in
+can't find its message by its proposal among the messages. It can in
 `recentActivity`, where the send's entry pairs its `requestId` with the message.
 
 ## Fields
@@ -72,7 +72,7 @@ least `proposedTimeMaxAgeNsec`, so a sender can still find the entry for any
 send the room could have accepted.
 
 A client that has been away longer than the window can't catch up from
-`recentActivity`, and reads `messages` afresh instead.
+`recentActivity`, and reopens its windows instead.
 
 ## Obliteration
 
