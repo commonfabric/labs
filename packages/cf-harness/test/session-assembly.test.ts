@@ -390,7 +390,7 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
     allowedSubagentProfiles: [],
     sandboxRuntimeKind: "runsc",
     sandboxRootfs: "/images/custom-rootfs",
-    sandboxCfcPolicy: "/etc/cfc/policy.json",
+    sandboxCfcPolicy: "/opt/cfc/policy.json",
     sandboxRunscBinary: "/opt/runsc/bin/runsc",
     sandboxRunscNetworkMode: "none",
   } as unknown as HarnessSessionConfig;
@@ -399,7 +399,7 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
 
   expect(options.sandboxRuntimeKind).toBe("runsc");
   expect(options.sandboxRootfs).toBe("/images/custom-rootfs");
-  expect(options.sandboxCfcPolicy).toBe("/etc/cfc/policy.json");
+  expect(options.sandboxCfcPolicy).toBe("/opt/cfc/policy.json");
   expect(options.sandboxRunscBinary).toBe("/opt/runsc/bin/runsc");
   expect(options.sandboxRunscNetworkMode).toBe("none");
 
@@ -418,7 +418,7 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
   expect(engine.ownedSandboxConfig).toBeUndefined();
   expect(engine.ownedRunscSandboxConfig).toMatchObject({
     rootfs: "/images/custom-rootfs",
-    cfcPolicyPath: "/etc/cfc/policy.json",
+    cfcPolicyPath: "/opt/cfc/policy.json",
     runscBinary: "/opt/runsc/bin/runsc",
     networkMode: "none",
     workspaceHostPath: "/workspace",

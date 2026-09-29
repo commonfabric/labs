@@ -121,6 +121,7 @@ const runscEngine = (
     model: "gpt-5.4",
     workspaceHostPath: "/host/project",
     sandboxRuntimeKind: "runsc",
+    sandboxRunscBinary: "/opt/runsc",
     sandboxRootfs: "/images/kitchensink",
     // No policy is configured, so the run is not an enforcing one.
     cfcEnforcementMode: "observe",

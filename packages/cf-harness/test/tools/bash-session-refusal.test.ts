@@ -141,6 +141,7 @@ describe("bash session refusals", () => {
     runtime = new RunscSandboxRuntime(
       resolveRunscSandboxConfig({
         workspaceHostPath: "/tmp/workspace",
+        runscBinary: "/opt/runsc",
         rootfs: "/images/kitchensink",
         scratchDir,
         runId: "run-refusal",
@@ -397,6 +398,7 @@ describe("bash session refusals", () => {
       const enforcingRuntime = new RunscSandboxRuntime(
         resolveRunscSandboxConfig({
           workspaceHostPath: "/tmp/workspace",
+          runscBinary: "/opt/runsc",
           rootfs: "/images/kitchensink",
           scratchDir: enforcingScratchDir,
           runId: "run-enforcing",

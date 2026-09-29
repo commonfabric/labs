@@ -26,6 +26,7 @@ Deno.test("CfHarnessEngine builds the runsc sandbox when asked, with no docker t
     runId: "run-1",
     workspaceHostPath: "/host/project",
     sandboxRuntimeKind: "runsc",
+    sandboxRunscBinary: "/opt/runsc",
     sandboxRootfs: "/images/kitchensink",
     sandboxCfcPolicy: "/policy.json",
     sandboxRunscNetworkMode: "sandbox",
@@ -46,6 +47,7 @@ Deno.test("CfHarnessEngine refuses the runsc sandbox without a workspace", () =>
       new CfHarnessEngine({
         runId: "run-1",
         sandboxRuntimeKind: "runsc",
+        sandboxRunscBinary: "/opt/runsc",
         sandboxRootfs: "/images/kitchensink",
         processRunner: new RecordingRunner(),
       }),
@@ -162,6 +164,7 @@ Deno.test("CfHarnessEngine closes the runsc runtime it built itself", async () =
     runId: "run-1",
     workspaceHostPath: "/host/project",
     sandboxRuntimeKind: "runsc",
+    sandboxRunscBinary: "/opt/runsc",
     sandboxRootfs: "/images/kitchensink",
     processRunner: new RecordingRunner(),
   });
@@ -191,6 +194,7 @@ Deno.test("CfHarnessEngine refuses enforcing work on the runsc sandbox without a
     runId: "run-1",
     workspaceHostPath: "/host/project",
     sandboxRuntimeKind: "runsc",
+    sandboxRunscBinary: "/opt/runsc",
     sandboxRootfs: "/images/kitchensink",
     cfcEnforcementMode: "enforce-explicit",
     processRunner: new RecordingRunner(),
@@ -207,6 +211,7 @@ Deno.test("CfHarnessEngine owns the runsc configuration a child can build on", (
     runId: "run-1",
     workspaceHostPath: "/host/project",
     sandboxRuntimeKind: "runsc",
+    sandboxRunscBinary: "/opt/runsc",
     sandboxRootfs: "/images/kitchensink",
     sandboxCfcPolicy: "/policy.json",
     additionalMounts: [{
@@ -290,6 +295,7 @@ Deno.test("CfHarnessEngine gives two runsc runs two run identities", () => {
       runId,
       workspaceHostPath: "/host/project",
       sandboxRuntimeKind: "runsc",
+      sandboxRunscBinary: "/opt/runsc",
       sandboxRootfs: "/images/kitchensink",
       processRunner: new RecordingRunner(),
     });
@@ -314,6 +320,7 @@ Deno.test("CfHarnessEngine resolves a host-backed path through the runsc runtime
       runId: "run-host-mounts",
       workspaceHostPath: workspace,
       sandboxRuntimeKind: "runsc",
+      sandboxRunscBinary: "/opt/runsc",
       sandboxRootfs: "/images/kitchensink",
       cfcEnforcementMode: "observe",
       additionalMounts: [{

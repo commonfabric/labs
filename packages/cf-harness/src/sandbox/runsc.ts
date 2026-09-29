@@ -1,6 +1,7 @@
 import {
   isAbsolute as isAbsoluteHostPath,
   join as joinHostPath,
+  normalize as normalizeHostPath,
 } from "@std/path";
 import {
   isAbsolute as isAbsoluteSandboxPath,
@@ -123,12 +124,19 @@ export const defaultDarwinRootfs = (
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 
 export interface RunscSandboxConfig {
-  runscBinary: string;
   /**
-   * The rootfs the bundle names. On Linux a directory; on macOS the
-   * `<store>/images/<key>` marker the darwin runsc maps to a block image.
+   * The runsc binary every command of the runtime executes, as the canonical
+   * absolute path {@link canonicalHostPath} returns.
+   */
+  runscBinary: string;
+
+  /**
+   * The rootfs the bundle names, as a canonical absolute path. On Linux a
+   * directory; on macOS the `<store>/images/<key>` marker the darwin runsc
+   * maps to a block image.
    */
   rootfs: string;
+
   workspaceHostPath: string;
   workspaceMountPath: string;
   shellPath: string;
@@ -136,7 +144,10 @@ export interface RunscSandboxConfig {
   additionalMounts: readonly DockerRunscAdditionalMount[];
   /** Global runsc flags placed before the subcommand, verbatim. */
   extraRunscArgs: readonly string[];
-  /** CFC policy file; `--cfc` is passed exactly when this is set. */
+  /**
+   * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
+   * when this is set.
+   */
   cfcPolicyPath?: string;
   /** Host directory for bundles, contexts and results; private to the run. */
   scratchDir: string;
@@ -153,7 +164,13 @@ export interface RunscSandboxConfig {
 }
 
 export interface ResolveRunscSandboxConfigOptions {
+  /**
+   * The runsc binary: an absolute path, a path relative to the working
+   * directory of this process, or a bare name to find on `PATH`. Default
+   * {@link DEFAULT_RUNSC_BINARY}.
+   */
   runscBinary?: string;
+
   rootfs?: string;
   workspaceHostPath: string;
   workspaceMountPath?: string;
@@ -242,6 +259,240 @@ const resolveAdditionalMounts = (
     };
   });
 
+/**
+ * How many symbolic links one path may lead through. A path that leads
+ * through more is taken to loop, as the kernel takes it.
+ */
+const MAX_SYMBOLIC_LINKS = 40;
+
+/** One name of a path being walked. */
+interface PathPart {
+  name: string;
+
+  /** Whether the name was read out of a symbolic link's target. */
+  fromLink: boolean;
+}
+
+/** Helper for `canonicalHostPath()`, which splits `path` into its names. */
+const pathParts = (path: string, fromLink: boolean): PathPart[] =>
+  path.split("/").filter((name) => name !== "").map((name) => ({
+    name,
+    fromLink,
+  }));
+
+/** Returns what `error` says of itself, for a message that passes it on. */
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+/**
+ * Returns the path the filesystem takes the absolute host path `path` to: a
+ * path with no symbolic link, no `.` and no `..` in it. `label` names the
+ * path in a refusal.
+ *
+ * The result is read off the filesystem one name at a time, in the order the
+ * kernel resolves them: a symbolic link is followed where it stands, and a
+ * `..` leaves the directory the names before it led to, which is not the
+ * directory their spelling suggests once one of them is a link. A path that
+ * does not exist yet is the real path of its nearest existing ancestor with
+ * the remaining names appended.
+ *
+ * The result describes the filesystem at the time of the call. Whoever can
+ * write a directory the result names can make the same path lead elsewhere
+ * afterwards, so the result is worth exactly as much as those directories
+ * are out of an adversary's reach.
+ *
+ * @throws When where the path leads cannot be told: a name on the way is a
+ * symbolic link whose target does not exist, a name cannot be examined for
+ * any reason but not existing, the path leads through more than
+ * {@link MAX_SYMBOLIC_LINKS} links, or a `.` or `..` follows a name that does
+ * not exist.
+ */
+export const canonicalHostPath = (label: string, path: string): string => {
+  requireAbsoluteHostPath(label, path);
+  const refuse = (why: string): never => {
+    throw new Error(`${label} ${path} ${why}`);
+  };
+  // `reached` holds no link and no dot name, so handing it to Deno, which
+  // folds `..` out of a spelling before the kernel sees it, changes nothing.
+  let reached = "/";
+  let reachedDirectory = true;
+  let links = 0;
+  let pending = pathParts(path, false);
+  let rest: string[] = [];
+  while (pending.length > 0) {
+    const part = pending.shift()!;
+    if (part.name === "." || part.name === "..") {
+      if (!reachedDirectory) {
+        refuse(`cannot be resolved: ${reached} is not a directory`);
+      }
+      if (part.name === "..") reached = dirnameHost(reached);
+      continue;
+    }
+    const next = joinHostPath(reached, part.name);
+    let info: Deno.FileInfo;
+    try {
+      info = Deno.lstatSync(next);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) {
+        refuse(
+          `cannot be resolved: ${next} could not be examined (${
+            errorText(error)
+          })`,
+        );
+      }
+      if (part.fromLink) {
+        refuse(
+          `leads through a symbolic link whose target does not exist (${next})`,
+        );
+      }
+      rest = [part, ...pending].map((p) => p.name);
+      if (rest.some((name) => name === "." || name === "..")) {
+        refuse(
+          `cannot be resolved: ${next} does not exist, and a \`.\` or \`..\` follows it`,
+        );
+      }
+      break;
+    }
+    if (!info.isSymlink) {
+      reached = next;
+      reachedDirectory = info.isDirectory;
+      continue;
+    }
+    links += 1;
+    if (links > MAX_SYMBOLIC_LINKS) {
+      refuse(
+        `cannot be resolved: it leads through more than ${MAX_SYMBOLIC_LINKS} symbolic links`,
+      );
+    }
+    let target: string;
+    try {
+      target = Deno.readLinkSync(next);
+    } catch (error) {
+      target = refuse(
+        `cannot be resolved: the symbolic link ${next} could not be read (${
+          errorText(error)
+        })`,
+      );
+    }
+    if (target === "") {
+      refuse(
+        `leads through a symbolic link whose target does not exist (${next})`,
+      );
+    }
+    if (target.startsWith("/")) reached = "/";
+    pending = [...pathParts(target, true), ...pending];
+  }
+  let real: string;
+  try {
+    // For what the walk cannot see: the case a case-insensitive volume
+    // stores a name in.
+    real = Deno.realPathSync(reached);
+  } catch (error) {
+    real = refuse(
+      `cannot be resolved: ${reached} could not be examined (${
+        errorText(error)
+      })`,
+    );
+  }
+  return rest.length === 0 ? real : joinHostPath(real, ...rest);
+};
+
+/**
+ * Helper for `resolveRunscBinary()`, which finds the file a bare `name` leads
+ * to on `searchPath` and returns its canonical path, or `undefined` when no
+ * entry holds one. The file is the one in the first entry, in order, holding
+ * an executable file of that name. An empty or relative entry is a directory
+ * under `cwd()`. An entry that cannot be looked into is passed over, as it is
+ * when the system runs a bare name.
+ */
+const findOnSearchPath = (
+  name: string,
+  searchPath: string,
+  cwd: () => string,
+): string | undefined => {
+  for (const entry of searchPath.split(":")) {
+    const directory = entry === ""
+      ? cwd()
+      : isAbsoluteHostPath(entry)
+      ? entry
+      : `${cwd()}/${entry}`;
+    try {
+      const candidate = canonicalHostPath(name, `${directory}/${name}`);
+      const info = Deno.statSync(candidate);
+      if (info.isFile && (info.mode === null || (info.mode & 0o111) !== 0)) {
+        return candidate;
+      }
+    } catch {
+      // Not in this entry.
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Returns the canonical path of the runsc binary `given` names, resolved the
+ * way running it would resolve it: a bare name through `PATH`, a relative
+ * path against the working directory of this process.
+ *
+ * @throws When `given` opens with `~`, which nothing between here and the
+ * kernel expands; when no `PATH` entry holds an executable of a bare name;
+ * and when {@link canonicalHostPath} does.
+ */
+const resolveRunscBinary = (given: string): string => {
+  const label = "runsc binary";
+  if (given === "") {
+    throw new Error(`${label} must not be empty: give an absolute path`);
+  }
+  if (given.startsWith("~")) {
+    throw new Error(
+      `${label} ${given} opens with \`~\`, which is not expanded here: give an absolute path`,
+    );
+  }
+  if (isAbsoluteHostPath(given)) return canonicalHostPath(label, given);
+  const cwd = (): string => {
+    try {
+      return Deno.cwd();
+    } catch (error) {
+      throw new Error(
+        `${label} ${given} cannot be resolved: the working directory could not be read (${
+          errorText(error)
+        }); give an absolute path`,
+      );
+    }
+  };
+  if (given.includes("/")) {
+    return canonicalHostPath(label, `${cwd()}/${given}`);
+  }
+  const searchPath = Deno.env.get("PATH");
+  const found = searchPath === undefined
+    ? undefined
+    : findOnSearchPath(given, searchPath, cwd);
+  if (found === undefined) {
+    throw new Error(
+      `${label} ${given} was not found: no directory on \`PATH\` (${
+        searchPath ?? "which is not set"
+      }) holds an executable file of that name; give an absolute path, or set ${RUNSC_BINARY_ENV} to one`,
+    );
+  }
+  return found;
+};
+
+/**
+ * Resolves the settings of a direct runsc sandbox, refusing those that would
+ * put what the sandbox is trusted on within the sandbox's reach.
+ *
+ * The runsc binary, the CFC policy and the rootfs are each resolved once,
+ * here, to a canonical path. That path is what is compared with the mounts,
+ * what the returned configuration holds, and so what every later use names.
+ * One of them that does not exist is accepted, as the path it will have under
+ * its nearest existing ancestor: no mount holds that ancestor, so what later
+ * appears there was not put there from a sandbox.
+ *
+ * @throws When a setting is malformed, when two sandbox roots overlap, when
+ * the scratch directory lies inside a mount, when the binary, the policy or
+ * the rootfs lies inside a writable mount, and when {@link canonicalHostPath}
+ * cannot tell where one of those paths, or a mount, leads.
+ */
 export const resolveRunscSandboxConfig = (
   options: ResolveRunscSandboxConfigOptions,
 ): RunscSandboxConfig => {
@@ -318,60 +569,105 @@ export const resolveRunscSandboxConfig = (
       }`,
     ),
   );
-  // Compared by real path, not spelling: a symlink under a mount that points
-  // at scratch (or the reverse) would put the files inside the sandbox's
-  // reach while the strings say otherwise. Existing ancestors resolve; the
-  // part that does not exist yet is put back unchanged.
+  // Compared by canonical path, not spelling: a symlink under a mount that
+  // points at scratch (or the reverse) would put the files inside the
+  // sandbox's reach while the strings say otherwise.
   // macOS volumes are case-insensitive by default: a path that differs only
   // in case from a mount is inside it once created.
-  const comparable = (path: string): string => {
-    const real = realPathOfNearestExisting(path).replace(/\/+$/, "");
-    return platform === "darwin" ? real.toLowerCase() : real;
+  const comparable = (canonical: string): string => {
+    const trimmed = canonical.replace(/\/+$/, "");
+    return platform === "darwin" ? trimmed.toLowerCase() : trimmed;
   };
-  const inside = (path: string, root: string): boolean => {
-    const p = comparable(path);
-    const r = comparable(root);
-    return p === r || p.startsWith(r + "/");
+  const inside = (
+    canonical: string,
+    canonicalRoots: readonly string[],
+  ): boolean => {
+    const p = comparable(canonical);
+    return canonicalRoots.some((root) => {
+      const r = comparable(root);
+      return p === r || p.startsWith(r + "/");
+    });
   };
+  // A mount and the scratch directory are kept as they were given, and what
+  // uses them does not agree on where a `..` after a link leads: the kernel
+  // follows the link first, and Deno folds the `..` out of the spelling
+  // first. Such a path is compared as both.
+  const everyReading = (label: string, path: string): string[] => [
+    ...new Set([
+      canonicalHostPath(label, path),
+      canonicalHostPath(label, normalizeHostPath(path)),
+    ]),
+  ];
   const hostMounts = [
-    { hostPath: workspaceHostPath, readOnly: false },
+    {
+      label: "workspace host path",
+      hostPath: workspaceHostPath,
+      readOnly: false,
+    },
     ...additionalMounts.map((m) => ({
+      label: m.kind === "fabric-fuse"
+        ? "fabric mount host path"
+        : `host bind ${m.name} host path`,
       hostPath: m.hostPath,
       readOnly: m.readOnly,
     })),
-  ];
-  for (const mount of hostMounts) {
-    if (inside(scratchDir, mount.hostPath)) {
-      throw new Error(
-        `sandbox scratch directory ${scratchDir} lies inside the mount ${mount.hostPath}: the CFC result and context files there would be writable from the sandbox`,
-      );
+  ].map((mount) => ({
+    ...mount,
+    canonical: everyReading(mount.label, mount.hostPath),
+  }));
+  for (const scratch of everyReading("sandbox scratch directory", scratchDir)) {
+    for (const mount of hostMounts) {
+      if (inside(scratch, mount.canonical)) {
+        throw new Error(
+          `sandbox scratch directory ${scratchDir} lies inside the mount ${mount.hostPath}: the CFC result and context files there would be writable from the sandbox`,
+        );
+      }
     }
   }
   // What decides how the sandbox is built and labelled must be out of the
   // sandbox's reach as well: a policy inside a writable mount was rewritten
   // from inside one container and the next read a labelled file as public
   // (review, verified live). The rootfs and the runsc binary likewise.
-  const trusted: Array<[string, string | undefined]> = [
-    ["CFC policy", options.cfcPolicyPath],
-    ["sandbox rootfs", rootfs],
-    ["runsc binary", options.runscBinary],
-  ];
-  for (const [label, path] of trusted) {
-    if (path === undefined || !isAbsoluteHostPath(path)) continue;
+  const trusted = (
+    label: string,
+    given: string,
+    canonical: string,
+  ): string => {
     for (const mount of hostMounts) {
-      if (!mount.readOnly && inside(path, mount.hostPath)) {
+      if (!mount.readOnly && inside(canonical, mount.canonical)) {
         throw new Error(
-          `${label} ${path} lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it`,
+          `${label} ${given}${
+            canonical === given ? "" : ` (which is ${canonical})`
+          } lies inside the writable mount ${mount.hostPath}: the sandbox could rewrite it`,
         );
       }
     }
-  }
+    return canonical;
+  };
+  const givenBinary = options.runscBinary ?? DEFAULT_RUNSC_BINARY;
+  const runscBinary = trusted(
+    "runsc binary",
+    givenBinary,
+    resolveRunscBinary(givenBinary),
+  );
+  const canonicalRootfs = trusted(
+    "sandbox rootfs",
+    rootfs,
+    canonicalHostPath("sandbox rootfs", rootfs),
+  );
+  const cfcPolicyPath = options.cfcPolicyPath === undefined
+    ? undefined
+    : trusted(
+      "CFC policy",
+      options.cfcPolicyPath,
+      canonicalHostPath("CFC policy", options.cfcPolicyPath),
+    );
   // Frozen, mounts included: the engine checks containment against this
   // set and the runtime rereads it at every launch, and a caller holding
   // `ownedRunscSandboxConfig` must not be able to make those two differ.
   return Object.freeze({
-    runscBinary: options.runscBinary ?? DEFAULT_RUNSC_BINARY,
-    rootfs: requireAbsoluteHostPath("sandbox rootfs", rootfs),
+    runscBinary,
+    rootfs: canonicalRootfs,
     workspaceHostPath,
     workspaceMountPath,
     shellPath: options.shellPath ?? DEFAULT_RUNSC_SHELL,
@@ -380,14 +676,7 @@ export const resolveRunscSandboxConfig = (
       additionalMounts.map((mount) => Object.freeze(mount)),
     ),
     extraRunscArgs: Object.freeze([...(options.extraRunscArgs ?? [])]),
-    ...(options.cfcPolicyPath !== undefined
-      ? {
-        cfcPolicyPath: requireAbsoluteHostPath(
-          "CFC policy",
-          options.cfcPolicyPath,
-        ),
-      }
-      : {}),
+    ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
     scratchDir,
     ...(options.scratchDir === undefined
       ? { scratchParentToVerify: defaultScratchParent }
@@ -524,37 +813,11 @@ const waitUpTo = (promise: Promise<unknown>, ms: number): Promise<void> => {
   });
 };
 
-/**
- * The real path of `path`, resolving as many leading components as exist
- * and appending the rest verbatim, so a path that is yet to be created is
- * still compared through the symlinks above it.
- */
-export const realPathOfNearestExisting = (path: string): string => {
-  let existing = path;
-  const rest: string[] = [];
-  for (;;) {
-    try {
-      const real = Deno.realPathSync(existing);
-      return rest.length === 0 ? real : joinHostPath(real, ...rest.reverse());
-    } catch {
-      const parent = dirnameHost(existing);
-      if (parent === existing) return path;
-      rest.push(basenameHost(existing));
-      existing = parent;
-    }
-  }
-};
-
 const dirnameHost = (p: string): string => {
   const trimmed = p.replace(/\/+$/, "");
   const i = trimmed.lastIndexOf("/");
   if (i <= 0) return "/";
   return trimmed.slice(0, i);
-};
-
-const basenameHost = (p: string): string => {
-  const trimmed = p.replace(/\/+$/, "");
-  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 };
 
 const sanitizeIdPart = (value: string): string =>

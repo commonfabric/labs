@@ -9,9 +9,9 @@ import { join } from "@std/path";
 
 import {
   assertRunscCfcPolicyForMode,
+  canonicalHostPath,
   currentUid,
   defaultDarwinRootfs,
-  realPathOfNearestExisting,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
@@ -163,11 +163,19 @@ class FakeRunscRunner implements ProcessRunner {
 
 const scratch = () => Deno.makeTempDirSync({ prefix: "runsc-sandbox-test-" });
 
+/**
+ * The runsc binary these configurations name. Nothing is there: a binary
+ * that does not exist is resolved under its nearest existing ancestor, and
+ * no runner here executes one.
+ */
+const RUNSC = "/opt/runsc/bin/runsc";
+
 const config = (
   overrides: Partial<Parameters<typeof resolveRunscSandboxConfig>[0]> = {},
 ) =>
   resolveRunscSandboxConfig({
     workspaceHostPath: "/tmp/workspace",
+    runscBinary: RUNSC,
     rootfs: "/images/kitchensink",
     scratchDir: scratch(),
     runId: "run-abc",
@@ -193,20 +201,36 @@ const context = (
     command: "echo hi",
   });
 
-Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", () => {
-  const c = resolveRunscSandboxConfig({
-    workspaceHostPath: "/tmp/ws",
-    platform: "darwin",
-    homeDir: "/Users/someone",
-    scratchDir: "/tmp/scratch",
-  });
+Deno.test("resolveRunscSandboxConfig defaults to the cfc-vm image on macOS", async () => {
+  // The default binary is a name to find on `PATH`, so the case gives `PATH`
+  // one directory holding it.
+  const bin = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-default-binary-" }),
+  );
+  await Deno.writeTextFile(join(bin, "runsc"), "#!/bin/sh\n");
+  await Deno.chmod(join(bin, "runsc"), 0o755);
+  const path = Deno.env.get("PATH");
+  let c: ReturnType<typeof resolveRunscSandboxConfig>;
+  try {
+    Deno.env.set("PATH", bin);
+    c = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/ws",
+      platform: "darwin",
+      homeDir: "/Users/someone",
+      scratchDir: "/tmp/scratch",
+    });
+  } finally {
+    if (path === undefined) Deno.env.delete("PATH");
+    else Deno.env.set("PATH", path);
+    await Deno.remove(bin, { recursive: true });
+  }
   assertEquals(c.rootfs, defaultDarwinRootfs("/Users/someone"));
   // The docker runtime defaults to `bridge`; the runsc runtime's default is
   // the runsc spelling of the same posture, so a run that names no network
   // mode gets the same reach on either runtime. `none` here would leave a
   // chat session on runsc without the network the docker session has.
   assertEquals(c.networkMode, "sandbox");
-  assertEquals(c.runscBinary, "runsc");
+  assertEquals(c.runscBinary, join(bin, "runsc"));
   assertEquals(c.cfcPolicyPath, undefined);
 });
 
@@ -215,6 +239,7 @@ Deno.test("resolveRunscSandboxConfig refuses a Linux config with no rootfs", () 
     () =>
       resolveRunscSandboxConfig({
         workspaceHostPath: "/tmp/ws",
+        runscBinary: RUNSC,
         platform: "linux",
       }),
     Error,
@@ -238,7 +263,7 @@ Deno.test("RunscSandboxRuntime runs a call as one container with the CFC transpo
   assertEquals(run.args[1], 'exec 3<"$1" 4>"$2"; shift 2; exec "$@"');
   assertMatch(run.args[3], /cfc-invocation-context\.json$/);
   assertMatch(run.args[4], /cfc-result\.json$/);
-  assertEquals(run.args[5], "runsc");
+  assertEquals(run.args[5], RUNSC);
   const argv = run.args.slice(6);
   const runAt = argv.indexOf("run");
   assert(runAt > 0);
@@ -373,7 +398,7 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   // One long-lived container for the session, started as an attached run.
   assertEquals(runner.spawns.length, 1);
   const spawn = runner.spawns[0];
-  assertEquals(spawn.command, "runsc");
+  assertEquals(spawn.command, RUNSC);
   assert(spawn.args.includes("run"));
   assert(!spawn.args.includes("--detach"));
   const cid = spawn.args[spawn.args.length - 1];
@@ -413,7 +438,7 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   // Closing kills the child, deletes the container and confirms it is gone.
   await runtime.close();
   assertEquals(runner.killed, [`${cid}:SIGKILL`]);
-  const control = runner.requests.filter((r) => r.command === "runsc").map((
+  const control = runner.requests.filter((r) => r.command === RUNSC).map((
     r,
   ) => r.args.slice(-3));
   assert(
@@ -424,7 +449,7 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   assert(runner.deleted.has(cid));
   assertEquals(runtime.sessionContainerIds(), []);
   // Every control command is bounded.
-  for (const r of runner.requests.filter((r) => r.command === "runsc")) {
+  for (const r of runner.requests.filter((r) => r.command === RUNSC)) {
     assert(r.timeoutMs !== undefined, `no timeout on: ${r.args.join(" ")}`);
   }
 });
@@ -560,6 +585,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
     () =>
       resolveRunscSandboxConfig({
         workspaceHostPath: "relative/ws",
+        runscBinary: RUNSC,
         rootfs: "/r",
         platform: "linux",
       }),
@@ -570,6 +596,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
     () =>
       resolveRunscSandboxConfig({
         workspaceHostPath: "/ws",
+        runscBinary: RUNSC,
         rootfs: "/r",
         workspaceMountPath: "workspace",
         platform: "linux",
@@ -581,6 +608,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
     () =>
       resolveRunscSandboxConfig({
         workspaceHostPath: "/ws",
+        runscBinary: RUNSC,
         rootfs: "/r",
         platform: "linux",
         additionalMounts: [{
@@ -597,6 +625,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
     () =>
       resolveRunscSandboxConfig({
         workspaceHostPath: "/ws",
+        runscBinary: RUNSC,
         rootfs: "/r",
         platform: "linux",
         additionalMounts: [{
@@ -611,6 +640,7 @@ Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names an
   );
   const c = resolveRunscSandboxConfig({
     workspaceHostPath: "/ws",
+    runscBinary: RUNSC,
     rootfs: "/r",
     platform: "linux",
     containerUser: "1000:1000",
@@ -852,6 +882,7 @@ Deno.test("the scratch directory defaults outside every sandbox mount and refuse
   // them can forge its own CFC result (review, verified live).
   const cfg = resolveRunscSandboxConfig({
     workspaceHostPath: "/tmp/workspace",
+    runscBinary: RUNSC,
     rootfs: "/images/kitchensink",
     runId: "run-abc",
     platform: "linux",
@@ -932,12 +963,14 @@ Deno.test("sibling subagent runs never share a scratch directory", () => {
   const parent = "0f9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d";
   const one = resolveRunscSandboxConfig({
     workspaceHostPath: "/tmp/workspace",
+    runscBinary: RUNSC,
     rootfs: "/images/kitchensink",
     runId: `${parent}.subagent.1`,
     platform: "linux",
   });
   const two = resolveRunscSandboxConfig({
     workspaceHostPath: "/tmp/workspace",
+    runscBinary: RUNSC,
     rootfs: "/images/kitchensink",
     runId: `${parent}.subagent.2`,
     platform: "linux",
@@ -955,6 +988,7 @@ Deno.test("the scratch containment check sees through symlinks", async () => {
       () =>
         resolveRunscSandboxConfig({
           workspaceHostPath: join(base, "workspace"),
+          runscBinary: RUNSC,
           rootfs: "/images/kitchensink",
           runId: "run-link",
           platform: "linux",
@@ -968,6 +1002,7 @@ Deno.test("the scratch containment check sees through symlinks", async () => {
       () =>
         resolveRunscSandboxConfig({
           workspaceHostPath: join(base, "alias"),
+          runscBinary: RUNSC,
           rootfs: "/images/kitchensink",
           runId: "run-link",
           platform: "linux",
@@ -977,7 +1012,7 @@ Deno.test("the scratch containment check sees through symlinks", async () => {
       "inside",
     );
     assertEquals(
-      realPathOfNearestExisting(join(base, "alias", "not", "yet")),
+      canonicalHostPath("path", join(base, "alias", "not", "yet")),
       join(await Deno.realPath(join(base, "workspace")), "not", "yet"),
     );
   } finally {
@@ -1219,7 +1254,10 @@ Deno.test("the floor holds for every enforcing mode", () => {
 Deno.test("what decides the sandbox's labels and contents is refused inside a writable mount", async () => {
   // A policy in the workspace was rewritten from inside one container, and
   // the next container read a labelled file as public.
-  const root = await Deno.makeTempDir({ prefix: "runsc-trusted-" });
+  // By its real path, which is how an accepted path is returned.
+  const root = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "runsc-trusted-" }),
+  );
   try {
     const workspace = join(root, "ws");
     const readonlyDir = join(root, "ro");
@@ -1227,6 +1265,7 @@ Deno.test("what decides the sandbox's labels and contents is refused inside a wr
     for (const d of [workspace, readonlyDir, writableDir]) await Deno.mkdir(d);
     const base = {
       workspaceHostPath: workspace,
+      runscBinary: RUNSC,
       rootfs: "/images/kitchensink",
       scratchDir: scratch(),
       platform: "linux",
@@ -1283,12 +1322,10 @@ Deno.test("what decides the sandbox's labels and contents is refused inside a wr
       Error,
       "lies inside the writable mount",
     );
-    // A read-only mount cannot rewrite it, and a bare binary name is a PATH
-    // lookup, not a path.
+    // A read-only mount cannot rewrite it.
     const ok = resolveRunscSandboxConfig({
       ...base,
       cfcPolicyPath: join(readonlyDir, "policy.json"),
-      runscBinary: "runsc",
     });
     assertEquals(ok.cfcPolicyPath, join(readonlyDir, "policy.json"));
   } finally {
@@ -1301,7 +1338,11 @@ Deno.test("the scratch check covers the mount root itself and, on macOS, its oth
   try {
     // Neither directory exists yet, so nothing on disk resolves their case.
     const workspace = join(root, "Work", "Sub");
-    const base = { workspaceHostPath: workspace, rootfs: "/images/k" };
+    const base = {
+      workspaceHostPath: workspace,
+      runscBinary: RUNSC,
+      rootfs: "/images/k",
+    };
     assertThrows(
       () =>
         resolveRunscSandboxConfig({
@@ -1538,6 +1579,7 @@ Deno.test("the default scratch parent must be this user's private directory", as
   assertEquals(config().scratchParentToVerify, undefined);
   const byDefault = resolveRunscSandboxConfig({
     workspaceHostPath: "/tmp/workspace",
+    runscBinary: RUNSC,
     rootfs: "/images/kitchensink",
     platform: "linux",
   });

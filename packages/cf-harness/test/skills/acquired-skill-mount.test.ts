@@ -302,6 +302,7 @@ describe("childSandboxOptions() on the runsc runtime", () => {
     const acquired = acquiredAt(COMMIT_SHA);
     const alreadyMounted = resolveRunscSandboxConfig({
       workspaceHostPath: "/tmp/workspace",
+      runscBinary: "/opt/runsc",
       rootfs: "/images/kitchensink",
       scratchDir: "/tmp/scratch",
       runId: "run-1",
