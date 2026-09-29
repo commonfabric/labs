@@ -1061,17 +1061,23 @@ const writerClaimedPositions = (
     isObjectOrArray(schema) && typeof schema.$ref === "string"
       ? ContextualFlowControl.resolveSchemaRefs(schema, root) ?? schema
       : schema;
+  // The cycle check compares the schema as written — the `$ref` site — as
+  // `cfcSchemaEntries` does, so a recursive definition is walked to the same
+  // horizon and marks the same positions: comparing the resolved schema
+  // would stop one hop earlier, and a position the entries walk reaches
+  // would go unmarked.
   const claimed = (
     schema: JSONSchema,
     active: readonly JSONSchema[],
   ): boolean => {
+    if (!isObjectOrArray(schema) || active.includes(schema)) return false;
     const resolved = resolve(schema);
-    if (!isObjectOrArray(resolved) || active.includes(resolved)) return false;
+    if (!isObjectOrArray(resolved)) return false;
     if (
       isObjectOrArray(resolved.ifc) &&
       resolved.ifc.writeAuthorizedBy !== undefined
     ) return true;
-    const next = [...active, resolved];
+    const next = [...active, schema];
     const unions = [resolved.anyOf, resolved.oneOf].filter(Array.isArray);
     if (
       unions.length > 0 &&
@@ -1088,10 +1094,11 @@ const writerClaimedPositions = (
     path: readonly string[],
     active: readonly JSONSchema[],
   ): void => {
+    if (!isObjectOrArray(schema) || active.includes(schema)) return;
     const resolved = resolve(schema);
-    if (!isObjectOrArray(resolved) || active.includes(resolved)) return;
-    if (claimed(resolved, active)) positions.push(path);
-    const next = [...active, resolved];
+    if (!isObjectOrArray(resolved)) return;
+    if (claimed(schema, active)) positions.push(path);
+    const next = [...active, schema];
     const recordOnly = resolved.properties === undefined ||
       (isObjectOrArray(resolved.properties) &&
         Object.keys(resolved.properties).length === 0);
@@ -6118,17 +6125,85 @@ const verifyInputRequirements = (
     .filter((read) => !isProvenanceOnlyConsumedLabel(read.label!))
     .length;
 
+  // A claim declared on a branch of an `anyOf`/`oneOf` applies to the values
+  // that branch admits. Where EVERY branch carries a writer claim, the
+  // position is the claim's whatever is written there (the persist loop marks
+  // it so, `writerClaimedPositions`), so a value that matches no branch — a
+  // `null` or a `0` at a `true`/`false` union — meets each branch's writer
+  // claim rather than none of them: otherwise a bare-link write of such a
+  // value would be the one write at the position no writer answers for.
+  // Only the writer claim is applied off-branch; a branch's floor or ceiling
+  // describes that branch's values.
+  const hasWriterClaim = (schema: JSONSchema): boolean =>
+    isObjectOrArray(schema) && isObjectOrArray(schema.ifc) &&
+    schema.ifc.writeAuthorizedBy !== undefined;
+  const everyBranchClaimed =
+    schemaEntries.some((entry) =>
+        entry.conditional === true && hasWriterClaim(entry.schema)
+      )
+      ? new Set(
+        writerClaimedPositions(schema).map((path) => pathKey(path)),
+      )
+      : undefined;
+  const branchAppliesAt = new Map<string, boolean>();
+  const someBranchAppliesAt = (path: readonly string[]): boolean => {
+    const key = pathKey(path);
+    let applies = branchAppliesAt.get(key);
+    if (applies === undefined) {
+      applies = schemaEntries.some((entry) =>
+        entry.conditional === true && pathKey(entry.path) === key &&
+        ifcEntryAppliesToAttemptedWrite(
+          tx,
+          target,
+          entry.path,
+          entry.schema,
+          entry.root,
+          true,
+        )
+      );
+      branchAppliesAt.set(key, applies);
+    }
+    return applies;
+  };
+
   for (const entry of schemaEntries) {
-    if (
-      !ifcEntryAppliesToAttemptedWrite(
+    const applies = ifcEntryAppliesToAttemptedWrite(
+      tx,
+      target,
+      entry.path,
+      entry.schema,
+      entry.root,
+      entry.conditional === true,
+    );
+    const claimHoldsOffBranch = !applies && entry.conditional === true &&
+      everyBranchClaimed !== undefined &&
+      everyBranchClaimed.has(pathKey(entry.path)) &&
+      hasWriterClaim(entry.schema) &&
+      !someBranchAppliesAt(entry.path) &&
+      ifcEntryAppliesToAttemptedWrite(
         tx,
         target,
         entry.path,
         entry.schema,
         entry.root,
-        entry.conditional === true,
-      )
-    ) {
+        false,
+      );
+    if (!applies && !claimHoldsOffBranch) {
+      continue;
+    }
+    if (claimHoldsOffBranch) {
+      for (const identity of identitiesForPath(entry.path)) {
+        const failure = writeAuthorizedByReason(
+          tx,
+          entry.schema,
+          entry.path,
+          target.space,
+          identity,
+        );
+        if (failure !== undefined) {
+          return { reason: failure, verdict: true };
+        }
+      }
       continue;
     }
     const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
@@ -11240,11 +11315,16 @@ export function* prepareBoundaryCommitSteps(
     // the marker would only add a more specific entry to the declared
     // component's longest-prefix resolution.
     //
-    // A wildcard position is marked at its longest concrete prefix — the
-    // container whose items carry the claim — which routes a write of the
-    // container and of any item; the claim itself is then verified through
-    // the stored schema, as for any routed write. A payload whose policy did
-    // not verify keeps no declared entry either.
+    // A claim on the items of a container (`list/*`) is marked at the
+    // container, which routes a write of the container and of any item; the
+    // claim itself is then verified through the stored schema, as for any
+    // routed write. A claim INSIDE each item (`items/*/claim`) is not marked
+    // at the container: it is a position of the item, which has its own
+    // document when items are anchored or linked and its own entries when
+    // written inline, and a container marked for it would make every link
+    // of an item into the list a policy write demanding the item's metadata
+    // (the list builtin's link of a new sub-piece was refused so). A payload
+    // whose policy did not verify keeps no declared entry either.
     if (!ingestVerificationFailed) {
       const declaredPaths = persistedLabelEntries
         .filter((entry) =>
@@ -11255,6 +11335,7 @@ export function* prepareBoundaryCommitSteps(
         declaredPaths.some((declared) => concretePathHasPrefix(path, declared));
       for (const claimedPath of writerClaimedPositions(schemaAndHash.schema)) {
         const wildcard = claimedPath.indexOf("*");
+        if (wildcard !== -1 && wildcard !== claimedPath.length - 1) continue;
         const path = canonicalizeLogicalPath(
           wildcard === -1 ? claimedPath : claimedPath.slice(0, wildcard),
         );

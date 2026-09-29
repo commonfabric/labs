@@ -469,6 +469,179 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
     expect(doc.get().grid).toEqual([[2]]);
   });
 
+  it("marks a recursive definition to the horizon the entries walk reaches", async () => {
+    // `$defs.Node = { next: Node, v: claimed }`. The entries walk stops where
+    // it meets a `$ref` site again, two hops down; the marker walk stops at
+    // the same site, so `tree/v` and `tree/next/v` are both marked from
+    // creation, as they were before the walk existed.
+    const schema = {
+      type: "object",
+      properties: { tree: { $ref: "#/$defs/Node" }, note: { type: "string" } },
+      $defs: {
+        Node: {
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            v: { type: "string", ifc: { writeAuthorizedBy: [WRITER] } },
+          },
+        },
+      },
+    } as JSONSchema;
+    const doc = await create("recursive", schema, { note: "" });
+    const entries = entriesOf(doc);
+    expect(declaredAt(entries, ["tree", "v"])).toMatchObject({ label: {} });
+    expect(declaredAt(entries, ["tree", "next", "v"])).toMatchObject({
+      label: {},
+    });
+
+    expect(
+      (await asWriter((tx) => {
+        doc.withTx(tx).key("tree").set({ v: "a", next: { v: "b" } } as never);
+      })).error,
+    ).toBeUndefined();
+    // A member's write two hops down lands under a marked position and is
+    // routed, whatever the reason the routed check then gives.
+    const deeper = await asMember((tx) => {
+      runtime.getCellFromLink(
+        bare(doc, ["tree", "next", "next"]),
+        undefined,
+        tx,
+      )
+        .set({ v: "forged" } as never);
+    });
+    expect(deeper.error, JSON.stringify(deeper.error)).toBeDefined();
+    expect(doc.get().tree).toEqual({ v: "a", next: { v: "b" } });
+  });
+
+  it("holds a value matching no branch of an every-branch union to each branch's claim", async () => {
+    // The group chat's bootstrap state: `everyoneIsAdmin: false` beside a
+    // bootstrap admin and no `admins`. `null`, `0` and `"false"` match
+    // neither the `true` nor the `false` branch; `adminRegistryEveryoneIsAdmin`
+    // reads anything but `false` as "everyone", so each is a write only the
+    // toggle handler may make.
+    const schema = {
+      type: "object",
+      properties: {
+        bootstrapAdmin: {
+          type: "object",
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+        admins: {
+          type: "array",
+          items: { type: "string" },
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+        everyoneIsAdmin: {
+          anyOf: [{ $ref: "#/$defs/On" }, { $ref: "#/$defs/Off" }],
+        },
+      },
+      $defs: {
+        On: {
+          type: "boolean",
+          const: true,
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+        Off: {
+          type: "boolean",
+          const: false,
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+      },
+    } as JSONSchema;
+    const registry = await create("bootstrap-registry", schema, {});
+    expect(
+      (await asWriter((tx) => {
+        registry.withTx(tx).set({
+          bootstrapAdmin: { did: "did:key:alice" },
+          everyoneIsAdmin: false,
+        });
+      })).error,
+    ).toBeUndefined();
+    for (const offBranch of [null, 0, "false"]) {
+      refusedByClaim(
+        (await asMember((tx) => {
+          runtime.getCellFromLink(
+            bare(registry, ["everyoneIsAdmin"]),
+            undefined,
+            tx,
+          )
+            .set(offBranch as never);
+        })).error,
+        `the flag set to ${JSON.stringify(offBranch)}`,
+      );
+      expect(registry.get().everyoneIsAdmin).toBe(false);
+    }
+    // And at the flag while it still holds nothing.
+    const fresh = await create("bootstrap-registry-fresh", schema, {});
+    refusedByClaim(
+      (await asMember((tx) => {
+        runtime.getCellFromLink(bare(fresh, ["everyoneIsAdmin"]), undefined, tx)
+          .set(null as never);
+      })).error,
+      "the absent flag set to null",
+    );
+    expect(fresh.get().everyoneIsAdmin).toBeUndefined();
+  });
+
+  it("marks a claimed tuple slot beside a labeled items schema, whose entry is spelled with a wildcard", async () => {
+    // Routing reads entry paths literally, so a declared `list/*` entry (the
+    // items' label, minted for the one item present) routes no write at
+    // `list/1`. The marker's own prefix test is literal too: the slot gets
+    // its marker, where a wildcard-aware test would have read `list/*` as
+    // covering it.
+    const schema = {
+      type: "object",
+      properties: {
+        list: {
+          type: "array",
+          items: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.space(space)] },
+          },
+          prefixItems: [
+            { type: "string" },
+            { type: "string", ifc: { writeAuthorizedBy: [WRITER] } },
+          ],
+        },
+      },
+    } as JSONSchema;
+    const doc = await create("tuple-slot", schema, { list: ["a"] });
+    const entries = entriesOf(doc);
+    expect(
+      entries.some((entry) =>
+        entry.origin === "declared" && entry.path.join("/") === "list/*"
+      ),
+    ).toBe(true);
+    expect(declaredAt(entries, ["list", "1"])).toMatchObject({ label: {} });
+  });
+
+  it("does not mark the container for a claim inside each item", async () => {
+    // `items/*/claim` is a position of the item — its own document when items
+    // are anchored or linked — and a container marked for it would make every
+    // link of an item into the list a policy write demanding the item's
+    // metadata (the list builtin's link of a new sub-piece was refused so).
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              claim: { type: "string", ifc: { writeAuthorizedBy: [WRITER] } },
+            },
+          },
+        },
+        note: {
+          type: "string",
+          ifc: { confidentiality: [cfcAtom.space(space)] },
+        },
+      },
+    } as JSONSchema;
+    const doc = await create("item-claims", schema, { note: "" });
+    expect(declaredAt(entriesOf(doc), ["items"])).toBeUndefined();
+  });
+
   it("refuses an item write on an absent claimed container, and a bare-link item write, by the claim", async () => {
     const schema = {
       type: "object",
