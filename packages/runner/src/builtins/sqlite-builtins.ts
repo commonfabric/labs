@@ -1785,9 +1785,7 @@ export function sqliteQuery(
             // own. Nothing that varies between runs over unchanged data may
             // reach a key, or an unchanged result would mint a document per
             // row per run.
-            const columnConfidentiality = staticConfidentialityOf(
-              labelSchema,
-            ) ?? [];
+            const columnConfidentiality = staticConfidentialityOf(labelSchema);
             const rowKeys = resultRowKeys({
               rows: resultRows,
               columns: res.columns,
