@@ -57,6 +57,9 @@ is part of the room's record.
 
 A session has no streams that write the room. Every write goes to the room's own
 streams (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)), whichever session
-the client reads through. The only streams under a session are its message
-list's `openWindow` and `closeWindow`, which change nothing but the session's
-own windows.
+the client reads through, because every write changes the room, which is
+`PerSpace` and shared, and never the session. Keeping the writes on the room
+keeps that line where the scopes draw it: the room is the shared thing, and a
+session is one reader's view of it. The only streams under a session are its
+message list's `openWindow` and `closeWindow`, which change nothing but the
+session's own windows.
