@@ -57,6 +57,15 @@
  * own code could repoint the component at another instance's slot, such as
  * that of a one-seat room the member sealed alone, or at an empty one.
  * `docs/specs/cfc-custody-seal.md` says what this does not cover.
+ *
+ * Whoever runs `propose` first fixes the terms for good, and anyone who can
+ * write in the room space can run it, with seats of their choosing, before
+ * the room's own proposal does. The room does not guard against that: it
+ * records no creator to check the sender against, and a proposer can always
+ * seat itself. What that costs is the room, not a member's consent. The
+ * seal's confirmation shows every seat, and a member seals only under terms
+ * that seat them, so terms the members did not agree to leave the room with
+ * no answer, and the remedy is another room.
  */
 
 import {
