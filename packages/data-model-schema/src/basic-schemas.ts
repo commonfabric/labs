@@ -69,6 +69,8 @@ export function schemaForValueType(
     }
 
     case "bigint":
+      return getBasicSchema("bigint");
+
     case "symbol":
     case "undefined": {
       // Not accepted yet, even though the intention is to accept most or all

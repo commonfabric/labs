@@ -353,6 +353,12 @@ export type Frame = {
    */
   pendingSpaceNames?: Set<string>;
 
+  /** Creator-only allocations waiting for authenticated genesis. */
+  pendingPrivateSpaces?: Map<string, string>;
+
+  /** ACL reads whose initial replica load must finish before this action commits. */
+  pendingMembershipSpaces?: Set<MemorySpace>;
+
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;
 };

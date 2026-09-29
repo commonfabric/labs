@@ -1556,6 +1556,11 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
+  /** Releases the bootstrap signer once the creator's session has opened. */
+  forgetSpaceIdentity(space: MemorySpace): void {
+    this.#spaceIdentities.delete(space);
+  }
+
   /**
    * Retain a derived space key solely as the authority for that space's first
    * ACL commit. Providers continue to authenticate all ordinary replica work
@@ -5856,6 +5861,7 @@ export class SpaceReplica
           preconditions,
           sqliteOps,
           options,
+          transaction.aclChange,
         ),
     );
   }
@@ -5895,6 +5901,7 @@ export class SpaceReplica
       transaction.sqliteOps ?? [],
       verdict,
       options,
+      transaction.aclChange,
     );
   }
 
@@ -5919,6 +5926,9 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
+    if (transaction.aclChange) {
+      throw new Error("Atomic ACL changes require direct session admission");
+    }
     return {
       operations: storeOperationsOf(
         documentOperationsOf(transaction),
@@ -5940,6 +5950,7 @@ export class SpaceReplica
       readonly identity?: ScopeKeyIdentity;
       readonly reads?: ClientCommit["reads"];
     },
+    aclChange?: ClientCommit["aclChange"],
   ): SealedNativeCommit {
     // The tx→replica identity seam (server-execution v2 stage A, OW17): a
     // served per-instance run seals under ITS identity — its ops apply to
@@ -5954,6 +5965,7 @@ export class SpaceReplica
     }
     const commit: ClientCommit = {
       localSeq,
+      ...(aclChange ? { aclChange } : {}),
       reads: options?.reads ?? this.#buildReads(source, localSeq, identity),
       // Cell ops first, folded SQLite ops last — the same commit shape
       // commitOperations builds, so the wave batch is made of ordinary
@@ -6588,6 +6600,7 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
     commitOptions?: TransactionCommitOptions,
+    aclChange?: ClientCommit["aclChange"],
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     if (
@@ -6605,6 +6618,7 @@ export class SpaceReplica
       ["commitOperations", "buildCommit"],
       (): ClientCommit => ({
         localSeq,
+        ...(aclChange ? { aclChange } : {}),
         reads: this.#buildReads(source, localSeq),
         // Cell ops first, folded SQLite ops last (applied in array order by the
         // engine; sqlite ops are not entity revisions and carry no id/scope).

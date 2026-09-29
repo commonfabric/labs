@@ -17,6 +17,8 @@ import AgentQueue, {
   type AgentQueueOutput,
   withAgentQueueRunLinkSchema,
 } from "./agent-queue.tsx";
+import FabriChatManager from "../fabrichat/manager.tsx";
+import type { ChatManagerOutput } from "../fabrichat/schemas.ts";
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
 import {
@@ -83,6 +85,7 @@ export type HomeOutput = {
   // registered runner. `wish({ query: "#agent_queue" })` resolves to it, and
   // the `agent` builtin appends to its `entries`.
   agentQueue: AgentQueueOutput;
+  chatManager: ChatManagerOutput;
   createProfile: Stream<CreateProfileEvent>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
@@ -235,6 +238,7 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
+    const chatManager = FabriChatManager({});
     // Private self-model — the "real you" tier (values, neurotype, meaning Q&A),
     // home-local and never shared. Distinct from the outward profile/personas in
     // the Profile tab. Owns its own durable cell (seeded via Default<>).
@@ -370,6 +374,7 @@ const Home = pattern(
       defaultProfile: defaultProfile as any,
       mru: mru as any,
       agentQueue,
+      chatManager,
 
       // Exported handlers
       addFavorite: addFavorite({ favorites }),

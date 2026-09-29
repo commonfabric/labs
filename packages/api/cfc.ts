@@ -866,6 +866,8 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
+  "AuthenticatedActionWrite",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -876,6 +878,16 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
 ] as const;
 
 export type CfcCanonicalAliasName = typeof CFC_CANONICAL_ALIAS_NAMES[number];
+
+/**
+ * Admits a write through one complete writer policy from a nonempty tuple.
+ * Each member is a `WriteAuthorizedBy` or `TrustedActionWrite` declaration;
+ * a trusted writer and its gesture must match the same member.
+ */
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [unknown, ...unknown[]],
+> = Cfc<T, { readonly writePolicyAnyOf: Policies }>;
 
 export type Ref<Root, Path extends readonly string[]> = {
   readonly __ct_ref_root__?: Root;
@@ -985,6 +997,12 @@ export type Projection<SourceRef> = SourceRef extends Ref<
 
 export type WriteAuthorizedBy<T, Binding> = Cfc<T, {
   writeAuthorizedBy: Binding;
+}>;
+
+/** Admits the named authenticated writer without requiring a reviewed UI gesture. */
+export type AuthenticatedActionWrite<T, Binding> = Cfc<T, {
+  writeAuthorizedBy: Binding;
+  authenticatedAction: true;
 }>;
 
 export type TrustedActionWriteWithIntegrity<

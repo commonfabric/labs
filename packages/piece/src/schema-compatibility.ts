@@ -363,7 +363,11 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * `writerIdentity` is the write authorization, compared except for the parts of
  * its claim that move without the authorization moving.
  */
-type IfcKeyRole = "declared" | "derived" | "writerIdentity";
+type IfcKeyRole =
+  | "declared"
+  | "derived"
+  | "writerIdentity"
+  | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -384,6 +388,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "writerIdentity",
+  writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
   // `AuthoredByCurrentUser` spellings that expand to it. It names atoms the
@@ -496,7 +501,10 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (role === "derived" || role === "writerIdentity") {
+    if (
+      role === "derived" || role === "writerIdentity" ||
+      role === "writerAlternatives"
+    ) {
       handled = true;
       break;
     }
@@ -519,6 +527,21 @@ const comparableIfc = (ifc: unknown): unknown => {
         : [];
       changed = true;
       if (evidence.length > 0) keep(kept, key, evidence);
+      continue;
+    }
+    if (role === "writerAlternatives" && Array.isArray(value)) {
+      const normalized = value.map((policy) =>
+        isObjectNotArray(policy)
+          ? {
+            ...policy,
+            writeAuthorizedBy: writerClaimWithoutVolatileIdentity(
+              policy.writeAuthorizedBy,
+            ),
+          }
+          : policy
+      );
+      changed = true;
+      keep(kept, key, normalized);
       continue;
     }
     if (role === "writerIdentity") {
@@ -2063,6 +2086,7 @@ function valueSchemaType(value: unknown): string | undefined {
     return Number.isInteger(value) ? "integer" : "number";
   }
   if (typeof value === "boolean") return "boolean";
+  if (typeof value === "bigint") return "bigint";
   if (Array.isArray(value)) return "array";
   return isPlainObject(value) ? "object" : undefined;
 }

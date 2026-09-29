@@ -194,6 +194,7 @@ function findWriteAuthorizedByReferences(
 
 function isWriteAuthorizedByLikeTypeName(name: string | undefined): boolean {
   return name === "WriteAuthorizedBy" ||
+    name === "AuthenticatedActionWrite" ||
     name === "TrustedActionWrite" ||
     name === "TrustedActionWriteWithIntegrity";
 }

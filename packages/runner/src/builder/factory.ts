@@ -70,6 +70,8 @@ import {
   wish,
 } from "./built-in.ts";
 import { tagCollectionKey } from "./collection-key.ts";
+import { setSpaceMembers, spaceMembers } from "./space-members.ts";
+import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import {
@@ -269,6 +271,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     navigateTo,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
+    currentPrincipal,
+    spaceMembers,
+    setSpaceMembers,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):

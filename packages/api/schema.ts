@@ -192,6 +192,7 @@ type SchemaCore<
     ? SchemaAnyOf<U, Root, Depth, WrapCells>
   : T extends { type: "string" } ? string
   : T extends { type: "number" | "integer" } ? number
+  : T extends { type: "bigint" } ? bigint
   : T extends { type: "boolean" } ? boolean
   : T extends { type: "null" } ? null
   : T extends { type: infer Name extends FabricPrimitiveSchemaType }

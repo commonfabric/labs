@@ -36,6 +36,7 @@ describe("basic-schemas", () => {
 
     testType("string", "hello");
     testType("integer", 42);
+    testType("bigint", 9007199254740993n);
     testType("number", 3.14);
     testType("boolean", true);
     testType("null", null);
@@ -54,12 +55,6 @@ describe("basic-schemas", () => {
     describe("undefined", () => {
       it("returns `undefined`", () => {
         expect(schemaForValueType(undefined)).toBe(undefined);
-      });
-    });
-
-    describe("bigint", () => {
-      it("returns `undefined`", () => {
-        expect(schemaForValueType(BigInt(42))).toBe(undefined);
       });
     });
 

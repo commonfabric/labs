@@ -473,6 +473,8 @@ export declare const CFC_CANONICAL_ALIAS_NAMES: readonly [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
+  "AuthenticatedActionWrite",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -482,6 +484,15 @@ export declare const CFC_CANONICAL_ALIAS_NAMES: readonly [
   "Projection",
 ];
 export type CfcCanonicalAliasName = typeof CFC_CANONICAL_ALIAS_NAMES[number];
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [
+    unknown,
+    ...unknown[],
+  ],
+> = Cfc<T, {
+  readonly writePolicyAnyOf: Policies;
+}>;
 export type Ref<Root, Path extends readonly string[]> = {
   readonly __ct_ref_root__?: Root;
   readonly __ct_ref_path__?: Path;
@@ -566,6 +577,10 @@ export type Projection<SourceRef> = SourceRef extends
   : never;
 export type WriteAuthorizedBy<T, Binding> = Cfc<T, {
   writeAuthorizedBy: Binding;
+}>;
+export type AuthenticatedActionWrite<T, Binding> = Cfc<T, {
+  writeAuthorizedBy: Binding;
+  authenticatedAction: true;
 }>;
 export type TrustedActionWriteWithIntegrity<
   T,

@@ -211,6 +211,7 @@ import {
 import {
   pathPatternMatches,
   recordedTrustedEventProvenanceMatchesUiContract,
+  uiContractFromSchema,
   uiContractsFromSchema,
 } from "./ui-contract.ts";
 import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
@@ -1077,6 +1078,7 @@ const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
   }
   return schema.ifc.requiredIntegrity !== undefined ||
     schema.ifc.writeAuthorizedBy !== undefined ||
+    schema.ifc.writePolicyAnyOf !== undefined ||
     schema.ifc.uiContract !== undefined ||
     schema.ifc.exactCopyOf !== undefined ||
     schema.ifc.projection !== undefined;
@@ -1119,7 +1121,8 @@ const writerClaimedPositions = (
     if (!isObjectOrArray(resolved)) return false;
     if (
       isObjectOrArray(resolved.ifc) &&
-      resolved.ifc.writeAuthorizedBy !== undefined
+      (resolved.ifc.writeAuthorizedBy !== undefined ||
+        resolved.ifc.writePolicyAnyOf !== undefined)
     ) return true;
     const next = [...active, schema];
     const unions = [resolved.anyOf, resolved.oneOf].filter(Array.isArray);
@@ -1503,7 +1506,8 @@ const writeIsRuntimeInitialization = (
     cfcSchemaEntries(stored.schema).some((entry) =>
       pathPatternsOverlap(entry.path, path) &&
       isObjectOrArray(entry.schema) &&
-      entry.schema.ifc?.[waived] !== undefined
+      (entry.schema.ifc?.[waived] !== undefined ||
+        entry.schema.ifc?.writePolicyAnyOf !== undefined)
     )
   ) return false;
   // Overlapping write paths can capture different intermediate states. Every
@@ -2851,6 +2855,18 @@ const rebindWriteAuthorizedByClaimsInner = (
       next.ifc = nextIfc;
       changed = true;
     }
+  }
+
+  if (isObjectOrArray(value.ifc) && Array.isArray(value.ifc.writePolicyAnyOf)) {
+    const policies = value.ifc.writePolicyAnyOf.map((policy) => {
+      const rebound = rebindWriteAuthorizedByClaimsInner({ ifc: policy }, ids);
+      return isObjectOrArray(rebound) ? rebound.ifc : policy;
+    });
+    next.ifc = {
+      ...(isObjectOrArray(next.ifc) ? next.ifc : value.ifc),
+      writePolicyAnyOf: policies,
+    };
+    changed = true;
   }
 
   return changed ? next : value;
@@ -4752,6 +4768,31 @@ const unsupportedTrustSensitiveReason = (
     "addedIntegrity",
   ] as const;
   const ifc = schema.ifc as Record<string, unknown>;
+  if (
+    ifc.authenticatedAction !== undefined &&
+    (ifc.authenticatedAction !== true || ifc.writeAuthorizedBy === undefined)
+  ) {
+    return `invalid authenticatedAction at /${path.join("/")}`;
+  }
+  if (ifc.writePolicyAnyOf !== undefined) {
+    const policies = ifc.writePolicyAnyOf;
+    if (
+      !Array.isArray(policies) || policies.length === 0 ||
+      policies.some((policy) =>
+        !isObjectNotArray(policy) || policy.writeAuthorizedBy === undefined ||
+        Object.keys(policy).some((key) =>
+          key !== "writeAuthorizedBy" && key !== "uiContract" &&
+          key !== "authenticatedAction"
+        ) ||
+        (policy.authenticatedAction !== undefined &&
+          policy.authenticatedAction !== true) ||
+        (policy.uiContract !== undefined &&
+          uiContractFromSchema({ ifc: policy }) === undefined)
+      )
+    ) {
+      return `invalid writePolicyAnyOf at /${path.join("/")}`;
+    }
+  }
   for (const key of unsupportedKeys) {
     if (ifc[key] !== undefined) {
       return `unsupported trust-sensitive claim ${key} at /${path.join("/")}`;
@@ -5044,7 +5085,9 @@ const currentPrincipalIntegrityReason = (
     if (trustSnapshot.actingPrincipal !== ownerPrincipal) {
       return `ownerPrincipal mismatch at /${path.join("/")}`;
     }
-    if (ifc.writeAuthorizedBy === undefined) {
+    if (
+      ifc.writeAuthorizedBy === undefined && ifc.writePolicyAnyOf === undefined
+    ) {
       return `ownerPrincipal requires writeAuthorizedBy at /${path.join("/")}`;
     }
     // A placeholder owner names the principal the stored label represents,
@@ -5104,12 +5147,20 @@ const currentPrincipalIntegrityReason = (
       path.join("/")
     }`;
   }
-  if (ifc.writeAuthorizedBy === undefined) {
+  if (
+    ifc.writeAuthorizedBy === undefined && ifc.writePolicyAnyOf === undefined
+  ) {
     return `current-principal integrity requires writeAuthorizedBy at /${
       path.join("/")
     }`;
   }
-  if (ifc.uiContract === undefined) {
+  if (
+    ifc.uiContract === undefined && ifc.authenticatedAction !== true &&
+    !(Array.isArray(ifc.writePolicyAnyOf) && ifc.writePolicyAnyOf.length > 0 &&
+      ifc.writePolicyAnyOf.every((policy) =>
+        policy.uiContract !== undefined || policy.authenticatedAction === true
+      ))
+  ) {
     return `current-principal integrity requires uiContract at /${
       path.join("/")
     }`;
@@ -6361,17 +6412,6 @@ const verifyInputRequirements = (
     if (currentPrincipalFailure !== undefined) {
       return { reason: currentPrincipalFailure, verdict: true };
     }
-    let writeAuthorizedByFailure: string | undefined;
-    for (const identity of identitiesForPath(entry.path)) {
-      writeAuthorizedByFailure = writeAuthorizedByReason(
-        tx,
-        entry.schema,
-        entry.path,
-        target.space,
-        identity,
-      );
-      if (writeAuthorizedByFailure !== undefined) break;
-    }
     const setupProjection = setupProjectionSourceMatchesValue(
       tx,
       target,
@@ -6384,6 +6424,76 @@ const verifyInputRequirements = (
         "writeAuthorizedBy",
       ) ||
       writeIsOwnerAdoption(tx, target, entry.path) || policyApplication;
+    let writeAuthorizedByFailure: string | undefined;
+    for (const identity of identitiesForPath(entry.path)) {
+      writeAuthorizedByFailure = writeAuthorizedByReason(
+        tx,
+        entry.schema,
+        entry.path,
+        target.space,
+        identity,
+      );
+      if (
+        ifc?.writePolicyAnyOf !== undefined
+      ) {
+        const policies = ifc.writePolicyAnyOf;
+        const uiInitialization =
+          setupProjectionSourceMatchesValue(tx, target, entry.path) ||
+          writeInstallsInitialSchemaDefault(
+            tx,
+            target,
+            entry.path,
+            entry.schema,
+          ) ||
+          writeIsRuntimeInitialization(tx, target, entry.path, "uiContract") ||
+          policyApplication;
+        const eligible = Array.isArray(policies)
+          ? policies.flatMap((policy) => {
+            if (
+              !isObjectOrArray(policy) || policy.writeAuthorizedBy === undefined
+            ) return [];
+            const contract = uiContractFromSchema({ ifc: policy });
+            const uiMatches = policy.uiContract === undefined ||
+              uiInitialization ||
+              (contract !== undefined &&
+                tx.getCfcState().writePolicyInputs.some((input) =>
+                  input.kind === "trusted-event" &&
+                  input.target.space === target.space &&
+                  input.target.id === target.id &&
+                  input.target.scope === target.scope &&
+                  pathPatternMatches(entry.path, input.target.path) &&
+                  recordedTrustedEventProvenanceMatchesUiContract(
+                    input.provenance,
+                    contract,
+                  )
+                ));
+            if (!uiMatches) return [];
+            const failure = writeAuthorizedByReason(
+              tx,
+              { ifc: policy },
+              entry.path,
+              target.space,
+              identity,
+            );
+            return [{ failure }];
+          })
+          : [];
+        const matched = eligible.some(({ failure }) =>
+          failure === undefined || setupProjection
+        ) ||
+          eligible.some(({ failure }) =>
+            failure !== undefined &&
+            deferWriterRefusal?.(failure, entry.path) === true
+          );
+        if (!matched) {
+          return {
+            reason: `writePolicyAnyOf failed at /${entry.path.join("/")}`,
+            verdict: true,
+          };
+        }
+      }
+      if (writeAuthorizedByFailure !== undefined) break;
+    }
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
       if (deferWriterRefusal?.(writeAuthorizedByFailure, entry.path) !== true) {
         return { reason: writeAuthorizedByFailure, verdict: true };
@@ -8312,6 +8422,7 @@ const storedForeignPositions = (
   ).filter((entry) =>
     isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
     (entry.schema.ifc.writeAuthorizedBy !== undefined ||
+      entry.schema.ifc.writePolicyAnyOf !== undefined ||
       entry.schema.ifc.uiContract !== undefined)
   ).map((entry) => entry.path);
   return {

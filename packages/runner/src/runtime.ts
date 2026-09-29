@@ -1340,6 +1340,9 @@ export class Runtime {
   }
 
   /** Cache of resolved PatternFactory.inSpace("name") space DIDs. */
+  readonly #privateSpaceAttempts = new Map<string, MemorySpace>();
+  readonly #privateSpaceDids = new Map<string, MemorySpace>();
+  readonly #privateSpaceResolutions = new Map<string, Promise<MemorySpace>>();
   readonly #spaceNameToDid = new Map<string, MemorySpace>();
   /** The genesisAcl each name was first resolved with, so an identical
    * re-resolution is a retry and a different one is refused. */
@@ -4151,6 +4154,52 @@ export class Runtime {
       spaceCellSchema,
       tx,
     ) as Cell<SpaceCellContents>;
+  }
+
+  /** Returns an allocation prepared for the current handler attempt. */
+  resolvedPrivateSpace(key: string): MemorySpace | undefined {
+    return this.#privateSpaceDids.get(key);
+  }
+
+  /** Creates a random space whose genesis grants only the authenticated creator. */
+  async resolvePrivateSpace(key: string, owner: DID): Promise<MemorySpace> {
+    const known = this.#privateSpaceDids.get(key);
+    if (known !== undefined) return known;
+    const pending = this.#privateSpaceResolutions.get(key);
+    if (pending !== undefined) return await pending;
+    const create = async (): Promise<MemorySpace> => {
+      if (
+        !this.storageManager.registerSpaceIdentity ||
+        !this.storageManager.ensureSpaceInitialized ||
+        !this.storageManager.forgetSpaceIdentity
+      ) {
+        throw new Error("Storage does not support private space creation.");
+      }
+      if (!isDID(owner)) {
+        throw new Error("Private space creation requires a principal DID.");
+      }
+      let space = this.#privateSpaceAttempts.get(key);
+      if (space === undefined) {
+        const identity = await Identity.generate();
+        space = identity.did() as MemorySpace;
+        this.storageManager.registerSpaceIdentity(identity, {
+          genesisAcl: { [owner]: "OWNER" },
+        });
+        this.#privateSpaceAttempts.set(key, space);
+      }
+      await this.storageManager.ensureSpaceInitialized(space);
+      this.storageManager.forgetSpaceIdentity(space);
+      this.#privateSpaceAttempts.delete(key);
+      this.#privateSpaceDids.set(key, space);
+      return space;
+    };
+    const promise = create();
+    this.#privateSpaceResolutions.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      this.#privateSpaceResolutions.delete(key);
+    }
   }
 
   /**

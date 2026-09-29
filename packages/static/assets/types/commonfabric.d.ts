@@ -2520,6 +2520,8 @@ export type PatternFactory<T, R> =
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
     inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
+    /** Creates or reuses a creator-only space allocated by this calling space. */
+    inPrivateSpace(name: string): PatternFactory<T, R>;
   };
 
 export type ModuleFactory<T, R> =
@@ -2565,6 +2567,7 @@ export type JSONSchemaTypes =
   | "array"
   | "string"
   | "integer"
+  | "bigint" // exact native integers, distinct from JavaScript numbers
   | "number"
   | "boolean"
   | "null"
@@ -2684,6 +2687,14 @@ export type JSONSchemaObj = {
     readonly requiredIntegrity?: readonly JSONValue[];
     readonly maxConfidentiality?: readonly JSONValue[];
     readonly ownerPrincipal?: string | CurrentPrincipal;
+    readonly authenticatedAction?: true;
+    readonly writePolicyAnyOf?: readonly {
+      readonly authenticatedAction?: true;
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly writeAuthorizedBy?:
       | readonly string[]
       | {
@@ -4091,6 +4102,22 @@ export type WishTag = `/${string}` | `#${string}`;
  * that decides whether a string is a DID, live in `@commonfabric/identity/did`.
  */
 export type DID = `did:${string}`;
+
+/**
+ * Returns the authenticated actor in a handler, or the demanding principal in
+ * a reactive computation. A reactive read acquires user scope. Returns
+ * `undefined` for a run with no authenticated principal, and throws outside
+ * execution. Event payloads cannot select the returned identity.
+ */
+export declare function currentPrincipal(): DID | undefined;
+
+/** Reads the current space's authoritative access list, or no list when unavailable. */
+export declare function spaceMembers(target?: Cell<unknown>): Readonly<Record<string, "READ" | "WRITE" | "OWNER" | undefined>> | undefined;
+
+/** Replaces the current space's ACL atomically with a handler's metadata writes. */
+export declare function setSpaceMembers(members: Readonly<Record<string, "READ" | "WRITE" | "OWNER" | undefined>>, target?: Cell<unknown>): void;
+
+
 
 export type WishParams = {
   query: WishTag | string;

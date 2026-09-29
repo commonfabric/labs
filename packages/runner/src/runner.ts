@@ -1,3 +1,4 @@
+import { loadSpaceMembership } from "./builder/space-members.ts";
 import {
   convertibleJsFromFabricValue,
   debugStr,
@@ -3191,9 +3192,14 @@ export class Runner {
             meta: ignoreReadForScheduling,
           });
           if (currentValue === undefined) {
-            derivedCell.setRawUntyped(
-              fabricFromConvertibleJsValue(schemaDefault),
-            );
+            const value = fabricFromConvertibleJsValue(schemaDefault);
+            derivedCell.setRawUntyped(value);
+            tx.recordCfcWritePolicyInput({
+              kind: "initialization",
+              mode: "seed",
+              target: derivedCell.getAsNormalizedFullLink(),
+              value,
+            }, runtimeWritePolicyAuthorization);
           }
         }
       }
@@ -10390,6 +10396,16 @@ export class Runner {
         )
       ),
     );
+    await Promise.all(
+      [...(frame.pendingPrivateSpaces ?? [])].map(([key, creator]) =>
+        this.#runtime.resolvePrivateSpace(key, creator as DID)
+      ),
+    );
+    await Promise.all(
+      [...(frame.pendingMembershipSpaces ?? [])].map((space) =>
+        loadSpaceMembership(this.#runtime, space)
+      ),
+    );
     throw new RetryImmediately(
       `Resolving in-space target spaces: ${names.join(", ")}`,
     );
@@ -10785,7 +10801,11 @@ export class Runner {
         const postRun = (result: any) => {
           logger.timeStart("stream", "postRun");
           try {
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (
+              ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+                (frame.pendingPrivateSpaces?.size ?? 0) > 0 ||
+                (frame.pendingMembershipSpaces?.size ?? 0) > 0)
+            ) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
@@ -10818,7 +10838,9 @@ export class Runner {
         // pending names and retry instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+            (frame.pendingPrivateSpaces?.size ?? 0) > 0 ||
+            (frame.pendingMembershipSpaces?.size ?? 0) > 0)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
@@ -11136,7 +11158,11 @@ export class Runner {
               );
               result = undefined;
             }
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (
+              ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+                (frame.pendingPrivateSpaces?.size ?? 0) > 0 ||
+                (frame.pendingMembershipSpaces?.size ?? 0) > 0)
+            ) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
@@ -11205,7 +11231,9 @@ export class Runner {
         // instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          ((frame.pendingSpaceNames?.size ?? 0) > 0 ||
+            (frame.pendingPrivateSpaces?.size ?? 0) > 0 ||
+            (frame.pendingMembershipSpaces?.size ?? 0) > 0)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)

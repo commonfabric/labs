@@ -97,7 +97,7 @@ export class PrimitiveFormatter implements TypeFormatter {
       return { type: "boolean" };
     }
     if (flags & ts.TypeFlags.BigInt) {
-      return { type: "integer" };
+      return { type: "bigint" };
     }
     if (flags & ts.TypeFlags.Null) {
       return { type: "null" };

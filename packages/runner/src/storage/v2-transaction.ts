@@ -37,6 +37,7 @@ import {
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { getCommitSeq } from "./commit-identity.ts";
+import { getAclChange } from "./acl-change.ts";
 import type {
   Activity,
   ChangeGroup,
@@ -1418,12 +1419,13 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   getNativeCommit(space: MemorySpace): NativeStorageCommit | undefined {
+    const aclChange = getAclChange(this, space);
     const branch = this.#branches.get(space);
     const nativePreconditions = this.#commitPreconditionsFor(space);
     const sqliteOps = this.#sqliteOps.get(space);
     if (
       !branch &&
-      nativePreconditions.length === 0 && !sqliteOps?.length
+      nativePreconditions.length === 0 && !sqliteOps?.length && !aclChange
     ) {
       return undefined;
     }
@@ -1552,8 +1554,14 @@ export class V2StorageTransaction implements IStorageTransaction {
       operations.push(...redeliveries);
     }
 
+    if (aclChange && operations.length === 0) {
+      throw new Error(
+        "An atomic ACL change requires companion metadata writes",
+      );
+    }
     return {
       operations,
+      ...(aclChange ? { aclChange } : {}),
       ...(nativePreconditions.length
         ? { preconditions: nativePreconditions }
         : {}),

@@ -28,6 +28,25 @@ export type CommonFabricRuntimeExportSpec =
   };
 
 export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
+  // Stages an atomic ACL companion in the executing handler transaction.
+  {
+    exportName: "setSpaceMembers",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads the executing transaction's ACL without creating a reactive node.
+  {
+    exportName: "spaceMembers",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads the executing transaction's principal and records user-scope demand.
+  // It returns a primitive, so it is an ordinary call inside a reactive body.
+  {
+    exportName: "currentPrincipal",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   {
     exportName: "tagCollectionKey",
     category: "ignored",

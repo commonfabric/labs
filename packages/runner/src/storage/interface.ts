@@ -391,6 +391,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   ensureSpaceInitialized?(space: MemorySpace): Promise<void>;
 
+  /** Releases bootstrap key material after confirmed genesis. */
+  forgetSpaceIdentity?(space: MemorySpace): void;
+
   /**
    * The serving manager's HOME space (a serving runtime's storage
    * manager declares it; undefined on every client manager). Consumers
@@ -3458,6 +3461,7 @@ export type NativeStorageCommitOperation =
   };
 
 export interface NativeStorageCommit {
+  aclChange?: ClientCommit["aclChange"];
   operations: readonly NativeStorageCommitOperation[];
   preconditions?: readonly CommitPrecondition[];
 

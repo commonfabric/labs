@@ -46,6 +46,8 @@ const IFC_KEYS = [
   "maxConfidentiality",
   "ownerPrincipal",
   "writeAuthorizedBy",
+  "writePolicyAnyOf",
+  "authenticatedAction",
   "exactCopyOf",
   "projection",
   "collection",
@@ -312,6 +314,42 @@ const mergeSetLikeIfcArray = (
       }
       return mergeArraySet(candidateArray);
     }
+    case "writePolicyAnyOf": {
+      if (
+        !Array.isArray(existing) || !Array.isArray(candidate) ||
+        existing.length === 0 || existing.length !== candidate.length
+      ) {
+        throw new Error(
+          `writePolicyAnyOf must remain stable at ${path || "/"}`,
+        );
+      }
+      return existing.map((policy, index) => {
+        const other = candidate[index];
+        if (
+          !isObjectNotArray(policy) || !isObjectNotArray(other) ||
+          !deepEqual(policy.uiContract, other.uiContract) ||
+          policy.authenticatedAction !== other.authenticatedAction
+        ) {
+          throw new Error(
+            `writePolicyAnyOf must remain stable at ${path || "/"}`,
+          );
+        }
+        const writer =
+          deepEqual(policy.writeAuthorizedBy, other.writeAuthorizedBy)
+            ? policy.writeAuthorizedBy
+            : reconcileWriterClaimStamp(
+              policy.writeAuthorizedBy,
+              other.writeAuthorizedBy,
+              adoptsStamp,
+            );
+        if (writer === undefined) {
+          throw new Error(
+            `writePolicyAnyOf must remain stable at ${path || "/"}`,
+          );
+        }
+        return { ...policy, writeAuthorizedBy: writer };
+      });
+    }
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -320,6 +358,7 @@ const mergeSetLikeIfcArray = (
         throw new Error(`${key} must remain stable at ${path || "/"}`);
       }
       return existing;
+    case "authenticatedAction":
     case "flowPrecisionClaim":
     case "uiContract":
       if (!deepEqual(existing, candidate)) {

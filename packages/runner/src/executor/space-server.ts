@@ -1418,6 +1418,8 @@ export class SpaceServer implements TransactionSealDestination {
     this.#lastFoldedDemandEnters = demandRootCounters.enters;
     this.#lastFoldedDemandLeaves = demandRootCounters.leaves;
     const sink = new EngineWaveCommitSink({
+      onAclChange: (s, changedEngine) =>
+        this.#options.server.completeAtomicAclChange(changedEngine, s),
       engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
@@ -6507,6 +6509,22 @@ export class SpaceServer implements TransactionSealDestination {
         writes: foreign.writes,
         warm: true,
       });
+      if (foreign.aclCompanionSeq !== undefined) {
+        const companion =
+          Engine.selectCommitsSince(this.#foreignEngineFor(foreign.space), {
+            fromSeq: foreign.aclCompanionSeq - 1,
+            limit: 1,
+          })[0];
+        if (companion) {
+          this.#options.server.noteExecutorCommit({
+            space: foreign.space,
+            seq: companion.seq,
+            class: "system",
+            sessionId: companion.sessionId,
+            writes: companion.writes as AdmittedCommitNotice["writes"],
+          });
+        }
+      }
     }
     await closing.settled();
     this.#reconcileDeliveryWritesAfterWave(closing);
@@ -6719,6 +6737,21 @@ export class SpaceServer implements TransactionSealDestination {
           sessionId: record.sessionId,
           writes: record.writes as AdmittedCommitNotice["writes"],
         });
+      }
+      if (outcome.aclCompanionSeq !== undefined) {
+        const companion = Engine.selectCommitsSince(this.#options.engine, {
+          fromSeq: outcome.aclCompanionSeq - 1,
+          limit: 1,
+        })[0];
+        if (companion) {
+          this.#options.server.noteExecutorCommit({
+            space: this.#options.space,
+            seq: companion.seq,
+            class: "system",
+            sessionId: companion.sessionId,
+            writes: companion.writes as AdmittedCommitNotice["writes"],
+          });
+        }
       }
     }
 

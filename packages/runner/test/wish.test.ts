@@ -2647,6 +2647,15 @@ describe("wish built-in", () => {
       expect(resolved?.result).toBeUndefined();
     });
 
+    it("resolves #chatManager to the requesting user's home chat manager", async () => {
+      const resolved = await resolveHomeTarget("chat-manager", "chatManager", {
+        rooms: [],
+        direct: {},
+      }, "#chatManager");
+      expect(resolved?.error).toBeUndefined();
+      expect(resolved?.result).toMatchObject({ rooms: [], direct: {} });
+    });
+
     it("resolves #agent_queue to the home agent queue", async () => {
       const resolved = await resolveHomeTarget(
         "agent-queue",

@@ -63,6 +63,7 @@ import {
 } from "../src/storage/v2.ts";
 import type { Signer } from "@commonfabric/memory/interface";
 import { Runtime } from "../src/runtime.ts";
+import { stageAclChange } from "../src/storage/acl-change.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type {
   ITransactionSealSink,
@@ -469,6 +470,125 @@ describe("stage D seal-into-wave", () => {
         message: "plain refusal",
       },
     });
+  });
+
+  it("replays an atomic membership wave with its durable companion identity", () => {
+    const before = { [signer.did()]: "OWNER" } as const;
+    Engine.applyCommit(engine, {
+      sessionId: "acl-replay-genesis",
+      space,
+      principal: signer.did(),
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: before },
+        }],
+      },
+    });
+    const lease = liveLease();
+    const options: Parameters<typeof Engine.applyWaveCommit>[1] = {
+      sessionId: lease.holder,
+      space,
+      holder: lease.holder,
+      commitClass: "derived",
+      commit: {
+        localSeq: 77,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: "of:membership-receipt",
+          value: { value: "done" },
+        }],
+      },
+      waveBasis: { basisSeq: Engine.serverSeq(engine), rebasedHeads: [] },
+      aclChanges: [{
+        principal: signer.did(),
+        before,
+        after: { ...before, "did:key:z6Mk-membership-reader": "READ" },
+      }],
+    };
+    const first = Engine.applyWaveCommit(engine, options);
+    const head = Engine.serverSeq(engine);
+    lease.release();
+    const replay = Engine.applyWaveCommit(engine, options);
+    expect(replay.replayed).toBe(true);
+    expect(replay.seq).toBe(first.seq);
+    expect(replay.aclCompanionSeq).toBe(first.aclCompanionSeq);
+    expect(replay.aclCompanionSeq).toBe(head);
+    expect(Engine.serverSeq(engine)).toBe(head);
+  });
+
+  it("commits one membership event and requeues a second event computed from the same ACL", async () => {
+    const before = { [signer.did()]: "OWNER" } as const;
+    Engine.applyCommit(engine, {
+      sessionId: "acl-genesis",
+      space,
+      principal: signer.did(),
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: before },
+        }],
+      },
+    });
+    const firstMember = (await Identity.fromPassphrase("wave-first-member"))
+      .did();
+    const secondMember = (await Identity.fromPassphrase("wave-second-member"))
+      .did();
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+    const first = runtime.getCell<{ member: string }>(
+      space,
+      "membership-first",
+    );
+    const second = runtime.getCell<{ member: string }>(
+      space,
+      "membership-second",
+    );
+    for (
+      const [cell, member, eventId] of [[first, firstMember, "add-first"], [
+        second,
+        secondMember,
+        "add-second",
+      ]] as const
+    ) {
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: eventId,
+        kind: "event-handler",
+        eventId,
+        acting: { user: signer.did() },
+      });
+      cell.withTx(tx).set({ member });
+      stageAclChange(tx.tx, space, {
+        before,
+        after: { ...before, [member]: "WRITE" },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+    }
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.committedEventIds).toEqual(["add-first"]);
+    expect(outcome.requeuedEventIds).toEqual(["add-second"]);
+    expect(outcome.aclCompanionSeq).toBe(outcome.seq! + 1);
+    expect(Engine.readState(engine, { id: `of:${space}` })?.document?.value)
+      .toEqual({ ...before, [firstMember]: "WRITE" });
+    expect(
+      Engine.readState(engine, { id: first.getAsNormalizedFullLink().id })
+        ?.document?.value,
+    ).toEqual({ member: firstMember });
+    expect(
+      Engine.readState(engine, { id: second.getAsNormalizedFullLink().id }),
+    ).toBeNull();
   });
 
   it("seals into the wave instead of committing; later txs read the layered view; the wave commits once", async () => {

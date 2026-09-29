@@ -225,6 +225,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#learned":
     case "#learnedSummary":
     case "#agent_queue":
+    case "#chatManager":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -926,6 +927,16 @@ function resolveHomeSpaceTarget(
       return [{
         cell: getHomeSpaceCell(ctx),
         pathPrefix: ["defaultPattern", "learned"],
+      }];
+    }
+
+    case "#chatManager": {
+      if (!homeSpaceUserDID(ctx)) {
+        throw new WishError("User identity DID not available for #chatManager");
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "chatManager"],
       }];
     }
 

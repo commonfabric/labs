@@ -4790,6 +4790,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.#isValidType(schemaObj, getJsonNumberType(doc.value))
         ? { ok: this.#traversePrimitive(doc, schemaObj) }
         : fail(TRAVERSE_FAILURES.invalidType);
+    } else if (typeof doc.value === "bigint") {
+      return this.#isValidType(schemaObj, "bigint")
+        ? { ok: this.#traversePrimitive(doc, schemaObj) }
+        : fail(TRAVERSE_FAILURES.invalidType);
     } else if (isBoolean(doc.value)) {
       return isPlainTypeSchema(schemaObj, "boolean") ||
           this.#isValidType(schemaObj, "boolean")
@@ -6121,6 +6125,7 @@ function getPlainJsonType(
   if (value === undefined) return "undefined";
   if (isString(value)) return "string";
   if (typeof value === "number") return "number";
+  if (typeof value === "bigint") return "bigint";
   if (isBoolean(value)) return "boolean";
   if (Array.isArray(value)) return "array";
   // A `FabricPrimitive` reports its specific type name; a schema saying

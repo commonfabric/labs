@@ -1,6 +1,7 @@
 export type {
   AddIntegrity,
   AnyOf,
+  AuthenticatedActionWrite,
   AuthoredByCurrentUser,
   Cfc,
   CfcAtom,
@@ -64,6 +65,7 @@ export type {
   TrustedActionWrite,
   TrustedActionWriteWithIntegrity,
   WriteAuthorizedBy,
+  WritePolicyAnyOf,
 } from "./cfc.ts";
 
 export {

@@ -39,7 +39,8 @@ export function recordNewProtectedDefaults(
   for (const entry of cfcSchemaEntries(schema)) {
     if (
       !isObjectOrArray(entry.schema) ||
-      entry.schema.ifc?.writeAuthorizedBy === undefined ||
+      (entry.schema.ifc?.writeAuthorizedBy === undefined &&
+        entry.schema.ifc?.writePolicyAnyOf === undefined) ||
       entry.path.length === 0 || entry.path.includes("*") ||
       ContextualFlowControl.schemaAtPath(
           previousSchema,

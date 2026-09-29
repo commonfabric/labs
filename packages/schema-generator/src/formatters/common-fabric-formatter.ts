@@ -2571,6 +2571,65 @@ export class CommonFabricFormatter implements TypeFormatter {
           aliasArgNodes,
           aliasName,
         );
+      case "AuthenticatedActionWrite":
+        return {
+          ...this.#buildWriteAuthorizedByMetadataForArg(
+            context,
+            aliasArgNodes,
+            aliasName,
+          ),
+          authenticatedAction: true,
+        };
+      case "WritePolicyAnyOf": {
+        const argument = aliasArgNodes?.[1];
+        const tuple = argument && ts.isTypeOperatorNode(argument)
+          ? argument.type
+          : argument;
+        if (
+          !tuple || !ts.isTupleTypeNode(tuple) || tuple.elements.length === 0
+        ) {
+          throw new Error(
+            "`WritePolicyAnyOf` requires a nonempty tuple of writer policies.",
+          );
+        }
+        const policies = tuple.elements.map((node) => {
+          const policyContext = { ...context, typeNode: node };
+          const policy = this.#resolveAliasChainInstantiation(
+            context.typeChecker.getTypeFromTypeNode(node) as TypeWithInternals,
+            policyContext,
+            new Set([
+              "WriteAuthorizedBy",
+              "AuthenticatedActionWrite",
+              "TrustedActionWrite",
+              "TrustedActionWriteWithIntegrity",
+            ]),
+          );
+          if (!policy) {
+            throw new Error(
+              "Each `WritePolicyAnyOf` member must declare a writer policy.",
+            );
+          }
+          const metadata = this.#buildIfcMetadataForAlias(
+            policy.aliasName,
+            policy.aliasArgs,
+            policyContext,
+            this.#withBoundArgumentsWritten(
+              ts.isTypeReferenceNode(node)
+                ? node.typeArguments
+                : policy.aliasArgNodes,
+              policyContext,
+            ),
+            policy.parameterTypes ?? NO_PARAMETER_TYPES,
+          );
+          if (!metadata?.writeAuthorizedBy) {
+            throw new Error(
+              "A `WritePolicyAnyOf` member has no resolved writer.",
+            );
+          }
+          return metadata;
+        });
+        return { writePolicyAnyOf: policies };
+      }
       case "TrustedActionWriteWithIntegrity":
         return this.#buildTrustedActionWriteMetadata({
           context,

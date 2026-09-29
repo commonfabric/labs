@@ -694,6 +694,16 @@ function factoryFromPattern<T, R>(
       noteDerivedCopy(derived, factory);
       return derived;
     };
+    factory.inPrivateSpace = (name: string) => {
+      if (typeof name !== "string" || name.length === 0) {
+        throw new Error("A private space allocation requires a nonempty name.");
+      }
+      const target = {};
+      privateSpaceTargets.set(target, name);
+      const derived = makePatternFactory(defaultScope, target);
+      noteDerivedCopy(derived, factory);
+      return derived;
+    };
     // Provenance brand: only the trusted builder stamps a pattern. Trust-granting
     // sites check `isTrustedPattern` so a `__cf_data`-forged pattern-shaped
     // object cannot acquire program / verified-load-id metadata.
@@ -1081,6 +1091,9 @@ function assignComputedCellKinds(
   });
 }
 
+/** Builder-owned targets carrying creator-only allocation semantics. */
+const privateSpaceTargets = new WeakMap<object, string>();
+
 /**
  * Resolves a `PatternFactory.inSpace(...)` target to a concrete space DID at
  * graph-construction time.
@@ -1100,6 +1113,52 @@ function resolveInSpaceTargetSpace(
   space: unknown,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
+  const privateName = typeof space === "object" && space !== null
+    ? privateSpaceTargets.get(space)
+    : undefined;
+  if (privateName !== undefined) {
+    if (!frame?.runtime || !frame.tx || !frame.space) {
+      throw new Error(
+        "Private space allocation requires an active transaction.",
+      );
+    }
+    const allocation = frame.runtime.getCell<string>(
+      frame.space,
+      {
+        privateSpaceAllocation: privateName,
+      },
+      { type: "string" },
+      frame.tx,
+    );
+    const existing = allocation.get();
+    if (existing !== undefined) {
+      if (!isDID(existing)) {
+        throw new Error("Invalid private space allocation.");
+      }
+      return optIntoInSpaceMultiSpaceCommit(frame, existing);
+    }
+    if (!frame.inHandler) {
+      throw new Error("A private space must be created from a handler.");
+    }
+    const owner = frame.tx.getCfcState().trustSnapshot?.actingPrincipal;
+    if (!owner) {
+      throw new Error(
+        "Private space creation requires an authenticated actor.",
+      );
+    }
+    const key = `${frame.space}/${allocation.getAsNormalizedFullLink().id}`;
+    const resolved = frame.runtime.resolvedPrivateSpace(key);
+    if (resolved !== undefined) {
+      if (!frame.tx.markCreateOnly) {
+        throw new Error("Private allocation requires create-only commits.");
+      }
+      frame.tx.markCreateOnly(allocation.getAsNormalizedFullLink());
+      allocation.set(resolved);
+      return optIntoInSpaceMultiSpaceCommit(frame, resolved);
+    }
+    (frame.pendingPrivateSpaces ??= new Map()).set(key, owner);
+    return undefined;
+  }
   if (isDID(space)) {
     return optIntoInSpaceMultiSpaceCommit(frame, space);
   }
