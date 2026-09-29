@@ -16,7 +16,6 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import {
-  clickCfButton,
   clickTrustedAction,
   fillCfInput,
   waitForRuntimeIdle,
@@ -26,14 +25,10 @@ import {
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
-// send and reaction (`fabrichat/chat.tsx`).
+// send and reaction (`fabrichat/room.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
-const SEND_ACTION = "FabriChatSend";
-const REACT_ACTION = "FabriChatReact";
-
-// The control on each message that opens its reaction picker. The first one
-// enabled is on the oldest message.
-const ADD_REACTION = 'cf-button[aria-label="Add reaction"]';
+const SEND_ACTION = "ChatSend";
+const REACT_ACTION = "ChatReact";
 
 /** What one rendered message's authorship element reports. */
 interface AuthorshipReport {
@@ -85,8 +80,12 @@ describe("fabrichat integration test", () => {
     const result = cc.getResult(piece.getCell());
     pieceSinkCancel = result.sink(() => {});
     storedBodies = () =>
-      ((result.get() as { messages?: { body?: string }[] } | undefined)
-        ?.messages ?? []).map((message) => message?.body ?? "");
+      ((result.get() as {
+        room?: { messages?: { latest?: { messages?: { body?: string }[] } } };
+      } | undefined)
+        ?.room?.messages?.latest?.messages ?? []).map((message) =>
+          message?.body ?? ""
+        );
   });
 
   afterAll(async () => {
@@ -103,6 +102,7 @@ describe("fabrichat integration test", () => {
       identity: firstIdentity,
     });
     await createProfile(page, "Ada Lovelace");
+    await clickTrustedAction(page, "ChatStart");
     await send(page, "Hello from Ada", storedBodies);
     await waitForVerified(page, "Hello from Ada");
 
@@ -119,9 +119,7 @@ describe("fabrichat integration test", () => {
     await waitForVerified(page, "Hi Ada, Grace here");
     await waitForVerified(page, "Hello from Ada");
 
-    // With the picker open on Ada's message, and no reactions yet, the first
-    // reaction control on the page is the picker's first cat.
-    await clickCfButton(page, ADD_REACTION);
+    // The first reviewed reaction control adds a cat to Ada's message.
     await clickTrustedAction(page, REACT_ACTION);
     await waitForText(page, "#fabrichat-messages", "😺 1");
 

@@ -131,7 +131,7 @@ describe("cfc-write-policy-any-of", () => {
     const [writer, action] of [["rogue", "Send"], ["send", "Edit"], [
       "edit",
       "Send",
-    ], ["send", undefined]]
+    ], ["send", undefined]] as const
   ) {
     it(`rejects writer ${writer} with action ${action ?? "missing"}`, async () => {
       const f = fixture();

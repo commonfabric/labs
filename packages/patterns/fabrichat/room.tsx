@@ -4,6 +4,7 @@
  */
 
 import {
+  action,
   type AuthenticatedActionWrite,
   type AuthoredByCurrentUser,
   type Cell,
@@ -12,6 +13,7 @@ import {
   type Default,
   entityRefToString,
   equals,
+  FabricEpochNsec,
   getEntityId,
   handler,
   lift,
@@ -24,6 +26,7 @@ import {
   type TrustedActionWrite,
   UI,
   VIEWS,
+  type VNode,
   Writable,
   type WriteAuthorizedBy,
   type WritePolicyAnyOf,
@@ -43,6 +46,7 @@ import type {
   ChatMessageWindow,
   ChatProfile,
   ChatReaction,
+  ChatReply,
   ChatRoomAbout,
   ChatRoomActivity,
   ChatRoomOutput,
@@ -64,7 +68,19 @@ export type StoredMessage = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof sendMessageFromUi,
+      "ChatSend",
+      "ChatSendSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitEdit,
+      "ChatEdit",
+      "ChatEditSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof editMessageFromUi,
       "ChatEdit",
       "ChatEditSurface"
     >,
@@ -76,7 +92,19 @@ export type StoredMessage = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof deleteMessageFromUi,
+      "ChatDelete",
+      "ChatDeleteSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitObliterate,
+      "ChatObliterate",
+      "ChatObliterateSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof obliterateMessageFromUi,
       "ChatObliterate",
       "ChatObliterateSurface"
     >,
@@ -94,7 +122,19 @@ export type StoredReaction = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof sendReactionFromUi,
+      "ChatReact",
+      "ChatReactSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitDeleteReaction,
+      "ChatReact",
+      "ChatReactSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof deleteReactionFromUi,
       "ChatReact",
       "ChatReactSurface"
     >,
@@ -106,7 +146,19 @@ export type StoredReaction = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof deleteMessageFromUi,
+      "ChatDelete",
+      "ChatDeleteSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitObliterate,
+      "ChatObliterate",
+      "ChatObliterateSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof obliterateMessageFromUi,
       "ChatObliterate",
       "ChatObliterateSurface"
     >,
@@ -130,15 +182,23 @@ interface RoomMemory {
 /** Bookkeeping writable only by the room's record writers. */
 export type StoredMemory = WritePolicyAnyOf<RoomMemory, [
   WriteAuthorizedBy<unknown, typeof commitSend>,
+  WriteAuthorizedBy<unknown, typeof sendMessageFromUi>,
   WriteAuthorizedBy<unknown, typeof commitEdit>,
+  WriteAuthorizedBy<unknown, typeof editMessageFromUi>,
   WriteAuthorizedBy<unknown, typeof commitDelete>,
+  WriteAuthorizedBy<unknown, typeof deleteMessageFromUi>,
   WriteAuthorizedBy<unknown, typeof commitObliterate>,
+  WriteAuthorizedBy<unknown, typeof obliterateMessageFromUi>,
   WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+  WriteAuthorizedBy<unknown, typeof sendReactionFromUi>,
   WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  WriteAuthorizedBy<unknown, typeof deleteReactionFromUi>,
   WriteAuthorizedBy<unknown, typeof commitShowProfile>,
   WriteAuthorizedBy<unknown, typeof commitLeave>,
   WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof addMemberFromUi>,
   WriteAuthorizedBy<unknown, typeof commitRemove>,
+  WriteAuthorizedBy<unknown, typeof removeMemberFromUi>,
   WriteAuthorizedBy<unknown, typeof commitDelivered>,
 ]>;
 
@@ -153,7 +213,19 @@ export type StoredActivity = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof sendMessageFromUi,
+      "ChatSend",
+      "ChatSendSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitEdit,
+      "ChatEdit",
+      "ChatEditSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof editMessageFromUi,
       "ChatEdit",
       "ChatEditSurface"
     >,
@@ -165,7 +237,19 @@ export type StoredActivity = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof deleteMessageFromUi,
+      "ChatDelete",
+      "ChatDeleteSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitObliterate,
+      "ChatObliterate",
+      "ChatObliterateSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof obliterateMessageFromUi,
       "ChatObliterate",
       "ChatObliterateSurface"
     >,
@@ -177,7 +261,19 @@ export type StoredActivity = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof sendReactionFromUi,
+      "ChatReact",
+      "ChatReactSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitDeleteReaction,
+      "ChatReact",
+      "ChatReactSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof deleteReactionFromUi,
       "ChatReact",
       "ChatReactSurface"
     >,
@@ -191,7 +287,19 @@ export type StoredActivity = AuthoredByCurrentUser<
     >,
     TrustedActionWrite<
       unknown,
+      typeof addMemberFromUi,
+      "ChatMembers",
+      "ChatMembersSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof commitRemove,
+      "ChatMembers",
+      "ChatMembersSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof removeMemberFromUi,
       "ChatMembers",
       "ChatMembersSurface"
     >,
@@ -201,9 +309,11 @@ export type StoredActivity = AuthoredByCurrentUser<
 /** Roster contributions may be added by their actor and removed on departure. */
 type StoredRoster = WritePolicyAnyOf<Cell<ChatProfile>[], [
   WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof addMemberFromUi>,
   WriteAuthorizedBy<unknown, typeof commitShowProfile>,
   WriteAuthorizedBy<unknown, typeof commitLeave>,
   WriteAuthorizedBy<unknown, typeof commitRemove>,
+  WriteAuthorizedBy<unknown, typeof removeMemberFromUi>,
 ]>;
 
 /** The internal writer bindings; identity is read at execution time. */
@@ -216,6 +326,46 @@ interface RoomWriterState {
   activity: Writable<ChatRoomActivity[]>;
   roster: Writable<Cell<ChatProfile>[]>;
   about: Cell<ChatRoomAbout>;
+  uiMessage?: Cell<ChatMessage>;
+  uiEmoji?: string;
+  uiPrincipal?: string;
+  uiAccess?: Writable<"WRITE" | "OWNER">;
+  uiReply?: Writable<ChatReply | undefined>;
+}
+
+/** The text captured by a reviewed submit control at the gesture. */
+interface TextGesture {
+  target?: { value?: string };
+}
+
+/** Mints a request identity only while handling a fresh UI gesture. */
+function uiRequestId(): string {
+  return Array.from(
+    { length: 4 },
+    () =>
+      Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, "0"),
+  ).join("");
+}
+
+/** Captures the text and time of a reviewed submit gesture. */
+function uiVersion(
+  event: TextGesture,
+): SendMessageRequest["version"] | undefined {
+  return typeof event.target?.value === "string"
+    ? { body: event.target.value, sentAt: new FabricEpochNsec(handlerTime()) }
+    : undefined;
+}
+
+/** Resolves the message visibly bound to a reviewed control. */
+function messageRequest(
+  input: MessageRequest | TextGesture,
+  state: RoomWriterState,
+): MessageRequest | undefined {
+  return "requestId" in input
+    ? input
+    : state.uiMessage
+    ? { requestId: uiRequestId(), message: state.uiMessage }
+    : undefined;
 }
 
 /** Returns a stable record key for a resolved entity. */
@@ -231,7 +381,7 @@ function requestKey(
 ): string | undefined {
   const principal = currentPrincipal();
   if (
-    !principal || state.memory.key("abandoned").get() ||
+    !principal || !state.about.get() || state.memory.key("abandoned").get() ||
     typeof requestId !== "string" || !requestId.trim()
   ) {
     return undefined;
@@ -282,69 +432,97 @@ function recordActivity(
       (!obliterated || !equals(entry.what, obliterated))
     ),
   );
-  state.activity.push({ seq, at, requestId, what });
+  const activity = new Writable<StoredActivity>();
+  activity.set({ seq, at, requestId, what });
+  state.activity.push(activity);
 }
 
 /** Records a new message from the authenticated sender, preserving its exact text. */
-export const commitSend = handler<SendMessageRequest, RoomWriterState>(
-  (event, state) => {
-    const key = requestKey(event.requestId, state);
-    const profile = state.myProfile?.resolveAsCell();
-    if (
-      !key || profile?.get() === undefined ||
-      typeof event.version?.body !== "string" || !event.version.body.trim()
-    ) return;
-    const now = handlerTime();
-    const proposed = proposedTime(event.version.sentAt, now);
-    if (proposed === undefined) return;
-    const targetIndex = event.replyTo
-      ? messageIndex(event.replyTo.message, state)
-      : -1;
-    if (event.replyTo && targetIndex < 0) return;
-    const target = targetIndex < 0
-      ? undefined
-      : state.records.key(targetIndex).resolveAsCell();
-    if (
-      event.replyTo && (!target || typeof target.get().body !== "string" ||
-        !["main", "thread", "both"].includes(event.replyTo.shownIn) ||
-        (event.replyTo.shownIn === "main" && !isMainMessage(target.get())))
-    ) return;
-    const floor = target && proposed <= target.get().sentAt.value
-      ? target.get().sentAt.value + 1n
-      : proposed;
-    const used = state.memory.key("usedTimes");
-    const sentAt = reserveTime(used, floor, now);
-    const at = reserveTime(used, now, now);
-    if (!sentAt || !at) return;
-    const reactions = new Writable<StoredReaction[]>([]);
-    const message = state.records.elementById(key);
-    message.set({
-      authorProfile: profile,
-      body: event.version.body,
-      sentAt,
-      earlierVersions: [],
-      ...(event.replyTo
-        ? { replyTo: { message: target!, shownIn: event.replyTo.shownIn } }
-        : {}),
-      reactions: [],
-    });
-    message.key("reactions").set(reactions);
-    state.records.addUnique(message);
-    const id = entityKey(message);
-    if (id === undefined) {
-      throw new Error("A stored chat message must have an entity.");
-    }
-    state.memory.key("authors").key(id).set(currentPrincipal()!);
-    state.memory.key("requests").key(key).set(true);
-    recordActivity(state, event.requestId, message, at, now);
-  },
-);
+function writeSend(
+  input: (SendMessageRequest) | TextGesture,
+  state: RoomWriterState,
+): void {
+  const version = "requestId" in input ? input.version : uiVersion(input);
+  if (!version) return;
+  const event: SendMessageRequest = "requestId" in input ? input : {
+    requestId: uiRequestId(),
+    version,
+    replyTo: state.uiReply?.get(),
+  };
+  const key = requestKey(event.requestId, state);
+  const profile = state.myProfile?.resolveAsCell();
+  if (
+    !key || profile?.get() === undefined ||
+    typeof event.version?.body !== "string" || !event.version.body.trim()
+  ) return;
+  const now = handlerTime();
+  const proposed = proposedTime(event.version.sentAt, now);
+  if (proposed === undefined) return;
+  const targetIndex = event.replyTo
+    ? messageIndex(event.replyTo.message, state)
+    : -1;
+  if (event.replyTo && targetIndex < 0) return;
+  const target = targetIndex < 0
+    ? undefined
+    : state.records.key(targetIndex).resolveAsCell();
+  if (
+    event.replyTo && (!target || typeof target.get().body !== "string" ||
+      !["main", "thread", "both"].includes(event.replyTo.shownIn) ||
+      (event.replyTo.shownIn === "main" && !isMainMessage(target.get())))
+  ) return;
+  const floor = target && proposed <= target.get().sentAt.value
+    ? target.get().sentAt.value + 1n
+    : proposed;
+  const used = state.memory.key("usedTimes");
+  const sentAt = reserveTime(used, floor, now);
+  const at = reserveTime(used, now, now);
+  if (!sentAt || !at) return;
+  const reactions = new Writable<StoredReaction[]>([]);
+  const message = state.records.elementById(key);
+  message.set({
+    authorProfile: profile,
+    body: event.version.body,
+    sentAt,
+    earlierVersions: [],
+    ...(event.replyTo
+      ? { replyTo: { message: target!, shownIn: event.replyTo.shownIn } }
+      : {}),
+    reactions: [],
+  });
+  message.key("reactions").set(reactions);
+  state.records.addUnique(message);
+  const id = entityKey(message);
+  if (id === undefined) {
+    throw new Error("A stored chat message must have an entity.");
+  }
+  state.memory.key("authors").key(id).set(currentPrincipal()!);
+  state.memory.key("requests").key(key).set(true);
+  recordActivity(state, event.requestId, message, at, now);
+}
+
+/** Binds the protocol event directly to its verified writer. */
+export const commitSend = handler<SendMessageRequest, RoomWriterState>((
+  event,
+  state,
+) => writeSend(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const sendMessageFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeSend(event, state));
 
 /** Records a new version while retaining the sender's profile and original position. */
-export const commitEdit = handler<
-  MessageRequest & { version: SendMessageRequest["version"] },
-  RoomWriterState
->((event, state) => {
+function writeEdit(
+  input:
+    | (MessageRequest & { version: SendMessageRequest["version"] })
+    | TextGesture,
+  state: RoomWriterState,
+): void {
+  const request = messageRequest(input, state);
+  const version = "requestId" in input ? input.version : uiVersion(input);
+  if (!request || !version) return;
+  const event = { ...request, version };
   const key = requestKey(event.requestId, state);
   const index = messageIndex(event.message, state);
   if (index < 0) return;
@@ -370,39 +548,81 @@ export const commitEdit = handler<
   message.key("editedAt").set(editedAt);
   state.memory.key("requests").key(key).set(true);
   recordActivity(state, event.requestId, message, at, now);
-});
+}
+
+/** Binds the protocol event directly to its verified writer. */
+export const commitEdit = handler<
+  MessageRequest & { version: SendMessageRequest["version"] },
+  RoomWriterState
+>((event, state) => writeEdit(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const editMessageFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeEdit(event, state));
 
 /** Records the sender's deletion, keeping the version it replaced. */
-export const commitDelete = handler<MessageRequest, RoomWriterState>(
-  (event, state) => {
-    const key = requestKey(event.requestId, state);
-    const index = messageIndex(event.message, state);
-    if (index < 0) return;
-    const message = state.records.key(index).resolveAsCell();
-    if (
-      !key || !message || !isSender(message, state) ||
-      typeof message.get().body !== "string"
-    ) return;
-    removeMessage(event, state, key, message, false);
-  },
-);
+function writeDelete(
+  input: (MessageRequest) | TextGesture,
+  state: RoomWriterState,
+): void {
+  const event = messageRequest(input, state);
+  if (!event) return;
+  const key = requestKey(event.requestId, state);
+  const index = messageIndex(event.message, state);
+  if (index < 0) return;
+  const message = state.records.key(index).resolveAsCell();
+  if (
+    !key || !message || !isSender(message, state) ||
+    typeof message.get().body !== "string"
+  ) return;
+  removeMessage(event, state, key, message, false);
+}
+
+/** Binds the protocol event directly to its verified writer. */
+export const commitDelete = handler<MessageRequest, RoomWriterState>((
+  event,
+  state,
+) => writeDelete(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const deleteMessageFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeDelete(event, state));
 
 /** Obliterates an owned direct message or a group message curated by an owner. */
-export const commitObliterate = handler<MessageRequest, RoomWriterState>(
-  (event, state) => {
-    const key = requestKey(event.requestId, state);
-    const index = messageIndex(event.message, state);
-    if (index < 0) return;
-    const message = state.records.key(index).resolveAsCell();
-    if (
-      !key || !message || message.key("authorProfile").get() === undefined ||
-      (state.about.get().kind === "direct"
-        ? !isSender(message, state)
-        : spaceMembers()?.[currentPrincipal() ?? ""] !== "OWNER")
-    ) return;
-    removeMessage(event, state, key, message, true);
-  },
-);
+function writeObliterate(
+  input: (MessageRequest) | TextGesture,
+  state: RoomWriterState,
+): void {
+  const event = messageRequest(input, state);
+  if (!event) return;
+  const key = requestKey(event.requestId, state);
+  const index = messageIndex(event.message, state);
+  if (index < 0) return;
+  const message = state.records.key(index).resolveAsCell();
+  if (
+    !key || !message || message.key("authorProfile").get() === undefined ||
+    (state.about.get().kind === "direct"
+      ? !isSender(message, state)
+      : spaceMembers()?.[currentPrincipal() ?? ""] !== "OWNER")
+  ) return;
+  removeMessage(event, state, key, message, true);
+}
+
+/** Binds the protocol event directly to its verified writer. */
+export const commitObliterate = handler<MessageRequest, RoomWriterState>((
+  event,
+  state,
+) => writeObliterate(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const obliterateMessageFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeObliterate(event, state));
 
 /** Applies a deletion or obliteration under the caller's reviewed writer identity. */
 function removeMessage(
@@ -441,10 +661,16 @@ function removeMessage(
 }
 
 /** Adds an emoji once at its reactor's stable address. */
-export const commitSendReaction = handler<
-  MessageRequest & { emoji: string },
-  RoomWriterState
->((event, state) => {
+function writeSendReaction(
+  input: (MessageRequest & { emoji: string }) | TextGesture,
+  state: RoomWriterState,
+): void {
+  const request = messageRequest(input, state);
+  const emoji = "requestId" in input
+    ? input.emoji
+    : state.uiEmoji ?? input.target?.value;
+  if (!request || typeof emoji !== "string") return;
+  const event = { ...request, emoji };
   const key = requestKey(event.requestId, state);
   const index = messageIndex(event.message, state);
   if (index < 0) return;
@@ -472,13 +698,31 @@ export const commitSendReaction = handler<
   reactions.addUnique(reaction);
   state.memory.key("requests").key(key).set(true);
   recordActivity(state, event.requestId, message, at, now);
-});
+}
 
-/** Removes only the sender's reaction, without toggling an absent one back on. */
-export const commitDeleteReaction = handler<
+/** Binds the protocol event directly to its verified writer. */
+export const commitSendReaction = handler<
   MessageRequest & { emoji: string },
   RoomWriterState
->((event, state) => {
+>((event, state) => writeSendReaction(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const sendReactionFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeSendReaction(event, state));
+
+/** Removes only the sender's reaction, without toggling an absent one back on. */
+function writeDeleteReaction(
+  input: (MessageRequest & { emoji: string }) | TextGesture,
+  state: RoomWriterState,
+): void {
+  const request = messageRequest(input, state);
+  const emoji = "requestId" in input
+    ? input.emoji
+    : state.uiEmoji ?? input.target?.value;
+  if (!request || typeof emoji !== "string") return;
+  const event = { ...request, emoji };
   const key = requestKey(event.requestId, state);
   const index = messageIndex(event.message, state);
   if (index < 0) return;
@@ -506,7 +750,19 @@ export const commitDeleteReaction = handler<
   removed.set(undefined);
   state.memory.key("requests").key(key).set(true);
   recordActivity(state, event.requestId, message, at, now);
-});
+}
+
+/** Binds the protocol event directly to its verified writer. */
+export const commitDeleteReaction = handler<
+  MessageRequest & { emoji: string },
+  RoomWriterState
+>((event, state) => writeDeleteReaction(event, state));
+
+/** Binds the reviewed DOM event to the same room operation. */
+const deleteReactionFromUi = handler<TextGesture, RoomWriterState>((
+  event,
+  state,
+) => writeDeleteReaction(event, state));
 
 /** Adds the sender's resolved profile as a roster claim. */
 export const commitShowProfile = handler<
@@ -523,7 +779,7 @@ export const commitShowProfile = handler<
   if (!at) return;
   state.roster.addUnique(profile);
   state.memory.key("profiles").key(currentPrincipal()!).set(profile);
-  recordActivity(state, event.requestId, state.roster, at, now);
+  recordActivity(state, event.requestId, state.roster.resolveAsCell(), at, now);
 });
 
 /** Whether this room offers independent group membership controls. */
@@ -551,7 +807,7 @@ function membershipActivity(
   const at = reserveTime(state.memory.key("usedTimes"), now, now);
   if (!at) throw new Error("No timestamp remains in this clock tick.");
   state.memory.key("requests").key(key).set(true);
-  recordActivity(state, requestId, state.roster, at, now);
+  recordActivity(state, requestId, state.roster.resolveAsCell(), at, now);
 }
 
 /** Lets a member leave, promoting the longest-standing member when necessary. */
@@ -589,10 +845,10 @@ export const commitLeave = handler<{ requestId: string }, RoomWriterState>(
 );
 
 /** Admits one member without downgrading an existing owner's grant. */
-export const commitAdd = handler<
-  { requestId: string; principal: string; access: "WRITE" | "OWNER" },
-  RoomWriterState
->((event, state) => {
+function writeAdd(
+  event: { requestId: string; principal: string; access: "WRITE" | "OWNER" },
+  state: RoomWriterState,
+): void {
   const key = requestKey(event.requestId, state);
   const acl = spaceMembers();
   if (
@@ -620,13 +876,28 @@ export const commitAdd = handler<
     recipient: event.principal,
   }]);
   membershipActivity(event.requestId, key, state);
-});
+}
+
+/** Binds the membership protocol request to its reviewed writer. */
+export const commitAdd = handler<
+  { requestId: string; principal: string; access: "WRITE" | "OWNER" },
+  RoomWriterState
+>((event, state) => writeAdd(event, state));
+
+/** Applies the member choice shown by the reviewed control. */
+const addMemberFromUi = handler<TextGesture, RoomWriterState>((event, state) =>
+  writeAdd({
+    requestId: uiRequestId(),
+    principal: event.target?.value ?? "",
+    access: state.uiAccess?.get() ?? "WRITE",
+  }, state)
+);
 
 /** Revokes access while preserving the room's final owner. */
-export const commitRemove = handler<
-  { requestId: string; principal: string },
-  RoomWriterState
->((event, state) => {
+function writeRemove(
+  event: { requestId: string; principal: string },
+  state: RoomWriterState,
+): void {
   const key = requestKey(event.requestId, state);
   const acl = spaceMembers();
   if (
@@ -645,7 +916,24 @@ export const commitRemove = handler<
   setSpaceMembers(after);
   removeProfile(event.principal, state);
   membershipActivity(event.requestId, key, state);
-});
+}
+
+/** Binds the membership protocol request to its reviewed writer. */
+export const commitRemove = handler<
+  { requestId: string; principal: string },
+  RoomWriterState
+>((event, state) => writeRemove(event, state));
+
+/** Applies the member choice shown by the reviewed control. */
+const removeMemberFromUi = handler<TextGesture, RoomWriterState>((
+  _event,
+  state,
+) =>
+  writeRemove(
+    { requestId: uiRequestId(), principal: state.uiPrincipal ?? "" },
+    state,
+  )
+);
 
 /** Removes a delivered membership notice without emitting room activity. */
 export const commitDelivered = handler<
@@ -740,6 +1028,246 @@ const windowCell = lift(
   },
 );
 
+/** The people contributing one emoji, read live from the message's reaction cells. */
+interface ReactionTally {
+  emoji: string;
+  profiles: Cell<ChatProfile>[];
+  mine: boolean;
+}
+
+/** Renders one message with direct, separately reviewed writer controls. */
+const MessageCard = pattern<{
+  message: Cell<ChatMessage>;
+  state: RoomWriterState;
+  reply: Writable<ChatReply | undefined>;
+}, { [UI]: VNode }>(({ message, state, reply }) => {
+  const editing = new Writable.perSession(false);
+  const history = new Writable.perSession(false);
+  const bound = {
+    dedicated: state.dedicated,
+    initialMembers: state.initialMembers,
+    myProfile: state.myProfile,
+    records: state.records,
+    memory: state.memory,
+    activity: state.activity,
+    roster: state.roster,
+    about: state.about,
+    uiMessage: message,
+  };
+  const live = computed(() => typeof message.key("body").get() === "string");
+  const removed = computed(() =>
+    message.key("authorProfile").get() === undefined
+  );
+  const mine = computed(() => isSender(message, state));
+  const canObliterate = computed(() =>
+    state.about.get().kind === "direct"
+      ? mine
+      : spaceMembers()?.[currentPrincipal() ?? ""] === "OWNER"
+  );
+  const tallies = computed(() =>
+    message.key("reactions").get().reduce<ReactionTally[]>(
+      (groups, reaction) => {
+        const existing = groups.find((group) => group.emoji === reaction.emoji);
+        const own = equals(reaction.reactorProfile, state.myProfile);
+        if (existing) {
+          existing.profiles.push(reaction.reactorProfile);
+          existing.mine ||= own;
+        } else {
+          groups.push({
+            emoji: reaction.emoji,
+            profiles: [reaction.reactorProfile],
+            mine: own,
+          });
+        }
+        return groups;
+      },
+      [],
+    )
+  );
+  return {
+    [UI]: (
+      <cf-vstack
+        gap="2"
+        style={{
+          padding: "0.75rem 0",
+          borderBottom: "1px solid var(--cf-color-border)",
+        }}
+      >
+        {removed
+          ? <cf-text variant="caption">Removed message</cf-text>
+          : (
+            <cf-profile-badge
+              $profile={message.get().authorProfile}
+              size="sm"
+            />
+          )}
+        <cf-cfc-authorship
+          $value={message.get().body}
+          $author={message.get().authorProfile}
+        >
+          <cf-text style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {live
+              ? String(message.get().body)
+              : removed
+              ? "Message removed"
+              : "Deleted message"}
+          </cf-text>
+        </cf-cfc-authorship>
+        {message.get().editedAt
+          ? <cf-text variant="caption">Edited</cf-text>
+          : null}
+        <cf-hstack gap="2" wrap>
+          {live
+            ? (
+              <cf-button
+                size="sm"
+                variant="ghost"
+                onClick={action(() =>
+                  reply.set({ message, shownIn: "thread" })
+                )}
+              >
+                Reply
+              </cf-button>
+            )
+            : null}
+          {live && mine
+            ? (
+              <cf-button
+                size="sm"
+                variant="ghost"
+                onClick={action(() => editing.set(!editing.get()))}
+              >
+                Edit
+              </cf-button>
+            )
+            : null}
+          {live && mine
+            ? (
+              <div
+                data-ui-pattern="ChatDeleteSurface"
+                data-ui-event-integrity="ChatDeleteSurface"
+              >
+                <cf-button
+                  size="sm"
+                  variant="ghost"
+                  data-ui-action="ChatDelete"
+                  onClick={deleteMessageFromUi(bound)}
+                >
+                  Delete
+                </cf-button>
+              </div>
+            )
+            : null}
+          {!removed && canObliterate
+            ? (
+              <div
+                data-ui-pattern="ChatObliterateSurface"
+                data-ui-event-integrity="ChatObliterateSurface"
+              >
+                <cf-button
+                  size="sm"
+                  variant="ghost"
+                  data-ui-action="ChatObliterate"
+                  onClick={obliterateMessageFromUi(bound)}
+                >
+                  Remove permanently
+                </cf-button>
+              </div>
+            )
+            : null}
+          {live && message.get().earlierVersions.length > 0
+            ? (
+              <cf-button
+                size="sm"
+                variant="ghost"
+                onClick={action(() => history.set(!history.get()))}
+              >
+                Version history
+              </cf-button>
+            )
+            : null}
+        </cf-hstack>
+        {history.get() && live
+          ? (
+            <cf-vstack gap="2">
+              {message.get().earlierVersions.map((version) => (
+                <cf-text style={{ whiteSpace: "pre-wrap" }}>
+                  {version.body}
+                </cf-text>
+              ))}
+            </cf-vstack>
+          )
+          : null}
+        {editing.get() && live && mine
+          ? (
+            <div
+              data-ui-pattern="ChatEditSurface"
+              data-ui-event-integrity="ChatEditSurface"
+            >
+              <cf-submit-input
+                placeholder="Replacement text"
+                buttonText="Save edit"
+                data-ui-action="ChatEdit"
+                onClick={editMessageFromUi(bound)}
+              />
+            </div>
+          )
+          : null}
+        {live
+          ? (
+            <div
+              data-ui-pattern="ChatReactSurface"
+              data-ui-event-integrity="ChatReactSurface"
+            >
+              <cf-hstack gap="2" wrap>
+                {tallies.map((tally) => (
+                  <cf-hover-card>
+                    <cf-button
+                      size="sm"
+                      variant={tally.mine ? "outline" : "ghost"}
+                      data-ui-action="ChatReact"
+                      onClick={tally.mine
+                        ? deleteReactionFromUi({
+                          ...bound,
+                          uiEmoji: tally.emoji,
+                        })
+                        : sendReactionFromUi({
+                          ...bound,
+                          uiEmoji: tally.emoji,
+                        })}
+                    >
+                      {tally.emoji} {tally.profiles.length}
+                    </cf-button>
+                    <cf-vstack slot="card">
+                      {tally.profiles.map((profile) => (
+                        <cf-profile-badge $profile={profile} size="sm" />
+                      ))}
+                    </cf-vstack>
+                  </cf-hover-card>
+                ))}
+              </cf-hstack>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                data-ui-action="ChatReact"
+                onClick={sendReactionFromUi({ ...bound, uiEmoji: "😺" })}
+              >
+                😺
+              </cf-button>
+              <cf-submit-input
+                placeholder="One emoji"
+                buttonText="React"
+                data-ui-action="ChatReact"
+                onClick={sendReactionFromUi(bound)}
+              />
+            </div>
+          )
+          : null}
+      </cf-vstack>
+    ),
+  };
+});
+
 /** A room's record and its direct protocol surface. */
 export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
   (
@@ -764,6 +1292,17 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       activity,
       roster,
     } as RoomWriterState;
+    const reply = new Writable.perSession<ChatReply | undefined>();
+    const memberAccess = new Writable.perSession<"WRITE" | "OWNER">("WRITE");
+    const members = computed(() =>
+      Object.entries(spaceMembers() ?? {}).filter(([principal]) =>
+        principal !== "*"
+      ).map(([principal, access]) => ({ principal, access }))
+    );
+    const managesMembers = computed(() =>
+      dedicated && about.get()?.kind === "group" &&
+      spaceMembers()?.[currentPrincipal() ?? ""] === "OWNER"
+    );
     const selections = new Writable.perSession<Record<string, WindowSelection>>(
       {},
     );
@@ -794,6 +1333,10 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     );
     const windows = windowCell(windowValues);
     const all = computed(() => conversationView(records!.get()));
+    const latestMessages = computed(() =>
+      all.slice(-CHAT_POLICY.maxWindowCount)
+    );
+    const hasOlder = computed(() => all.length > CHAT_POLICY.maxWindowCount);
     const messages = {
       count: computed(() => records!.get().length),
       oldestAt: computed(() =>
@@ -806,14 +1349,28 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
           a.sentAt.value < b.sentAt.value ? 1 : -1
         )[0]?.sentAt
       ),
-      latest: computed(() => ({
-        messages: all.slice(-CHAT_POLICY.maxWindowCount),
-        hasOlder: all.length > CHAT_POLICY.maxWindowCount,
-      })),
+      latest: { messages: latestMessages, hasOlder },
       windows,
       openWindow: openWindow({ records: records!, windows: selections }),
       closeWindow: closeWindow({ windows: selections }),
     };
+    const participants = computed(() =>
+      records!.get().reduce<Cell<ChatProfile>[]>(
+        (profiles, message) =>
+          message.authorProfile?.get() !== undefined &&
+            !profiles.some((entry) => equals(entry, message.authorProfile))
+            ? [...profiles, message.authorProfile]
+            : profiles,
+        [...roster!.get()],
+      )
+    );
+    const canSend = computed(() => {
+      const acl = spaceMembers();
+      const access = acl?.[currentPrincipal() ?? ""] ?? acl?.["*"];
+      return !memory!.key("abandoned").get() &&
+        myProfile?.get() !== undefined &&
+        (access === "WRITE" || access === "OWNER");
+    });
     const facts = {
       about,
       recentActivity: activity!,
@@ -821,24 +1378,9 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
         memory!.key("expiredThrough").get() ?? 0
       ),
       roster: roster!,
-      participants: computed(() =>
-        records!.get().reduce<Cell<ChatProfile>[]>(
-          (profiles, message) =>
-            message.authorProfile?.get() !== undefined &&
-              !profiles.some((entry) => equals(entry, message.authorProfile))
-              ? [...profiles, message.authorProfile]
-              : profiles,
-          [...roster!.get()],
-        )
-      ),
+      participants,
       messages,
-      canSend: computed(() => {
-        const acl = spaceMembers();
-        const access = acl?.[currentPrincipal() ?? ""] ?? acl?.["*"];
-        return !memory!.key("abandoned").get() &&
-          myProfile?.get() !== undefined &&
-          (access === "WRITE" || access === "OWNER");
-      }),
+      canSend,
       sendMessage: commitSend(state),
       editMessage: commitEdit(state),
       deleteMessage: commitDelete(state),
@@ -873,15 +1415,128 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     return {
       [NAME]: "FabriChat",
       [UI]: (
-        <cf-vstack>
-          {messages.latest.messages.map((message) => (
-            <cf-text>
-              {typeof message.body === "string"
-                ? message.body
-                : "Deleted message"}
-            </cf-text>
-          ))}
-        </cf-vstack>
+        <cf-theme
+          theme={{
+            density: "comfortable",
+            colors: { primary: "#126b63", primaryForeground: "#ffffff" },
+          }}
+        >
+          <cf-screen>
+            <cf-hstack slot="header" justify="between" align="center">
+              <cf-heading level={2}>
+                {about.get()?.title || "Conversation"}
+              </cf-heading>
+              <cf-profile-badge $profile={myProfile} size="sm" />
+              {dedicated && about.get()?.kind === "group"
+                ? (
+                  <cf-button
+                    variant="ghost"
+                    onClick={action(() =>
+                      facts.leave?.send({ requestId: uiRequestId() })
+                    )}
+                  >
+                    Leave conversation
+                  </cf-button>
+                )
+                : null}
+            </cf-hstack>
+            <cf-vstack id="fabrichat-messages" gap="3" padding="4">
+              <cf-hstack gap="2" wrap>
+                {participants.map((profile) => (
+                  <cf-profile-badge $profile={profile} variant="chip" />
+                ))}
+              </cf-hstack>
+              {managesMembers
+                ? (
+                  <details>
+                    <summary>Conversation members</summary>
+                    <div
+                      data-ui-pattern="ChatMembersSurface"
+                      data-ui-event-integrity="ChatMembersSurface"
+                    >
+                      <cf-vstack gap="2">
+                        {members.map((member) => (
+                          <cf-hstack gap="2">
+                            <cf-text>
+                              {member.principal} ({member.access})
+                            </cf-text>
+                            <cf-button
+                              size="sm"
+                              data-ui-action="ChatMembers"
+                              onClick={removeMemberFromUi({
+                                ...state,
+                                uiPrincipal: member.principal,
+                              })}
+                            >
+                              Remove member
+                            </cf-button>
+                          </cf-hstack>
+                        ))}
+                        <cf-select
+                          $value={memberAccess}
+                          items={[{ label: "Writer", value: "WRITE" }, {
+                            label: "Owner",
+                            value: "OWNER",
+                          }]}
+                        />
+                        <cf-submit-input
+                          placeholder="Member principal"
+                          buttonText="Add member"
+                          data-ui-action="ChatMembers"
+                          onClick={addMemberFromUi({
+                            ...state,
+                            uiAccess: memberAccess,
+                          })}
+                        />
+                      </cf-vstack>
+                    </div>
+                  </details>
+                )
+                : null}
+              {latestMessages.length === 0
+                ? <cf-text>Start the conversation.</cf-text>
+                : null}
+              {latestMessages.map((message) => (
+                <MessageCard message={message} state={state} reply={reply} />
+              ))}
+            </cf-vstack>
+            <cf-vstack slot="footer" gap="2" padding="4">
+              {reply.get()
+                ? (
+                  <cf-hstack gap="2">
+                    <cf-text>Replying in a thread</cf-text>
+                    <cf-button
+                      variant="ghost"
+                      onClick={action(() => reply.set(undefined))}
+                    >
+                      Cancel reply
+                    </cf-button>
+                  </cf-hstack>
+                )
+                : null}
+              <div
+                data-ui-pattern="ChatSendSurface"
+                data-ui-event-integrity="ChatSendSurface"
+              >
+                <cf-submit-input
+                  inputId="fabrichat-message"
+                  placeholder="Write a message"
+                  buttonText="Send"
+                  disabled={!canSend}
+                  data-ui-action="ChatSend"
+                  onClick={sendMessageFromUi({ ...state, uiReply: reply })}
+                />
+              </div>
+              {!canSend
+                ? (
+                  <cf-text variant="caption">
+                    A profile and write access are required to send.
+                  </cf-text>
+                )
+                : null}
+            </cf-vstack>
+          </cf-screen>
+        </cf-theme>
       ),
       ...facts,
       [VIEWS]: { room: facts },

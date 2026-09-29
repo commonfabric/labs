@@ -1,85 +1,106 @@
-/**
- * FabriChat: a group chat among the people in a space, each identified by
- * their own profile, with every message labeled with the principal who sent
- * it.
- *
- * This is the room from `chat.tsx`, given the viewer's real profile. The
- * messages and their reactions are shared by everyone in the space. A viewer
- * with no profile can read the conversation, and is offered the form that
- * creates one.
- */
+/** Opens a space's own conversation and supplies the viewer's live profile. */
 import {
+  type AuthoredByCurrentUser,
   computed,
+  currentPrincipal,
+  FabricEpochNsec,
+  handler,
   NAME,
   pattern,
-  type PerSpace,
-  Stream,
+  spaceMembers,
+  type TrustedActionWrite,
   UI,
-  type VNode,
+  VIEWS,
   wish,
+  Writable,
 } from "commonfabric";
-import {
-  type FabriChatProfile,
-  FabriChatRoom,
-  type MessagesCell,
-  type ReactionsCell,
-  type SubmittedTextEvent,
-} from "./chat.tsx";
+import { FabriChatRoom, type StoredMemory } from "./room.tsx";
+import { CHAT_POLICY } from "./records.ts";
+import type { ChatProfile, ChatRoomAbout, ChatRoomPolicy } from "./schemas.ts";
 
-type FabriChatRoomInputArg = Parameters<typeof FabriChatRoom>[0];
+/** Immutable creation records admitted by the space conversation's start control. */
+type Created<T> = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    T,
+    typeof initializeRoom,
+    "ChatStart",
+    "ChatStartSurface"
+  >
+>;
 
-/** What FabriChat stores: the conversation, shared by the space. */
-export interface FabriChatInput {
-  messages?: PerSpace<MessagesCell>;
-  reactions?: PerSpace<ReactionsCell>;
-}
+/** Creates the space conversation once, recording its creator and policy together. */
+const initializeRoom = handler<unknown, {
+  about: Writable<ChatRoomAbout>;
+  policy: Writable<ChatRoomPolicy>;
+}>((_, { about, policy }) => {
+  if (about.get()) return;
+  const actor = currentPrincipal();
+  const acl = spaceMembers();
+  const access = actor ? acl?.[actor] ?? acl?.["*"] : undefined;
+  if (access !== "WRITE" && access !== "OWNER") return;
+  policy.set(CHAT_POLICY);
+  about.set({
+    kind: "group",
+    title: "Space conversation",
+    createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+    policy,
+  });
+});
 
-/** What FabriChat provides. */
-export interface FabriChatOutput {
-  [NAME]: string;
-  [UI]: VNode;
-  messages: PerSpace<MessagesCell>;
-  reactions: PerSpace<ReactionsCell>;
-  sendMessage: Stream<SubmittedTextEvent>;
-}
-
-/** A FabriChat room whose viewer is the person looking at it. */
-export default pattern<FabriChatInput, FabriChatOutput>(
-  ({ messages, reactions }) => {
-    const messagesCell: MessagesCell = messages!;
-    const reactionsCell: ReactionsCell = reactions!;
-    const profileWish = wish<FabriChatProfile>({ query: "#profile" });
-    const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
-
-    const room = FabriChatRoom({
-      myProfile: profileWish.result,
-      myName: computed(() => profileNameWish.result ?? ""),
-      myAvatar: computed(() => profileAvatarWish.result ?? ""),
-      messages: messagesCell,
-      reactions: reactionsCell,
-    } as FabriChatRoomInputArg);
-
-    const hasProfile = computed(() => profileWish.result !== undefined);
-
-    return {
-      [NAME]: "FabriChat",
-      [UI]: (
-        <cf-screen>
-          {room[UI]}
-          {hasProfile ? null : (
+/** A space conversation shares its enclosing space's membership. */
+export default pattern(() => {
+  const about = new Writable<Created<ChatRoomAbout>>();
+  const policy = new Writable<Created<ChatRoomPolicy>>();
+  const memory = new Writable<StoredMemory>({
+    requests: {},
+    authors: {},
+    usedTimes: {},
+    nextSeq: 1,
+    expiredThrough: 0,
+    left: {},
+    admissions: {},
+    profiles: {},
+    abandoned: false,
+    notices: [],
+  });
+  const profile = wish<ChatProfile>({ query: "#profile" });
+  const room = FabriChatRoom({ about, memory, myProfile: profile.result });
+  const ready = computed(() => about.get() !== undefined);
+  const canCreate = computed(() => {
+    const acl = spaceMembers();
+    const access = acl?.[currentPrincipal() ?? ""] ?? acl?.["*"];
+    return access === "WRITE" || access === "OWNER";
+  });
+  return {
+    [NAME]: "FabriChat",
+    [UI]: (
+      <cf-screen>
+        {ready ? room[UI] : (
+          <cf-vstack padding="4" gap="3">
+            <cf-heading level={2}>Space conversation</cf-heading>
+            <cf-text>
+              Everyone with access to this space can read its conversation.
+            </cf-text>
             <div
-              id="fabrichat-profile-setup"
-              style={{ padding: "0 1rem 1rem", maxWidth: "640px" }}
+              data-ui-pattern="ChatStartSurface"
+              data-ui-event-integrity="ChatStartSurface"
             >
-              {profileWish[UI]}
+              <cf-button
+                disabled={!canCreate}
+                data-ui-action="ChatStart"
+                onClick={initializeRoom({ about, policy })}
+              >
+                Start conversation
+              </cf-button>
             </div>
-          )}
-        </cf-screen>
-      ),
-      messages: messagesCell as PerSpace<MessagesCell>,
-      reactions: reactionsCell as PerSpace<ReactionsCell>,
-      sendMessage: room.sendMessage,
-    };
-  },
-);
+          </cf-vstack>
+        )}
+        {profile.result === undefined
+          ? <div id="fabrichat-profile-setup">{profile[UI]}</div>
+          : null}
+      </cf-screen>
+    ),
+    room,
+    [VIEWS]: { room: room[VIEWS].room },
+  };
+});

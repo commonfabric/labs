@@ -387,6 +387,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   collection: "declared",
   flowPrecisionClaim: "declared",
   uiContract: "declared",
+  authenticatedAction: "declared",
   writeAuthorizedBy: "writerIdentity",
   writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`

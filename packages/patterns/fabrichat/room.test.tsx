@@ -11,8 +11,10 @@ import {
   FabricEpochNsec,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import { hasText } from "../test/vnode-helpers.ts";
 import { CHAT_POLICY } from "./records.ts";
 import {
   FabriChatRoom,
@@ -79,6 +81,9 @@ export default pattern(() => {
     [TESTS]: [
       { action: initialize },
       { action: room.sendMessage, event: sendEvent, trustedUi: sendGesture },
+      { assertion: assert(() => room.messages.latest.messages.length === 1) },
+      { render: room[UI] },
+      { assertion: assert(() => hasText(room[UI], "Hello")) },
       {
         assertion: assert(() =>
           records.get().length === 1 && records.get()[0].body === "  Hello  "

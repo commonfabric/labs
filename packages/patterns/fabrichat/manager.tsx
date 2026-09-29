@@ -17,7 +17,7 @@ import {
   type WriteAuthorizedBy,
   type WritePolicyAnyOf,
 } from "commonfabric";
-import { FabriChatRoom } from "./room.tsx";
+import { FabriChatRoom, type StoredMemory } from "./room.tsx";
 import { CHAT_POLICY } from "./records.ts";
 import type {
   ChatIndexEntry,
@@ -328,6 +328,18 @@ const PrivateRoom = pattern<{
     myProfile: profile.result,
     dedicated: true,
     initialMembers,
+    memory: new Writable<StoredMemory>({
+      requests: {},
+      authors: {},
+      usedTimes: {},
+      nextSeq: 1,
+      expiredThrough: 0,
+      left: {},
+      admissions: {},
+      profiles: {},
+      abandoned: false,
+      notices: [],
+    }),
   });
   return { room, configured: configured! };
 });
