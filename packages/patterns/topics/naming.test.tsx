@@ -4,14 +4,17 @@
  * name by identity, the backfill over topics filed before the board numbered
  * anything, and the bound on what any of those reads expands.
  *
- * Topics shows none of those numbers while `SHOW_TOPIC_NUMBERS` in
- * `topic.tsx` is off, and this file holds that as well. A topic publishes no
- * `shortName` then, so its header, the board's cards, the survey rows and the
- * mention universe's rows all carry none, while the namespace and the names
- * table carry every one. A case reading an absence for a topic the board has
- * named states that number in the table beside it, so the absence stands
- * against a number that exists; the two over a topic nothing has named have no
- * number to stand against and read the table as empty.
+ * A topic publishes the number it stores, and this file holds that as well:
+ * its header, the board's cards, the survey rows and the mention universe's
+ * rows all carry the number the namespace and the names table hold for it. A
+ * topic that stores none publishes none, and a case reading that absence
+ * states what the table holds beside it, so the absence stands against a
+ * namespace that has named the topic or has not.
+ *
+ * That publication is also what this file reads to ask what a topic STORES.
+ * The two are one property — a topic publishes its `shortName` input — so the
+ * published path is the read, including on a topic composed with no board and
+ * on one composed with no number cell at all.
  *
  * Separate from topics.test.tsx for the reason render-shape.test.tsx is
  * separate from it: this file drives one surface end to end and keeps
@@ -24,14 +27,6 @@
  * its own state schema, which does not materialize one (`TopicOutput`'s
  * `editingBody` says why). `backfillNames` reaches the topic through the
  * board's list instead.
- *
- * That same seam is how this file reads what a topic STORES, which is a
- * separate question from what it shows and the one the storage cases below
- * ask. A topic composed here takes its number through a cell this file holds,
- * so the cell is readable afterwards whatever the topic publishes. Nothing
- * published would serve: `SHOW_TOPIC_NUMBERS` gates the publication, so an
- * assertion over `shortName` reads absent for a topic holding a number and for
- * one holding none alike, and would pass with the storage removed.
  *
  * The mixed-vintage case — a topic deployed before `shortName` existed, read
  * beside one that has it — is NOT here, and deliberately. A fixture of that
@@ -68,7 +63,12 @@ import {
   recordNames,
   type RecordNamesResult,
 } from "../collection-naming/naming.ts";
-import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
+import {
+  findNodeByProp,
+  hasExactText,
+  hasText,
+  innermostNode,
+} from "../test/vnode-helpers.ts";
 import Topics, {
   submitProfileTopic,
   type TopicCrossrefRow,
@@ -83,6 +83,20 @@ import Topic, { TOPIC_STATE_VERSION } from "./topic.tsx";
  */
 const numberBadge = (node: unknown): unknown =>
   findNodeByProp(node, "data-member-name", "");
+
+/**
+ * The number badge in the board card whose text carries `title`, so a board
+ * rendering several cards is asked about one of them rather than about
+ * whichever card the walk reaches first. `undefined` where that card renders
+ * no badge, which `hasExactText` reads as no text at all.
+ */
+const cardBadge = (board: unknown, title: string): unknown =>
+  numberBadge(
+    innermostNode(
+      board,
+      (node) => hasText(node, title) && numberBadge(node) !== undefined,
+    ),
+  );
 
 export default pattern(() => {
   const names = new Writable<NamesMap>({});
@@ -150,34 +164,35 @@ export default pattern(() => {
     )
   );
   // A survey row IS its topic, so it carries what the topic publishes: the
-  // titles, and no number, although the table names both.
-  const assert_index_rows_carry_no_name = assert(() =>
+  // titles, and the number the table names each topic by.
+  const assert_index_rows_carry_the_number = assert(() =>
     (board.index ?? []).length === 2 &&
     board.index?.[0]?.title === "First topic" &&
-    board.index?.[0]?.shortName === undefined &&
-    board.index?.[1]?.shortName === undefined &&
+    board.index?.[0]?.shortName === "1" &&
+    board.index?.[1]?.shortName === "2" &&
     board.namesTable?.[0]?.name === "1" &&
     board.namesTable?.[1]?.name === "2"
   );
-  // The board's cards show the titles and no number, although the table names
-  // both topics: the badge is the only `cf-badge` a card renders.
-  const assert_cards_show_no_number = assert(() =>
-    numberBadge(board[UI]) === undefined &&
+  // The board's cards show the titles and each topic's own number, in the one
+  // badge a card marks with `data-member-name`.
+  const assert_cards_show_the_number = assert(() =>
+    hasExactText(cardBadge(board[UI], "First topic"), "1") &&
+    hasExactText(cardBadge(board[UI], "Second topic"), "2") &&
     hasText(board[UI], "First topic") &&
     hasText(board[UI], "Second topic") &&
     board.namesTable?.[0]?.name === "1" &&
     board.namesTable?.[1]?.name === "2"
   );
-  // The mention universe: one row per topic, each copying its topic's absent
-  // name as the empty one, although the table names both. A `#42` completion
-  // matches a row's name and a mention's pill shows it, so a row without one
-  // is offered for no number and gives a pill none.
-  const assert_universe_rows_carry_no_name = assert(() =>
+  // The mention universe: one row per topic, each copying the number its topic
+  // publishes. A `#42` completion matches a row's name and a mention's pill
+  // shows it, so the row carrying `1` is what `#1` offers and what a pill for
+  // that topic reads.
+  const assert_universe_rows_carry_the_number = assert(() =>
     (board.mentionable ?? []).length === 2 &&
     board.mentionable?.[0]?.[NAME] === "First topic" &&
     board.mentionable?.[0]?.title === "First topic" &&
-    board.mentionable?.[0]?.shortName === "" &&
-    board.mentionable?.[1]?.shortName === "" &&
+    board.mentionable?.[0]?.shortName === "1" &&
+    board.mentionable?.[1]?.shortName === "2" &&
     board.namesTable?.[0]?.name === "1" &&
     board.namesTable?.[1]?.name === "2" &&
     equals(
@@ -217,13 +232,12 @@ export default pattern(() => {
     hasText(solo[UI], "Solo topic")
   );
 
-  // A numbered topic stores its number and shows none, which is the whole of
-  // what hiding costs and the case both halves of this change meet in. The
-  // topic is listed in the board's input and numbered by the board's step,
-  // which asks it to store what the namespace holds for it; the cell it was
-  // composed with is how this file reads that it did. The namespace and the
-  // table naming the topic are what make the absences below absences of a
-  // number the topic has.
+  // A numbered topic publishes the number it stores, in its own header as well
+  // as through the board. The topic is listed in the board's input and
+  // numbered by the board's step, which asks it to store what the namespace
+  // holds for it; the publication is how this file reads that it did. The
+  // namespace and the table naming the topic are what that publication is
+  // checked against.
   const heldNames = new Writable<NamesMap>({});
   const heldNumber = new Writable<string | undefined>(undefined);
   const held = Topic({ title: "Held topic", shortName: heldNumber });
@@ -231,16 +245,15 @@ export default pattern(() => {
   const action_name_the_held_topic = action(() => {
     heldBoard.backfillNames.send({ agentName: "Sol" });
   });
-  const assert_named_topic_stores_it_and_shows_none = assert(() =>
+  const assert_named_topic_publishes_its_number = assert(() =>
     Object.keys((heldBoard.names ?? {}) as NamesMap).join(",") === "1" &&
     heldBoard.namesTable?.[0]?.name === "1" &&
     equals(
       heldBoard.namesTable?.[0]?.member as object,
       heldBoard.topics?.[0] as object,
     ) &&
-    heldNumber.get() === "1" &&
-    held.shortName === undefined &&
-    numberBadge(held[UI]) === undefined &&
+    held.shortName === "1" &&
+    hasExactText(numberBadge(held[UI]), "1") &&
     hasText(held[UI], "Held topic")
   );
 
@@ -282,34 +295,35 @@ export default pattern(() => {
   const action_backfill = action(() => {
     runs.push(recordNames(olderTopics, olderNames));
   });
-  // The backfill names both topics in the table, and neither the survey rows
-  // nor the universe rows carry a number.
+  // The backfill names both topics in the table, and both the survey rows and
+  // the universe rows carry what each topic now publishes.
   const assert_backfilled_in_filing_order = assert(() =>
     Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2" &&
     nameOf(olderTopics.key(0), older.namesTable ?? []) === "1" &&
     nameOf(olderTopics.key(1), older.namesTable ?? []) === "2" &&
-    older.index?.[0]?.shortName === undefined &&
-    older.index?.[1]?.shortName === undefined &&
-    older.mentionable?.[0]?.shortName === "" &&
-    older.mentionable?.[1]?.shortName === "" &&
+    older.index?.[0]?.shortName === "1" &&
+    older.index?.[1]?.shortName === "2" &&
+    older.mentionable?.[0]?.shortName === "1" &&
+    older.mentionable?.[1]?.shortName === "2" &&
     equals(
       ((older.names ?? {}) as NamesMap)["1"] as object,
       older.topics?.[0] as object,
     )
   );
-  // And each asked topic stored what it was asked for. This is the half no
-  // published path carries while numbers are hidden, and the half the step
-  // exists for.
+  // And each asked topic stored what it was asked for, read through the
+  // board's demand over its topics — which is the projection `recordNames`
+  // itself reads a member's name from, and so the read that decides which list
+  // the run below reports each topic under.
   const assert_asked_topics_stored_their_numbers = assert(() =>
-    olderOne.get() === "1" &&
-    olderTwo.get() === "2"
+    older.topics?.[0]?.shortName === "1" &&
+    older.topics?.[1]?.shortName === "2"
   );
   // What the first run reports, and what it cannot. `assigned` settles the
-  // namespace exactly. `named` is empty and `pending` holds both, and that is
-  // the degradation `SHOW_TOPIC_NUMBERS` costs rather than a fact about these
-  // topics: the step reads a topic's published `shortName` to tell a stored
-  // number from none, and the switch gates it, so every topic reads as storing
-  // nothing however much it holds. Turning the switch on is what restores it.
+  // namespace exactly. Neither topic stored a number when the run read it, so
+  // both were asked and both land under `pending`, which confirms nothing: a
+  // send's effect is invisible to the transaction that makes it. `named` is
+  // empty for that reason and no other, and the later run below is where these
+  // two come back under it.
   const assert_first_run_reports_what_it_allocated = assert(() =>
     runs.get().length === 1 &&
     runs.get()[0]?.assigned?.join(",") === "1,2" &&
@@ -318,8 +332,8 @@ export default pattern(() => {
   );
 
   // A create after the backfill continues the sequence rather than restarting
-  // it. The name a create allocates is as real as a backfilled one, and
-  // `namesTable` is where both are read while no topic publishes one.
+  // it. The name a create allocates is as real as a backfilled one, and a
+  // topic publishes it whichever way it got there.
   const action_add_after_backfill = action(() => {
     older.addTopic.send({ title: "Newer one", agentName: "Sol" });
   });
@@ -335,28 +349,33 @@ export default pattern(() => {
     older.topicCount === 4 &&
     Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
     older.index?.[2]?.title === "Newer one" &&
-    older.index?.[2]?.shortName === undefined &&
+    older.index?.[2]?.shortName === "3" &&
     older.index?.[3]?.title === "Older three" &&
-    older.index?.[3]?.shortName === undefined &&
+    older.index?.[3]?.shortName === "4" &&
     nameOf(olderTopics.key(2), older.namesTable ?? []) === "3" &&
     nameOf(olderTopics.key(3), older.namesTable ?? []) === "4"
   );
-  // A later run allocates nothing and stores nothing new. It asks again, which
-  // is what the step can do and no more while numbers are hidden; what it must
-  // not do is write, and the two clauses below are that: no key joins the map,
-  // and no topic's stored number moves.
+  // A later run over a board every topic of which publishes its number: it
+  // allocates nothing, asks nothing, and reports all four under `named` with
+  // `pending` empty. An empty `pending` is the report that says the board is
+  // finished, and it is the one the step can only make by reading what a topic
+  // publishes.
   const action_backfill_a_third_time = action(() => {
     runs.push(recordNames(olderTopics, olderNames));
   });
-  const assert_later_run_allocates_nothing = assert(() =>
+  const assert_later_run_reports_them_named = assert(() =>
     runs.get().length === 2 &&
     runs.get()[1]?.assigned?.length === 0 &&
-    runs.get()[1]?.pending?.join(",") === "1,2,3,4"
+    runs.get()[1]?.named?.join(",") === "1,2,3,4" &&
+    runs.get()[1]?.pending?.length === 0
   );
+  // And it stored nothing new: every topic publishes the number it held before
+  // the run, in the filing order the list holds them in.
   const assert_later_run_stores_nothing_new = assert(() =>
-    olderOne.get() === "1" &&
-    olderTwo.get() === "2" &&
-    olderThree.get() === "4"
+    older.topics?.[0]?.shortName === "1" &&
+    older.topics?.[1]?.shortName === "2" &&
+    older.topics?.[2]?.shortName === "3" &&
+    older.topics?.[3]?.shortName === "4"
   );
   const assert_third_backfill_leaves_the_map = assert(() =>
     Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
@@ -370,39 +389,46 @@ export default pattern(() => {
   //
   // What a topic stores
   //
-  // Everything above reads what Topics shows. These read what a topic holds,
-  // through the cell it was composed with, because while `SHOW_TOPIC_NUMBERS`
-  // is off nothing published carries it.
+  // Everything above reads a topic's number through a board. These reach a
+  // topic that has none: the store is its own, and it publishes what it holds
+  // whether or not anything is listing it.
   //
 
   // A topic composed with a number and NO board at all: no names table, no
-  // pivot, no mention universe, and no sibling topic in existence. It holds
-  // the number anyway, which is the whole of what storing it buys — there is
-  // nothing else it could be reading — and it renders without failing.
+  // pivot, no mention universe, and no sibling topic in existence. It
+  // publishes the number it holds anyway, which is the whole of what storing
+  // it buys — there is nothing else it could be reading — and renders it.
   const loneNumber = new Writable<string | undefined>("7");
   const lone = Topic({ title: "Lone topic", shortName: loneNumber });
-  const assert_lone_topic_holds_its_number = assert(() =>
-    loneNumber.get() === "7" &&
+  const assert_lone_topic_publishes_its_number = assert(() =>
+    lone.shortName === "7" &&
+    hasExactText(numberBadge(lone[UI]), "7") &&
     lone[NAME] === "Lone topic" &&
     hasText(lone[UI], "Lone topic")
   );
-  // And `recordName` is what writes that cell, on a topic wired to nothing.
+  // And `recordName` is what writes the store, on a topic wired to nothing.
+  // The one case reading the composed cell as well as the publication, which
+  // is what pins the two together: a topic publishes the number its durable
+  // input holds, and a publication drawn from anywhere else would satisfy
+  // every other assertion in this file.
   const blankNumber = new Writable<string | undefined>(undefined);
   const blank = Topic({ title: "Blank topic", shortName: blankNumber });
   const action_record_on_a_lone_topic = action(() => {
     blank.recordName.send({ name: "5" });
   });
-  const assert_record_wrote_the_store = assert(() => blankNumber.get() === "5");
+  const assert_record_wrote_the_store = assert(() =>
+    blankNumber.get() === "5" &&
+    blank.shortName === "5"
+  );
 
-  // The create passes its allocated number into the topic it creates. No
-  // published path shows that while numbers are hidden, and no cell of this
-  // file's is the created topic's input, so the witness is the topic's own
-  // REFUSAL: `recordName` rejects a number disagreeing with one already
-  // stored, so a board-created topic refusing `9` is one that stores something
-  // else. That refusal is counted, not asserted — it is one of this file's
-  // five expected runtime errors, and dropping the pass-through at the create
-  // makes the call succeed and the count fall to four. The assertion below
-  // carries only the namespace half, which is what it can read.
+  // The create passes its allocated number into the topic it creates, and the
+  // created topic publishes it — which is the read below, since no cell of
+  // this file's is that topic's input. The topic's REFUSAL of a second number
+  // stands beside it: `recordName` rejects a number disagreeing with one
+  // already stored, so a board-created topic refusing `9` is one that stores
+  // something else. That refusal is counted, not asserted — it is one of this
+  // file's five expected runtime errors, and dropping the pass-through at the
+  // create makes the call succeed and the count fall to four.
   const madeNames = new Writable<NamesMap>({});
   const madeTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const made = Topics({ topics: madeTopics, names: madeNames });
@@ -414,15 +440,17 @@ export default pattern(() => {
   });
   const assert_create_allocated_into_the_namespace = assert(() =>
     Object.keys((madeNames.get() ?? {}) as NamesMap).join(",") === "1" &&
-    nameOf(madeTopics.key(0), made.namesTable ?? []) === "1"
+    nameOf(madeTopics.key(0), made.namesTable ?? []) === "1" &&
+    made.index?.[0]?.shortName === "1"
   );
 
   // The browser composer passes its allocated number into the topic too, and
   // it is a SECOND create path: `submitProfileTopic` and `addTopic` hand
   // `createNamed` separate callbacks, so a pass-through dropped from one is
-  // not dropped from the other. Witnessed the way the headless create is —
-  // the composed topic refusing a second number — because the composer builds
-  // its topic inside the handler, so no cell here is that topic's input.
+  // not dropped from the other. Read off what the composed topic publishes,
+  // because the composer builds its topic inside the handler and no cell here
+  // is that topic's input; its refusal of a second number stands beside that
+  // read the way the headless create's does.
   const composerNames = new Writable<NamesMap>({});
   const composerTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const composerCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>([]);
@@ -442,6 +470,7 @@ export default pattern(() => {
   const assert_composer_allocated_into_the_namespace = assert(() =>
     Object.keys(composerNames.get() ?? {}).join(",") === "1" &&
     (composerTopics.get() ?? []).length === 1 &&
+    (composerTopics.get() ?? [])[0]?.shortName === "1" &&
     equals(
       (composerNames.get() ?? {})["1"] as object,
       composerTopics.key(0),
@@ -480,7 +509,7 @@ export default pattern(() => {
     blockedRuns.get().length === 1 &&
     blockedRuns.get()[0]?.assigned?.join(",") === "1" &&
     blocked.namesTable?.[0]?.name === "1" &&
-    blockedNumber.get() === undefined
+    blocked.index?.[0]?.shortName === undefined
   );
   const action_unblock = action(() => {
     blockedVersion.set(TOPIC_STATE_VERSION);
@@ -488,7 +517,7 @@ export default pattern(() => {
   const assert_rerun_completes_the_write = assert(() =>
     blockedRuns.get().length === 2 &&
     blockedRuns.get()[1]?.assigned?.length === 0 &&
-    blockedNumber.get() === "1"
+    blocked.index?.[0]?.shortName === "1"
   );
 
   // A topic the namespace holds only under a key the grammar does not admit —
@@ -524,7 +553,7 @@ export default pattern(() => {
       "007,1" &&
     (foreignBoard.namesTable ?? []).length === 1 &&
     foreignBoard.namesTable?.[0]?.name === "1" &&
-    foreignNumber.get() === "1"
+    foreignBoard.index?.[0]?.shortName === "1"
   );
 
   // A topic filed before this change existed at all: composed with no
@@ -534,11 +563,12 @@ export default pattern(() => {
   //
   // Nothing here supplies a cell for its number, and that is the case rather
   // than an oversight — a pre-input topic is exactly one nothing was handed a
-  // cell for. So the store is read the only way it can be: the topic's own
-  // refusal of a SECOND number, which `recordName` gives for a number
-  // disagreeing with one already stored. A topic that stored nothing would
-  // accept `9`. That refusal is one of this file's expected runtime errors,
-  // and dropping the step's send makes the call succeed and the count fall.
+  // cell for. It publishes what the step asked it to store all the same, which
+  // is what the assertion below reads. Its refusal of a SECOND number stands
+  // beside that: `recordName` refuses a number disagreeing with one already
+  // stored, and a topic that stored nothing would accept `9`. That refusal is
+  // one of this file's expected runtime errors, and dropping the step's send
+  // makes the call succeed and the count fall.
   const preInputNames = new Writable<NamesMap>({});
   const preInputTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const preInput = Topics({
@@ -555,6 +585,7 @@ export default pattern(() => {
     Object.keys(preInputNames.get() ?? {}).join(",") === "1" &&
     (preInput.namesTable ?? []).length === 1 &&
     preInput.namesTable?.[0]?.name === "1" &&
+    preInput.index?.[0]?.shortName === "1" &&
     equals(
       preInput.namesTable?.[0]?.member as object,
       preInput.topics?.[0] as object,
@@ -564,15 +595,21 @@ export default pattern(() => {
     preInputTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
   });
 
-  // A second run stores nothing new, seen rather than assumed. A re-write of
-  // the same string leaves every value it could be compared against unchanged,
-  // so comparing values cannot detect one. The verb can: `recordName` returns
-  // BEFORE `upgradeTopicState` when the number asked for is the number stored,
-  // and `upgradeTopicState` refuses a state version no source supports. So a
-  // topic parked at such a version after its number is stored is refused if
-  // and only if the verb goes on to write, and the second run's silence
-  // becomes observable — no error means no write. Drop the early return and
-  // this run rejects, whichever guard it reaches first.
+  // Two silences, and they belong to different pieces of code. The STEP's is
+  // that `recordNames` sends nothing to a member already publishing the name
+  // it would ask for. The VERB's is that `recordName` returns before it writes
+  // when the number asked for is the number stored. The step's silence is what
+  // stops the verb being reached at all, so a case that only re-runs the step
+  // cannot see the verb's guard; each is driven here on its own.
+  //
+  // Both are seen rather than assumed. A re-write of the same string leaves
+  // every value it could be compared against unchanged, so comparing values
+  // cannot detect one. Parking the topic at a state version no source supports
+  // is what makes a write observable: `upgradeTopicState` refuses such a
+  // version, and `recordName` reaches it only by going on to write. So no
+  // error means no write. Drop the verb's early return and the direct call
+  // below rejects, whichever guard it reaches first; drop the step's skip and
+  // `assert_later_run_reports_them_named` above reds instead.
   const settledNumber = new Writable<string | undefined>(undefined);
   const settledVersion = new Writable<number | Default<0>>(
     TOPIC_STATE_VERSION,
@@ -598,14 +635,21 @@ export default pattern(() => {
   });
   const assert_settled_topic_stored_its_number = assert(() =>
     Object.keys(settledNames.get() ?? {}).join(",") === "1" &&
-    settledNumber.get() === "1"
+    (settledTopics.get() ?? [])[0]?.shortName === "1"
   );
   const action_park_the_settled_version = action(() => {
     settledVersion.set(99);
   });
+  // The verb asked directly for the number the topic already stores, which is
+  // the call the step no longer makes now that it can see that number. Nothing
+  // else reaches `recordName`'s same-number return: every other `recordName`
+  // in this file names a number its topic does not store.
+  const action_offer_the_settled_topic_its_own_number = action(() => {
+    settledTopics.key(0).resolveAsCell().key("recordName").send({ name: "1" });
+  });
   const assert_second_run_wrote_nothing = assert(() =>
     Object.keys(settledNames.get() ?? {}).join(",") === "1" &&
-    settledNumber.get() === "1" &&
+    (settledTopics.get() ?? [])[0]?.shortName === "1" &&
     settledVersion.get() === 99
   );
 
@@ -633,7 +677,7 @@ export default pattern(() => {
   const assert_mislabeled_keeps_its_own = assert(() =>
     Object.keys(mislabeledNames.get() ?? {}).join(",") === "1" &&
     mislabeled.namesTable?.[0]?.name === "1" &&
-    mislabeledNumber.get() === "9"
+    mislabeled.index?.[0]?.shortName === "9"
   );
 
   return {
@@ -653,14 +697,14 @@ export default pattern(() => {
       { action: action_add_second },
       { assertion: assert_allocated_on_create },
       { assertion: assert_table_names_each_topic },
-      { assertion: assert_index_rows_carry_no_name },
-      { assertion: assert_cards_show_no_number },
-      { assertion: assert_universe_rows_carry_no_name },
+      { assertion: assert_index_rows_carry_the_number },
+      { assertion: assert_cards_show_the_number },
+      { assertion: assert_universe_rows_carry_the_number },
       { assertion: assert_reads_expand_no_topic },
       { assertion: assert_solo_topic_has_no_name },
       { assertion: assert_solo_topic_renders_no_badge },
       { action: action_name_the_held_topic },
-      { assertion: assert_named_topic_stores_it_and_shows_none },
+      { assertion: assert_named_topic_publishes_its_number },
       { action: action_file_two_unnamed },
       { assertion: assert_unnamed_rows_carry_no_name },
       { action: action_backfill },
@@ -673,9 +717,9 @@ export default pattern(() => {
       { assertion: assert_backfill_skips_the_named },
       { action: action_backfill_a_third_time },
       { assertion: assert_third_backfill_leaves_the_map },
-      { assertion: assert_later_run_allocates_nothing },
+      { assertion: assert_later_run_reports_them_named },
       { assertion: assert_later_run_stores_nothing_new },
-      { assertion: assert_lone_topic_holds_its_number },
+      { assertion: assert_lone_topic_publishes_its_number },
       { action: action_record_on_a_lone_topic },
       { assertion: assert_record_wrote_the_store },
       { action: action_make_one },
@@ -703,6 +747,7 @@ export default pattern(() => {
       { assertion: assert_settled_topic_stored_its_number },
       { action: action_park_the_settled_version },
       { action: action_number_the_settled_topic },
+      { action: action_offer_the_settled_topic_its_own_number },
       { assertion: assert_second_run_wrote_nothing },
       { action: action_file_a_mislabeled_topic },
       { action: action_record_mislabeled },

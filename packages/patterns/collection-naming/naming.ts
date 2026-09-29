@@ -299,9 +299,6 @@ export interface RecordNamesResult {
    * storing the name writes nothing further while one whose name never landed
    * stores it now — and the asking is itself a write to the member's stream
    * either way.
-   * Topics withholds it today, behind `SHOW_TOPIC_NUMBERS` in
-   * `../topics/topic.tsx`, and `BackfillNamesResult` there says what an
-   * operator reads instead.
    */
   pending: string[];
 }

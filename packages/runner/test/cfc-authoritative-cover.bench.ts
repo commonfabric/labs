@@ -36,7 +36,7 @@ for (const { size, fraction } of PATH_INDEX_GRID) {
     }
     return checksum;
   };
-  const index = new ConsumedLabelIndex(entries, { canonicalPaths: true });
+  const index = new ConsumedLabelIndex(entries);
   let expected = 0;
   for (const query of queries) {
     const result = cover(query);
@@ -57,7 +57,7 @@ for (const { size, fraction } of PATH_INDEX_GRID) {
         let checksum = 0;
         b.start();
         const lookup = kind === "index"
-          ? new ConsumedLabelIndex(entries, { canonicalPaths: true })
+          ? new ConsumedLabelIndex(entries)
           : undefined;
         for (const query of queries) checksum += cover(query, lookup);
         b.end();

@@ -81,7 +81,7 @@ import {
   type IMemorySpaceValueAddress,
   isSigilLink,
   isWriteRedirectLink,
-  type ValuePath,
+  type StoredValuePath,
 } from "./link-types.ts";
 import {
   addressKey,
@@ -2891,10 +2891,10 @@ function followPointer(
     // If the doc exists, but we don't have our entire path to the link target,
     // see if we can get there through intermediate documents.
     const lastPath = (error !== undefined)
-      ? error.path // this may not be a ValuePath
-      : valueEntry.address.path; // this is a ValuePath
+      ? error.path // this may not be a StoredValuePath
+      : valueEntry.address.path; // this is a StoredValuePath
     if (valueEntry === undefined || valueEntry.value === undefined) {
-      let lastExisting: ValuePath = ["value"];
+      let lastExisting: StoredValuePath = ["value"];
       // Never slice below "value" - it's the minimum valid path for getNormalizedLink
       if (lastPath.length > 1) {
         // It's possible an error path may not have a value. If so, we throw.
@@ -2903,7 +2903,7 @@ function followPointer(
             "traverse",
             () => ["Invalid path:", lastPath, error, valueEntry?.address],
           );
-          throw new Error("Invalid path (not a ValuePath)");
+          throw new Error("Invalid path (not a StoredValuePath)");
         }
         // The last element in path wasn't found, so chop that off
         lastExisting = ["value", ...lastPath.slice(1, -1)];
@@ -6239,13 +6239,16 @@ function getNextCellLink(
 }
 
 // helper function - since path starts with value, the new array will too
-function appendToPath(path: ValuePath, part: string): ValuePath {
-  return [...path, part] as ValuePath;
+function appendToPath(path: StoredValuePath, part: string): StoredValuePath {
+  return [...path, part] as StoredValuePath;
 }
 
 // helper function - since path starts with value, the new array will too
-function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
-  return [...path, ...parts] as ValuePath;
+function appendPartsToPath(
+  path: StoredValuePath,
+  parts: string[],
+): StoredValuePath {
+  return [...path, ...parts] as StoredValuePath;
 }
 
 /**

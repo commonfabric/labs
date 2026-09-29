@@ -8,10 +8,17 @@ import type { ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
- * Performs a one-off structural-map of a value, with the given visitor. This
- * configures the map to freeze the containers it produces.
+ * Performs a one-off structural-map of a value, with the given visitor, with
+ * the structure it builds frozen: every container the map builds is frozen,
+ * and every `FabricInstance` it rebuilds is as its codec's `decode()` builds
+ * one when asked for a frozen value.
  *
- * TODO(danfuzz): The freezing is not yet implemented; see `VisitInProgress`.
+ * What the map places into that structure without building it is left as it
+ * is, frozen or not. A visited value or subvalue which is itself frozen _and_
+ * which the operation left unchanged (that is, which mapped to itself) is
+ * included directly rather than as a copy, and so is a value a visitor supplies
+ * with a `mapTo`, which is the visitor's statement of what it wants in that
+ * position.
  *
  * See `visitValue()` in re `value` validation.
  */
@@ -27,11 +34,15 @@ export function mapValue<PlusType, ResultType>(
 }
 
 /**
- * Performs a one-off structural-map of a value, with the given visitor. This
- * configures the map to leave the containers it produces mutable.
+ * Performs a one-off structural-map of a value, with the given visitor, with
+ * the structure it builds left mutable: every container the map builds is
+ * mutable, and every `FabricInstance` it rebuilds is as its codec's `decode()`
+ * builds one when asked for a mutable value.
  *
- * TODO(danfuzz): The configuration is not yet honored, so this currently
- * behaves exactly like `mapValue()`; see `VisitInProgress`.
+ * The map copies every container it recurses into, even one it leaves
+ * unchanged (that is, which mapped to itself). A value a visitor supplies with
+ * a `mapTo` is included as given, frozen or not, being the visitor's statement
+ * of what it wants in that position.
  *
  * See `visitValue()` in re `value` validation.
  */

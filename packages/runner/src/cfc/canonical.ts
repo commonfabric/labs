@@ -76,7 +76,7 @@ const pathPointerCache = new WeakMap<readonly string[], string>();
 export const logicalPathToPointer = (path: readonly string[]): string => {
   const cached = pathPointerCache.get(path);
   if (cached !== undefined) return cached;
-  const pointer = encodePointer(canonicalizeLogicalPath(path));
+  const pointer = encodePointer(path);
   if (Object.isFrozen(path)) pathPointerCache.set(path, pointer);
   return pointer;
 };
@@ -129,11 +129,7 @@ const compareDereferenceTrace = (
 export const cfcDereferenceTracesEqual = (
   left: CfcDereferenceTrace,
   right: CfcDereferenceTrace,
-): boolean =>
-  compareDereferenceTrace(
-    canonicalizeDereferenceTrace(left),
-    canonicalizeDereferenceTrace(right),
-  ) === 0;
+): boolean => compareDereferenceTrace(left, right) === 0;
 
 const compareConsultedGrant = (
   left: ConsultedGrant,
@@ -272,14 +268,11 @@ export const canonicalizeWritePolicyInput = (
     case "release-program":
     case "owner-adoption":
     case "initialization":
-      // Runtime evidence addresses are already value-relative. A literal leading
-      // `value` is a field name, not the storage envelope segment.
       return {
         ...input,
         target: {
-          ...input.target,
+          ...canonicalizeAttemptedWrite(input.target),
           scope: normalizeCellScope(input.target.scope),
-          path: Object.freeze([...input.target.path]),
         },
       };
     case "schema":
