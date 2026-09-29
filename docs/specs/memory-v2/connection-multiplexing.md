@@ -153,6 +153,14 @@ It then records `(iss, sub, nonce)` until `exp` plus the grace has passed and
 refuses a repeat with a retriable `AuthorizationError`. The record's size is
 bounded by the number of opens accepted inside one window.
 
+A nonce belongs to one signed open, not to a space or a connection. The client
+draws a fresh nonce for every `session.open` it signs — each first mount and
+each reopen after a reconnect — so a client with sessions in five spaces signs
+five opens with five nonces, and signs new ones when it reconnects. The space
+is part of the record's key because the signature already binds the open to
+its space: a nonce cannot be moved to another space, and each space's record
+lives on the server that owns the space.
+
 Nothing about a signed open depends on the connection it arrives on, so opens
 on one connection run concurrently, and a client signs each open without first
 waiting for a server round trip. `hello.ok` still carries `sessionOpen.audience`
@@ -166,11 +174,11 @@ requires breaking TLS or holding the client, and either of those exposes the
 session's traffic anyway; the window bounds the exposure in time and the replay
 record makes each open usable once.
 
-The replay record is kept in the memory of the server that owns the space. A
-server that restarts inside a window forgets the opens it accepted in that
-window, which lets a captured open from that window be used once more. Keeping
-the window short bounds this; writing the record into the space's store closes
-it at the cost of a write per open.
+The replay record is kept only in the memory of the server that owns the
+space, and is not persisted. A server that restarts inside a window forgets the
+opens it accepted in that window, which lets a captured open from that window
+be used once more before it expires. The window bounds that exposure, and it is
+accepted.
 
 Compatibility follows the flags:
 
@@ -458,9 +466,6 @@ depend on anything after them.
 
 ## 7. Open questions
 
-- **Persisting the replay record.** Keeping `(iss, sub, nonce)` in server
-  memory leaves the restart gap described in section 3.2. Whether that gap is
-  accepted or the record is written to the space's store is not settled.
 - **Retiring challenge-signed opens.** A server keeps accepting them for
   clients without `sessionOpenNonce`. When that path, and the challenge in
   `hello.ok`, can be removed depends on how long older clients stay deployed.
