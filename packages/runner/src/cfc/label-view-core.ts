@@ -65,12 +65,18 @@ const LABEL_KEYS = [
   "integrity",
 ] as const satisfies readonly (keyof IFCLabel)[];
 
+/**
+ * Returns a mutable copy of a label view's logical path. A view's paths are
+ * relative to the node it describes, so a first segment of `"value"` names a
+ * payload field of that name and is kept.
+ */
 export const canonicalizeCfcLogicalPath = (
   path: readonly string[],
-): string[] => path[0] === "value" ? path.slice(1) : [...path];
+): string[] => [...path];
 
+/** Returns the key under which a label view files an entry at `path`. */
 export const cfcLabelViewPathKey = (path: readonly string[]): string =>
-  encodePointer(path[0] === "value" ? path.slice(1) : path);
+  encodePointer(path);
 
 export const cfcLabelPathPrefixMatches = (
   prefix: readonly string[],

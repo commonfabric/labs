@@ -56,7 +56,7 @@ const recordSecretWritePolicy = (
       space: signer.did(),
       scope: "space",
       id: id as URI,
-      path: ["value", "secret"],
+      path: ["secret"],
     },
     schemaHash: SECRET_FIELD_SCHEMA.taggedHashString,
     schema: SECRET_FIELD_SCHEMA.schema,

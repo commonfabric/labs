@@ -78,11 +78,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [
           {
-            path: ["value", "body"],
+            path: ["body"],
             label: { confidentiality: ["prompt-influenced"] },
           },
           {
-            path: ["value", "body", "summary"],
+            path: ["body", "summary"],
             label: { integrity: ["summarized-by-trusted-pattern"] },
           },
           {
@@ -194,11 +194,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [
           {
-            path: ["value", "*"],
+            path: ["*"],
             label: { integrity: ["trusted-item"] },
           },
           {
-            path: ["value", "*", "title"],
+            path: ["*", "title"],
             label: { integrity: ["trusted-title"] },
           },
         ],

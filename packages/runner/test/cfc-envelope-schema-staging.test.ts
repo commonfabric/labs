@@ -84,11 +84,11 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
       space,
       scope: "space",
       id: targetId,
-      path: ["value", "field"],
+      path: ["field"],
     }, "v");
     tx.recordCfcWritePolicyInput({
       kind: "link-write",
-      target: { space, scope: "space", id: targetId, path: ["value", "field"] },
+      target: { space, scope: "space", id: targetId, path: ["field"] },
       source: { space, scope: "space", id: sourceId, path: [] },
       cfcLabelView: {
         version: 1,
