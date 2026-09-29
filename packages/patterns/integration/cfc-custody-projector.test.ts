@@ -31,6 +31,7 @@ import {
   ACLManager,
   type Cell,
   type IExtendedStorageTransaction,
+  type JSONSchema,
   Runtime,
 } from "@commonfabric/runner";
 import {
@@ -38,6 +39,7 @@ import {
   type CfcTrustConfigInput,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
+  loadStoredCfcEnvelope,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
 import { clauseAlternatives } from "@commonfabric/runner/cfc/clause";
@@ -100,15 +102,40 @@ const trustedClick = () => {
 };
 
 /**
- * How a member's own code, after the answer room's answer is published, would
- * have the room show another instance's slot: running `propose` again with
- * the member's seat alone, writing the terms of a room the member sealed
- * alone over the room's `terms`, clearing `terms` so that `propose` writes
- * them again, or writing another policy's reference over the room's
- * `policy`. The host shows the slot the room's bound `terms` and `policy`
- * name, so the room must keep both as their first write left them.
+ * How a member's own code would have the answer room show another instance's
+ * slot. The host shows the slot the room's bound `terms` and `policy` name, so
+ * the room must keep both as their first write left them. After the answer is
+ * published, the member's code:
+ *
+ * - `propose`: runs `propose` again with the member's seat alone;
+ * - `terms`: writes the terms of a room the member sealed alone over the
+ *   room's `terms`;
+ * - `seats`: narrows the seats beneath `terms` to the member's own, which
+ *   makes them the terms of that room;
+ * - `extra`: adds a field beneath `terms`, which makes them another
+ *   instance's, whose slot is empty;
+ * - `clear`: writes `null`, then nothing, over `terms`, so that `propose`
+ *   writes them again;
+ * - `policy`: writes over the room's `policy`.
+ *
+ * `early` is the same member's code before the room's own proposal, writing
+ * terms and a policy into the absent slots for `propose` to find written.
+ *
+ * Every write goes through the room's argument document by its bare link, and
+ * a schema of the member's choosing that declares no claim, as code holding
+ * WRITE on the room space can address it. A write through `room.key("terms")`
+ * would carry the room's own schema, claim included, and be refused whether
+ * or not the runtime stored the claim; only the claim the runtime stored for
+ * the document refuses a write through a link that carries none.
  */
-type Repoint = "propose" | "terms" | "clear" | "policy";
+type Repoint =
+  | "propose"
+  | "terms"
+  | "seats"
+  | "extra"
+  | "clear"
+  | "policy"
+  | "early";
 
 /**
  * Two members seal their stances into a room of `file`, and a reader of the
@@ -210,6 +237,108 @@ const sealAndRelease = async (
       return seat.withTx(undefined);
     };
     const seats = [await seatOf(alice), await seatOf(bob)];
+
+    // Code of a member's own, which is not `propose`, writing to the room.
+    const asMember = (write: (tx: IExtendedStorageTransaction) => void) =>
+      host.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, {
+          kind: "verified",
+          moduleIdentity: "sha256:member-code",
+          symbol: "repointRoom",
+          bindingPath: ["repointRoom"],
+        });
+        write(tx);
+      });
+    // The room's argument document, which holds its `terms` and `policy`.
+    const argument = room.getArgumentCell<unknown>()!;
+    // A cell at `path` in that document, by its bare link and through
+    // `schema`, which declares no claim: whether the write is refused is the
+    // stored claim's to say.
+    const bare = (
+      path: string[],
+      schema: JSONSchema,
+      tx: IExtendedStorageTransaction,
+    ) => {
+      const { schema: _schema, ...link } = argument.getAsNormalizedFullLink();
+      return host.getCellFromLink(
+        { ...link, path: [...link.path, ...path] },
+        schema,
+        tx,
+      );
+    };
+    const expectClaimRefused = (error: unknown) =>
+      expect(error).toMatchObject({
+        name: "CfcCommitRefusalError",
+        reasons: [expect.stringMatching(/^writeAuthorizedBy failed at /)],
+      });
+    // The claims the runtime stored for the argument document, as the commit
+    // reads them: `terms` and `policy` each name `propose`, of the module
+    // `moduleIdentity` when given, as their writer. Returns both claims.
+    const expectClaimsStored = (moduleIdentity?: string) => {
+      const link = argument.getAsNormalizedFullLink();
+      const tx = host.edit();
+      let stored: ReturnType<typeof loadStoredCfcEnvelope>;
+      try {
+        stored = loadStoredCfcEnvelope(tx, {
+          space: link.space,
+          id: link.id,
+          scope: link.scope,
+        });
+      } finally {
+        tx.abort();
+      }
+      expect(stored.status).toBe("loaded");
+      type Node = { $ref?: string; ifc?: { writeAuthorizedBy?: unknown } };
+      const schema = (stored as {
+        schema?: {
+          $defs?: Record<string, Node>;
+          properties?: Record<string, Node>;
+        };
+      }).schema;
+      // Each field's schema is a reference to the type the pattern names.
+      const resolved = (node: Node | undefined) =>
+        node?.$ref?.startsWith("#/$defs/")
+          ? schema?.$defs?.[node.$ref.slice("#/$defs/".length)]
+          : node;
+      const claims = ["terms", "policy"].map((field) =>
+        resolved(schema?.properties?.[field])?.ifc?.writeAuthorizedBy
+      );
+      for (const claim of claims) {
+        expect(claim).toEqual({
+          __ctWriterIdentityOf: expect.objectContaining({
+            path: ["propose"],
+            moduleIdentity: moduleIdentity ?? expect.any(String),
+          }),
+        });
+      }
+      return claims;
+    };
+
+    // The claims as stored at the room's creation, before anything has
+    // written either slot.
+    let claimsAtCreation: unknown[] | undefined;
+    if (repoint === "early") {
+      claimsAtCreation = expectClaimsStored();
+      // A member's code writes terms naming its own seat alone into the
+      // absent slot, and a policy into the other, for `propose` to find
+      // written and leave alone.
+      expectClaimRefused(
+        (await asMember((tx) =>
+          bare(["terms"], { type: "object" }, tx).set({
+            question: "Where should we eat?",
+            seats: [host.getCellFromLink(seats[1])],
+          } as never)
+        )).error,
+      );
+      expectClaimRefused(
+        (await asMember((tx) =>
+          bare(["policy"], { type: "boolean" }, tx).set(false as never)
+        )).error,
+      );
+      await host.idle();
+      expect(room.key("terms").get()).toBeUndefined();
+      expect(room.key("policy").get()).toBeUndefined();
+    }
 
     // Alice proposes: the room's terms name the seats by those cells,
     // never by a DID, and the room declares its policy.
@@ -339,6 +468,19 @@ const sealAndRelease = async (
     await published.answer.sync();
     expect(shownTo(bob.did(), published.answer)).toBe(true);
 
+    if (repoint === "early") {
+      // The room's own proposal was the one that landed, and the claims are
+      // those stored at its creation, naming the `propose` of the module
+      // whose policy the room declares.
+      expect(
+        (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
+      ).toHaveLength(2);
+      expect(expectClaimsStored(declared!.moduleIdentity)).toEqual(
+        claimsAtCreation,
+      );
+      return;
+    }
+
     if (repoint !== undefined) {
       // A room of the same pattern in the same space, which Bob seals alone
       // and publishes. Its policy is the answer room's, and so are its terms
@@ -362,17 +504,6 @@ const sealAndRelease = async (
         (await publishCustodyAnswer(loneRoom, lone.key("choice"))).value,
       ).toBe("sushi");
 
-      // Code of a member's own, which is not `propose`, writing to the room.
-      const asMember = (write: (tx: IExtendedStorageTransaction) => void) =>
-        host.editWithRetry((tx) => {
-          setCfcImplementationIdentity(tx, {
-            kind: "verified",
-            moduleIdentity: "sha256:member-code",
-            symbol: "repointRoom",
-            bindingPath: ["repointRoom"],
-          });
-          write(tx);
-        });
       const proposeAlone = () =>
         room.key("propose").send({
           seats: [host.getCellFromLink(seats[1])],
@@ -383,11 +514,31 @@ const sealAndRelease = async (
           // The room's own handler, run again with the member's seat alone.
           proposeAlone();
           break;
-        case "terms":
-          // The room's terms repointed at the one-seat room's.
+        case "terms": {
+          // The one-seat room's terms written over the room's.
+          const loneTerms = lone.key("terms").resolveAsCell().getRaw();
           refusals.push(
             (await asMember((tx) =>
-              room.key("terms").withTx(tx).set(lone.key("terms") as never)
+              bare(["terms"], { type: "object" }, tx).set(loneTerms as never)
+            )).error,
+          );
+          break;
+        }
+        case "seats":
+          // The room's seats narrowed to the member's own.
+          refusals.push(
+            (await asMember((tx) =>
+              bare(["terms", "seats"], { type: "array" }, tx).set(
+                [host.getCellFromLink(seats[1])] as never,
+              )
+            )).error,
+          );
+          break;
+        case "extra":
+          // A field added beneath the room's terms.
+          refusals.push(
+            (await asMember((tx) =>
+              bare(["terms", "extra"], { type: "number" }, tx).set(1 as never)
             )).error,
           );
           break;
@@ -396,7 +547,9 @@ const sealAndRelease = async (
           for (const cleared of [null, undefined]) {
             refusals.push(
               (await asMember((tx) =>
-                room.key("terms").withTx(tx).set(cleared as never)
+                bare(["terms"], { type: ["object", "null"] }, tx).set(
+                  cleared as never,
+                )
               )).error,
             );
           }
@@ -405,10 +558,11 @@ const sealAndRelease = async (
           break;
         case "policy":
           // The room's policy cell holding another policy's reference, with
-          // the room space as its subject.
+          // the room space as its subject, which the host reads in place of
+          // the reference its label carries.
           refusals.push(
             (await asMember((tx) =>
-              room.key("policy").withTx(tx).set({
+              bare(["policy"], {}, tx).set({
                 ...declared,
                 policyDigest: `sha256:${"0".repeat(64)}`,
               } as never)
@@ -422,12 +576,7 @@ const sealAndRelease = async (
       // one-seat room's, and not a slot that is empty or refused.
       expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
       // The member's write was refused, and `propose` wrote nothing again.
-      for (const refusal of refusals) {
-        expect(refusal).toMatchObject({
-          name: "CfcCommitRefusalError",
-          reasons: [expect.stringMatching(/^writeAuthorizedBy failed at /)],
-        });
-      }
+      for (const refusal of refusals) expectClaimRefused(refusal);
       expect(
         (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
       ).toHaveLength(2);
@@ -541,8 +690,16 @@ describe("sealed custody through a pattern", () => {
     await sealAndRelease(ANSWER_ROOM, "propose");
   });
 
-  it("shows the published answer still when a member's code repoints the room's terms at a room it sealed alone", async () => {
+  it("shows the published answer still when a member's code writes the terms of a room it sealed alone over the room's", async () => {
     await sealAndRelease(ANSWER_ROOM, "terms");
+  });
+
+  it("shows the published answer still when a member's code narrows the seats beneath the room's terms to its own", async () => {
+    await sealAndRelease(ANSWER_ROOM, "seats");
+  });
+
+  it("shows the published answer still when a member's code adds a field beneath the room's terms", async () => {
+    await sealAndRelease(ANSWER_ROOM, "extra");
   });
 
   it("shows the published answer still when a member's code clears the room's terms and runs `propose` again", async () => {
@@ -551,5 +708,9 @@ describe("sealed custody through a pattern", () => {
 
   it("shows the published answer still when a member's code writes another policy's reference over the room's policy", async () => {
     await sealAndRelease(ANSWER_ROOM, "policy");
+  });
+
+  it("stores the room's writer claims from its creation, and refuses a member's terms and policy written before `propose`", async () => {
+    await sealAndRelease(ANSWER_ROOM, "early");
   });
 });
