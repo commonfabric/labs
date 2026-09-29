@@ -18,6 +18,7 @@ import type {
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type AtomPattern, isAtomPattern } from "./atom-pattern.ts";
 import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES, isOrClause } from "./clause.ts";
+import { reportCfcDenial } from "./denial-report.ts";
 import type {
   CfcGrantResolver,
   CfcGrantResolverQuery,
@@ -895,67 +896,82 @@ export interface CfcGrantSource {
   subscribe(candidate: CfcGrantCandidate, onChange: () => void): Cancel;
 }
 
+/** How many grant cells a runtime-backed {@link CfcGrantSource} keeps. */
+const DEFAULT_GRANT_CELL_CAPACITY = 128;
+
 /**
  * A runtime-backed {@link CfcGrantSource}. Each lookup reads the document at
  * the candidate address from the local replica through `Cell.get()`, a
  * synchronous read that kicks off the document's load when it has not synced,
  * and verifies what it finds the way the transaction-bound resolver does:
- * shape, re-derived address, audience, then lifecycle. Deliberately not
- * memoized: a grant is an authority record revoked in place, and a kept
- * answer would keep releasing after the revocation, so every evaluation reads
- * the replica again, and the cell holds no transaction, so nothing caches the
- * read between two lookups either; the document is small. One `Cell` per
- * candidate serves both reads and subscriptions. The clock defaults to the
- * runner's wall clock.
+ * shape, re-derived address, audience, then lifecycle. A document at the
+ * address that does not verify as a grant releases nothing and is reported
+ * through the CFC denial log, once per source with a count of repeats.
+ * Deliberately not memoized: a grant is an authority record revoked in
+ * place, and a kept answer would keep releasing after the revocation, so
+ * every evaluation reads the replica again, and the cell holds no
+ * transaction, so nothing caches the read between two lookups either; the
+ * document is small. One `Cell` per candidate serves both reads and
+ * subscriptions, and the `capacity` most recently used are kept: a cell
+ * dropped from that set stays live for as long as a subscription holds it,
+ * and the next lookup of its candidate opens another view over the same
+ * document. The clock defaults to the runner's wall clock.
  */
 export const createRuntimeCfcGrantSource = (
   runtime: Pick<Runtime, "getCellFromLink">,
   now: () => number = Date.now,
+  capacity: number = DEFAULT_GRANT_CELL_CAPACITY,
 ): CfcGrantSource => {
   const cells = new Map<string, Cell<unknown>>();
   const cellFor = ({ space, id }: CfcGrantCandidate): Cell<unknown> => {
     const key = JSON.stringify([space, id]);
     let cell = cells.get(key);
-    if (cell === undefined) {
+    if (cell !== undefined) {
+      cells.delete(key);
+    } else {
       cell = runtime.getCellFromLink<unknown>({
         id,
         path: [],
         space: space as MemorySpace,
       });
-      cells.set(key, cell);
+    }
+    cells.set(key, cell);
+    if (cells.size > capacity) {
+      cells.delete(cells.keys().next().value!);
     }
     return cell;
   };
   return {
     resolve: (query) => {
-      let candidate: CfcGrantCandidate | undefined;
       try {
-        candidate = cfcGrantCandidateOf(query);
+        // Inside the catch, as at the transaction-bound site, so a bound
+        // field the hasher cannot digest, a replica that cannot be read, or
+        // a stored resource the address check cannot digest fails the guard
+        // closed (§4.9.3) rather than throwing out of the resolver.
+        const candidate = cfcGrantCandidateOf(query);
+        if (candidate === undefined) return [];
+        const value = cellFor(candidate).get();
+        if (value === undefined) return [];
+        const grant = verifyCfcGrantDocument(
+          candidate.space,
+          candidate.id,
+          value as FabricValue,
+        );
+        if (grant === undefined) {
+          reportCfcDenial(
+            "render-grant-malformed",
+            "a document at a grant's address did not verify as a grant, so the guard that named it stays unsatisfied",
+            () => ({ space: candidate.space, id: candidate.id }),
+          );
+          return [];
+        }
+        if (!cfcGrantIsLive(grant, now()) || grant.singleUse === true) {
+          return [];
+        }
+        return expandCfcGrantFacts(grant);
       } catch {
-        // A bound field the hasher cannot digest names no document.
         return [];
       }
-      if (candidate === undefined) return [];
-      let value: unknown;
-      try {
-        value = cellFor(candidate).get();
-      } catch {
-        // A replica that cannot be read releases nothing (§4.9.3).
-        return [];
-      }
-      if (value === undefined) return [];
-      const grant = verifyCfcGrantDocument(
-        candidate.space,
-        candidate.id,
-        value as FabricValue,
-      );
-      if (
-        grant === undefined || !cfcGrantIsLive(grant, now()) ||
-        grant.singleUse === true
-      ) {
-        return [];
-      }
-      return expandCfcGrantFacts(grant);
     },
     subscribe(candidate, onChange) {
       // `Cell.sink` runs its action once synchronously at subscribe time;

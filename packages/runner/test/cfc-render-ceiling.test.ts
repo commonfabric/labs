@@ -8,6 +8,7 @@ import {
 } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { getLogger } from "@commonfabric/utils/logger";
 import {
   type CfcConfClause,
   clauseAlternatives,
@@ -1376,11 +1377,15 @@ describe("CFC render resolver — grants at the display boundary", () => {
       });
     });
 
-    it("keeps the clause sealed under a document at the grant's address that the guard matches but that does not verify", async () => {
+    it("keeps the clause sealed under a document at the grant's address that the guard matches but that does not verify, and reports it", async () => {
       // Written past the trusted writer, straight into storage. Each carries
       // the fields the guard reads, so only verify-on-read refuses it: a
       // stored space other than the one it sits in, a version that is not
-      // the grant version, a time that is not a number.
+      // the grant version, a time that is not a number. Each refusal is
+      // reported through the CFC denial log; the count is read from the
+      // logger, which counts a call below its level without printing it.
+      const reports = () =>
+        getLogger("cfc").countsByKey["render-grant-malformed"]?.debug ?? 0;
       const grant = {
         version: 1,
         space: OWNER,
@@ -1407,7 +1412,9 @@ describe("CFC render resolver — grants at the display boundary", () => {
           }, stored as never);
           expect((await tx.commit()).error).toBeUndefined();
           await runtime.idle();
+          const before = reports();
           expect(resolveAsViewer(runtime)).toEqual([shareRef]);
+          expect(reports()).toBeGreaterThan(before);
         });
       }
     });
@@ -1457,6 +1464,33 @@ describe("CFC render resolver — grants at the display boundary", () => {
           await writeGrant(runtime, { revoked: { at: 2000, by: OWNER } });
           expect(changes).toBe(2);
           expect(resolve({ confidentiality: [shareRef] })).toEqual([shareRef]);
+        } finally {
+          cancel();
+        }
+      });
+    });
+
+    it("keeps a subscription live, and reads the document again, after the source has dropped its cell for another candidate", async () => {
+      // A source keeping one cell: looking up a second candidate drops the
+      // first's cell from the set, and the subscription taken on it stays
+      // live while the next read of it opens another view.
+      await withGrantRuntime(async (runtime) => {
+        const source = createRuntimeCfcGrantSource(runtime, Date.now, 1);
+        const resolve = createRenderConfidentialityResolver({
+          actingPrincipal: VIEWER,
+          modulePolicyResolver: () => shareManifest,
+          grantResolver: source.resolve,
+        });
+        let changes = 0;
+        const cancel = source.subscribe(answerCandidate, () => changes++);
+        try {
+          expect(source.resolve({
+            kind: "ShareGrant",
+            fields: { owner: OWNER, resource: OTHER_ANSWER },
+          })).toEqual([]);
+          await writeGrant(runtime);
+          expect(changes).toBe(1);
+          expect(resolve({ confidentiality: [shareRef] })).toEqual([released]);
         } finally {
           cancel();
         }
