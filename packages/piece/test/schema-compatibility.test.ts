@@ -367,7 +367,7 @@ describe("piece schema compatibility", () => {
             listResult("UVJh2ChHuLkknYrVet0Iu", "RetitleFlag"),
           ),
         )
-      ).toThrow();
+      ).toThrow("result.flag: ifc changed");
     });
   });
 

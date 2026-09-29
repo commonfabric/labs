@@ -11651,8 +11651,8 @@ export function* prepareBoundaryCommitSteps(
     // branch a position takes is decided by the value written there, so a
     // position holding nothing is on no branch — and an envelope persisted
     // for it ahead of a value would meet every later writer of another branch
-    // with the merge's refusal of divergent branch ifc. A union every branch of which carries the claim is marked:
-    // no value written there escapes it.
+    // with the merge's refusal of divergent branch ifc. A union every branch
+    // of which carries the claim is marked: no value written there escapes it.
     //
     // The marker is what routes a writer's later write, so what already
     // routes one decides where it goes: a declared entry (or a legacy one,
