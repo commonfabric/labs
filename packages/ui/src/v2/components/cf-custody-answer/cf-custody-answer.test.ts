@@ -337,6 +337,41 @@ describe("cf-custody-answer", () => {
     state.element.disconnectedCallback();
   });
 
+  it("keeps no request queued once the one it waited on publishes", async () => {
+    let release: (() => void) | undefined;
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () =>
+        new Promise((resolve) => {
+          release = () => {
+            slot.answer = "sushi";
+            resolve({ instance: "first", answer: "sushi" });
+          };
+        }),
+      () =>
+        Promise.reject(
+          new Error("Custody answer requires every seat to have sealed"),
+        ),
+    ], slot);
+    // A request made while another is out waits on it, and that one
+    // publishes, so there is nothing left to ask.
+    const first = state.element.accessForTestingOnly.publish();
+    const second = state.element.accessForTestingOnly.publish();
+    await settle();
+    release!();
+    await first;
+    await second;
+    expect(state.element.accessForTestingOnly.published).toBe(true);
+    expect(state.requests).toHaveLength(1);
+    // Rebound, with nothing subscribed: one request asks once, and nothing
+    // queued before the rebinding runs after it.
+    state.element.connected = false;
+    state.element.willUpdate(new Map([["policy", undefined]]));
+    slot.answer = undefined;
+    await state.element.accessForTestingOnly.publish();
+    expect(state.requests).toHaveLength(2);
+  });
+
   it("does not run a queued request once detached", async () => {
     let release: (() => void) | undefined;
     const state = setup([
