@@ -2305,6 +2305,9 @@ describe("Schema: CFC authoring aliases", () => {
         "{ k: T }",
         "{ readonly k?: T }",
         "{ [key: string]: T }",
+        '{ [K in "k"]: T }',
+        "{ m(): T }",
+        '{ ["k"]: T }',
       ]
     ) {
       it(`reports a recursion that grows through \`${argument}\`, which settles to no level`, async () => {
@@ -2319,6 +2322,185 @@ describe("Schema: CFC authoring aliases", () => {
         );
       });
     }
+
+    /** Each level of `value` down `next`, through local references. */
+    const levels = (
+      schema: object,
+      read: (value: Record<string, any>) => unknown,
+    ) => {
+      const { $defs, properties } = schema as Record<string, any>;
+      const definitions = ($defs ?? {}) as Record<string, any>;
+      const resolve = (at: any) =>
+        typeof at?.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()]
+          : at;
+      const seen: unknown[] = [];
+      let level = resolve(properties.value);
+      for (let depth = 0; depth < 4; depth++) {
+        seen.push(read(resolve(level.properties.value) ?? level));
+        level = resolve(level.properties.next);
+      }
+      return seen;
+    };
+
+    for (
+      const [spelling, declarations, expected] of [
+        [
+          "tuples another alias indexes",
+          `type First<X extends unknown[]> = Confidential<{ first: X[0] }, readonly ["b"]>;
+          type Sec<A extends unknown[], B extends unknown[]> = Confidential<{ value: First<A>; next?: Sec<B, A> }, readonly ["a"]>;
+          interface Holder { value: Sec<[string, number], [number, string]> }`,
+          ["string", "number", "string", "number"],
+        ],
+        [
+          "references to two declarations",
+          `interface One<U> { one: U }
+          interface Two<U> { two: U }
+          type Sec<A, B> = Confidential<{ value: A; next?: Sec<B, A> }, readonly ["a"]>;
+          type Outer<U> = Sec<One<U>, Two<U>>;
+          interface Holder { value: Outer<string> }`,
+          ["one", "two", "one", "two"],
+        ],
+        [
+          "an optional and a required member",
+          `type Sec<A, B> = Confidential<{ value: A; next?: Sec<B, A> }, readonly ["a"]>;
+          type Outer<U> = Sec<{ v?: U }, { v: U }>;
+          interface Holder { value: Outer<string> }`,
+          ["v?", "v", "v?", "v"],
+        ],
+        [
+          "an optional member and one named with the marker",
+          `type Sec<A, B> = Confidential<{ value: A; next?: Sec<B, A> }, readonly ["a"]>;
+          type Outer<U> = Sec<{ v?: U }, { "v?": U }>;
+          interface Holder { value: Outer<string> }`,
+          ["v?", "v?!", "v?", "v?!"],
+        ],
+      ] as const
+    ) {
+      it(`keeps each level's value in a recursion that swaps ${spelling}`, async () => {
+        // The two arguments differ only in what their written form holds, so
+        // each level is its own, and the recursion settles only where the
+        // same types come round again.
+        const { schema, diagnostics } = await generate(declarations);
+        const read = (value: Record<string, any>) => {
+          if (value.properties?.first) return value.properties.first.type;
+          const [name] = Object.keys(value.properties ?? {});
+          const required = (value.required ?? []).includes(name);
+          // A required member named `v?` reads `v?!`, an optional `v` `v?`.
+          return name === "v"
+            ? (required ? "v" : "v?")
+            : name === "v?"
+            ? (required ? "v?!" : "v??")
+            : name;
+        };
+        expect(levels(schema, read)).toEqual([...expected]);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("keeps each level's value in a recursion whose argument alternates", async () => {
+      // The payload is read from its instantiation, which leaves the written
+      // argument's `T` unbound, so that argument has no form.
+      const { schema, diagnostics } = await generate(`
+        type Sec<T> = Confidential<{ value: T; next?: Sec<T extends string ? number : string> }, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      expect(levels(schema, (value) => value.type)).toEqual([
+        "string",
+        "number",
+        "string",
+        "number",
+      ]);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("keeps each level's writer in a recursion that swaps its writer bindings", async () => {
+      // `f` and `g` have one type, so each level's instantiation is
+      // assignable both ways with the one before, though its writer is the
+      // other; a `typeof` argument settles nothing.
+      const { schema } = await generate(`
+        function f(x: string): void {}
+        function g(x: string): void {}
+        type Sec<T, A, B> = WriteAuthorizedBy<{ value: T; next?: Sec<T, B, A> }, A>;
+        interface Holder { value: Sec<string, typeof f, typeof g> }
+      `);
+      const definitions = (schema.$defs ?? {}) as Record<string, any>;
+      const resolve = (at: any) =>
+        typeof at?.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()]
+          : at;
+      const writers: unknown[] = [];
+      let level = resolve(schema.properties?.value);
+      for (let depth = 0; depth < 4; depth++) {
+        writers.push(
+          JSON.stringify(level.ifc.writeAuthorizedBy).includes('"f"')
+            ? "f"
+            : "g",
+        );
+        level = resolve(level.properties.next);
+      }
+      expect(writers).toEqual(["f", "g", "f", "g"]);
+    });
+
+    it("settles a recursion whose argument has a numeric member name", async () => {
+      // The union with another value loses the instantiation, so the
+      // arguments' written forms settle it.
+      const { schema, diagnostics } = await generate(`
+        type Sec<T> = Confidential<{ value: T; next: Sec<T | undefined> | number }, readonly ["a"]>;
+        type Outer<U> = Sec<{ 0: U }>;
+        interface Holder { value: Outer<string> }
+      `);
+      const definitions = Object.entries(schema.$defs ?? {});
+      expect(
+        definitions.some(([name, definition]) =>
+          JSON.stringify(definition).includes(`"#/$defs/${name}"`)
+        ),
+      ).toBe(true);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports a written mapped type, or an alias of one, over a bound parameter", async () => {
+      // A union payload is read under the bindings, and the checker has not
+      // instantiated a mapped type over a parameter.
+      const { value, diagnostics } = await generate(`
+        type M<X> = { [K in keyof X]: X[K] };
+        type Sec<T> = Confidential<
+          { written: { [K in keyof T]: T[K] }; aliased: M<T | undefined> } | { n: number },
+          readonly ["a"]
+        >;
+        interface Holder { value: Sec<{ a: string }> }
+      `);
+      expect(value).toBeDefined();
+      expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
+        "schema-type:unread",
+      );
+    });
+
+    it("reads a mapped alias over a type that is its own argument", async () => {
+      // `Rec` is `Box<Rec>`, so its type arguments hold it again.
+      const { value, diagnostics } = await generate(`
+        interface Box<U> { inner?: U }
+        type Rec = Box<Rec>;
+        type M<X> = { [K in keyof X]: X[K] };
+        type Sec<T> = Confidential<{ value: T; m: M<Rec> } | { n: number }, readonly ["a"]>;
+        interface Holder { value: Sec<string> }
+      `);
+      expect(value).toBeDefined();
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a chain through an identity alias that leaves its argument to its default", async () => {
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Id<X = Sec<string>> = X;
+        interface Holder { value: Id }
+      `);
+      expect(value).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
 
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`

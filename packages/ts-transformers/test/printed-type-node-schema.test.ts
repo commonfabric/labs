@@ -1201,6 +1201,11 @@ export default pattern<{ a: Sec<[string, number], [number, string]> }>(({ a }) =
             "Sec<{ v?: U }, { v: U }>",
             ["v:", "v:v", "v:", "v:v"],
           ],
+          [
+            "an optional member and one named with the marker",
+            'Sec<{ v?: U }, { "v?": U }>',
+            ["v:", "v?:v?", "v:", "v?:v?"],
+          ],
         ] as const
       ) {
         it(`keeps each level's value in a recursion that swaps ${spelling}, on both sides`, async () => {

@@ -1073,8 +1073,10 @@ Mechanics:
   type the checker gives it, by identity, a union or an intersection as its
   members flattened, a reference as the declaration it names and its
   arguments' forms, and an array, a tuple, `keyof`, `readonly` or a type
-  literal as that construct and its parts' forms, names and optional or
-  readonly modifiers included. Any other node holding a type parameter has
+  literal as that construct and its parts' forms, each member's name kept
+  apart from its optional and readonly modifiers, so `{ v?: U }` and
+  `{ "v?": U }` differ, and a numeric name apart from a string one. Any other
+  node holding a type parameter has
   no form and settles nothing. The same reference over the same types is the
   same reading. That
   settles a recursion wherever the reading has lost the instantiation at its
