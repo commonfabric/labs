@@ -10,7 +10,6 @@ import { join } from "@std/path";
 import {
   assertRunscCfcPolicyForMode,
   canonicalHostPath,
-  currentUid,
   defaultDarwinRootfs,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
@@ -1555,7 +1554,11 @@ Deno.test("the default scratch parent must be this user's private directory", as
     const mine = (await Deno.lstat(fresh)).uid!;
     await verifyPrivateScratchParent(fresh, () => Promise.resolve(mine));
     await assertRejects(
-      () => verifyPrivateScratchParent(fresh, () => Promise.resolve(mine + 1)),
+      () =>
+        verifyPrivateScratchParent(
+          fresh,
+          (path) => Promise.resolve(path === fresh ? mine + 1 : mine),
+        ),
       Error,
       "not a private directory of this user",
     );
@@ -1564,14 +1567,11 @@ Deno.test("the default scratch parent must be this user's private directory", as
       () =>
         verifyPrivateScratchParent(
           fresh,
-          () => Promise.reject(new Error("cannot tell which user this is")),
+          () => Promise.reject(new Error("cannot tell whose this is")),
         ),
       Error,
-      "cannot tell which user this is",
+      "cannot tell whose this is",
     );
-    // And the way this process learns who it is gives the owner of what it
-    // has just made, with the sys permission or without it.
-    assertEquals(await currentUid(), mine);
   } finally {
     await Deno.remove(root, { recursive: true });
   }

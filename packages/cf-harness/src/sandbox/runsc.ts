@@ -153,7 +153,8 @@ export interface RunscSandboxConfig {
   scratchDir: string;
   /**
    * Set when `scratchDir` is the default: its parent, which the runtime
-   * creates 0700 or verifies is this user's and private before first use.
+   * creates 0700 when absent and verifies is this user's and private before
+   * first use.
    */
   scratchParentToVerify?: string;
   /** Distinguishes this run's sessions from every other run's. */
@@ -724,80 +725,80 @@ interface SessionState {
   ended: boolean;
 }
 
-/**
- * This user's id, or null where the platform has none (Windows).
- *
- * `Deno.uid` needs the sys permission, which the harness is not always run
- * with: its own test task grants none, and the check below threw there. So
- * where that permission is missing the id is asked of `id -u`, which needs
- * the run permission every sandbox driver already depends on, as the docker
- * driver does for the container's user. It is run by its full path, because
- * what it answers decides whose directory is trusted. An id that cannot be
- * had is an error and never null: null means "nothing to compare", and would
- * pass a directory that belongs to someone else.
- */
-export const currentUid = async (): Promise<number | null> => {
-  try {
-    return Deno.uid();
-  } catch (error) {
-    if (
-      !(error instanceof Deno.errors.NotCapable) &&
-      !(error instanceof Deno.errors.PermissionDenied)
-    ) {
-      throw error;
-    }
-  }
-  let text = "";
-  try {
-    const result = await new Deno.Command("/usr/bin/id", {
-      args: ["-u"],
-      stdin: "null",
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (result.success) text = new TextDecoder().decode(result.stdout).trim();
-  } catch {
-    // Reported below, with the other ways of having no answer.
-  }
-  if (!/^\d+$/.test(text)) {
-    throw new Error(
-      "cannot tell which user this is: Deno.uid needs the sys permission and /usr/bin/id -u gave no id",
-    );
-  }
-  return Number(text);
-};
+/** Returns the owner of the entry at `path`, read without following a link. */
+const ownerOfEntry = async (path: string): Promise<number | null> =>
+  (await Deno.lstat(path)).uid;
 
 /**
- * The scratch parent must be this user's alone. Created 0700 when absent;
- * when present it must be a real directory (not a symlink) owned by this
- * user with no group or other access, or the run is refused: whoever owns
- * the parent can swap a bundle or a result under the run. `whoAmI` is how
- * this user's id is had, for the tests.
+ * Verifies that the scratch parent is this user's alone, creating it with
+ * mode 0700 when it is absent: whoever owns the parent, or may write to it,
+ * can swap a bundle or a result under the run.
+ *
+ * This user is whoever owns what this process makes. The function makes an
+ * empty entry in the parent, compares its owner with the parent's, and
+ * removes it again, so the user compared is the one the run's own files will
+ * belong to, whichever user started the process. The entry is made only in
+ * a parent that is a directory with no access for group or others, and is
+ * removed whether the parent is then accepted or not.
+ *
+ * `ownerOf` reads the owner of an entry, for the tests.
+ *
+ * @throws When the parent is a symbolic link, is not a directory, has any
+ * access for group or others, belongs to another user than what this process
+ * makes in it, or admits no entry made by this process.
  */
 export const verifyPrivateScratchParent = async (
   parent: string,
-  whoAmI: () => Promise<number | null> = currentUid,
+  ownerOf: (path: string) => Promise<number | null> = ownerOfEntry,
 ): Promise<void> => {
   await Deno.mkdir(dirnameHost(parent), { recursive: true }).catch(() =>
     undefined
   );
   try {
     await Deno.mkdir(parent, { mode: 0o700 });
-    return;
   } catch (error) {
     if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
   }
   const info = await Deno.lstat(parent);
-  const uid = await whoAmI();
+  const mode = info.mode === null ? "unknown" : (info.mode & 0o777).toString(8);
+  const refusal = (found: string): Error =>
+    new Error(
+      `sandbox scratch parent ${parent} is not a private directory of this user (${found}); remove it or set TMPDIR to a private directory`,
+    );
   if (
     !info.isDirectory || info.isSymlink ||
-    (uid !== null && info.uid !== null && info.uid !== uid) ||
     (info.mode !== null && (info.mode & 0o077) !== 0)
   ) {
-    throw new Error(
-      `sandbox scratch parent ${parent} is not a private directory of this user (owner ${info.uid}, mode ${
-        info.mode === null ? "unknown" : (info.mode & 0o777).toString(8)
-      }); remove it or set TMPDIR to a private directory`,
+    const kind = info.isSymlink
+      ? "a symbolic link, "
+      : info.isDirectory
+      ? ""
+      : "not a directory, ";
+    throw refusal(`${kind}owner ${info.uid}, mode ${mode}`);
+  }
+  // A directory, which `mkdir` makes or fails to make and never follows a
+  // link to, under a name nothing else in the parent has.
+  const probe = joinHostPath(parent, `.owner-probe-${crypto.randomUUID()}`);
+  try {
+    await Deno.mkdir(probe, { mode: 0o700 });
+  } catch (error) {
+    throw refusal(
+      `owner ${info.uid}, mode ${mode}; this process could not make an entry in it: ${
+        errorText(error)
+      }`,
+    );
+  }
+  let parentOwner: number | null;
+  let madeOwner: number | null;
+  try {
+    parentOwner = await ownerOf(parent);
+    madeOwner = await ownerOf(probe);
+  } finally {
+    await Deno.remove(probe);
+  }
+  if (madeOwner !== parentOwner) {
+    throw refusal(
+      `owner ${parentOwner}, mode ${mode}; what this process makes there is owned by ${madeOwner}`,
     );
   }
 };
