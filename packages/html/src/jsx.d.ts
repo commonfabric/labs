@@ -3006,6 +3006,7 @@ interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
 interface CFCustodySealElement extends CFHTMLElement {}
+interface CFCustodyAnswerElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
@@ -4349,6 +4350,17 @@ interface CFCustodySealAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-sealed"?: EventHandler<{ instance: string }>;
 }
 
+interface CFCustodyAnswerAttributes<T> extends CFHTMLAttributes<T> {
+  /** The room's terms document; its space is the room space. */
+  "$terms"?: CellLike<unknown>;
+  /** A cell holding the room's custody policy reference. */
+  "$policy"?: CellLike<unknown>;
+  /** The room's projected answer, which the host publishes once and shows. */
+  "$output"?: CellLike<unknown>;
+  /** Fires once the answer is published; `instance` names it when known. */
+  "oncf-published"?: EventHandler<{ instance?: string }>;
+}
+
 interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
   /** Persisted creator identity whose attested owner is checked by the host. */
   "$originator"?: CellLike<unknown>;
@@ -5406,6 +5418,10 @@ declare global {
       "cf-custody-seal": CFDOM.DetailedHTMLProps<
         CFCustodySealAttributes<CFCustodySealElement>,
         CFCustodySealElement
+      >;
+      "cf-custody-answer": CFDOM.DetailedHTMLProps<
+        CFCustodyAnswerAttributes<CFCustodyAnswerElement>,
+        CFCustodyAnswerElement
       >;
       "cf-owner-view": CFDOM.DetailedHTMLProps<
         CFOwnerViewAttributes<CFHTMLElement>,

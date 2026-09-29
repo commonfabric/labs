@@ -46,7 +46,10 @@ import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
 import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
-import type { SandboxRuntime } from "../sandbox/types.ts";
+import type {
+  SandboxRuntime,
+  SandboxRuntimeDescription,
+} from "../sandbox/types.ts";
 
 export interface HarnessToolContext {
   runId: string;
@@ -342,6 +345,17 @@ export interface HarnessToolContext {
 
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
   descriptor: HarnessToolDescriptor;
+
+  /**
+   * The descriptor a run on this sandbox runtime offers the model, for a
+   * tool whose inputs depend on what the runtime can do. A tool without it
+   * offers `descriptor` to every run. Everything that is not the model's
+   * view of the tool (its id, its effect class) is read from `descriptor`.
+   */
+  descriptorForRuntime?(
+    runtime: SandboxRuntimeDescription,
+  ): HarnessToolDescriptor;
+
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }
 

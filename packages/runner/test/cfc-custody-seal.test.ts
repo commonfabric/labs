@@ -15,6 +15,7 @@ import {
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   commitCustodySeal,
+  CUSTODY_SEAL_READER,
   type CustodyRoom,
   type CustodySealConsent,
   type CustodySealOptions,
@@ -537,11 +538,32 @@ const beforeEntry = (runtime: Runtime, step: () => Promise<void>) => {
   }) as Runtime["editWithRetry"];
 };
 
-const witnessed = {
-  type: CFC_ATOM_TYPE.TransformedBy,
-  identity: PROJECT,
-  inputWitness: sealedBy,
+/** Whether `atom` is the seal's `TransformedBy`, for whichever instance. */
+const isSealedBy = (atom: unknown): boolean => {
+  const record = atom as { type?: unknown; identity?: Record<string, unknown> };
+  return record?.type === CFC_ATOM_TYPE.TransformedBy &&
+    record.identity?.kind === "builtin" &&
+    record.identity?.builtinId === "cfc-custody-seal" &&
+    typeof record.identity?.instance === "string";
 };
+
+/**
+ * Whether `integrity` holds the projector's `TransformedBy` witnessing that
+ * everything it read was the seal's.
+ */
+const hasWitnessed = (integrity: readonly unknown[]): boolean =>
+  integrity.some((atom) => {
+    const record = atom as {
+      type?: unknown;
+      identity?: unknown;
+      inputWitness?: unknown;
+    };
+    const identity = record.identity as Record<string, unknown> | undefined;
+    return record.type === CFC_ATOM_TYPE.TransformedBy &&
+      identity?.symbol === PROJECT.symbol &&
+      identity?.moduleIdentity === MODULE &&
+      isSealedBy(record.inputWitness);
+  });
 
 describe("cfc-custody-seal", () => {
   describe("the box", () => {
@@ -562,7 +584,7 @@ describe("cfc-custody-seal", () => {
         expect(paths).toContain("");
         expect(paths).toContain(entryKey);
         for (const entry of valueEntries) {
-          expect(entry.label.integrity).toContainEqual(sealedBy);
+          expect((entry.label.integrity ?? []).some(isSealedBy)).toBe(true);
         }
       } finally {
         await fixture.dispose();
@@ -576,7 +598,7 @@ describe("cfc-custody-seal", () => {
         await fixture.seal(bob);
         await fixture.seal(carol);
         const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(true);
       } finally {
         await fixture.dispose();
       }
@@ -618,10 +640,10 @@ describe("cfc-custody-seal", () => {
           entryKey,
         );
         for (const entry of valueEntries) {
-          expect(entry.label.integrity).toContainEqual(sealedBy);
+          expect((entry.label.integrity ?? []).some(isSealedBy)).toBe(true);
         }
         const integrity = await project(fixture, carol, box);
-        expect(integrity).toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(true);
       } finally {
         await fixture.dispose();
       }
@@ -654,7 +676,7 @@ describe("cfc-custody-seal", () => {
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
         });
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -804,7 +826,7 @@ describe("cfc-custody-seal", () => {
         );
         expect(local.getRaw()).toEqual(before);
         // The projector still reads the box the seal wrote.
-        expect(await project(fixture, carol, box)).toContainEqual(witnessed);
+        expect(hasWitnessed(await project(fixture, carol, box))).toBe(true);
       } finally {
         await fixture.dispose();
       }
@@ -990,7 +1012,7 @@ describe("cfc-custody-seal", () => {
         await fixture.seal(bob, bobStance, binding);
         const integrity = await projectThrough(fixture, carol, binding);
         expect(projectedChoices).toEqual(honestCount);
-        expect(integrity).toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(true);
       } finally {
         await fixture.dispose();
       }
@@ -1020,7 +1042,7 @@ describe("cfc-custody-seal", () => {
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
         });
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -1076,7 +1098,7 @@ describe("cfc-custody-seal", () => {
         expect(await pointAt(labeled)).toBeUndefined();
         const integrity = await projectThrough(fixture, carol, binding);
         expect(projectedChoices).toEqual(bobTwice);
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -1101,7 +1123,7 @@ describe("cfc-custody-seal", () => {
         );
         const integrity = await projectThrough(fixture, carol, binding);
         expect(projectedChoices).toEqual(honestCount);
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -1133,7 +1155,7 @@ describe("cfc-custody-seal", () => {
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
         });
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -1169,8 +1191,11 @@ describe("cfc-custody-seal", () => {
         // The seal wrote and stamped the slot the redirect leads to. Each
         // projection writes an output of its own, so an answer equal to an
         // earlier one is still written and stamped.
-        expect(await projectThrough(fixture, carol, holder, "from-holder"))
-          .toContainEqual(witnessed);
+        expect(
+          hasWitnessed(
+            await projectThrough(fixture, carol, holder, "from-holder"),
+          ),
+        ).toBe(true);
         expect(projectedChoices).toEqual(honestCount);
         const record = runtime.getCell(S, "redirected-record");
         await writeAsOtherCode(fixture, mallory, record, (runtime, tx) => {
@@ -1200,7 +1225,7 @@ describe("cfc-custody-seal", () => {
           type: CFC_ATOM_TYPE.TransformedBy,
           identity: PROJECT,
         });
-        expect(repeated).not.toContainEqual(witnessed);
+        expect(hasWitnessed(repeated)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -1247,6 +1272,38 @@ describe("cfc-custody-seal", () => {
         expect((entries[entryKey] as { stance: unknown }).stance).toEqual(
           bobStance,
         );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell in a document that does not exist, such as the answer slot", async () => {
+      // An absent document may be the address of a custody document the seal
+      // has yet to write; a link the seal wrote there would pass for its own
+      // write and block what it writes there later.
+      const fixture = await setup();
+      try {
+        const { instance } = await fixture.seal(
+          alice,
+          honestStance,
+          roomBox(fixture),
+        );
+        const runtime = fixture.runtimes.get(bob)!;
+        const slot = runtime.getCell(S, {
+          custodyAnswer: { policy: P, instance },
+        });
+        for (
+          const binding of [
+            slot,
+            slot.key("answer"),
+            runtime.getCell(S, "absent"),
+          ]
+        ) {
+          await expect(fixture.seal(bob, bobStance, binding)).rejects
+            .toThrow("only from a cell that holds nothing else");
+        }
+        await slot.sync();
+        expect(slot.getRaw()).toBeUndefined();
       } finally {
         await fixture.dispose();
       }
@@ -1320,7 +1377,7 @@ describe("cfc-custody-seal", () => {
           }),
         );
         expect(projectedChoices).toEqual(honestCount);
-        expect(integrity).not.toContainEqual(witnessed);
+        expect(hasWitnessed(integrity)).toBe(false);
       } finally {
         await fixture.dispose();
       }
@@ -2895,8 +2952,12 @@ describe("cfc-custody-seal", () => {
 
     it("previews whether the room's policy witnesses its release", async () => {
       // A policy whose one rule releases what its projector computes, named
-      // by identity alone or with the seal's witness.
-      const policyReleasing = (witnessed: boolean) =>
+      // by identity alone or with the seal's witness, to the room's readers
+      // or to the seal alone. Only the witnessed release to the seal bounds
+      // what a member learns: a projection the room's readers can read says,
+      // by keeping or losing its stamp, whether input of a member's choosing
+      // yields the released answer.
+      const policyReleasing = (witnessed: boolean, toSeal: boolean) =>
         buildCfcPolicyArtifactManifest({
           formatVersion: 1,
           moduleIdentity: MODULE,
@@ -2917,14 +2978,23 @@ describe("cfc-custody-seal", () => {
                   ...(witnessed ? { inputWitness: sealedBy } : {}),
                 }],
               },
-              postCondition: { confidentiality: [], integrity: [] },
+              postCondition: {
+                confidentiality: toSeal ? [CUSTODY_SEAL_READER] : [],
+                integrity: [],
+              },
             }],
             dependencies: { authorityOnly: [], dataBearing: [] },
             integrityRequirements: {},
           },
         } as never);
-      for (const witnessed of [false, true]) {
-        const artifact = policyReleasing(witnessed);
+      for (
+        const [witnessed, toSeal] of [
+          [false, true],
+          [true, false],
+          [true, true],
+        ]
+      ) {
+        const artifact = policyReleasing(witnessed, toSeal);
         const policy = policyOf(artifact);
         const fixture = await setup({
           trust: {
@@ -2958,7 +3028,7 @@ describe("cfc-custody-seal", () => {
             draft,
             fixture.room(alice, policy),
           );
-          expect(prepared.witnessedRelease).toBe(witnessed);
+          expect(prepared.witnessedRelease).toBe(witnessed && toSeal);
         } finally {
           await fixture.dispose();
         }

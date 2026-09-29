@@ -217,7 +217,11 @@ import {
   scrubBareFabricIdentifiers,
   scrubBareFabricIdentifiersDeep,
 } from "./fabric-identifier-scrub.ts";
-import { BUILTIN_TOOLS, getBuiltinTool } from "./tools/registry.ts";
+import {
+  BUILTIN_TOOLS,
+  builtinToolDescriptorForRuntime,
+  getBuiltinTool,
+} from "./tools/registry.ts";
 import { isSearchPatternsToolSuccessOutput } from "./tools/search-patterns.ts";
 import {
   isResearchToolSuccessOutput,
@@ -3142,7 +3146,7 @@ export class CfHarnessPromptLoop {
       // it — the acquiring parent, or a child sharing a handed-in runtime —
       // has nothing to run and is not backed.
       acquiredSkillsAvailable: acquiredSkillScriptBacking(
-        this.engine.ownedSandboxConfig,
+        this.engine.ownedSandboxConfig ?? this.engine.ownedRunscSandboxConfig,
         this.engine.getRunState().acquiredSkills?.skills,
       ),
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
@@ -3886,6 +3890,9 @@ export class CfHarnessPromptLoop {
           });
         }
         let response;
+        // What the run's sandbox can do decides which inputs a tool offers
+        // (bash takes `session` only where there are sessions).
+        const sandboxDescription = this.engine.sandbox.describe();
         try {
           response = await this.modelClient.complete({
             model,
@@ -3894,7 +3901,9 @@ export class CfHarnessPromptLoop {
               ? []
               : BUILTIN_TOOLS.filter((tool) =>
                 this.#allowedToolIds.has(tool.descriptor.toolId)
-              ).map((tool) => tool.descriptor),
+              ).map((tool) =>
+                builtinToolDescriptorForRuntime(tool, sandboxDescription)
+              ),
             nativeModelToolIds: finalizing ? [] : this.#nativeModelToolIds,
             runId: this.engine.getRunState().runId,
             ...(this.#cacheAffinityKey !== undefined
@@ -5663,12 +5672,14 @@ export class CfHarnessPromptLoop {
     const childEngine = new CfHarnessEngine({
       runId: childRunId,
       lineage: childLineage,
-      // A child that mounts an acquired skill gets a sandbox of its own, built
-      // from this run's configuration plus that one mount; every other child
-      // shares this run's runtime.
+      // What sandbox a child gets depends on how this run's was made: see
+      // `childSandboxOptions`. Under the direct runsc driver every child builds
+      // a runtime of its own; under Docker a child shares this run's unless it
+      // mounts an acquired skill.
       ...childSandboxOptions({
         sandbox: this.engine.sandbox,
         ownedSandboxConfig: this.engine.ownedSandboxConfig,
+        ownedRunscSandboxConfig: this.engine.ownedRunscSandboxConfig,
         configuredSandbox: this.engine.config.sandbox,
       }, childAcquiredSkill),
       // The parent's own record, narrowed to the one skill. Narrowed rather

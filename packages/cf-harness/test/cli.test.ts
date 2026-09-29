@@ -7954,3 +7954,125 @@ Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no
     );
   }
 });
+
+Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc settings", async () => {
+  const fromFlags = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--sandbox-runtime",
+      "runsc",
+      "--sandbox-rootfs",
+      "/images/kitchensink",
+      "--sandbox-cfc-policy",
+      "/policy.json",
+    ],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+      },
+    },
+  );
+  if ("help" in fromFlags) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromFlags.sandboxRuntimeKind, "runsc");
+  assertEquals(fromFlags.sandboxRootfs, "/images/kitchensink");
+  assertEquals(fromFlags.sandboxCfcPolicy, "/policy.json");
+  assertEquals(fromFlags.sandboxRunscBinary, "/opt/runsc");
+  // docker's network vocabulary maps onto runsc's: bridge is runsc's netstack.
+  assertEquals(fromFlags.sandboxRunscNetworkMode, "sandbox");
+
+  const fromEnv = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_SANDBOX_ROOTFS: "/r",
+        CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "none",
+      },
+    },
+  );
+  if ("help" in fromEnv) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromEnv.sandboxRuntimeKind, "runsc");
+  assertEquals(fromEnv.sandboxRootfs, "/r");
+  assertEquals(fromEnv.sandboxCfcPolicy, "/p");
+  assertEquals(fromEnv.sandboxRunscNetworkMode, "none");
+
+  const unset = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in unset) {
+    throw new Error("expected config result");
+  }
+  assertEquals(unset.sandboxRuntimeKind, undefined);
+  assertEquals(unset.sandboxRunscNetworkMode, undefined);
+
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--sandbox-runtime", "podman"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "sandbox runtime must be one of docker, runsc",
+  );
+});
+
+Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime", async () => {
+  const defaultPolicy = "/home/u/.local/share/runsc-cfc/cfc-policy.json";
+  const parse = (
+    runtime: "runsc" | "docker",
+    present: boolean,
+  ) =>
+    parseCfHarnessCliArgs(
+      [
+        "hi",
+        "--sandbox-runtime",
+        runtime,
+        "--sandbox-rootfs",
+        "/images/kitchensink",
+      ],
+      {
+        cwd: "/tmp/project",
+        env: { HOME: "/home/u" },
+        pathExists: (path: string) =>
+          Promise.resolve(present && path === defaultPolicy),
+      },
+    );
+  const found = await parse("runsc", true);
+  if ("help" in found) throw new Error("expected config result");
+  // The usage text promises this default, so it is looked up.
+  assertEquals(found.sandboxCfcPolicy, defaultPolicy);
+  const absent = await parse("runsc", false);
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.sandboxCfcPolicy, undefined);
+  // The docker runtime has its own policy registration; the default is
+  // runsc's alone.
+  const docker = await parse("docker", true);
+  if ("help" in docker) throw new Error("expected config result");
+  assertEquals(docker.sandboxCfcPolicy, undefined);
+});
+
+Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["hi", "--sandbox-runtime", "runsc", "--sandbox-rootfs", "/images/k"],
+        {
+          cwd: "/tmp/project",
+          env: { CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish" },
+        },
+      ),
+    Error,
+    "must be one of none, bridge, or host",
+  );
+});

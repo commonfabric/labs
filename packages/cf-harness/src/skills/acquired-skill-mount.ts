@@ -10,10 +10,12 @@
  */
 
 import type {
+  DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
   SandboxRuntime,
   SandboxRuntimeMountDescription,
 } from "../sandbox/types.ts";
+import type { RunscNetworkMode, RunscSandboxConfig } from "../sandbox/runsc.ts";
 import type {
   HarnessAcquiredSkill,
   HarnessAllowedSkillScript,
@@ -73,35 +75,82 @@ export const acquiredSkillForHandle = (
 
 /**
  * The sandbox options a child engine is built with, given the acquired skill
- * it was handed.
+ * it was handed. Which of three arrangements the child gets is decided by how
+ * its parent's runtime came to be.
  *
- * A child normally shares its parent's sandbox runtime — the same container
- * configuration, and the object that executes in it. A child that mounts an
- * acquired skill cannot: the mount is a property of the container, so a
- * runtime already built against the parent's mounts would ignore any
+ * Where the parent built the direct runsc runtime, every child builds a
+ * runtime of its own, acquired skill or not. It is given the settings the
+ * parent's engine built its runtime from, as engine options, and no runtime.
+ * A direct runtime holds its named sessions and counts them against its cap,
+ * so a child sharing one would exec into its parent's sessions and spend its
+ * parent's cap.
+ *
+ * Where the parent built the Docker runtime, a child shares it — the same
+ * container configuration, and the object that executes in it — unless the
+ * child mounts an acquired skill. The mount is a property of the container,
+ * so a runtime already built against the parent's mounts would ignore any
  * configuration handed alongside it and the skill's directory would never
  * appear. Such a child is given a configuration and no runtime, and builds its
  * own from it — which also keeps the CFC transport floor, since an engine
  * checks that only for a sandbox it built.
  *
- * The parent's own configuration is what is extended, so the child differs
- * from it in exactly one mount: the acquired skill's host root, read-only,
- * because a script the child could rewrite is a script whose acquisition
- * digest says nothing about what ran. Where the parent's runtime was handed in
- * rather than built, there is no configuration to extend and the child shares,
- * acquired skill or not.
+ * Where the parent's runtime was handed in rather than built, whichever kind
+ * it is, there is no configuration to extend and the child shares it, acquired
+ * skill or not.
+ *
+ * A child that builds has its parent's mounts and at most one more: the
+ * acquired skill's host root, read-only, because a script the child could
+ * rewrite is a script whose acquisition digest says nothing about what ran.
+ * Mounts already carrying that one are handed on as they stand.
  */
 export const childSandboxOptions = (
   parent: {
     sandbox: SandboxRuntime;
     ownedSandboxConfig?: DockerRunscSandboxConfig;
+    /** The parent's direct-runsc configuration, when that is what it runs. */
+    ownedRunscSandboxConfig?: RunscSandboxConfig;
     configuredSandbox?: DockerRunscSandboxConfig;
   },
   acquired: HarnessAcquiredSkill | undefined,
 ): {
   sandboxRuntime?: SandboxRuntime;
   sandbox?: DockerRunscSandboxConfig;
+  sandboxRuntimeKind?: "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
+  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
+  if (parent.ownedRunscSandboxConfig !== undefined) {
+    // The direct runtime: every child gets a runtime of its own, which its
+    // engine builds from the options returned here. They carry the settings
+    // the parent's engine built from, plus the skill mount when there is one.
+    const runsc = parent.ownedRunscSandboxConfig;
+    const mounts = acquired === undefined ||
+        acquiredSkillMountBacks(runsc.additionalMounts, acquired)
+      ? runsc.additionalMounts
+      : [
+        ...runsc.additionalMounts,
+        {
+          kind: "host-bind" as const,
+          name: ACQUIRED_SKILL_MOUNT_NAME,
+          hostPath: acquired.hostRoot,
+          sandboxPath: acquired.sandboxRoot,
+          readOnly: true,
+        },
+      ];
+    return {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: runsc.rootfs,
+      ...(runsc.cfcPolicyPath !== undefined
+        ? { sandboxCfcPolicy: runsc.cfcPolicyPath }
+        : {}),
+      sandboxRunscBinary: runsc.runscBinary,
+      sandboxRunscNetworkMode: runsc.networkMode,
+      additionalMounts: mounts,
+    };
+  }
   if (acquired === undefined || parent.ownedSandboxConfig === undefined) {
     return {
       sandboxRuntime: parent.sandbox,
@@ -200,7 +249,9 @@ export const acquiredSkillScriptSurface = (
  * neither receives no tool.
  */
 export const acquiredSkillScriptBacking = (
-  ownedSandboxConfig: DockerRunscSandboxConfig | undefined,
+  ownedSandboxConfig:
+    | Pick<DockerRunscSandboxConfig, "additionalMounts">
+    | undefined,
   acquiredSkills: readonly HarnessAcquiredSkill[] | undefined,
 ): boolean =>
   (acquiredSkills ?? []).some((skill) =>

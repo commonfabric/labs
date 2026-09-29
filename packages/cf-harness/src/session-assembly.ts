@@ -20,6 +20,7 @@
  * nowhere else.
  */
 
+import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
 import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
@@ -87,6 +88,16 @@ export interface HarnessSessionConfig {
 
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+
+  /**
+   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
+   * honoured. Absent means the docker sandbox.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
 
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
@@ -276,6 +287,21 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxDockerRuntime !== undefined
       ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
+      : {}),
+    ...(config.sandboxRuntimeKind !== undefined
+      ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
+      : {}),
+    ...(config.sandboxRootfs !== undefined
+      ? { sandboxRootfs: config.sandboxRootfs }
+      : {}),
+    ...(config.sandboxCfcPolicy !== undefined
+      ? { sandboxCfcPolicy: config.sandboxCfcPolicy }
+      : {}),
+    ...(config.sandboxRunscBinary !== undefined
+      ? { sandboxRunscBinary: config.sandboxRunscBinary }
+      : {}),
+    ...(config.sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
       : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }

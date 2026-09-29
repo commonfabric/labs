@@ -65,6 +65,11 @@ import {
   clauseAlternatives,
   clausesEqual,
 } from "./clause.ts";
+import {
+  evaluateExchangeRules,
+  modulePolicyRecordId,
+} from "./exchange-eval.ts";
+import { cfcLabelViewForResolvedCellWithStatus } from "./label-view.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { cfcPolicyManifestDocId, type PolicyTemplateV1 } from "./policy.ts";
@@ -196,12 +201,15 @@ export interface PreparedCustodySeal {
 
   /**
    * Whether every release rule of the room's policy requires that everything
-   * confidential its releasing code read was written by this seal: an
+   * confidential its releasing code read was written by this seal (an
    * integrity guard on `TransformedBy` with the seal's builtin identity as its
-   * input witness. When it is `false`, a member's own code can run the
-   * room's releasing code over the actor's entry and values it made up, and
-   * learn the entry one answer at a time; the confirmation must say so rather
-   * than state a bound on what an answer reveals.
+   * input witness), and releases what it matches to the seal alone
+   * (`releasesOnlyToSeal`), which publishes it once per instance. When it is
+   * `false`, a member's own code can run the room's releasing code over the
+   * actor's entry and values it made up, or read a projection whose stamp
+   * says whether such values yield the released answer, and learn the entry
+   * one answer at a time; the confirmation must say so rather than state a
+   * bound on what an answer reveals.
    */
   readonly witnessedRelease: boolean;
 
@@ -310,10 +318,34 @@ const MAX_STANCE_ARRAY_ITEMS = 64;
 
 const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
 
+/** The witness a release rule names: the seal, of any instance. */
 const SEALED_BY = {
   type: CFC_ATOM_TYPE.TransformedBy,
   identity: { kind: "builtin", builtinId: CUSTODY_SEAL_WRITER },
 };
+
+/** The seal's identity when it acts for `instance`. */
+const sealIdentity = (instance: string) => ({
+  kind: "builtin" as const,
+  builtinId: CUSTODY_SEAL_WRITER,
+  instance,
+});
+
+/**
+ * What the seal's writes for `instance` carry. A witness over them names the
+ * instance, so an answer computed over another instance's box is told apart
+ * from one computed over this one's.
+ */
+const sealedFor = (instance: string) => ({
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: sealIdentity(instance),
+});
+
+/** Whether `atom` is the seal's `TransformedBy`, for any instance. */
+const isSealStamp = (atom: unknown): boolean =>
+  isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+  isObjectNotArray(atom.identity) && atom.identity.kind === "builtin" &&
+  atom.identity.builtinId === CUSTODY_SEAL_WRITER;
 
 /** Whether `value` is a record with exactly the keys named. */
 const hasExactKeys = (
@@ -719,6 +751,30 @@ const readEvidence = (tx: IExtendedStorageTransaction): ReadEvidence[] => {
 };
 
 /**
+ * The one reader a custody room's rule releases its projection to: the seal
+ * itself. No member's runtime holds a `Builtin` atom as a reader, so a clause
+ * a rule widens with it is still read by no member. A room's projection is
+ * reactive, and a member's code can point it at input of its own; were the
+ * projection readable, an unchanged answer keeping its earlier witnessed
+ * stamp would tell that code whether its input yields the released answer.
+ * Released only to the seal, the projection is read by
+ * {@link publishCustodyAnswer} alone, which declassifies it once per instance
+ * into the instance's answer slot.
+ */
+export const CUSTODY_SEAL_READER = cfcAtom.builtin(CUSTODY_SEAL_WRITER);
+
+/**
+ * Whether every exchange rule of `template` releases what it matches to the
+ * seal alone (`addAlternatives: [CUSTODY_SEAL_READER]`), so that nothing its
+ * rules release is readable by a member. A policy with no rules releases
+ * nothing and passes, as it does {@link releaseRequiresSealWitness}.
+ */
+export const releasesOnlyToSeal = (template: PolicyTemplateV1): boolean =>
+  template.exchangeRules.every((rule) =>
+    deepEqual(rule.postCondition.confidentiality, [CUSTODY_SEAL_READER])
+  );
+
+/**
  * Whether every exchange rule of `template` guards on the code that computed
  * what it releases, and every such `TransformedBy` guard names the seal's own
  * `TransformedBy{builtin cfc-custody-seal}` as its input witness, so that no
@@ -789,6 +845,7 @@ const containsVariable = (pattern: unknown): boolean =>
 const absentOrSealed = (
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
+  instance: string,
 ): boolean => {
   if (
     tx.readValueOrThrow({ ...link, path: [] }, {
@@ -799,7 +856,9 @@ const absentOrSealed = (
   return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? []).some(
     (entry) =>
       entry.path.length === 0 && entry.origin === "derived" &&
-      (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY)),
+      (entry.label.integrity ?? []).some((atom) =>
+        deepEqual(atom, sealedFor(instance))
+      ),
   );
 };
 
@@ -947,7 +1006,7 @@ const linkRoomToBox = (
     scope: destination.scope,
   })?.labelMap.entries ?? []).some((entry) =>
     entry.path.length === 0 && entry.origin === "derived" &&
-    (entry.label.integrity ?? []).some((atom) => deepEqual(atom, SEALED_BY))
+    (entry.label.integrity ?? []).some(isSealStamp)
   );
   const current = tx.readValueOrThrow(destination, {
     meta: internalVerifierRead,
@@ -958,7 +1017,7 @@ const linkRoomToBox = (
     : undefined;
   // A cell the seal links from sits in a room document that exists. An
   // instance is the digest of its terms, so a member can derive the address
-  // of an anchor or box the seal has yet to create; an absent document could
+  // of an anchor, box or answer slot the seal has yet to create; an absent document could
   // be one, and cannot be told apart from an ordinary one by its content.
   const documentExists = tx.readValueOrThrow({ ...destination, path: [] }, {
     meta: internalVerifierRead,
@@ -1488,69 +1547,33 @@ const requestedPolicyOf = async (
   }
 };
 
+/** A room as the seal reads it: its policy, its terms, and their instance. */
+interface RoomInspection {
+  readonly policy: CfcModulePolicyRefAtom;
+  readonly room: string;
+  readonly termsLink: NormalizedFullLink;
+  readonly terms: JSONValue;
+  readonly template: PolicyTemplateV1;
+  readonly witnessedRelease: boolean;
+}
+
 /**
- * Reads the draft, the terms, and the room's state, and checks them all. At
- * commit, `reviewed` is what the prepare established, and a stored input that
- * no longer holds it is refused as stale before anything is checked against
- * it.
+ * Reads and checks a room: the policy its policy cell declares, the terms
+ * with each seat resolved to its DID, and the policy's installed manifest.
+ * Each read that established a check is added to `evidence`.
  */
-const inspect = async (
-  draft: Cell<unknown>,
+const inspectRoom = async (
+  runtime: Runtime,
   requestedRoom: CustodyRoom,
-  options: CustodySealOptions,
-  reviewed?: Inspection,
-): Promise<Inspection> => {
-  const runtime = draft.runtime;
-  if (requestedRoom.terms.runtime !== runtime) {
-    throw new Error("Custody seal handles must belong to the same runtime");
-  }
-  await Promise.all([
-    syncResolved(draft),
-    syncResolved(requestedRoom.terms),
-  ]);
-
-  const evidence: ReadEvidence[] = [];
-  const allowed = await allowedSourcesOf(runtime, options, evidence);
-  if (reviewed && !deepEqual(allowed, reviewed.allowedSources)) {
-    throw new Error(STALE_REVIEW);
-  }
-
-  const draftTx = runtime.edit();
-  let actor: string;
-  let draftLink: NormalizedFullLink;
-  let stance: JSONValue;
-  let sources: CfcAtom[];
-  try {
-    const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
-    if (!isDID(acting)) {
-      throw new Error("Custody seal requires an authenticated actor");
-    }
-    actor = acting;
-    draftLink = draft.withTx(draftTx).resolveAsCell().getAsNormalizedFullLink();
-    stance = snapshotJsonValue(draft.withTx(draftTx).get());
-    sources = actorOwnedSources(
-      collectConsumedLabel(draftTx).confidentiality,
-      actor,
-    );
-    evidence.push(...readEvidence(draftTx));
-  } finally {
-    draftTx.abort();
-  }
-  const refused = sources.find((source) =>
-    !allowed.some((entry) => deepEqual(entry, source))
-  );
-  if (refused !== undefined) {
-    throw new Error(
-      debugStr`Custody seal refuses a source this room does not allow: $quote,long${refused}`,
-    );
-  }
-
+  evidence: ReadEvidence[],
+  reviewedPolicy?: CfcModulePolicyRefAtom,
+): Promise<RoomInspection> => {
   const requestedPolicy = await requestedPolicyOf(
     runtime,
     requestedRoom.policy,
     evidence,
   );
-  if (reviewed && !deepEqual(requestedPolicy, reviewed.policy)) {
+  if (reviewedPolicy && !deepEqual(requestedPolicy, reviewedPolicy)) {
     throw new Error(STALE_REVIEW);
   }
 
@@ -1616,6 +1639,7 @@ const inspect = async (
   await manifest.sync();
   const manifestTx = runtime.edit();
   let witnessedRelease: boolean;
+  let template: PolicyTemplateV1;
   try {
     const artifact = runtime.resolveCfcPolicyManifest(
       policy,
@@ -1628,10 +1652,91 @@ const inspect = async (
         debugStr`Custody seal refuses a policy not installed in the room space: $quote${policy.policyDigest}`,
       );
     }
-    witnessedRelease = releaseRequiresSealWitness(artifact.manifest.template);
+    template = artifact.manifest.template;
+    witnessedRelease = releaseRequiresSealWitness(template);
   } finally {
     manifestTx.abort();
   }
+  return {
+    policy,
+    room,
+    termsLink,
+    terms,
+    template,
+    witnessedRelease,
+  };
+};
+
+/**
+ * Reads the draft, the terms, and the room's state, and checks them all. At
+ * commit, `reviewed` is what the prepare established, and a stored input that
+ * no longer holds it is refused as stale before anything is checked against
+ * it.
+ */
+const inspect = async (
+  draft: Cell<unknown>,
+  requestedRoom: CustodyRoom,
+  options: CustodySealOptions,
+  reviewed?: Inspection,
+): Promise<Inspection> => {
+  const runtime = draft.runtime;
+  if (requestedRoom.terms.runtime !== runtime) {
+    throw new Error("Custody seal handles must belong to the same runtime");
+  }
+  await Promise.all([
+    syncResolved(draft),
+    syncResolved(requestedRoom.terms),
+  ]);
+
+  const evidence: ReadEvidence[] = [];
+  const allowed = await allowedSourcesOf(runtime, options, evidence);
+  if (reviewed && !deepEqual(allowed, reviewed.allowedSources)) {
+    throw new Error(STALE_REVIEW);
+  }
+
+  const draftTx = runtime.edit();
+  let actor: string;
+  let draftLink: NormalizedFullLink;
+  let stance: JSONValue;
+  let sources: CfcAtom[];
+  try {
+    const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
+    if (!isDID(acting)) {
+      throw new Error("Custody seal requires an authenticated actor");
+    }
+    actor = acting;
+    draftLink = draft.withTx(draftTx).resolveAsCell().getAsNormalizedFullLink();
+    stance = snapshotJsonValue(draft.withTx(draftTx).get());
+    sources = actorOwnedSources(
+      collectConsumedLabel(draftTx).confidentiality,
+      actor,
+    );
+    evidence.push(...readEvidence(draftTx));
+  } finally {
+    draftTx.abort();
+  }
+  const refused = sources.find((source) =>
+    !allowed.some((entry) => deepEqual(entry, source))
+  );
+  if (refused !== undefined) {
+    throw new Error(
+      debugStr`Custody seal refuses a source this room does not allow: $quote,long${refused}`,
+    );
+  }
+
+  const inspectedRoom = await inspectRoom(
+    runtime,
+    requestedRoom,
+    evidence,
+    reviewed?.policy,
+  );
+  const { policy, room, termsLink, terms } = inspectedRoom;
+  // A bound on what an answer reveals needs the release witnessed and made
+  // to the seal alone: a projection the room's readers can read says, by
+  // keeping or losing its stamp, whether input of a member's choosing yields
+  // the released answer.
+  const witnessedRelease = inspectedRoom.witnessedRelease &&
+    releasesOnlyToSeal(inspectedRoom.template);
   const acl = runtime.getCellFromLink({
     space: room,
     id: aclDocId(room),
@@ -1671,7 +1776,7 @@ const inspect = async (
     if (entry !== undefined) {
       throw new Error("Custody seal refuses a second entry for this actor");
     }
-    if (!absentOrSealed(boxTx, box.getAsNormalizedFullLink())) {
+    if (!absentOrSealed(boxTx, box.getAsNormalizedFullLink(), instance)) {
       throw new Error("Custody seal refuses a box the seal did not create");
     }
   } finally {
@@ -1826,10 +1931,7 @@ export async function commitCustodySeal(
         }
         return;
       }
-      setCfcImplementationIdentity(tx, {
-        kind: "builtin",
-        builtinId: CUSTODY_SEAL_WRITER,
-      });
+      setCfcImplementationIdentity(tx, sealIdentity(instance));
       anchor.withTx(tx).set({ instance });
     },
     undefined,
@@ -1849,10 +1951,7 @@ export async function commitCustodySeal(
   const receiptTx = runtime.edit();
   let receipt: Cell<unknown>;
   try {
-    setCfcImplementationIdentity(receiptTx, {
-      kind: "builtin",
-      builtinId: CUSTODY_SEAL_WRITER,
-    });
+    setCfcImplementationIdentity(receiptTx, sealIdentity(instance));
     receipt = runtime.getCell(actor as never, {
       custodySealReceipt: state.eventId,
     }, {
@@ -1911,10 +2010,7 @@ export async function commitCustodySeal(
           throw new Error("Custody seal review changed before commit");
         }
       }
-      setCfcImplementationIdentity(tx, {
-        kind: "builtin",
-        builtinId: CUSTODY_SEAL_WRITER,
-      });
+      setCfcImplementationIdentity(tx, sealIdentity(instance));
       if (!absentOrAnchor(tx, anchorLink, anchorClause(policy), instance)) {
         throw new Error(
           "Custody seal refuses an anchor the seal did not create",
@@ -1922,7 +2018,7 @@ export async function commitCustodySeal(
       }
       box = boxCell(runtime, policy, instance, tx);
       const boxLink = box.getAsNormalizedFullLink();
-      if (!absentOrSealed(tx, boxLink)) {
+      if (!absentOrSealed(tx, boxLink, instance)) {
         throw new Error("Custody seal refuses a box the seal did not create");
       }
       // The one labeled read in this transaction: it attributes the entry's
@@ -1955,7 +2051,11 @@ export async function commitCustodySeal(
           state.requestedRoom.box,
           boxLink,
           room,
-          [boxLink, anchorLink],
+          [
+            boxLink,
+            anchorLink,
+            answerCell(runtime, policy, instance).getAsNormalizedFullLink(),
+          ],
           state.termsLink,
         );
       }
@@ -1976,4 +2076,304 @@ export async function commitCustodySeal(
     instance,
     receipt: receipt.withTx(undefined),
   };
+}
+
+/** What {@link publishCustodyAnswer} published. */
+export interface CustodyAnswerResult {
+  /** The instance's answer slot, in the room space. */
+  readonly answer: Cell<unknown>;
+
+  /** The instance the answer was published for: the digest of the terms. */
+  readonly instance: string;
+
+  /** The answer as published. */
+  readonly value: JSONValue;
+}
+
+/** The longest answer, in characters, the seal publishes. */
+const MAX_ANSWER_LENGTH = 1024;
+
+/** The instance's answer slot, in the room space. */
+const answerCell = (
+  runtime: Cell<unknown>["runtime"],
+  policy: CfcModulePolicyRefAtom,
+  instance: string,
+  tx?: IExtendedStorageTransaction,
+) =>
+  runtime.getCell<Record<string, JSONValue>>(
+    policy.subject as never,
+    { custodyAnswer: { policy, instance } },
+    {
+      type: "object",
+      ifc: {
+        confidentiality: [cfcAtom.space(policy.subject as string)],
+        writeAuthorizedBy: [CUSTODY_SEAL_WRITER],
+      },
+    } as never,
+    tx,
+  );
+
+/** Whether a clause names `policy` among its alternatives. */
+const namesPolicy = (clause: unknown, policy: CfcModulePolicyRefAtom) =>
+  clauseAlternatives(clause as CfcConfClause).some((atom) =>
+    isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.Policy &&
+    atom.policyDigest === policy.policyDigest &&
+    atom.moduleIdentity === policy.moduleIdentity &&
+    atom.symbol === policy.symbol && atom.subject === policy.subject
+  );
+
+/**
+ * The value `output` holds and whether the room's policy releases it to the
+ * seal by one of its own rules, for the seal to publish to the room's
+ * readers. The answer is a scalar, as a room's projected answer is, and its
+ * label is what a display of it resolves: the content entries at its root,
+ * joined. It is released when that label carries the room's policy, a rule of
+ * that policy fires, every clause naming the policy is left admitting the
+ * seal ({@link CUSTODY_SEAL_READER}), and every other clause admits the room
+ * space's readers. The room's rules all require the seal's witness and
+ * release only to the seal (checked by the caller), so a release here is one
+ * whose computation read only what the seal wrote, and one no member could
+ * read before the seal published it. A value that never carried the policy is
+ * not the room's answer, whatever its label admits.
+ */
+const releasedToSeal = (
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  output: Cell<unknown>,
+  policy: CfcModulePolicyRefAtom,
+  room: string,
+  instance: string,
+): { value: JSONValue; released: boolean } => {
+  const resolved = output.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+  const stored = tx.readValueOrThrow(resolved, { meta: internalVerifierRead });
+  // A projector that has not run yet has computed nothing: not an answer yet,
+  // refused like one the policy does not release.
+  if (stored === undefined) return { value: null, released: false };
+  const value = snapshotJsonValue(stored);
+  if (
+    value === null || typeof value === "object" ||
+    (typeof value === "string" && value.length > MAX_ANSWER_LENGTH)
+  ) {
+    return { value, released: false };
+  }
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    output.withTx(tx),
+  );
+  // The value's own entries: a link's entry, which labels a pointer crossed
+  // on the way to the value, is a `followRef` entry in the view.
+  const entries = (view?.entries ?? []).filter((entry) =>
+    entry.path.length === 0 &&
+    (entry.observes === undefined || entry.observes === "value")
+  );
+  const confidentiality = entries.flatMap((entry) =>
+    entry.label.confidentiality ?? []
+  );
+  if (
+    readFailed || !confidentiality.some((clause) => namesPolicy(clause, policy))
+  ) {
+    return { value, released: false };
+  }
+  // The seal witnessed this instance's writes and no other's: every witness
+  // naming the seal names this instance, and one does.
+  const integrity = entries.flatMap((entry) => entry.label.integrity ?? []);
+  const sealWitnesses = integrity.flatMap((atom) =>
+    isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+      isSealStamp(atom.inputWitness)
+      ? [atom.inputWitness]
+      : []
+  );
+  if (
+    sealWitnesses.length === 0 ||
+    !sealWitnesses.every((witness) => deepEqual(witness, sealedFor(instance)))
+  ) {
+    return { value, released: false };
+  }
+  const result = evaluateExchangeRules(
+    { confidentiality, integrity },
+    undefined,
+    {
+      modulePolicyResolver: (reference) =>
+        runtime.resolveCfcPolicyManifest(reference, tx, room as never, false),
+    },
+  );
+  const left = result.label.confidentiality ?? [];
+  const roomReaders = cfcAtom.space(room);
+  // A rule of the room's own policy fired, and released every clause naming
+  // the policy to the seal; every other clause admits the room's readers.
+  const roomRecord = modulePolicyRecordId(policy);
+  const admits = (clause: unknown, reader: unknown) =>
+    clauseAlternatives(clause as CfcConfClause).some((atom) =>
+      deepEqual(atom, reader)
+    );
+  return {
+    value,
+    released: !result.exhausted && result.resolutionFailures.length === 0 &&
+      result.firings.some((firing) =>
+        firing.recordId === roomRecord && firing.kind === "add"
+      ) &&
+      left.every((clause) =>
+        namesPolicy(clause, policy)
+          ? admits(clause, CUSTODY_SEAL_READER)
+          : admits(clause, roomReaders)
+      ),
+  };
+};
+
+/**
+ * The answer an instance's slot holds, when the seal wrote it: `undefined`
+ * while nothing is published, and a refusal for a slot other code wrote.
+ */
+const sealedAnswer = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  instance: string,
+): { value: JSONValue } | undefined => {
+  const stored = tx.readValueOrThrow({ ...link, path: [] }, {
+    meta: internalVerifierRead,
+  });
+  if (stored === undefined) return undefined;
+  if (
+    !absentOrSealed(tx, link, instance) || !isObjectNotArray(stored) ||
+    !hasExactKeys(stored as Record<string, unknown>, ["answer", "instance"]) ||
+    (stored as { instance?: unknown }).instance !== instance
+  ) {
+    throw new Error("Custody answer refuses a slot the seal did not write");
+  }
+  return { value: snapshotJsonValue((stored as { answer?: unknown }).answer) };
+};
+
+/**
+ * Reads a custody instance's published answer: the value its answer slot
+ * holds, verified to be the seal's own write, or `undefined` while nothing is
+ * published. A host renders this, never a link a room holds, which the room's
+ * members can write. The slot is that of the instance `room.terms` digest to,
+ * under the policy `room.policy` names. Its content is create-only and the
+ * seal's own, so the answer published for an instance never changes; which
+ * instance this reads moves with `room.terms` and `room.policy`, which a room
+ * member's own code can repoint at another instance's terms or at terms whose
+ * slot is empty. A writer claim on the room's cells does not close that in
+ * general, as write authority is keyed by code (normative CFC §8.15.8).
+ *
+ * @throws If the slot holds something the seal did not write.
+ */
+export async function readCustodyAnswer(
+  room: CustodyRoom,
+): Promise<JSONValue | undefined> {
+  const runtime = room.terms.runtime;
+  await syncResolved(room.terms);
+  const { policy, terms } = await inspectRoom(runtime, room, []);
+  const instance = hashStringOf(terms);
+  const slot = answerCell(runtime, policy, instance);
+  await slot.sync();
+  const tx = runtime.edit();
+  try {
+    return sealedAnswer(tx, slot.getAsNormalizedFullLink(), instance)?.value;
+  } finally {
+    tx.abort();
+  }
+}
+
+/**
+ * Publishes a custody instance's answer once: the value `output` holds, when
+ * a rule of the room's policy, every one of which requires the seal's
+ * witness and releases only to the seal, releases it to the seal, and every
+ * seat has sealed. The seal declassifies it into the instance's answer slot,
+ * a create-only document in the room space at
+ * `{custodyAnswer: {policy, instance}}` labeled for the room's readers and
+ * stamped as the seal's own like the box, and refuses a second publication.
+ * The projection itself is read by no member. A host renders the slot through
+ * {@link readCustodyAnswer}, so the answer published for an instance never
+ * changes, whatever later points the projector at other input. Which instance
+ * a room shows moves with `room.terms` and `room.policy`, as
+ * {@link readCustodyAnswer} says.
+ *
+ * @throws If the room's policy releases anything without the seal's witness
+ *   or to anyone but the seal, a seat has not sealed, the policy does not
+ *   release `output` to the seal, the room changed while the answer was being
+ *   published, or the instance's answer is already published.
+ */
+export async function publishCustodyAnswer(
+  room: CustodyRoom,
+  output: Cell<unknown>,
+): Promise<CustodyAnswerResult> {
+  const runtime = output.runtime;
+  if (room.terms.runtime !== runtime) {
+    throw new Error("Custody seal handles must belong to the same runtime");
+  }
+  await Promise.all([syncResolved(room.terms), syncResolved(output)]);
+  const evidence: ReadEvidence[] = [];
+  const inspected = await inspectRoom(runtime, room, evidence);
+  if (!inspected.witnessedRelease) {
+    throw new Error(
+      "Custody answer requires a policy whose every rule requires the seal's witness",
+    );
+  }
+  if (!releasesOnlyToSeal(inspected.template)) {
+    throw new Error(
+      "Custody answer requires a policy whose every rule releases only to the seal",
+    );
+  }
+  const { policy, terms } = inspected;
+  const space = inspected.room;
+  const instance = hashStringOf(terms);
+  const seats = (terms as { seats: readonly unknown[] }).seats.length;
+  const box = boxCell(runtime, policy, instance);
+  const anchor = anchorCell(runtime, policy, instance);
+  const slot = answerCell(runtime, policy, instance);
+  await Promise.all([box.sync(), anchor.sync(), slot.sync()]);
+  let published: { value: JSONValue } | undefined;
+  const written = await runtime.editWithRetry((tx) => {
+    // The room read at inspection is the room published for.
+    for (const read of evidence) {
+      const stored = tx.readOrThrow(read.address, {
+        meta: internalVerifierRead,
+      });
+      if (hashStringOf(stored) !== read.digest) {
+        throw new Error("Custody answer's room changed while publishing");
+      }
+    }
+    setCfcImplementationIdentity(tx, sealIdentity(instance));
+    const answer = answerCell(runtime, policy, instance, tx);
+    const answerLink = answer.getAsNormalizedFullLink();
+    if (sealedAnswer(tx, answerLink, instance) !== undefined) {
+      throw new Error("Custody answer is already published for this instance");
+    }
+    const anchorLink = anchor.getAsNormalizedFullLink();
+    const boxLink = box.getAsNormalizedFullLink();
+    const entries = tx.readValueOrThrow({ ...boxLink, path: [] }, {
+      meta: internalVerifierRead,
+    });
+    if (
+      !absentOrAnchor(tx, anchorLink, anchorClause(policy), instance) ||
+      !absentOrSealed(tx, boxLink, instance) || !isObjectNotArray(entries) ||
+      Object.keys(entries).length !== seats
+    ) {
+      throw new Error("Custody answer requires every seat to have sealed");
+    }
+    const { value, released } = releasedToSeal(
+      runtime,
+      tx,
+      output,
+      policy,
+      space,
+      instance,
+    );
+    if (!released) {
+      throw new Error(
+        "Custody answer requires a value the room's policy releases to the seal",
+      );
+    }
+    // The one labeled read, as in the entry transaction: it attributes the
+    // slot to the seal, which is what a reader verifies.
+    anchor.withTx(tx).get();
+    answer.set({ instance, answer: value });
+    tx.markCreateOnly?.(answerLink);
+    published = { value };
+  });
+  if (written.error) {
+    const reason = "reason" in written.error ? written.error.reason : undefined;
+    if (reason instanceof Error) throw reason;
+    throw new Error(`Custody answer failed: ${written.error.message}`);
+  }
+  return { answer: slot, instance, value: published!.value };
 }

@@ -88,6 +88,7 @@ import {
   DEFAULT_DOCKER_RUNSC_IMAGE,
   DEFAULT_FABRIC_MOUNT_PATH,
 } from "./sandbox/docker-runsc.ts";
+import { resolveSandboxRuntimeSelection } from "./sandbox/runtime-selection.ts";
 import {
   type CfHarnessHostMountConfig,
   type CfHarnessHostMountMode,
@@ -206,6 +207,9 @@ const CLI_STRING_FLAGS = [
   "cfc-invocation-context-dir",
   "sandbox-image",
   "sandbox-docker-runtime",
+  "sandbox-runtime",
+  "sandbox-rootfs",
+  "sandbox-cfc-policy",
   "max-model-turns",
   "fabric-mount",
   "loom-authoring-config",
@@ -380,6 +384,13 @@ export interface RunCfHarnessCliDependencies {
 
   io?: CfHarnessCliIO;
   readTextFile?: (path: string) => Promise<string>;
+  /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
+  pathExists?: (path: string) => Promise<boolean>;
+  /**
+   * The home the default runsc CFC policy is looked up under, for an embedder
+   * that clears `HOME` from `env` (the Loom local host); `env.HOME` otherwise.
+   */
+  sandboxHomeDir?: string;
   writeTextFile?: (path: string, text: string) => Promise<void>;
   readRunArtifacts?: typeof readHarnessRunArtifacts;
   createPromptLoop?: (
@@ -557,10 +568,19 @@ Options:
   --handle-value-origin <origin> Origin a handle's value may be sent to (repeatable; none by default)
   --input-cell <name>=<link>       Explicitly attach a cell in the fabric space to this run by reference, announced as a handle under <name>; its shape and labels live on the cell's declared schema (repeatable; requires --fabric-space)
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
-  --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (required for enforce-* modes)
-  --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (required for enforce-* modes)
+  --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (docker runtime only; required for enforce-* modes)
+  --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
+  --sandbox-runtime <kind>      docker (the default) or runsc: run runsc directly with
+                                no Docker; the same on Linux and on macOS through the
+                                darwin runsc. Tool calls may then name a sandbox session.
+  --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
+                                on Linux; on macOS the cfc-vm image marker, default
+                                ~/Library/Application Support/cfc-vm/images/kitchensink)
+  --sandbox-cfc-policy <path>   runsc runtime only: CFC policy file; --cfc is passed exactly
+                                when this is set (default: ~/.local/share/runsc-cfc/cfc-policy.json
+                                when present)
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
@@ -613,7 +633,9 @@ Environment:
   CF_HARNESS_PROMPT_CACHE_MODE  Default value for --prompt-cache-mode
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
-  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge)
+  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
+                                runsc runtime is runsc's own network stack, reported
+                                as sandbox)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
@@ -630,6 +652,10 @@ Environment:
                                 patterns to search immediately (default: recorded only)
   CF_HARNESS_SANDBOX_IMAGE      Default value for --sandbox-image
   CF_HARNESS_SANDBOX_DOCKER_RUNTIME Default value for --sandbox-docker-runtime
+  CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
+  CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
+  CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
+  CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
   ${CFC_RESULT_DIR_ENV} Fallback for --cfc-result-dir
@@ -1293,7 +1319,12 @@ export const parseCfHarnessCliArgs = async (
   argv: readonly string[],
   deps: Pick<
     RunCfHarnessCliDependencies,
-    "cwd" | "env" | "readTextFile" | "providerSettingsStore"
+    | "cwd"
+    | "env"
+    | "readTextFile"
+    | "pathExists"
+    | "sandboxHomeDir"
+    | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1547,6 +1578,13 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_SANDBOX_DOCKER_RUNTIME: Deno.env.get(
         "CF_HARNESS_SANDBOX_DOCKER_RUNTIME",
       ),
+      CF_HARNESS_SANDBOX_RUNTIME: Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME"),
+      CF_HARNESS_SANDBOX_ROOTFS: Deno.env.get("CF_HARNESS_SANDBOX_ROOTFS"),
+      CF_HARNESS_RUNSC_CFC_POLICY: Deno.env.get("CF_HARNESS_RUNSC_CFC_POLICY"),
+      CF_HARNESS_RUNSC_BINARY: Deno.env.get("CF_HARNESS_RUNSC_BINARY"),
+      CF_HARNESS_DOCKER_NETWORK_MODE: Deno.env.get(
+        "CF_HARNESS_DOCKER_NETWORK_MODE",
+      ),
       [CFC_RESULT_DIR_ENV]: Deno.env.get(CFC_RESULT_DIR_ENV),
       [CFC_INVOCATION_CONTEXT_DIR_ENV]: Deno.env.get(
         CFC_INVOCATION_CONTEXT_DIR_ENV,
@@ -1721,6 +1759,36 @@ export const parseCfHarnessCliArgs = async (
   }
   const sandboxDockerRuntime = rawSandboxDockerRuntime ??
     nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_DOCKER_RUNTIME);
+  // One derivation shared with the interactive entrypoints; flags win over
+  // the environment, and the default policy is looked up through
+  // `deps.pathExists`.
+  const {
+    sandboxRuntimeKind,
+    sandboxRootfs,
+    sandboxCfcPolicy,
+    sandboxRunscBinary,
+    sandboxRunscNetworkMode,
+  } = await resolveSandboxRuntimeSelection(
+    env,
+    {
+      ...(typeof args["sandbox-runtime"] === "string"
+        ? { sandboxRuntime: args["sandbox-runtime"] }
+        : {}),
+      ...(typeof args["sandbox-rootfs"] === "string"
+        ? { sandboxRootfs: args["sandbox-rootfs"] }
+        : {}),
+      ...(typeof args["sandbox-cfc-policy"] === "string"
+        ? { sandboxCfcPolicy: args["sandbox-cfc-policy"] }
+        : {}),
+    },
+    {
+      cwd,
+      ...(deps.pathExists !== undefined ? { pathExists: deps.pathExists } : {}),
+      ...(deps.sandboxHomeDir !== undefined
+        ? { homeDir: deps.sandboxHomeDir }
+        : {}),
+    },
+  );
   const explicitCfcMode = typeof args["cfc-enforcement-mode"] === "string"
     ? args["cfc-enforcement-mode"]
     : undefined;
@@ -1960,6 +2028,13 @@ export const parseCfHarnessCliArgs = async (
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
     ...(sandboxImage !== undefined ? { sandboxImage } : {}),
     ...(sandboxDockerRuntime !== undefined ? { sandboxDockerRuntime } : {}),
+    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
+    ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
+    ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
+    ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),
+    ...(sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode }
+      : {}),
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),

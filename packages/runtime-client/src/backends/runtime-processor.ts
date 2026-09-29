@@ -117,6 +117,8 @@ import {
   CUSTODY_SEAL_GESTURE,
   type CustodySealConsent,
   prepareCustodySeal,
+  publishCustodyAnswer,
+  readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
@@ -180,6 +182,10 @@ import {
   type CellUnsubscribeRequest,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CustodyAnswerPublishRequest,
+  type CustodyAnswerPublishResponse,
+  type CustodyAnswerReadRequest,
+  type CustodyAnswerReadResponse,
   type CustodySealCommitRequest,
   type CustodySealCommitResponse,
   type CustodySealPrepareRequest,
@@ -2320,6 +2326,40 @@ export class RuntimeProcessor {
     }
   }
 
+  /**
+   * Publishes a custody instance's answer once. The worker reads the room's
+   * terms, policy and projected answer at the addresses the host names, and
+   * the seal decides from what it reads whether the answer is released to the
+   * room's readers and not yet published; nothing in the request vouches for
+   * the answer.
+   */
+  async handleCustodyAnswerPublish(
+    request: CustodyAnswerPublishRequest,
+  ): Promise<CustodyAnswerPublishResponse> {
+    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
+    const terms = this.#hostSelectedCell(request.terms);
+    const policy = this.#hostSelectedCell(request.policy);
+    const output = this.#hostSelectedCell(request.output);
+    const published = await publishCustodyAnswer({ terms, policy }, output);
+    return { instance: published.instance, answer: published.value };
+  }
+
+  /**
+   * Reads a custody instance's published answer from the slot the seal
+   * derives from the room's terms and policy, verified to be the seal's own
+   * write. A host renders this rather than anything the room holds.
+   */
+  async handleCustodyAnswerRead(
+    request: CustodyAnswerReadRequest,
+  ): Promise<CustodyAnswerReadResponse> {
+    if (this.#isDisposed) throw new Error("Custody sealing is unavailable");
+    const answer = await readCustodyAnswer({
+      terms: this.#hostSelectedCell(request.terms),
+      policy: this.#hostSelectedCell(request.policy),
+    });
+    return answer === undefined ? {} : { answer };
+  }
+
   handleCellGetCfcLabel(
     request: CellGetCfcLabelRequest,
   ): CfcLabelViewResponse {
@@ -3457,6 +3497,10 @@ export class RuntimeProcessor {
       case RequestType.CustodySealCancel:
         this.#custodySeals.delete(clientScopedKey(client, request.id));
         return;
+      case RequestType.CustodyAnswerPublish:
+        return await this.handleCustodyAnswerPublish(request);
+      case RequestType.CustodyAnswerRead:
+        return await this.handleCustodyAnswerRead(request);
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:

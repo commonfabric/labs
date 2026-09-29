@@ -146,6 +146,19 @@ export type CfcTransportReadiness = {
   readonly [K in CfcSidecarTransportKind]?: CfcSidecarTransportReading;
 };
 
+/**
+ * A sandbox session name. A call that names one runs inside a sandbox the
+ * runtime keeps alive for the rest of the run, so state a command leaves
+ * behind (files outside the mounts, background processes, installed
+ * packages) is there for the next call that names the same session. A call
+ * that names none gets a fresh sandbox of its own. A session belongs to the
+ * runtime that started it: two runtimes naming the same session never share a
+ * sandbox, and runs that execute on one runtime share its sessions.
+ */
+export type SandboxSessionName = string;
+
+export const SANDBOX_SESSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+
 export interface SandboxCommandRequest {
   argv: string[];
   cwd?: string;
@@ -153,6 +166,7 @@ export interface SandboxCommandRequest {
   stdinText?: string;
   timeoutMs?: number;
   cfcInvocationContext?: HarnessCfcInvocationContext;
+  session?: SandboxSessionName;
 }
 
 export interface SandboxShellRequest {
@@ -163,6 +177,7 @@ export interface SandboxShellRequest {
   stdinText?: string;
   timeoutMs?: number;
   cfcInvocationContext?: HarnessCfcInvocationContext;
+  session?: SandboxSessionName;
 }
 
 export interface SandboxCommandResult {
@@ -172,16 +187,62 @@ export interface SandboxCommandResult {
   cfcResult?: CfcSandboxResult;
 }
 
+/**
+ * Why a runtime refused a sandbox session, as a closed set. What a model
+ * should do next differs by reason, so a caller that tells a model about the
+ * refusal selects its text by this and never by reading the message.
+ *
+ * - `invalid-name`: the name is not a session name.
+ * - `enforcing-mode`: the run's CFC enforcement mode allows no session.
+ * - `session-lost`: the session ended before the call and what it held is
+ *   gone. The call's command was not executed. Naming the session again
+ *   starts an empty one.
+ * - `session-ended-during-call`: the session ended while the call's command
+ *   was handed to it, and what it held is gone. Whether the command ran, in
+ *   whole or in part, is not known, and its output was not kept. Naming the
+ *   session again starts an empty one.
+ * - `session-limit`: the run holds as many sessions as it may.
+ * - `start-failed`: the session's sandbox did not start.
+ */
+export type SandboxSessionUnavailableReason =
+  | "invalid-name"
+  | "enforcing-mode"
+  | "session-lost"
+  | "session-ended-during-call"
+  | "session-limit"
+  | "start-failed";
+
+/**
+ * A tool call named a sandbox session the runtime cannot honor right now.
+ * Recoverable: the bash tool turns it into a result the model can act on,
+ * rather than a run-fatal error.
+ *
+ * `message` is written for an operator. It can carry host paths, container
+ * ids and the text of an underlying runtime error, so it is not shown to a
+ * model; `reason` is what a model-facing caller goes by.
+ */
+export class SandboxSessionUnavailableError extends Error {
+  readonly reason: SandboxSessionUnavailableReason;
+
+  constructor(message: string, reason: SandboxSessionUnavailableReason) {
+    super(message);
+    this.name = "SandboxSessionUnavailableError";
+    this.reason = reason;
+  }
+}
+
 export interface SandboxRuntimeDescription {
-  kind: "docker-runsc-cfc";
+  kind: "docker-runsc-cfc" | "runsc-cfc";
   defaultWorkingDirectory: string;
+  /** Whether `session` on a request is honoured rather than ignored. */
+  sessions?: boolean;
   cfc?: {
     runtimeRequested: boolean;
     runtimeName?: string;
     image?: string;
     workspaceMountPath?: string;
     mounts?: readonly SandboxRuntimeMountDescription[];
-    networkMode?: DockerNetworkMode;
+    networkMode?: DockerNetworkMode | "sandbox";
     extraDockerArgsCount?: number;
     invocationContextTransport?: string;
     invocationContextTransportReadiness?: string;
@@ -214,4 +275,11 @@ export interface SandboxRuntime {
   defaultWorkingDirectory(): string;
   run(request: SandboxCommandRequest): Promise<SandboxCommandResult>;
   runShell(request: SandboxShellRequest): Promise<SandboxCommandResult>;
+
+  /**
+   * Release whatever the runtime keeps alive between calls (sessions). The
+   * engine calls it when the run ends; a runtime with nothing to release
+   * need not implement it.
+   */
+  close?(): Promise<void>;
 }
