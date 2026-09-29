@@ -16,6 +16,10 @@ class HeadlessAnswer extends CFCustodyAnswer {
   override get isConnected(): boolean {
     return this.connected;
   }
+
+  // Connecting makes Lit schedule an update, which wants a DOM. These tests
+  // read `render()` directly instead.
+  protected override performUpdate(): void {}
 }
 
 /** Every string the rendered template interpolates, nested templates included. */
@@ -42,7 +46,7 @@ const settle = async () => {
 
 const setup = (
   publishes: Array<() => ReturnType<Publish>>,
-  slot: { answer?: unknown; refuse?: string } = {},
+  slot: { answer?: unknown; refuse?: string; hold?: Promise<void> } = {},
   termsValue: unknown = {},
 ) => {
   const element = new HeadlessAnswer();
@@ -56,9 +60,11 @@ const setup = (
     },
     readCustodyAnswer: (cells: unknown) => {
       reads.push(cells);
-      return slot.refuse === undefined
-        ? Promise.resolve(slot.answer)
-        : Promise.reject(new Error(slot.refuse));
+      const read = () =>
+        slot.refuse === undefined
+          ? Promise.resolve(slot.answer)
+          : Promise.reject(new Error(slot.refuse));
+      return slot.hold ? slot.hold.then(read) : read();
     },
   } as unknown as RuntimeClient;
   const terms = createMockCellHandle<unknown>(termsValue, { id: "of:terms" });
@@ -273,6 +279,62 @@ describe("cf-custody-answer", () => {
     expect(state.element.accessForTestingOnly.answer).toBeUndefined();
     expect(state.published).toHaveLength(0);
     expect(state.reads).toHaveLength(0);
+  });
+
+  it("drops what a slot read returns once detached mid-read", async () => {
+    let release: (() => void) | undefined;
+    const slot: { answer?: string; hold?: Promise<void> } = {
+      hold: new Promise((resolve) => {
+        release = resolve;
+      }),
+    };
+    const state = setup([() => {
+      slot.answer = "sushi";
+      return Promise.resolve({ instance: "instance", answer: "sushi" });
+    }], slot);
+    const pending = state.element.accessForTestingOnly.publish();
+    await settle();
+    expect(state.reads).toHaveLength(1);
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    release!();
+    await pending;
+    expect(state.element.accessForTestingOnly.published).toBe(false);
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+    expect(state.published).toHaveLength(0);
+  });
+
+  it("subscribes once connected, and starts over when connected again", async () => {
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () => {
+        slot.answer = "sushi";
+        return Promise.resolve({ instance: "instance", answer: "sushi" });
+      },
+      () =>
+        Promise.reject(
+          new Error("Custody answer is already published for this instance"),
+        ),
+    ], slot);
+    state.element.connectedCallback();
+    await settle();
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    // Connected again, it reads the slot afresh: already published, so the
+    // request is refused and the slot's answer shown.
+    state.element.connected = true;
+    state.element.connectedCallback();
+    await settle();
+    expect(state.requests).toHaveLength(2);
+    expect(state.reads).toHaveLength(2);
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+    expect(state.published.map((event) => event.detail)).toEqual([
+      { instance: "instance" },
+      {},
+    ]);
+    state.element.connected = false;
+    state.element.disconnectedCallback();
   });
 
   it("does not run a queued request once detached", async () => {
