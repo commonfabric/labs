@@ -2247,10 +2247,12 @@ const sealedAnswer = (
  * holds, verified to be the seal's own write, or `undefined` while nothing is
  * published. A host renders this, never a link a room holds, which the room's
  * members can write. The slot is that of the instance `room.terms` digest to,
- * under the policy `room.policy` names, so a room must make both write-once
- * from their first write (a writer claim whose writer refuses to overwrite),
- * or a member's own code can repoint the host at another instance's slot or
- * an empty one.
+ * under the policy `room.policy` names, so it moves when either does: a room
+ * must keep both as their first write left them, or a member's own code can
+ * repoint the host at another instance's slot or an empty one. A writer claim
+ * whose writer refuses to overwrite keeps them against other code, but not
+ * against a member's own instance of the room's pattern bound beneath them:
+ * write authority is keyed by code (normative CFC §8.15.8).
  *
  * @throws If the slot holds something the seal did not write.
  */
@@ -2280,10 +2282,10 @@ export async function readCustodyAnswer(
  * `{custodyAnswer: {policy, instance}}` labeled for the room's readers and
  * stamped as the seal's own like the box, and refuses a second publication.
  * The projection itself is read by no member. A host renders the slot through
- * {@link readCustodyAnswer}, so what the room's readers are shown cannot move
- * once the answer is published, whatever later points the projector at other
- * input, provided the room keeps `room.terms` and `room.policy` write-once
- * from their first write, as {@link readCustodyAnswer} requires.
+ * {@link readCustodyAnswer}, so once the answer is published, whatever later
+ * points the projector at other input does not move what the room's readers
+ * are shown; moving `room.terms` or `room.policy` does, as
+ * {@link readCustodyAnswer} says.
  *
  * @throws If the room's policy releases anything without the seal's witness
  *   or to anyone but the seal, a seat has not sealed, the policy does not

@@ -968,12 +968,14 @@ releases the answer to the seal, and every seat has sealed, and refuses every
 later request. What the component shows is read by the host from the instance's
 answer slot and verified to be the seal's write: the slot of the instance the
 bound terms digest to, under the policy the bound policy cell names. Bind both
-to write-once cells, each `WriteAuthorizedBy` the one handler that writes it,
-which writes only while the cell is unwritten; otherwise a member's own code can
-repoint the component at another instance's slot or an empty one. A failure
-other than those refusals (a lost worker connection, a slot the seal did not
-write) is shown as an alert; before the room has terms it asks nothing. **Tag**:
-`<cf-custody-answer>`
+to cells each `WriteAuthorizedBy` the one handler that writes it, which writes
+only while the cell is unwritten; otherwise a member's own code can repoint the
+component at another instance's slot or an empty one. That keeps them against
+other code, not against a member's own instance of the same pattern bound
+beneath them, since write authority is keyed by code, so the shown answer is
+only as fixed as the room's bindings. A failure other than those refusals (a
+lost worker connection, a slot the seal did not write) is shown as an alert;
+before the room has terms it asks nothing. **Tag**: `<cf-custody-answer>`
 
 **Bindings**:
 

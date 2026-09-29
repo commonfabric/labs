@@ -48,21 +48,38 @@
  * once every seat has sealed and the rule releases it to the seal. The seal
  * declassifies it once into the instance's answer slot, which the room's
  * readers can read, and the component shows what the slot holds, verified to
- * be the seal's write. What the room's readers are shown then cannot move,
- * whatever later points the projector at other input.
+ * be the seal's write. Whatever later points the projector at other input
+ * does not move what the room's readers are shown; moving `terms` or
+ * `policy` does.
  *
  * The slot shown is the one of the instance `terms` digest to, under the
- * policy `policy` names, so both are write-once: only `propose` may write
- * them, and it writes each only while it is unwritten. Otherwise a member's
- * own code could repoint the component at another instance's slot, such as
- * that of a one-seat room the member sealed alone, or at an empty one.
- * `docs/specs/cfc-custody-seal.md` says what this does not cover.
+ * policy `policy` names, so the room keeps both as their first write left
+ * them: each carries a writer claim naming `propose`, and `propose` writes
+ * each only while it reads as unwritten. Otherwise a member's own code could
+ * repoint the component at another instance's slot, such as that of a
+ * one-seat room the member sealed alone, or at an empty one. The claim
+ * refuses a write by any other code, through any schema, and the room's
+ * `propose` run again over the terms it wrote writes nothing.
  *
- * Whoever runs `propose` first fixes the terms for good, and anyone who can
- * write in the room space can run it, with seats of their choosing, before
- * the room's own proposal does. The room does not guard against that: it
- * records no creator to check the sender against, and a proposer can always
- * seat itself. What that costs is the room, not a member's consent. The
+ * That is not write-once against this pattern's own code run elsewhere.
+ * Write authority is keyed by code, not by piece (normative CFC §8.15.8), so
+ * a member's own instance of this pattern, its `terms` bound beneath the
+ * room's `terms`, runs a `propose` the claim authorizes, and that guard reads
+ * its own binding as unwritten. Once it has written there, the room's terms
+ * no longer read as terms, and the room's own `propose` rewrites them too. A
+ * member who updates the room's source to a successor that imports these
+ * rules, and so declares the same policy, runs a `propose` of its own that
+ * inherits this one's authority. Closing either needs a write-once or
+ * create-only primitive, or write authority bound to a piece, which is an
+ * open question for the CFC spec. `docs/specs/cfc-custody-seal.md` says what
+ * else this does not cover.
+ *
+ * Whoever runs `propose` first writes the terms, and anyone who can write in
+ * the room space can run it, with seats of their choosing, before the room's
+ * own proposal does. The room does not guard against that: it records no
+ * creator to check the sender against, and a guard requiring the sender to
+ * hold a seat would admit any sender that seats itself. What that costs is
+ * the room, not a member's consent. The
  * seal's confirmation shows every seat, and a member seals only under terms
  * that seat them, so terms the members did not agree to leave the room with
  * no answer, and the remedy is another room.
@@ -216,16 +233,16 @@ export interface CustodyTerms {
 }
 
 /**
- * The room's terms, which only `propose` writes, and only while they are
- * unwritten. The host shows the slot of the instance the terms digest to, so
+ * The room's terms, which only `propose` writes, and only while it reads them
+ * as unwritten. The host shows the slot of the instance the terms digest to, so
  * terms rewritten after the answer is published would have the room show
  * another instance's slot, or an empty one.
  */
 export type ProposedTerms = WriteAuthorizedBy<CustodyTerms, typeof propose>;
 
 /**
- * The room's policy cell, which only `propose` writes, and only while it is
- * unwritten, for the same reason: the host reads the slot under the policy
+ * The room's policy cell, which only `propose` writes, and only while it reads
+ * it as unwritten, for the same reason: the host reads the slot under the policy
  * this cell names.
  */
 export type DeclaredPolicy = WriteAuthorizedBy<Sealed<boolean>, typeof propose>;
@@ -280,9 +297,10 @@ export interface CustodyAnswerRoomOutput {
 /**
  * Writes the room's terms, naming each seat by the cell the event carries,
  * and declares the room's policy on `policy`, each only while it is
- * unwritten. Each guard reads the cell it writes and nothing else, so code
- * that runs this handler again, the room's own stream or a member's copy of
- * it, finds what the first proposal wrote and writes nothing.
+ * unwritten. Each guard reads the cell it writes and nothing else, so the
+ * room's own stream, run again, finds what the first proposal wrote and
+ * writes nothing. An instance of this pattern bound elsewhere reads its own
+ * binding instead; the doc comment at the top says what that leaves open.
  */
 const propose = handler<
   { seats: unknown[] },
