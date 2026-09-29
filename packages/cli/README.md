@@ -111,15 +111,15 @@ posture, including each multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.
 
-The `cfc` logger warns once per kind of denial in a run, naming the kind but not
-the reasons. `--cfc-denials` prints every denial as it happens, repeats
-included: a heading naming the kind, each reason the gate gave, the structured
-detail paired with a reason where the gate recorded one (what it refused, and
-the reads that carried the offending clauses), and the remaining inputs behind
-the decision. That covers a denial of the pattern's own setup, which otherwise
-leaves a run with no steps and no reason, as well as one the runtime retries. A
-multi-user participant's lines carry its name. A run that fails on a `cfc`
-warning without the flag says to run again with it.
+The `cfc` logger warns once per kind of denial in each test file, naming the
+kind but not the reasons. `--cfc-denials` prints every denial as it happens,
+repeats included: a heading naming the kind, each reason the gate gave, the
+structured detail paired with a reason where the gate recorded one (what it
+refused, and the reads that carried the offending clauses), and the remaining
+inputs behind the decision. That covers a denial of the pattern's own setup,
+which otherwise leaves a run with no steps and no reason, as well as one the
+runtime retries. A multi-user participant's lines carry its name. A run that
+fails on a `cfc` warning without the flag says to run again with it.
 
 A pattern test can create its own labeled store without a connector. Declare a
 column's `ifc` alongside its SQLite type and seed rows in an action:

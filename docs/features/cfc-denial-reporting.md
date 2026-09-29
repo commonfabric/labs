@@ -103,7 +103,9 @@ so `commonfabric.logger["cfc"].countsByKey` carries the per-kind totals and
 refused once at startup from a write refused on every tick of a retry loop.
 
 `resetCfcDenialAnnouncements()` forgets which codes have been announced; the
-next denial of each announces again.
+next denial of each announces again. `cf test` calls it as each test file
+starts, since a file that does not allow for a warning fails on one, and a
+second file denied like the first would otherwise log nothing.
 
 ## Reading a denial
 

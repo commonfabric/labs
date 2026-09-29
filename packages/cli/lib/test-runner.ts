@@ -69,9 +69,10 @@ import type {
   SettleStats,
   Stream,
 } from "@commonfabric/runner";
-import type {
-  CfcEnforcementMode,
-  CfcFlowLabelsMode,
+import {
+  type CfcEnforcementMode,
+  type CfcFlowLabelsMode,
+  resetCfcDenialAnnouncements,
 } from "@commonfabric/runner/cfc";
 import {
   type CDFPoint,
@@ -1110,6 +1111,12 @@ export async function runTestPattern(
   testPath: string,
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
+  // A denial logs its warning once per kind, and a denial's warning is what
+  // fails a file that does not allow for one, so each file starts with every
+  // kind unannounced. Otherwise a second file denied the same way would log
+  // nothing, and pass.
+  resetCfcDenialAnnouncements();
+
   // The effective import root: an explicit `root` wins; otherwise the nearest
   // package root above the test file, so imports that span the package (shared
   // helpers, sibling patterns) resolve without a flag. When neither exists the

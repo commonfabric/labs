@@ -202,6 +202,20 @@ describe("cfc-denials", () => {
       });
     });
 
+    it("fails each of two files denied the same way", async () => {
+      const repeated = resolve(
+        import.meta.dirname!,
+        "fixtures/cfc-denials/repeated",
+      );
+      const { code, stdout } = await cf(`test "${repeated}"`);
+      expect(code).toBe(1);
+      expect(
+        stdout.filter((line) =>
+          line === "  ✗ 1 console warning(s) during test:"
+        ),
+      ).toHaveLength(2);
+    });
+
     describe("a multi-user participant's denial", () => {
       const multiUserFixture = resolve(
         import.meta.dirname!,
