@@ -40,6 +40,37 @@ export class CommonIframeSandboxElement extends LitElement {
   @property({ attribute: "load-state", reflect: true })
   accessor loadState: CommonIframeLoadState = "";
 
+  /**
+   * Where the outer frame loads from, or `undefined` to inline its document
+   * as `srcdoc`.
+   *
+   * A `srcdoc` document inherits the policy container of the page embedding
+   * it, so the embedding page's Content Security Policy applies inside the
+   * frame alongside the frame's own. A page whose policy refuses inline script
+   * therefore refuses the outer frame's script and every guest's, and the
+   * sandbox never loads. A document loaded from a URL takes its policy from
+   * its own response instead, so a host that keeps such a policy serves the
+   * outer frame itself and names it here.
+   *
+   * The document at the URL is the host's to serve: `outer-frame-script.js`
+   * as its script, under a policy that admits what the guest needs, which the
+   * guest's `srcdoc` frame inherits in turn. With no `data-host-origin` on the
+   * script, the host's origin is taken to be the one the document was served
+   * from, so a host serving it from another origin says which origin it is on
+   * that attribute.
+   *
+   * It is the host's to set: the outer frame is what stands between the
+   * guest and the page. So it is a property with no attribute, which keeps
+   * it out of reach of HTML, and whoever holds the element answers for what
+   * they assign. `cf-iframe` holds this one inside its shadow tree and
+   * assigns what the runtime the host provided says, and nothing else.
+   *
+   * A change replaces the frame, and the guest with it: the document is
+   * loaded again into the frame that results.
+   */
+  @property({ attribute: false })
+  accessor outerFrameUrl: string | undefined = undefined;
+
   static override styles = css`
     :host {
       display: block;
@@ -297,14 +328,42 @@ export class CommonIframeSandboxElement extends LitElement {
    */
   protected override updated(changed: PropertyValues) {
     super.updated(changed);
+    if (changed.has("outerFrameUrl")) {
+      // The render this follows replaced the frame, so the window whose
+      // readiness was acted on is gone and its guest with it. The frame that
+      // took its place reports itself ready once it loads, and that loads
+      // `src`; until then there is nothing to ask anything of.
+      this.#readyWindow = undefined;
+      this.#releaseGuest();
+      this.loadState = "";
+      return;
+    }
     if (!this.#readyWindow) return;
     if (changed.has("src") || (changed.has("bridge") && this.src)) {
       this.#loadInnerDoc();
     }
   }
 
-  /** @inheritDoc */
+  /**
+   * Renders the outer frame, from `outerFrameUrl` or inlined. The two are
+   * templates of their own so that a change from one to the other replaces
+   * the frame rather than navigating it: a frame given a `src` while it
+   * holds a `srcdoc` keeps the `srcdoc`.
+   */
   override render() {
+    if (this.outerFrameUrl !== undefined) {
+      return html`
+        <iframe
+          ${ref(this.#iframeRef)}
+          allow="clipboard-write"
+          sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
+          src="${this.outerFrameUrl}"
+          height="100%"
+          width="100%"
+          style="border: none;"
+        ></iframe>
+      `;
+    }
     return html`
       <iframe
         ${ref(this.#iframeRef)}

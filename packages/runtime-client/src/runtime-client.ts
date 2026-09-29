@@ -90,8 +90,26 @@ import {
 } from "./shared/security-context.ts";
 import { cellRefToInstanceId, cellRefToKey } from "./shared/utils.ts";
 
+/**
+ * What a client is told about the page it runs in. None of it is posture, and
+ * none of it crosses the wire: it is read back from the client by what renders
+ * on the page.
+ */
+export interface RuntimeClientPageSettings {
+  /**
+   * Where `cf-iframe` loads its sandbox's outer frame from, for a page whose
+   * own Content Security Policy refuses inline script and so refuses the
+   * `srcdoc` frame the sandbox otherwise inlines. The page serves the document
+   * at this URL; `common-iframe-sandbox`'s `outerFrameUrl` says what it has
+   * to be. Unset, the outer frame is inlined.
+   */
+  iframeOuterFrameUrl?: string;
+}
+
 export interface RuntimeClientOptions
-  extends Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity"> {
+  extends
+    Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity">,
+    RuntimeClientPageSettings {
   apiUrl: URL;
   identity: Identity;
   spaceIdentity?: Identity;
@@ -115,7 +133,8 @@ export interface RuntimeAttachOptions extends
   Omit<
     RuntimeSecurityContext,
     "apiUrl" | "spaceHostMap" | "identity"
-  > {
+  >,
+  RuntimeClientPageSettings {
   /** The backend this client believes the runtime reads from. */
   apiUrl: URL;
 
@@ -168,7 +187,21 @@ export function attachOptionsFrom(
     renderDeclassificationPolicy: options.renderDeclassificationPolicy,
     renderConfidentialityCeiling: options.renderConfidentialityCeiling,
     trustSnapshot: options.trustSnapshot,
+    iframeOuterFrameUrl: options.iframeOuterFrameUrl,
   } satisfies EveryFieldOf<RuntimeAttachOptions>;
+}
+
+/**
+ * The page settings in `options`, apart from everything else there. Named
+ * field by field, as the posture is, so that a setting added to the type is a
+ * type error here until a client carries it.
+ */
+function pageSettingsFrom(
+  options: RuntimeClientPageSettings,
+): RuntimeClientPageSettings {
+  return {
+    iframeOuterFrameUrl: options.iframeOuterFrameUrl,
+  } satisfies EveryFieldOf<RuntimeClientPageSettings>;
 }
 
 export const $conn = Symbol("$request");
@@ -298,6 +331,7 @@ const scheduleAnimationFrame = (callback: () => void): number => {
 export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   #conn: InitializedRuntimeConnection;
   readonly #principal: DID | undefined;
+  readonly #pageSettings: RuntimeClientPageSettings;
   readonly #sessionInstanceId = crypto.randomUUID();
   #pendingWrites = false;
   #operationSubscriptions = new Map<
@@ -320,10 +354,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   private constructor(
     conn: InitializedRuntimeConnection,
     principal: DID | undefined,
+    pageSettings: RuntimeClientPageSettings = {},
   ) {
     super();
     this.#conn = conn;
     this.#principal = principal;
+    this.#pageSettings = pageSettings;
     this.#conn.on("console", this.#onConsole);
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
@@ -339,6 +375,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   /** Acting principal established by the runtime connection posture. */
   actingPrincipalDid(): DID | undefined {
     return this.#principal;
+  }
+
+  /**
+   * Where the page serves the outer frame of `cf-iframe`'s sandbox, as the
+   * host said when it made this client, or `undefined` for a page that
+   * serves none.
+   */
+  iframeOuterFrameUrl(): string | undefined {
+    return this.#pageSettings.iframeOuterFrameUrl;
   }
 
   /** Returns an opaque identity for the scoped document instance in `ref`. */
@@ -778,6 +823,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new RuntimeClient(
       attached,
       options.trustSnapshot?.actingPrincipal ?? options.identity,
+      pageSettingsFrom(options),
     );
   }
 
@@ -816,6 +862,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new RuntimeClient(
       initialized,
       options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+      pageSettingsFrom(options),
     );
   }
 
