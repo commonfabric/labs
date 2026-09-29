@@ -1,8 +1,5 @@
 # ChatIndexEntry
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 One room in a user's chat manager. A manager's `rooms` and `direct` hold these
 ([`ChatManagerOutput`](ChatManagerOutput.md)).
 

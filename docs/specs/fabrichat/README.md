@@ -1,9 +1,9 @@
 # FabriChat
 
-Status: implemented in `packages/patterns/fabrichat/`, with the departures
-[implementation status](#implementation-status) lists. This directory describes
-the four patterns FabriChat is made of, and what they require of the runtime and
-of the programs that use them.
+This directory describes the four patterns FabriChat is made of, and what they
+require of the runtime and of the programs that use them. [Implementation
+status](#implementation-status) says where they are built, and where the build
+departs from this design.
 
 ## Quick links
 

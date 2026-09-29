@@ -1,8 +1,5 @@
 # FabriChatRoom
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 `FabriChatRoom` is an implementation of [`ChatRoomOutput`](ChatRoomOutput.md),
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.

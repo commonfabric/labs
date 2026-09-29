@@ -1,8 +1,5 @@
 # FabriChatManager
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 `FabriChatManager` is an implementation of
 [`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
 manager does: where it lives, what its indexes mean, and what each request does.

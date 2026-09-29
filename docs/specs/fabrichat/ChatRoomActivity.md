@@ -1,8 +1,5 @@
 # ChatRoomActivity
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 One entry in a room's log of recent activity: something the room recorded, and
 when. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers its recent activity,
 in `seq` order, as `recentActivity`.

@@ -1,8 +1,5 @@
 # ChatReaction
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 One person's reaction to one message, with one emoji. A
 [`ChatMessage`](ChatMessage.md) holds its reactions, in no particular order, as
 `reactions`.

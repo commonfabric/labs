@@ -1,8 +1,5 @@
 # ChatMessageVersion
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 One version of a message: its body, and a time. A
 [`ChatMessage`](ChatMessage.md) keeps its versions before the current one in
 `earlierVersions`, oldest first, each with the time the room recorded it. A

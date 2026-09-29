@@ -1,8 +1,5 @@
 # ChatMessage
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)), with its
 reactions and its edit history. A client reads a room's newest messages from its
 [`ChatMessageList`](ChatMessageList.md), and the rest through its session's

@@ -1,8 +1,5 @@
 # FabriChatPlacement
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 `FabriChatPlacement` is one room placed in some other space: a container that
 shows chats among other things. It has no rendering. It is the thing a client
 reads to learn what a placed chat holds and what the viewer may see of it, and

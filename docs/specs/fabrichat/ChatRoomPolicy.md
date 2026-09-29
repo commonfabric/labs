@@ -1,8 +1,5 @@
 # ChatRoomPolicy
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 A room's policy: how it behaves where
 [`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior) leaves the
 choice to the implementation. A room states it in its

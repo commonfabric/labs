@@ -1,8 +1,5 @@
 # ChatRoomAbout
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 What a room says about itself: its kind, its title, when it was created, and its
 policy. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `about`,
 and sets it once, when the room is created. It never changes: its `policy` is a

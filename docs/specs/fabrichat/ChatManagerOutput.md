@@ -1,8 +1,5 @@
 # ChatManagerOutput
 
-Status: implemented, with the departures listed in
-[`README.md`](README.md#implementation-status).
-
 The result of a user's chat manager: what `wish({ query: "#chatManager" })`
 resolves to. It is the contract clients read, and it is named for the role
 rather than for an implementation. [`FabriChatManager`](FabriChatManager.md) is
