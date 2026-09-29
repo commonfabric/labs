@@ -360,12 +360,38 @@ describe("sqlite-query-row-identity", () => {
   });
 
   it({
+    name: "stores two column-labeled rows of equal content as one document",
+    sanitizeResources: false,
+  }, async () => {
+    // A labeled handle has the server load the column-metadata library, which
+    // stays loaded for the life of the process, so this case is exempt from
+    // the dynamic-library leak check.
+
+    const db = await seededDb(labeledTables, "(1, 'a'), (2, 'a'), (3, 'c')");
+    const { result } = await runQuery(
+      db,
+      "labeled-equal",
+      "SELECT body FROM notes ORDER BY id",
+    );
+    const first = await settledPast(result, undefined);
+    await runtime.settled();
+    expect(first.error).toBeUndefined();
+    expect(first.result).toEqual([{ body: "a" }, { body: "a" }, { body: "c" }]);
+
+    const rows = rowDocIds(result);
+    expect(rows[0]).toBe(rows[1]);
+    expect(rows[2]).not.toBe(rows[0]);
+    expect(written.filter((w) => w.id === rows[0])).toHaveLength(1);
+  });
+
+  it({
     name:
       "leaves the document of a column-labeled row standing once no result holds it",
     sanitizeResources: false,
   }, async () => {
-    // Exempt from the dynamic-library leak check for the reason above. A row
-    // document is written once: a row whose data changed is another document,
+    // A labeled handle has the server load the column-metadata library, which
+    // stays loaded for the life of the process, so this case is exempt from
+    // the dynamic-library leak check. A row document is written once: a row whose data changed is another document,
     // and the one it had stays as it was, for a reader who retained a
     // reference to it. Nothing collects it, so the count of row documents a
     // result cell has written grows by one per distinct row it ever held.

@@ -665,7 +665,7 @@ The strict-only delta is:
     transaction that settles a request reads its destination's hash as a read
     of the write destination, so the clauses the control state accumulates
     never reach the rows. The second thing that store's ceiling was refusing
-    was the membership of a SHARED result selected by a labeled parameter,
+    was the membership of a result selected by a labeled parameter,
     which no transaction's join can supply once the settle carries nothing;
     the builtin declares it on `/result`'s shape itself, beside the rows'
     own labels. Most

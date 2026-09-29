@@ -26,7 +26,7 @@ import {
   enrollRuntimeOwnedStore,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
-import { resultRowKeys } from "./sqlite/row-identity.ts";
+import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
   resolveCeilingPlaceholders,
@@ -39,6 +39,7 @@ import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope } from "../builder/types.ts";
 import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
 import {
@@ -314,11 +315,11 @@ function staticConfidentialityOf(
 }
 
 /**
- * The confidentiality a result store already declares on the reference
- * identity of its slots: the declared `followRef` entries at the children of
- * `resultPath`, whether one entry covers every slot or each slot has its own.
- * A declaration only grows, so a settle joins what stands with what it
- * brings.
+ * Returns the confidentiality a result store already declares on the
+ * reference identity of its slots: the declared `followRef` entries at the
+ * children of `resultPath`, whether one entry covers every slot or each slot
+ * has its own. A declaration only grows, so a settle joins what stands with
+ * what it brings.
  */
 function declaredSlotConfidentiality(
   metadata: ReturnType<typeof readStoredCfcMetadata>,
@@ -338,24 +339,21 @@ function declaredSlotConfidentiality(
 }
 
 /**
- * `writeSchema` with `slotIfc` declared on every slot of `result`, as a label
- * on which reference sits at the slot and not on what the reference leads to.
- * A slot's node keeps the row schema it has, per-column labels included: those
- * sit beneath the slot, at the columns.
+ * Returns `writeSchema` with `confidentiality` declared on every slot of
+ * `result` as a `followRef` entry: a label on which reference sits at the
+ * slot and not on what the reference leads to. A probe of the slot consumes
+ * it, and so do `equals()` on the slot and a dereference through it. A slot's
+ * node keeps the row schema it has, per-column labels included: those sit
+ * beneath the slot, at the columns, and a row schema carries no label at its
+ * own root.
  */
 function withSlotIdentityLabel(
   writeSchema: Record<string, unknown> | undefined,
-  slotIfc: {
-    confidentiality: readonly CfcConfClause[];
-    observes: "followRef";
-  },
+  confidentiality: readonly CfcConfClause[],
 ): Record<string, unknown> {
-  const labeled = (node: unknown): Record<string, unknown> => {
-    if (!isObjectNotArray(node)) return { ifc: slotIfc };
-    return node.ifc === undefined
-      ? { ...node, ifc: slotIfc }
-      : { allOf: [node, { ifc: slotIfc }] };
-  };
+  const ifc = { confidentiality, observes: "followRef" };
+  const labeled = (node: unknown): Record<string, unknown> =>
+    isObjectNotArray(node) ? { ...node, ifc } : { ifc };
   const properties = (writeSchema?.properties ?? {}) as Record<
     string,
     Record<string, unknown> | undefined
@@ -1200,9 +1198,10 @@ export function sqliteQuery(
       sql: inputs.sql,
       params: params ?? null,
       reactOn: reactOn ?? null,
-      // Shared materializations include their shape-label contract in the
-      // identity so a memo without that protection cannot stand as a hit.
-      ...(scope !== "session" ? { sharedResultLabelVersion: 1 } : {}),
+      // The contract a result's labels are written under is part of the
+      // identity, so a result stored under another contract cannot stand as
+      // a memo hit.
+      resultLabelVersion: 2,
       // Phase 3 read-surface options join the request identity so changing
       // them re-issues the query (pre-existing queries re-hash once — benign).
       maxConfidentiality: declaredCeiling ?? null,
@@ -1585,7 +1584,18 @@ export function sqliteQuery(
             const reader = crossSpace && servedRun && actingReader
               ? { ...runIdentity, principal: actingReader }
               : undefined;
-            const res = await provider.sqliteQuery(db, sql, params, reader);
+            // The space's row salt is read inside the settle, and loaded
+            // while the query runs, so a salt another runtime minted is the
+            // one the settle finds rather than a conflict its commit meets.
+            const [res] = await Promise.all([
+              provider.sqliteQuery(db, sql, params, reader),
+              runtime.getCellFromLink(
+                runtimeSecretLink(
+                  result.getAsNormalizedFullLink().space,
+                  SQLITE_ROW_SALT,
+                ),
+              ).sync(),
+            ]);
             if (cancelled.signal.aborted) return;
             // Decode asCell-marked `_cf_link` columns from sigil STRINGS to sigil
             // OBJECTS so a typed consumer's asCell schema rehydrates them to live
@@ -1747,15 +1757,16 @@ export function sqliteQuery(
             // a scope limits who can read a result, and says nothing about
             // what that reader's code derives from it and writes elsewhere.
             //
-            // Which rows' labels join it turns on the scope. A shared result
-            // takes every row's, the withheld ones included, since the
-            // count of the rows it kept tells any reader of the space about
-            // the rows it dropped. A session-scoped result is filtered for
-            // its one reader under that reader's own ceiling, which is the
-            // release its contract declares, so it takes the labels of the
-            // rows it holds: the stored references are derived from those
-            // rows' content, and the labels of the rows it dropped would
-            // withhold the result from the reader it was filtered for.
+            // The rows' labels join it as well, because which rows exist
+            // is a fact about each of them (§8.17.4). Which rows' labels
+            // turns on the scope. A shared result takes every row's, the
+            // withheld ones included, since the count of the rows it kept
+            // tells any reader of the space about the rows it dropped. A
+            // session-scoped result is filtered for its one reader under
+            // that reader's own ceiling, which is the release its contract
+            // declares, so it takes the labels of the rows it holds: the
+            // labels of the rows it dropped would withhold the result from
+            // the reader it was filtered for.
             const shapeConfidentiality = joinCfcObservedConfidentiality([
               staticConfidentialityOf(labelSchema),
               ...(scope === "session" ? perRow : rowLabels.labels).map((
@@ -1776,26 +1787,6 @@ export function sqliteQuery(
                 },
               }
               : labelSchema;
-            // Every row is an entity document of its own under the result
-            // cell, keyed as `resultRowKeys()` decides: on its content and
-            // the label it is written under, so a document is written once
-            // and a row that did not change finds its document standing.
-            // The selected database and the handle's `tables` declaration
-            // are namespaces the keys of labeled rows carry on purpose, so a
-            // query whose `db` input moves to another database, or whose
-            // handle is re-declared, lands its rows on documents of their
-            // own. Nothing that varies between runs over unchanged data may
-            // reach a key, or an unchanged result would mint a document per
-            // row per run.
-            const columnConfidentiality = staticConfidentialityOf(labelSchema);
-            const rowKeys = resultRowKeys({
-              rows: resultRows,
-              columns: res.columns,
-              tables: db.tables,
-              database: { space: databaseSpace, id: db.id },
-              columnLabeled: labelSchema !== undefined,
-              rowLabel: (i) => perRow[i],
-            });
             const wrote = await runtime.editWithRetry(
               (wtx) => {
                 markEffectCompletion(wtx, effectKey);
@@ -1807,6 +1798,36 @@ export function sqliteQuery(
                   return;
                 }
                 const base = result.getAsNormalizedFullLink();
+                // Every row is an entity document of its own under the
+                // result cell, keyed as `resultRowKeys()` decides: on the
+                // space's row salt, its content and the label it is written
+                // under, so a document is written once and a row that did
+                // not change finds its document standing. The selected
+                // database and the handle's `tables` declaration are
+                // namespaces the keys of labeled rows carry on purpose, so a
+                // query whose `db` input moves to another database, or whose
+                // handle is re-declared, lands its rows on documents of their
+                // own. Nothing that varies between runs over unchanged data
+                // may reach a key, or an unchanged result would mint a
+                // document per row per run.
+                wtx.ensureRuntimeSecret(base.space, SQLITE_ROW_SALT);
+                const salt = readRuntimeSecret(
+                  wtx,
+                  base.space,
+                  SQLITE_ROW_SALT,
+                );
+                if (salt === undefined) {
+                  throw new Error("sqlite: the space's row salt is unreadable");
+                }
+                const rowKeys = resultRowKeys({
+                  salt,
+                  rows: resultRows,
+                  columns: res.columns,
+                  tables: db.tables,
+                  database: { space: databaseSpace, id: db.id },
+                  columnLabeled: labelSchema !== undefined,
+                  rowLabel: (i) => perRow[i],
+                });
                 let writeSchema = rowWriteSchema;
                 // The store's declaration is grow-only, so the prior is read
                 // whether or not THIS settle carries anything: a refresh whose
@@ -1826,11 +1847,10 @@ export function sqliteQuery(
                 ]);
                 // Which reference sits at a slot is a function of the
                 // parameters too, so every slot declares the request's
-                // label. It is also a function of the row, whose content
-                // the row document's id is derived from. That part differs
-                // from slot to slot and is not declared here: the link
-                // written at a slot carries the labels of the document it
-                // names.
+                // label. A row document's id is salted, so it reveals
+                // nothing about the row to a reader who cannot read the row,
+                // and the slot carries no row's label beyond the one the
+                // link written there carries for the document it names.
                 const slotIfcAtoms = joinCfcObservedConfidentiality([
                   declaredSlotConfidentiality(storedMetadata, [
                     ...base.path,
@@ -1866,10 +1886,10 @@ export function sqliteQuery(
                   };
                 }
                 if (slotIfcAtoms.length > 0) {
-                  writeSchema = withSlotIdentityLabel(writeSchema, {
-                    confidentiality: slotIfcAtoms,
-                    observes: "followRef",
-                  });
+                  writeSchema = withSlotIdentityLabel(
+                    writeSchema,
+                    slotIfcAtoms,
+                  );
                 }
                 // The stored link is bare. The row's schema, per-column labels
                 // and row label included, goes on the write alone, whose policy
@@ -1883,9 +1903,12 @@ export function sqliteQuery(
                 // of the request: a row is reached through a result slot,
                 // and the slot is where the request's label sits. A row
                 // holding a link column declares none: a label at a row's
-                // root makes every link written beneath it answer to the
-                // link write policy, which refuses a link to a cell that
-                // carries no label metadata.
+                // root subjects every link written beneath it to the link
+                // write policy, which refuses a link to a cell that carries
+                // no label metadata.
+                const columnConfidentiality = staticConfidentialityOf(
+                  labelSchema,
+                );
                 const storedRows = resultRows.map((row, i) => {
                   const schema = {
                     ...rowSchemas[i],

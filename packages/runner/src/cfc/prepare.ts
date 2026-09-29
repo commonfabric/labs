@@ -248,6 +248,38 @@ const transformedByProbePath = (
     ? entry.path.slice(0, -1)
     : entry.path;
 
+/**
+ * Returns whether `entry` applies to a read at exactly its own path and not
+ * to a read below it: a concrete `structure` entry, which labels a container
+ * node's shape, and an `enumerate` entry, which labels a container's
+ * membership. A recursive read of an ancestor still consumes either, since it
+ * materializes the container. `template` says whether the entry is a
+ * runtime-minted `*` template, which is consumed at the children it matches.
+ */
+const appliesAtItsPathOnly = (
+  entry: Pick<LabelMapEntry, "origin" | "observes">,
+  template: boolean,
+): boolean =>
+  entry.observes === "enumerate" ||
+  (entry.origin === "structure" && !template);
+
+/**
+ * Returns whether a read at `path` observes the node an entry at `entryPath`
+ * that {@link appliesAtItsPathOnly} labels: a read at that path, or, for a
+ * declared `enumerate` entry, a read of the container's `length`, which the
+ * journal records beneath the container. A runtime-minted container's
+ * `length` is labeled by its `*` templates, which a read there matches.
+ */
+const readsEntryNode = (
+  entry: Pick<LabelMapEntry, "origin" | "observes">,
+  entryPath: readonly string[],
+  path: readonly string[],
+): boolean =>
+  entryPath.length === path.length ||
+  (entry.origin === "declared" && entry.observes === "enumerate" &&
+    path.length === entryPath.length + 1 &&
+    path[path.length - 1] === "length");
+
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
@@ -275,9 +307,12 @@ const labelForEntriesAtPath = (
     // preserve. `*`-path templates are the opposite by construction
     // (template-population §3.2): their whole point is consumption at
     // matching child paths, so the exact-path rule does not apply to them.
+    // An `enumerate` entry, whatever its origin, takes the same rule: it
+    // labels the container's membership, order and count, which a read of
+    // one addressed child does not observe.
     if (
-      entry.origin === "structure" && !template &&
-      entry.path.length !== path.length
+      appliesAtItsPathOnly(entry, template) &&
+      !readsEntryNode(entry, entry.path, path)
     ) {
       continue;
     }
@@ -8705,10 +8740,13 @@ const collectConsumedLabelImpl = (
       // shape). `*`-path templates (template-population §3.2) exist to be
       // consumed at matching child paths, so they take the generic
       // ancestor-or-equal arm — this collector stays additive; templates
-      // just participate.
-      const overlapsRead = entry.origin === "structure" &&
-          !isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath })
-        ? (entryPath.length === path.length
+      // just participate. An `enumerate` entry takes the exact-path rule
+      // too, as it does in `labelAtPath`.
+      const overlapsRead = appliesAtItsPathOnly(
+          entry,
+          isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath }),
+        )
+        ? (readsEntryNode(entry, entryPath, path)
           ? isPrefix(entryPath, path)
           : read.nonRecursive !== true && isPrefix(path, entryPath))
         : (isPrefix(entryPath, path) ||

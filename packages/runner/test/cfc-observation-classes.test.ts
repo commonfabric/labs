@@ -218,6 +218,44 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     expect(tagsOf(join)).toEqual(["root-covering", "members-secret"]);
   });
 
+  it("consumes an enumerate entry on a read of its container or the container's length, and not on a read of one child", async () => {
+    // An enumerate entry labels a container's membership, order and count.
+    // Reading one addressed child observes that child, so it consumes the
+    // child's own entries and not the membership's.
+
+    const rt = makeRuntime();
+    const id = await seedDoc(rt, "occ-enumerate", { items: [{ n: 1 }] }, [
+      {
+        path: ["items"],
+        label: { confidentiality: [audience("members-secret")] },
+        origin: "declared",
+        observes: "enumerate",
+      },
+      // Another component than the membership's, so longest-prefix
+      // resolution within a component cannot mask it at the child.
+      {
+        path: ["items", "0"],
+        label: { confidentiality: [audience("element")] },
+        origin: "derived",
+      },
+    ]);
+
+    const container = await flowJoinOf(rt, "occ-enumerate-container", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items"]), { nonRecursive: true });
+    });
+    expect(tagsOf(container)).toContain("members-secret");
+
+    const length = await flowJoinOf(rt, "occ-enumerate-length", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items", "length"]));
+    });
+    expect(tagsOf(length)).toContain("members-secret");
+
+    const child = await flowJoinOf(rt, "occ-enumerate-child", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items", "0"]));
+    });
+    expect(tagsOf(child)).toEqual(["element"]);
+  });
+
   it("standalone probes consume the link-origin pointer label (SC-8 widening, the new wider join)", async () => {
     // The SC-8 widening (NOT parity — C0 §6 scopes it out deliberately): a
     // standalone slot-pointer probe — a `linkResolutionProbe` read with no

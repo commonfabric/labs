@@ -407,12 +407,9 @@ with the pure half in
    content and its label (Section [05](./05-reactivity.md)). The doc id is a
    value derived from the row, so the reference at each result slot carries
    the row's label ("Where a query's selection inputs are labeled" below):
-   a reader the row label excludes cannot observe the id, and so cannot
-   confirm a guess at the row's content by recomputing it. The flush writes
-   each labeled row doc **directly** (its own id, root path) under a
-   root-`ifc` schema, and then reads each row's stored link back to confirm
-   the row has a doc to carry the label, refusing the query if one does not.
-   Keyed by the row doc's id, the per-row root label coexists with Phase 2's
+   a reader the row label excludes cannot observe the id at the slot. The
+   flush writes each labeled row doc **directly** (its own id, root path)
+   under a root-`ifc` schema. Keyed by the row doc's id, the per-row root label coexists with Phase 2's
    per-column field labels on the same doc and dominates its fields by
    prefix-match (a field of a row is at least as confidential as the row —
    inheriting down can only raise). Downstream consumers inherit it through
@@ -487,8 +484,9 @@ session. A runtime `skip` falls back to `fail` for aggregates; a query's own
 
 A **shared** query result materializes under its query-declared ceiling and
 mode, independently of runtime ceilings. The runtime ceiling does not join its
-request hash or filter its stored rows. The hash includes the shared result's
-shape-label contract version, so a memo without that protection is reissued.
+request hash or filter its stored rows. The hash of every query, shared or
+not, includes the version of the contract its result's labels are written
+under, so a result stored under another contract is reissued.
 Each reader instead observes the
 materialized result through the ordinary cell read guard. The result array
 carries the canonical join of all source-row labels, including rows that the
@@ -837,8 +835,8 @@ carries them. A row under a row label carries the row label at its root for
 every class; where such a row also carries per-column labels, its existence
 carries the row label and its columns carry theirs. A row of a query that
 projects an `asCell` link column declares no existence label: a label at a
-row's root makes every link written beneath it answer to the link write
-policy, which refuses a link to a cell that carries no label metadata.
+row's root subjects every link written beneath it to the link write policy,
+which refuses a link to a cell that carries no label metadata.
 
 Two residuals are recorded against §8.17.6:
 

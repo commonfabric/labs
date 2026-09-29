@@ -164,9 +164,8 @@ proportionate to what the view displays. A view that needs more of the store
 than that pages through it — a bound the reader moves. Paging bounds what one
 query writes rather than what the space accumulates: every page fetched
 materializes its rows, and nothing reclaims the rows of a page the reader has
-left. Returning to an earlier page issues a fresh query; its rows land on the
-documents they had before where their content is the key, and rewrite the
-documents at their positions where their position is. The durable cost is
+left. Returning to an earlier page issues a fresh query, and its rows land on
+the documents they had before. The durable cost is
 the number of distinct row documents the pages materialize, which grows with
 every page whose rows the space has not held.
 
