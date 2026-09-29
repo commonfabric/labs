@@ -1863,3 +1863,5 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     };
   },
 );
+
+export default FabriChatRoom;

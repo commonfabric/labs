@@ -278,6 +278,7 @@ export async function runMultiUserTestPattern(
           // the single-user runner honors it.
           cfcEnforcementMode: options.cfcEnforcementMode,
           cfcFlowLabels: options.cfcFlowLabels,
+          cfcDenials: options.cfcDenials,
         }) as ParticipantInitResult;
         assertParticipantRung(
           spec.name,

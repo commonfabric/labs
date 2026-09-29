@@ -58,13 +58,12 @@ first run does without.
    `Warning Ignored build scripts for packages: npm:fuse-native@2.2.6` box on
    stderr. It is noise; the command's output is on stdout.
 
-2. **Docker with the `runsc-cfc` runtime.** The console runs every sandboxed
-   tool in a container under that runtime. Every other entrypoint, which is the
-   batch CLI, the interactive stdio entrypoint, and both lanes of the Loom local
-   host, can instead invoke `runsc` directly, with no Docker, where
+2. **Docker with the `runsc-cfc` runtime.** By default the console runs every
+   sandboxed tool in a container under that runtime. Every entrypoint, the
+   console included, can instead invoke `runsc` directly, with no Docker, where
    `CF_HARNESS_SANDBOX_RUNTIME` selects it; the package README's
-   [Sandbox runtimes](README.md#sandbox-runtimes) covers that driver. On macOS,
-   follow the gVisor
+   [Sandbox runtimes](README.md#sandbox-runtimes) covers that driver, and this
+   walkthrough follows the Docker one. On macOS, follow the gVisor
    [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
    it owns installation and registration. Confirm the result:
 
@@ -602,11 +601,11 @@ is a real problem.
 
 ## 8. Run the CLI path instead
 
-The batch CLI and the console resolve the same session configuration, with one
-difference: the CLI reads the sandbox runtime selection, `--sandbox-runtime` and
-`CF_HARNESS_SANDBOX_RUNTIME`, and the console does not, so a console session
-always runs on the Docker driver. On the Docker driver, which is the default,
-the CLI refuses an enforcing run unless both runsc-cfc transports are named:
+The batch CLI and the console resolve the same session configuration, and the
+same sandbox runtime selection: the CLI from `--sandbox-runtime` or
+`CF_HARNESS_SANDBOX_RUNTIME`, the console from the variable alone. On the Docker
+driver, which is the default, the CLI refuses an enforcing run unless both
+runsc-cfc transports are named:
 
 ```sh
 cd <labs>/packages/cf-harness

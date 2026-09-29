@@ -627,6 +627,15 @@ describe("cfc schema sanitization", () => {
     ).toContain("cannot resolve schema reference");
   });
 
+  it("validates exact bigint values without accepting rounded numbers", () => {
+    expect(validateSchemaDefinition({ type: "bigint" })).toBeUndefined();
+    expect(validateSchemaValue({ type: "bigint" }, 9007199254740993n))
+      .toBeUndefined();
+    expect(validateSchemaValue({ type: "bigint" }, 9007199254740992))
+      .toBeDefined();
+    expect(validateSchemaValue({ type: "integer" }, 1n)).toBeDefined();
+  });
+
   it("validates `FabricPrimitive` schema types by prototype", () => {
     const bytes = new FabricBytes(new Uint8Array([1, 2]));
 

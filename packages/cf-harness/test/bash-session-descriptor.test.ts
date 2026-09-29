@@ -1,14 +1,21 @@
 /**
- * The bash tool offers `session` only to a run whose sandbox has sessions.
+ * The bash tool offers `session` only to a run that can use one: a run whose
+ * sandbox has sessions, in a mode that allows them.
  *
  * The Docker runtime has none, and it is the default: a `session` input in
  * its tool manifest would change what every existing run sends the model and
  * invite a call that can only be refused. So on a runtime without sessions
- * the descriptor has to be the one main offers, byte for byte.
+ * the descriptor has to be the one main offers, byte for byte. The same holds
+ * for a run in an enforcing mode on a runtime with sessions, which refuses
+ * every session.
  */
 
 import { assertEquals, assertNotEquals } from "@std/assert";
 import { normalize } from "@std/path/posix";
+import {
+  CFC_ENFORCEMENT_MODES,
+  type CfcEnforcementMode,
+} from "@commonfabric/runner/cfc";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
@@ -56,65 +63,107 @@ const runscDescription: SandboxRuntimeDescription = {
   cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
 };
 
-Deno.test("the bash descriptor for a runtime without sessions is main's, byte for byte", () => {
+/**
+ * Which modes let a run use a session, stated here rather than read from the
+ * rule under test, so that the rule and this table are two different answers.
+ */
+const SESSIONS_USABLE: Readonly<Record<CfcEnforcementMode, boolean>> = {
+  disabled: true,
+  observe: true,
+  "enforce-explicit": false,
+  "enforce-strict": false,
+};
+
+Deno.test("the table covers every enforcement mode", () => {
   assertEquals(
-    JSON.stringify(bashToolDescriptorForRuntime(dockerDescription)),
-    MAIN_BASH_DESCRIPTOR_JSON,
-  );
-  // `sessions: false` and `sessions` absent are the same answer.
-  assertEquals(
-    JSON.stringify(
-      bashToolDescriptorForRuntime({ ...dockerDescription, sessions: false }),
-    ),
-    MAIN_BASH_DESCRIPTOR_JSON,
-  );
-  // The descriptor a caller reads off the tool with no run in hand.
-  assertEquals(JSON.stringify(bashToolDescriptor), MAIN_BASH_DESCRIPTOR_JSON);
-  assertEquals(JSON.stringify(bashTool.descriptor), MAIN_BASH_DESCRIPTOR_JSON);
-  assertEquals(
-    JSON.stringify(
-      builtinToolDescriptorForRuntime(bashTool, dockerDescription),
-    ),
-    MAIN_BASH_DESCRIPTOR_JSON,
+    Object.keys(SESSIONS_USABLE).sort(),
+    [...CFC_ENFORCEMENT_MODES].sort(),
   );
 });
 
-Deno.test("the bash descriptor for a runtime with sessions adds `session` and nothing else", () => {
-  const descriptor = bashToolDescriptorForRuntime(runscDescription);
-  const schema = descriptor.inputSchema as {
-    properties: Record<string, Record<string, unknown>>;
-  };
-  assertEquals(Object.keys(schema.properties), [
-    "command",
-    "cwd",
-    "timeoutMs",
-    "session",
-  ]);
-  assertEquals(schema.properties.session.type, "string");
-  // One pattern, the runtime's: the schema the model reads and the check the
-  // runtime makes cannot drift apart.
-  assertEquals(
-    schema.properties.session.pattern,
-    SANDBOX_SESSION_NAME_PATTERN.source,
-  );
-  assertEquals(typeof schema.properties.session.description, "string");
+for (const mode of CFC_ENFORCEMENT_MODES) {
+  const run = { cfcEnforcementMode: mode };
 
-  // Take `session` back out and what is left is main's descriptor.
-  const { session: _session, ...mainProperties } = schema.properties;
-  assertEquals(
-    JSON.stringify({
-      ...descriptor,
-      inputSchema: {
-        ...(descriptor.inputSchema as object),
-        properties: mainProperties,
-      },
-    }),
-    MAIN_BASH_DESCRIPTOR_JSON,
-  );
-  assertEquals(
-    builtinToolDescriptorForRuntime(bashTool, runscDescription),
-    descriptor,
-  );
+  Deno.test(`the bash descriptor for a runtime without sessions is main's, byte for byte, under ${mode}`, () => {
+    assertEquals(
+      JSON.stringify(bashToolDescriptorForRuntime(dockerDescription, run)),
+      MAIN_BASH_DESCRIPTOR_JSON,
+    );
+    // `sessions: false` and `sessions` absent are the same answer.
+    assertEquals(
+      JSON.stringify(
+        bashToolDescriptorForRuntime(
+          { ...dockerDescription, sessions: false },
+          run,
+        ),
+      ),
+      MAIN_BASH_DESCRIPTOR_JSON,
+    );
+    assertEquals(
+      JSON.stringify(
+        builtinToolDescriptorForRuntime(bashTool, dockerDescription, run),
+      ),
+      MAIN_BASH_DESCRIPTOR_JSON,
+    );
+  });
+
+  if (SESSIONS_USABLE[mode]) {
+    Deno.test(`the bash descriptor for a runtime with sessions adds \`session\` and nothing else under ${mode}`, () => {
+      const descriptor = bashToolDescriptorForRuntime(runscDescription, run);
+      const schema = descriptor.inputSchema as {
+        properties: Record<string, Record<string, unknown>>;
+      };
+      assertEquals(Object.keys(schema.properties), [
+        "command",
+        "cwd",
+        "timeoutMs",
+        "session",
+      ]);
+      assertEquals(schema.properties.session.type, "string");
+      // One pattern, the runtime's: the schema the model reads and the check
+      // the runtime makes cannot drift apart.
+      assertEquals(
+        schema.properties.session.pattern,
+        SANDBOX_SESSION_NAME_PATTERN.source,
+      );
+      assertEquals(typeof schema.properties.session.description, "string");
+
+      // Take `session` back out and what is left is main's descriptor.
+      const { session: _session, ...mainProperties } = schema.properties;
+      assertEquals(
+        JSON.stringify({
+          ...descriptor,
+          inputSchema: {
+            ...(descriptor.inputSchema as object),
+            properties: mainProperties,
+          },
+        }),
+        MAIN_BASH_DESCRIPTOR_JSON,
+      );
+      assertEquals(
+        builtinToolDescriptorForRuntime(bashTool, runscDescription, run),
+        descriptor,
+      );
+    });
+  } else {
+    Deno.test(`the bash descriptor for a runtime with sessions is main's, byte for byte, under ${mode}, which refuses every session`, () => {
+      assertEquals(
+        JSON.stringify(bashToolDescriptorForRuntime(runscDescription, run)),
+        MAIN_BASH_DESCRIPTOR_JSON,
+      );
+      assertEquals(
+        JSON.stringify(
+          builtinToolDescriptorForRuntime(bashTool, runscDescription, run),
+        ),
+        MAIN_BASH_DESCRIPTOR_JSON,
+      );
+    });
+  }
+}
+
+Deno.test("the descriptor a caller reads off the tool with no run in hand is main's", () => {
+  assertEquals(JSON.stringify(bashToolDescriptor), MAIN_BASH_DESCRIPTOR_JSON);
+  assertEquals(JSON.stringify(bashTool.descriptor), MAIN_BASH_DESCRIPTOR_JSON);
 });
 
 // --- what reaches the model -------------------------------------------------
@@ -168,18 +217,28 @@ class FakeSandboxRuntime implements SandboxRuntime {
   }
 }
 
-/** The tools of the one model request a run over `description` makes. */
+/**
+ * The tools of the one model request a run over `description` makes, in
+ * `cfcEnforcementMode` when one is named and in the engine's default when not.
+ */
 const toolsSentToTheModel = async (
   description: SandboxRuntimeDescription,
+  cfcEnforcementMode?: CfcEnforcementMode,
 ): Promise<Array<{ name?: string }>> => {
   const bodies: Array<{ tools?: Array<{ name?: string }> }> = [];
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(description),
+    runId: `run-bash-descriptor-${description.kind}`,
+    model: "gpt-5.4",
+    ...(cfcEnforcementMode !== undefined ? { cfcEnforcementMode } : {}),
+  });
+  assertEquals(
+    engine.getRunState().cfcEnforcementMode,
+    cfcEnforcementMode ?? "enforce-strict",
+  );
   const loop = new CfHarnessPromptLoop({
     apiKey: "test-key",
-    engine: new CfHarnessEngine({
-      sandboxRuntime: new FakeSandboxRuntime(description),
-      runId: `run-bash-descriptor-${description.kind}`,
-      model: "gpt-5.4",
-    }),
+    engine,
     allowedToolIds: ["bash", "read_file"],
     fetchFn: (_input, init) => {
       bodies.push(JSON.parse(String(init?.body)));
@@ -212,8 +271,8 @@ Deno.test("a run on a runtime without sessions sends the model main's bash tool"
 });
 
 Deno.test("a run on a runtime with sessions sends the model a bash tool that takes `session`", async () => {
-  const withSessions = await toolsSentToTheModel(runscDescription);
-  const without = await toolsSentToTheModel(dockerDescription);
+  const withSessions = await toolsSentToTheModel(runscDescription, "observe");
+  const without = await toolsSentToTheModel(dockerDescription, "observe");
   assertEquals(withSessions.map((tool) => tool.name), ["bash", "read_file"]);
   const bash = withSessions[0] as {
     parameters?: { properties?: Record<string, unknown> };
@@ -227,4 +286,12 @@ Deno.test("a run on a runtime with sessions sends the model a bash tool that tak
   assertNotEquals(JSON.stringify(bash), MAIN_BASH_WIRE_TOOL_JSON);
   // Only bash depends on the runtime.
   assertEquals(JSON.stringify(withSessions[1]), JSON.stringify(without[1]));
+});
+
+Deno.test("a run in the default mode on a runtime with sessions sends the model main's bash tool", async () => {
+  // The default mode enforces, and an enforcing run can use no session: a
+  // `session` offered here would be refused on every call.
+  const tools = await toolsSentToTheModel(runscDescription);
+  assertEquals(tools.map((tool) => tool.name), ["bash", "read_file"]);
+  assertEquals(JSON.stringify(tools[0]), MAIN_BASH_WIRE_TOOL_JSON);
 });

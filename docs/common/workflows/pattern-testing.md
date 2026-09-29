@@ -87,7 +87,9 @@ Use `cf test <file> --cfc-shell-posture --verbose --stats-threshold 0` to run
 with the shell's `enforce-explicit` enforcement and `persist` flow labels.
 Individual dials are `--cfc-enforcement-mode` and `--cfc-flow-labels`; the latter
 accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
-The run prints the resolved posture. The
+The run prints the resolved posture. When CFC denies something — a write,
+including one the pattern's own setup makes — `--cfc-denials` prints each
+denial with the reasons behind it. The
 [CLI guide](../../../packages/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
 shows how a test declares a local SQLite store with per-column `ifc` labels and
 explains the per-step CFC preparation timings.

@@ -83,6 +83,27 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    pattern: "fabrichat/main.tsx",
+    baselines: [
+      "20260924T175254Z-lVPuvyO2neYxy2fr",
+      "20260924T182554Z-N3p-f7YPbqOkTZYM",
+      "20260924T225103Z-YjE9_Hki8UCUTFpT",
+      "20260924T230240Z-uI7tdMbhqscACz7z",
+      "20260924T232405Z-TEJvpSwlmDpuRRiN",
+      "20260924T234624Z-jlyRd4GdKsxMivd8",
+      "20260925T003944Z-G5oUMsfWQHE_IsdJ",
+      "20260925T010354Z-I1gvu92zRWpwqeGC",
+      "20260925T024902Z-cnnWs44Auqp7mCiB",
+      "20260925T153146Z-TdaJ74eecwaKd76W",
+      "20260925T155413Z-A_iQ8cehCGOyaBlJ",
+      "20260925T161227Z-Q_coiTXjbDNnn1pD",
+    ],
+    paths: ["argument", "result.messages"],
+    reason:
+      "replace the FabriChat example with the requested room/manager protocol; old message storage is not migrated",
+    record: "docs/history/fabrichat-protocol-replacement-2026-09-29.md",
+  },
+  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that

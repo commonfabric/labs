@@ -22,6 +22,8 @@ import {
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
+import { clickButtonWithExactText } from "./note-button-helpers.ts";
+
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
@@ -140,6 +142,37 @@ describe("fabrichat integration test", () => {
     });
     await waitForText(page, "#fabrichat-messages", "😺 2");
     await waitForReactorCard(page, ["Grace Hopper", "Julie Sussman"]);
+
+    await clickButtonWithExactText(page, "Edit");
+    await fillCfInput(
+      page,
+      'cf-submit-input[data-ui-action="ChatEdit"]',
+      "Hello again from Ada",
+    );
+    await clickTrustedAction(page, "ChatEdit");
+    await waitForVerified(page, "Hello again from Ada");
+    await clickButtonWithExactText(page, "Version history");
+    await waitForText(page, "#fabrichat-messages", "Hello from Ada");
+
+    await clickButtonWithExactText(page, "Reply");
+    await clickButtonWithExactText(page, "Conversation only");
+    await send(page, "An inline answer", storedBodies);
+    await waitForText(page, "blockquote", "Hello again from Ada");
+    await waitForVerified(page, "An inline answer");
+
+    await clickButtonWithExactText(page, "Reply");
+    await send(page, "A thread answer", storedBodies);
+    await waitForVerified(page, "A thread answer");
+    await clickButtonWithExactText(page, "Back to conversation");
+    await waitForCondition(
+      page,
+      (probe) =>
+        !probe.collect("#fabrichat-messages").some((element) =>
+          probe.deepText(element).includes("A thread answer")
+        ),
+    );
+    await clickButtonWithExactText(page, "View thread (1)");
+    await waitForText(page, "#fabrichat-messages", "A thread answer");
   });
 });
 

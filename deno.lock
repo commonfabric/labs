@@ -155,6 +155,7 @@
     "npm:ses@^2.2.0": "2.2.0",
     "npm:source-map-js@^1.2.1": "1.2.1",
     "npm:stoker@^2.0.1": "2.0.1_@hono+zod-openapi@1.5.1__hono@4.12.31__zod@4.4.3_hono@4.12.31",
+    "npm:tree-sitter-bash@0.25.1": "0.25.1",
     "npm:tree-sitter-python@0.25.0": "0.25.0",
     "npm:turndown@^7.2.4": "7.2.4",
     "npm:typescript@6.0.3": "6.0.3",
@@ -2681,6 +2682,14 @@
     "toidentifier@1.0.1": {
       "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA=="
     },
+    "tree-sitter-bash@0.25.1": {
+      "integrity": "sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
     "tree-sitter-python@0.25.0": {
       "integrity": "sha512-eCmJx6zQa35GxaCtQD+wXHOhYqBxEL+bp71W/s3fcDMu06MrtzkVXR437dRrCrbrDbyLuUDJpAgycs7ncngLXw==",
       "dependencies": [
@@ -2866,6 +2875,7 @@
           "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0",
           "npm:entities@8",
           "npm:marked@^18.0.6",
+          "npm:tree-sitter-bash@0.25.1",
           "npm:tree-sitter-python@0.25.0",
           "npm:typescript@6.0.3",
           "npm:web-tree-sitter@0.26.12"

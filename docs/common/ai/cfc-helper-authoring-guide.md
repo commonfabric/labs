@@ -7,6 +7,12 @@ This guide documents the authoring patterns used by the current shared helpers
 so pattern authors can add new helpers without first learning every part of the
 CFC runtime.
 
+A verified pattern's declared default initializes a previously absent protected
+cell without impersonating a handler. The runtime records the exact seed and
+checks that the destination was absent before the transaction. Subsequent writes,
+including an unapproved handler's first attempt to change that seed, must satisfy
+the cell's writer policy. A seed cannot replace an existing value.
+
 ## Mental Model
 
 CFC helpers are normal pattern code plus policy metadata. The metadata is

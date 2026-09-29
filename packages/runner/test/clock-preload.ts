@@ -39,7 +39,7 @@ installFakeClock({
     // (T_flush), and IDLE_PARK_MS are real-time policies, and
     // auto-advance fires the renew interval and park timers as fast as
     // they arm — a semantics change, not a speedup. The test waits on
-    // watermark/subscription edges with bounded timeouts.
+    // watermark/subscription edges under the stuck-condition net.
     "executor-serving-loop",
     "executor-llm-supersession",
     // The engine read-through suite drives the same live ExecutorHost

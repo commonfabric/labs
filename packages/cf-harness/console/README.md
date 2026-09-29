@@ -42,9 +42,11 @@ shared host, a tailnet with an access policy — and not behind a public address
 - **Toolshed and shell running locally.** `./scripts/start-local-dev.sh` from
   the repository root, which serves the API on `http://localhost:8000`. See
   [`docs/development/LOCAL_DEV_SERVERS.md`](../../../docs/development/LOCAL_DEV_SERVERS.md).
-- **Docker.** Every tool the model runs executes in the harness sandbox, which
-  is a container. A stopped Docker daemon is a run that fails on its first
-  `bash` call.
+- **A sandbox runtime.** Every tool the model runs executes in the harness
+  sandbox. By default that is a Docker container under the `runsc-cfc` runtime,
+  and a stopped Docker daemon is a run that fails on its first `bash` call. With
+  `CF_HARNESS_SANDBOX_RUNTIME=runsc` it is the direct `runsc` driver instead,
+  and Docker is not needed; see [Sandbox runtime](#sandbox-runtime).
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
@@ -101,18 +103,18 @@ deno task --cwd packages/cf-harness console:launch \
 That task reads the identity, the space and the toolshed URL off a loom
 instance's `pieces.json` when `--instance` names one, the store off
 `loom toolshed-store-dir`, the connector handles that instance has injected off
-its `sqlite-injection/handles.json` receipt, and the two `runsc-cfc` sidecar
-directories off the runtime registration `docker info` reports — so a sidecar
-path is fixed where Docker registers the runtime, not in loom. Without an
-instance the identity and the space are named — by the flags above, or by
-`CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, or by the `cf` CLI's
-own `CF_IDENTITY` and `CF_SPACE` — and their absence is an error naming them.
-The pattern index and skills registry are this deployment's constants rather
-than any fabric's. It prints every value with the record that decided it, and
-serves on the port Weaver pairs with. Arguments after `--` reach this server
-untouched, so every flag in the tables below is reachable through it.
-[`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it belongs
-to, including the tailnet topology and the pre-demo preflight.
+its `sqlite-injection/handles.json` receipt, and, on the Docker driver, the two
+`runsc-cfc` sidecar directories off the runtime registration `docker info`
+reports — so a sidecar path is fixed where Docker registers the runtime, not in
+loom. Without an instance the identity and the space are named — by the flags
+above, or by `CF_HARNESS_FABRIC_IDENTITY` and `CF_HARNESS_FABRIC_SPACE`, or by
+the `cf` CLI's own `CF_IDENTITY` and `CF_SPACE` — and their absence is an error
+naming them. The pattern index and skills registry are this deployment's
+constants rather than any fabric's. It prints every value with the record that
+decided it, and serves on the port Weaver pairs with. Arguments after `--` reach
+this server untouched, so every flag in the tables below is reachable through
+it. [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it
+belongs to, including the tailnet topology and the pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:
@@ -205,6 +207,42 @@ takes the same spec the CLI takes, and is repeatable. It is how a reference tree
 — a corpus to work from, a checkout to read — reaches the sandbox a task runs
 in.
 
+### Sandbox runtime
+
+The console selects its sandbox the way the interactive entrypoints do: from its
+environment alone, through the derivation every cf-harness entrypoint shares
+(`src/sandbox/runtime-selection.ts`), so a console and a batch run started from
+one environment execute on the same driver. The package's
+[CURRENT_STATE](../docs/CURRENT_STATE.md#sandbox-runtimes) describes both
+drivers.
+
+| Environment                      | Selects                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_SANDBOX_RUNTIME`     | `docker` or `runsc`; unset is `docker`, and any other value refuses to start                  |
+| `CF_HARNESS_SANDBOX_ROOTFS`      | under `runsc`, the rootfs a bundle names                                                      |
+| `CF_HARNESS_RUNSC_BINARY`        | under `runsc`, the `runsc` binary; unset, `runsc` is looked for on `PATH`                     |
+| `CF_HARNESS_RUNSC_CFC_POLICY`    | under `runsc`, the CFC policy; unset, `$HOME/.local/share/runsc-cfc/cfc-policy.json` if there |
+| `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                    |
+
+The batch CLI's `--sandbox-runtime`, `--sandbox-rootfs` and
+`--sandbox-cfc-policy` are refused here and by `console:launch`, in any
+spelling, naming the variable to set instead: the launcher reads the same
+environment to decide whether Docker is involved at all, and a flag one of them
+read and the other did not would leave the launch and the console describing two
+different sandboxes. The Docker image and the Docker runtime name are not
+configurable on the console.
+
+Under `runsc` the console builds the direct driver: no Docker, and the runtime
+description reads `runsc-cfc`. `bash` takes no `session`, as on Docker: the
+console's turns run at `enforce-strict`, and no enforcing run can use a sandbox
+session. `console:launch` reads no Docker runtime table, sites no sidecar
+directory, and refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`,
+which it takes on the Docker driver only, because only that driver reads them;
+it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
+the server when it binds. With no CFC policy, both say that every turn is
+refused. A console that names no runtime, or names `docker`, builds the Docker
+driver exactly as it would with no variable set.
+
 Every turn scans the skills root and records the registry on its run before the
 first model call, so `read_skill_resource` can answer and a delegated
 `pattern-author` child inherits its profile's preloaded skills — the authoring,
@@ -214,9 +252,10 @@ registry names host paths, and the run's `skill-registry.json` artifact records
 what the scan found.
 
 Everything the server writes lives under `.cf-harness-console/` in the working
-directory — the sandbox workspace, run artifacts, the session database, and the
-sandbox's two CFC sidecar transport directories. The harness refuses to start an
-enforcing run without those transports wired, so this surface sites them itself;
+directory — the sandbox workspace, run artifacts, the session database, and, on
+the Docker driver, the sandbox's two CFC sidecar transport directories. The
+harness refuses to start an enforcing run on that driver without those
+transports wired, so this surface sites them itself;
 `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` move them somewhere else.
 `CF_HARNESS_CONSOLE_DIR` moves the whole tree. Give each console a directory of
@@ -274,26 +313,38 @@ an unknown row can have a null timestamp. An unavailable observation stays
 unknown rather than claiming a failure.
 
 Configuration rows name the active console address, port, space, store, model,
-and skill-script switch. The launcher passes its decision report directly into
-the server: connector rows retain every accepted or refused grant, its CFC class
-or refusal reason, and the injection receipt and piece declaration that decided
-it. Changing those files requires a console restart to establish new grants. A
-server flag takes precedence over the inherited launch value and its source. A
-directly configured server reports its explicit grants and marks the full
-connector inventory unknown. An absent injection receipt is also unknown; an
-observed empty receipt establishes an empty inventory.
+sandbox runtime, and skill-script switch. The launcher passes its decision
+report directly into the server: connector rows retain every accepted or refused
+grant, its CFC class or refusal reason, and the injection receipt and piece
+declaration that decided it. Changing those files requires a console restart to
+establish new grants. A server flag takes precedence over the inherited launch
+value and its source. A directly configured server reports its explicit grants
+and marks the full connector inventory unknown. An absent injection receipt is
+also unknown; an observed empty receipt establishes an empty inventory.
 
-External rows check the running Docker daemon's `runsc-cfc` registration and the
-configured index's health and enrollment for the console identity. Each probe
-caches independently for 30 seconds. Reading the route returns the current
-snapshot immediately and schedules stale checks in the background, sharing any
-in-flight check. No probe is awaited by the route. The timestamp remains visible
-while an observation is being refreshed. Model rows describe the startup
-provider and credential source without exposing credentials or making a model
-request; a configured API key does not prove provider acceptance. Docker
-registration does not prove a sandbox can execute a task. Fabric-session
-liveness remains unverified, and Loom, toolshed, and application pin status
-belong to the application that observes them directly.
+External rows check the selected sandbox driver and the configured index's
+health and enrollment for the console identity. On the Docker driver the sandbox
+rows read the running daemon's `runsc-cfc` registration. On the direct `runsc`
+driver they ask Docker nothing: they resolve the driver's configuration the way
+a turn resolves it, and report whether the `runsc` binary is an executable file,
+whether the rootfs is a directory, and whether a CFC policy is configured,
+readable and a JSON object. A policy that is missing, not a file, unreadable for
+want of permission or malformed is failed: runsc cannot use it, and every
+command's output then arrives without a CFC result and is denied to the model.
+The console takes no enforcement mode, so its turns run at `enforce-strict`, and
+with no policy the runtime row is failed because the engine refuses every turn
+before any tool runs. Each probe caches independently for 30 seconds. Reading
+the route returns the current snapshot immediately and schedules stale checks in
+the background, sharing any in-flight check. No probe is awaited by the route.
+The timestamp remains visible while an observation is being refreshed. Model
+rows describe the startup provider and credential source without exposing
+credentials or making a model request; a configured API key does not prove
+provider acceptance. Neither a Docker registration nor an executable `runsc`
+proves a sandbox can execute a task, nor does a rootfs directory or a policy
+that parses: on macOS the rootfs is a marker the darwin `runsc` maps to a block
+image the probe does not look at, and only `runsc` knows a policy's schema.
+Fabric-session liveness remains unverified, and Loom, toolshed, and application
+pin status belong to the application that observes them directly.
 
 A task body carries the text, optionally the session to continue, and optionally
 the cells the task is to be computed over, published patterns, and the

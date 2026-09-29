@@ -1,3 +1,11 @@
+---
+status: historical
+created: 2026-09-09
+archived: 2026-09-28
+reason: "Executed operator procedure for numbering the Topics filed before the namespace; that board is numbered, and the library README carries the general procedure."
+superseded-by: packages/patterns/collection-naming/README.md
+---
+
 # Numbering the Topics that predate the namespace
 
 Part of `skills/topics/SKILL.md`, which is the map. This is the operator
@@ -54,7 +62,7 @@ this against a space holding real data.
    into a sibling piece, so both can be green while the deploy is refused. Run
    `setsrc --check` against the deployment itself before scheduling a window,
    and treat the flag as needing team authorization under the rule in
-   `references/pattern-updates.md`.
+   `skills/topics/references/pattern-updates.md`.
 
 2. **Then each Topic's source**, and it needs
    `--dangerously-allow-incompatible-schema` once per Topic. Moving the board
@@ -76,7 +84,7 @@ this against a space holding real data.
    demand the Topic's three-field projection accept the `piece` the board's row
    publishes — so `setsrc --check` proves every update after this one. Like step
    1's, the flag is a team-authorization decision under the rule in
-   `references/pattern-updates.md`, and a separate one, for an unrelated reason.
+   `skills/topics/references/pattern-updates.md`, and a separate one, for an unrelated reason.
    The flag is for `mentionable` and for nothing else this leg does.
 
    This leg is also what gives a Topic the input its number is stored in and the
@@ -132,7 +140,7 @@ deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames
 ```
 
 `--invocation` needs an invocation session; set `CF_INVOCATION_SESSION` as
-`references/mutating.md` does. One command for the whole board, where the shape
+`skills/topics/references/mutating.md` does. One command for the whole board, where the shape
 this replaced cost one `cf piece link` per Topic.
 
 Step 2 is still one source update per Topic. Drive it as a plan rather than a
@@ -236,7 +244,7 @@ missed in both passes and a second run changed nothing for it. So store its
 number directly. The numbers the namespace holds that no Topic reported storing
 are the ones to resolve. Read each entry as an address, since the map renders
 its members as `{}` otherwise, and confirm it is that Topic — by `createdAt`,
-for the reason `references/reading.md` gives — before sending:
+for the reason `skills/topics/references/reading.md` gives — before sending:
 
 ```bash
 deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @
@@ -250,7 +258,7 @@ deno task cf cell get --cell "$TOPIC" shortName --input
 `recordName` stores whatever number it is handed, so resolving the entry first
 is what keeps the number the namespace's. The call is a mutation like any other:
 it takes an invocation id under `CF_INVOCATION_SESSION`, and its envelope is not
-the evidence — the read of `shortName` after it is (`references/mutating.md`).
+the evidence — the read of `shortName` after it is (`skills/topics/references/mutating.md`).
 
 Every run also logs `Event dropped: speculative origin failed` once per Topic.
 That counts the step's sends, not the Topics that missed: in the same rehearsal

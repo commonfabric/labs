@@ -329,7 +329,8 @@ export abstract class DefaultValueVisitor<
   override mappedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -341,7 +342,8 @@ export abstract class DefaultValueVisitor<
    */
   override mappedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<ResultType>,
+    _state: FabricValuePlus<PlusType>,
+    _resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -354,7 +356,9 @@ export abstract class DefaultValueVisitor<
   override mappedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultKey: string,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }

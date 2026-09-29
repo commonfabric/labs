@@ -348,12 +348,14 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
 
   /**
    * The descriptor a run on this sandbox runtime offers the model, for a
-   * tool whose inputs depend on what the runtime can do. A tool without it
-   * offers `descriptor` to every run. Everything that is not the model's
-   * view of the tool (its id, its effect class) is read from `descriptor`.
+   * tool whose inputs depend on what the runtime can do in this run. A tool
+   * without it offers `descriptor` to every run. Everything that is not the
+   * model's view of the tool (its id, its effect class) is read from
+   * `descriptor`.
    */
   descriptorForRuntime?(
     runtime: SandboxRuntimeDescription,
+    run: { cfcEnforcementMode: CfcEnforcementMode },
   ): HarnessToolDescriptor;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;

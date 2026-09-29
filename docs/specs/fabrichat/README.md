@@ -1,7 +1,6 @@
 # FabriChat
 
-Status: normative protocol and implementation reference. The READ-member
-self-departure requirement remains pending runtime support. The implementation is in `packages/patterns/fabrichat`; its
+Status: normative protocol and implementation reference. The implementation is in `packages/patterns/fabrichat`; its
 [README](../../../packages/patterns/fabrichat/README.md) describes the available
 surfaces and implementation choices.
 

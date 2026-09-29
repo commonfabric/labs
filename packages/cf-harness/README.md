@@ -108,7 +108,7 @@ What works today:
   `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
-  sessions
+  sessions and its CFC enforcement mode allows them
 - under the Docker driver, sandbox containers default to Docker
   `--network bridge` so local Loom/Fabric helper services can be reached through
   Docker Desktop's `host.docker.internal` host alias during early integration
@@ -893,8 +893,14 @@ deno task run -- \
 as its default. A run that names neither uses Docker. The flags in this section
 are the batch CLI's; the interactive stdio entrypoint and the interactive lane
 of the Loom local host refuse them and read the environment variables alone. The
-two coexist on one machine: the direct driver registers nothing with Docker and
-keeps its `runsc` state under the run's own scratch directory.
+console refuses the three selection flags, `--sandbox-runtime`,
+`--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads their variables alone.
+The two sidecar directory flags are the Docker driver's: the console's launcher,
+`console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
+the Docker driver and refuses them under `runsc`. The console takes no Docker
+image or Docker runtime name. The two drivers coexist on one machine: the direct
+driver registers nothing with Docker and keeps its `runsc` state under the run's
+own scratch directory.
 
 - `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
   `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
@@ -913,24 +919,25 @@ executes. With no policy named, it uses the one the Docker path's installer
 places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
 so both drivers label the same files the same way.
 
-Under the direct driver `bash` takes an optional `session`. A call that names a
-session executes in a container the harness keeps for the rest of the run, and a
-call that names none runs in a fresh container of its own. Sessions are refused
-in the enforcing CFC modes. Under Docker the `bash` descriptor has no `session`
-argument.
+Under the direct driver `bash` takes an optional `session`, in a run whose CFC
+enforcement mode allows one. A call that names a session executes in a container
+the harness keeps for the rest of the run, and a call that names none runs in a
+fresh container of its own. Sessions are refused in the enforcing CFC modes, so
+a run in one of them, `enforce-strict` by default, is offered `bash` with no
+`session`, as a run under Docker is in every mode.
 
 The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any
 mount.
 
-Every run that the batch CLI, the interactive stdio entrypoint, or the Loom
-local host starts on the direct driver runs its commands as root, on every host.
-None of them configures a container user: only a caller that builds the runtime
-itself can name one, numerically. The Docker driver's default on Linux is the
-host user. Those runs also use the direct driver's default scratch directory,
-which is made for the run with no access for group or others, under a parent the
-driver verifies is this user's alone. Only a caller that builds the runtime
-itself can name another scratch directory, and that one is not verified.
+Every run that the batch CLI, the interactive stdio entrypoint, the Loom local
+host, or the console starts on the direct driver runs its commands as root, on
+every host. None of them configures a container user: only a caller that builds
+the runtime itself can name one, numerically. The Docker driver's default on
+Linux is the host user. Those runs also use the direct driver's default scratch
+directory, which is made for the run with no access for group or others, under a
+parent the driver verifies is this user's alone. Only a caller that builds the
+runtime itself can name another scratch directory, and that one is not verified.
 
 [Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
 reference is the full contract: the defaults of each setting, the runtime

@@ -6600,10 +6600,11 @@ export class Runner {
    * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
    * other retrying writer: wait for the refusal's catch-up, then prepare the
    * run from the start, where the install reads the manifest as present.
-   * Every other refusal stays terminal, a stale read over the piece's own
-   * documents included: whether a re-commit converges against a serving
-   * side's derived writes is a different question, which
-   * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
+   * A client-executed piece can also lose a read of its ordinary documents
+   * to another participant. It follows this same fresh-transaction path so
+   * intentional argument changes survive. Under server execution, stale reads
+   * instead use `#catchUpAndStartOnStaleRead()` without recommitting setup.
+   * Refusals outside these two conflict classes stay terminal.
    *
    * The refused install is torn down only while it is still the key's current
    * registration, and the ownership token goes back to pending for the wait,
@@ -6624,7 +6625,9 @@ export class Runner {
     // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
     if (
-      !refusalNamesPolicyManifest(error) ||
+      !(refusalNamesPolicyManifest(error) ||
+        (!this.#runtime.experimental.serverExecution &&
+          isStaleReadConflict(error))) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
@@ -6635,8 +6638,8 @@ export class Runner {
     this.#registerPendingDeferredStart(key, ownership);
     logger.info(
       "piece-start-commit-retrying",
-      "piece-run start lost a policy manifest install to another " +
-        "participant; running it again once storage has caught up",
+      "piece-run start lost its read basis to another participant; " +
+        "running it again once storage has caught up",
       resultCell.getAsNormalizedFullLink().id,
       error,
     );
