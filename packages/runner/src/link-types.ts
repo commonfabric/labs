@@ -166,9 +166,15 @@ export type NormalizedFullLink = NormalizedLink & {
   scope: CellScope;
 };
 
-export type ValuePath = readonly ["value", ...string[]];
+/**
+ * A path rooted at a stored document that reaches into its payload, so its
+ * first segment is the `value` member holding the payload. A path relative to
+ * the payload, as a normalized link's is, has no such segment.
+ */
+export type StoredValuePath = readonly ["value", ...string[]];
+
 export type IMemorySpaceValueAddress = IMemorySpaceAddress & {
-  path: ValuePath;
+  path: StoredValuePath;
 };
 
 /**

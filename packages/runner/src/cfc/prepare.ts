@@ -2055,7 +2055,6 @@ class VerifierMetadataResolver {
     let index = this.#labelIndexes.get(metadata);
     if (index === undefined) {
       index = new ConsumedLabelIndex(metadata.labelMap.entries, {
-        canonicalPaths: true,
         onQuery: (wildcard) =>
           this.#tx.noteCfcPreparationWork?.(
             wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
@@ -2095,21 +2094,14 @@ class VerifierMetadataResolver {
         this.#viewIndexes.set(metadata, index);
       }
       const logicalPath = canonicalizeLogicalPath(path);
-      const matching = index.overlapping(logicalPath);
-      // Match claims in the view's logical coordinates, the ones the index
-      // keys each entry by.
       const projected = withoutShadowedPrincipalClaims(
-        matching.map(({ entry, path }) => ({ ...entry, path })),
+        index.overlapping(logicalPath).map(({ entry }) => entry),
         logicalPath,
       );
-      const entries = projected.map((entry, index) => ({
-        ...entry,
-        path: matching[index].entry.path,
-      }));
       views.set(key, {
         view: cfcLabelViewFromMetadata({
           ...metadata,
-          labelMap: { ...metadata.labelMap, entries },
+          labelMap: { ...metadata.labelMap, entries: projected },
         }, path),
         principalClaims: (labelForEntriesAtPath(projected, logicalPath)
           ?.integrity ?? []).filter((atom) =>
@@ -2142,7 +2134,6 @@ class VerifierMetadataResolver {
             label: entry.label,
           })),
           {
-            canonicalPaths: true,
             onQuery: (wildcard) =>
               this.#tx.noteCfcPreparationWork?.(
                 wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
@@ -2389,7 +2380,7 @@ const writePolicyIdentitiesByTarget = (
     const key = targetKey(input.target);
     let paths = result.get(key);
     if (paths === undefined) result.set(key, paths = new Map());
-    const path = encodePointer(canonicalizeLogicalPath(input.target.path));
+    const path = encodePointer(input.target.path);
     if (!paths.has(path)) paths.set(path, identityForInput(input));
   }
   return result;
@@ -2500,8 +2491,7 @@ const linkWritesByTarget = (
   return result;
 };
 
-const pathKey = (path: readonly string[]): string =>
-  encodePointer(canonicalizeLogicalPath(path));
+const pathKey = (path: readonly string[]): string => encodePointer(path);
 
 const pathPatternsOverlap = (
   prefix: readonly string[],
@@ -3325,7 +3315,7 @@ const recordedReferences = (
   const references = new Map<string, CfcAddress>();
   for (const { address, reference } of writersRecordedRoots(tx, target)) {
     if (reference === undefined) continue;
-    references.set(pathKey(canonicalizeLogicalPath(address.path)), reference);
+    references.set(pathKey(address.path), reference);
   }
   return references;
 };
@@ -3949,7 +3939,7 @@ const slotStampDescribesAnother = (
   return metadata.labelMap.entries.some((entry) =>
     isWitnessEvidence(entry) &&
     (entry.observes === undefined || entry.observes === "value") &&
-    pathKey(canonicalizeLogicalPath(entry.path)) === key &&
+    pathKey(entry.path) === key &&
     (entry.label.integrity ?? []).some(isTransformedByAtom) &&
     !stampNamesReference(entry, target)
   );
@@ -4100,7 +4090,6 @@ const deriveFlowJoinImpl = (
               readConsumesEntry(shape, entry)
             ),
             {
-              canonicalPaths: true,
               onQuery: (wildcard) =>
                 tx.noteCfcPreparationWork?.(
                   wildcard
@@ -4253,7 +4242,7 @@ const deriveFlowJoinImpl = (
                 { nonRecursive: true, consumes: "value", ...exclusion },
                 indexFor("value"),
               ).filter((entry) =>
-                pathKey(canonicalizeLogicalPath(entry.path)) ===
+                pathKey(entry.path) ===
                   pathKey(lengthPath)
               );
               return lengthEntries.length === 0
@@ -10179,7 +10168,7 @@ export function* prepareBoundaryCommitSteps(
       );
       if (claims.length > 0) {
         existingPrincipalClaims.set(
-          pathKey(canonicalizeLogicalPath(e.path)),
+          pathKey(e.path),
           claims as readonly CfcAtom[],
         );
       }
@@ -10226,7 +10215,7 @@ export function* prepareBoundaryCommitSteps(
           );
           const carriedClaims = mint.attributeCurrentPrincipal === false
             ? existingPrincipalClaims.get(
-              pathKey(canonicalizeLogicalPath(entry.path)),
+              pathKey(entry.path),
             )
             : undefined;
           // Store confidentiality is grow-only (§8.12.1): a re-write of a path must
@@ -11640,7 +11629,7 @@ export function* prepareBoundaryCommitSteps(
       // deferred paths alone.
       const declaredPositions = (schema: JSONSchema) =>
         cfcSchemaEntries(schema).map((entry) => ({
-          path: encodePointer(canonicalizeLogicalPath(entry.path)),
+          path: encodePointer(entry.path),
           ifc: withoutUndefinedMembers(
             isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
           ),
