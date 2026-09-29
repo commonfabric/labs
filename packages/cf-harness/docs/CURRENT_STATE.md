@@ -101,12 +101,12 @@ either driver coexist on one machine.
 The settings below describe the direct driver and are read only when it is
 selected:
 
-| Setting        | Batch CLI flag         | Environment                      | When neither names one                                                                  |
-| -------------- | ---------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
-| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the VM's image store. On Linux, the run is refused. |
-| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.  |
-| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc` on `PATH`.                                                                      |
-| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                              |
+| Setting        | Batch CLI flag         | Environment                      | When neither names one                                                                                       |
+| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the VM's image store. On Linux, the run is refused.                      |
+| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                       |
+| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it. |
+| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                   |
 
 The harness writes the rootfs path into the bundle as the container's root. On
 Linux `runsc` is expected to find a directory there. On macOS the path is a
@@ -288,10 +288,27 @@ session cap included, and leaves it open when it ends.
 
 Three files decide how the direct driver's sandbox is built and labeled: the CFC
 policy, the rootfs, and the `runsc` binary. Each is refused when it lies inside
-a writable mount of the run, where the sandbox could rewrite it. The comparison
-is by real path, so a symbolic link into a mount is caught, and it ignores case
-on macOS. A `runsc` binary named by anything other than an absolute path is not
-checked.
+a writable mount of the run, where the sandbox could rewrite it.
+
+Each of the three is resolved once, when the configuration is resolved, to the
+path the filesystem leads to, and that path is both what is compared with the
+mounts and what is used from then on: it is the command that is executed, the
+`--cfc-policy` argument, the root in the bundle, and what a child run's runtime
+is built from. The path is walked one name at a time, so a `..` leaves the
+directory the names before it led to and not the one their spelling suggests.
+The comparison ignores case on macOS. A `runsc` binary given as a bare name, the
+default `runsc` included, is looked for on `PATH` in order; one given as a
+relative path, or found through an empty or relative `PATH` entry, is taken
+against the working directory. The policy and the rootfs have to be absolute
+when they reach the driver.
+
+A configuration is refused where any of the three opens with `~`, leads through
+a symbolic link whose target is missing, leads through a name that cannot be
+examined for any reason other than not existing, or has a `.` or `..` after a
+name that does not exist, and where a bare binary name is found on no `PATH`
+entry. A path that does not exist yet is accepted, as the real path of its
+nearest existing ancestor followed by the names that are missing. A hard link
+outside the mounts to a file inside one is not detected.
 
 The scratch directory holds the bundle, the invocation context, and the result
 of each call, so whoever can write there can swap a bundle or a result under the
@@ -302,25 +319,26 @@ comparison.
 
 The second is checked for the default scratch directory only. That directory is
 made for the run with mode 0700, under a parent named `cf-harness-runsc` in the
-temporary directory. The parent is created 0700 when it is absent, and when it
-is there it has to be a real directory, owned by this user, with no access for
-group or others, or no command can run. This user's id is read from `Deno.uid`,
-and from `/usr/bin/id -u` where the `sys` permission is missing; an id that
-cannot be had refuses the run. A scratch directory named by the caller is not
-verified, and the Docker driver does not verify the directories it reads results
-from.
+temporary directory. The parent is created 0700 when it is absent. Created or
+found, it has to be a real directory with no access for group or others, and it
+has to belong to whoever owns what this process makes: the runtime makes an
+empty entry in the parent, compares its owner with the parent's, and removes it.
+Otherwise no command can run. The comparison needs no permission beyond reading
+and writing, and it follows the effective user, which is the one whose files
+these are. A scratch directory named by the caller is not verified, and the
+Docker driver does not verify the directories it reads results from.
 
 A parent that fails the check does not refuse the run as it starts. The runtime
 makes the check once, the first time it is about to write under the scratch
 directory, and keeps the outcome. Where the check failed, the runtime writes
-nothing under the scratch directory and starts no container, and every command
-it is given fails on the check's error. In a run the first such command is the
-capability probe. Its failure is recorded as a `capability_snapshot` failure
-record and does not stop the run, which goes on to its first model turn. A
-`bash` call that names a session is then refused as a session that failed to
-start, and a `bash` call that names none throws, which ends the run. An
-enforcing run with no CFC policy differs: it is refused before the capability
-probe.
+nothing under the scratch directory, runs no `runsc` command and starts no
+container, and every command it is given fails on the check's error. In a run
+the first such command is the capability probe. Its failure is recorded as a
+`capability_snapshot` failure record and does not stop the run, which goes on to
+its first model turn. A `bash` call that names a session is then refused as a
+session that failed to start, and a `bash` call that names none throws, which
+ends the run. An enforcing run with no CFC policy differs: it is refused before
+the capability probe.
 
 With no container user configured the direct driver runs every command as uid 0
 and gid 0, on Linux and on macOS. The Docker driver defaults to the host user on

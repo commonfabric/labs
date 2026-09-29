@@ -830,9 +830,10 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   readonly #sessions = new Map<string, SessionState>();
   /**
    * Sessions that ended underneath the run (their init died, a call in
-   * them timed out, they failed to start) and have not been named since.
-   * The next call that names one is told its state is lost, once; the call
-   * after that starts an empty session.
+   * them timed out) and have not been named since. The next call that names
+   * one is told its state is lost, once; the call after that starts an empty
+   * session. A session that failed to start is not kept here: it held
+   * nothing, and the next call that names it starts it again.
    */
   readonly #lostSessions = new Map<string, string>();
   /** Fresh-call containers in flight, so `close()` can take them down. */
