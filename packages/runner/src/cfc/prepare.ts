@@ -11112,6 +11112,47 @@ export function* prepareBoundaryCommitSteps(
       }
     }
 
+    // A claim binding every later writer of a position is store policy from
+    // the moment the envelope declaring it persists, whether or not the
+    // position holds a value yet: write authority is a property of the
+    // schema, not the value (normative CFC §8.15.3). The schema walk above
+    // mints an entry only where the attempted write reaches a value
+    // (`ifcEntryAppliesToAttemptedWrite`), so a claimed position still
+    // absent — a pattern input declared `WriteAuthorizedBy` with no default,
+    // or one a sibling's default was written beside — got none. A writer
+    // through a schema declaring nothing then found the path policy-free
+    // (`storedCfcMetadataAppliesToPath` reads the label map, not the schema)
+    // and never reached the claim; and a document whose only policy is such
+    // a claim persisted no envelope at all, since nothing below writes an
+    // empty label map. Every claimed concrete position of the schema this
+    // commit persists therefore carries an entry in the final payload set.
+    // The entry says only that policy applies there — its label values stay
+    // the position's writer's to mint — and it is added after the carry
+    // above, so it replaces nothing a stored entry at the path already says.
+    // A wildcard position names no single path an entry could mark, and
+    // matches concrete writes through the schema at verification as before.
+    // A payload whose policy did not verify keeps no declared entry either.
+    if (!ingestVerificationFailed) {
+      const markedPaths = new Set(
+        persistedLabelEntries.map((entry) =>
+          pathKey(canonicalizeLogicalPath(entry.path))
+        ),
+      );
+      for (const entry of mergedSchemaEntries) {
+        if (
+          entry.path.includes("*") || !hasPersistedPolicyClaim(entry.schema)
+        ) continue;
+        const key = pathKey(canonicalizeLogicalPath(entry.path));
+        if (markedPaths.has(key)) continue;
+        markedPaths.add(key);
+        persistedLabelEntries.push({
+          path: entry.path,
+          label: {},
+          origin: "declared",
+        });
+      }
+    }
+
     // The §4.6.4 redundant-entry collapse, ahead of the template derivation
     // so a dropped entry takes its label-metadata templates with it. It runs
     // on the final payload set, so it reaches carried-forward entries as well
