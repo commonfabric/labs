@@ -36,7 +36,10 @@ export interface FabriChatAdapterInput {
 
 /** What an adapter offers. */
 export interface FabriChatAdapterOutput {
-  /** The placed room's title, for lists of pieces. */
+  /**
+   * The placed room's title, for lists of pieces: `"Chat"` for a room with no
+   * title, and `"Chat (unavailable)"` for a room the viewer can't read.
+   */
   [NAME]: string;
 
   /** The room's own rendering, or why there is none. */

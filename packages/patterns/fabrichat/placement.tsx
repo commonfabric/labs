@@ -121,7 +121,10 @@ export interface FabriChatPlacementInput {
 
 /** What a placement offers. */
 export interface FabriChatPlacementOutput {
-  /** The placed room's title, for lists of pieces. */
+  /**
+   * The placed room's title, for lists of pieces: `"Chat"` for a room with no
+   * title, and `"Chat (unavailable)"` for a room the viewer can't read.
+   */
   [NAME]: string;
 
   /** The room, so a client can reach its own streams. */
