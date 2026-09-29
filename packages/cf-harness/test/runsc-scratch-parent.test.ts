@@ -226,7 +226,7 @@ describe("runsc", () => {
       return new RunscSandboxRuntime(config, runner);
     };
 
-    it("rejects a call, having started no container and written nothing, when the default scratch parent is not private", async () => {
+    it("rejects a call, having run and written nothing, when the default scratch parent is not private", async () => {
       await Deno.chmod(parent, 0o755);
       const runner = new RecordingRunner();
       const runtime = runtimeOnTheDefaultScratch(runner);
@@ -235,9 +235,11 @@ describe("runsc", () => {
       );
       await expect(runtime.run({ argv: ["true"], session: "s" })).rejects
         .toThrow("not a private directory of this user");
-      expect(runner.runs.filter((r) => r.command === "/bin/sh")).toEqual([]);
-      expect(await entriesOf(parent)).toEqual([]);
       await runtime.close();
+      // No `runsc` command at all, the ones that tidy up included: each
+      // would read its container state from under the parent.
+      expect(runner.runs).toEqual([]);
+      expect(await entriesOf(parent)).toEqual([]);
     });
 
     it("writes a call's bundle under a scratch parent that is private", async () => {

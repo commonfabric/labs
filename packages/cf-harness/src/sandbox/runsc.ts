@@ -486,8 +486,8 @@ const resolveRunscBinary = (given: string): string => {
  * here, to a canonical path. That path is what is compared with the mounts,
  * what the returned configuration holds, and so what every later use names.
  * One of them that does not exist is accepted, as the path it will have under
- * its nearest existing ancestor: no mount holds that ancestor, so what later
- * appears there was not put there from a sandbox.
+ * its nearest existing ancestor: no writable mount holds that ancestor, so
+ * what later appears there was not put there from a sandbox.
  *
  * @throws When a setting is malformed, when two sandbox roots overlap, when
  * the scratch directory lies inside a mount, when the binary, the policy or
@@ -1079,7 +1079,11 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     return this.#scratchVerified;
   }
 
-  /** A runsc control command: bounded, and never throwing. */
+  /**
+   * A runsc control command: bounded, and never throwing. None is run while
+   * the scratch parent has not passed, because a control command reads the
+   * state of its container from under the scratch directory.
+   */
   async #control(args: string[]): Promise<ProcessRunResult | undefined> {
     const request: ProcessRunRequest = {
       command: this.config.runscBinary,
@@ -1087,6 +1091,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       timeoutMs: RUNSC_CONTROL_TIMEOUT_MS,
     };
     try {
+      await this.#verifyScratch();
       return await this.#runner.run(request);
     } catch {
       return undefined;
