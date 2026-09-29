@@ -33,6 +33,7 @@ import {
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
+  type VisitingEntryResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -530,124 +531,50 @@ export class VisitInProgress<
           value,
         );
 
-        // A `mapTo` settles the entry without visiting either half of it, and
-        // a `replace` puts another entry in its place, visited as the original
-        // would have been.
-        let settled: MapToEntryForm<ResultType> | undefined;
-        let entryKey = key;
-        let entryValue = value;
-
-        switch (visitingResult?.type) {
-          case "mainResult": {
-            return visitingResult;
-          }
-
-          case "mapTo": {
-            settled = visitingResult;
-            break;
-          }
-
-          case "replace": {
-            entryKey = visitingResult.key;
-            entryValue = visitingResult.value;
-            break;
-          }
-
-          case undefined: {
-            break;
-          }
-
-          default: {
-            // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(visitingResult);
-          }
-            // deno-coverage-ignore-stop
-        }
-
-        const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
-          entryKey,
-          settled
-            ? { type: "mapTo", value: settled.key }
-            : doKeys
-            ? this.#visitValue(entryKey)
-            : undefined,
+        const entryResult = this.#resolveVisitingEntryResult(
+          key,
+          value,
+          doKeys,
+          visitingResult,
+          mapResult,
         );
-        let keyMappedTo: string | undefined;
 
-        switch (keyResult?.type) {
+        switch (entryResult?.type) {
           case "mainResult": {
-            return keyResult;
+            return entryResult;
           }
 
           case "mapTo": {
-            keyMappedTo = keyResult.value;
-            if (Object.hasOwn(mapResult!, keyMappedTo)) {
-              throw new Error(
-                debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
-              );
+            const { key: finalKey, value: valueMappedTo } = entryResult;
+            const result = vis.mappedFabricPlainObjectEntry(
+              plainObj,
+              key,
+              value,
+              finalKey,
+              valueMappedTo,
+            );
+
+            if (result?.type === "mainResult") {
+              return result;
             }
+
+            // `!` is valid, because we'll only see `mapTo` when we're actually
+            // mapping.
+            mapResult![finalKey] = valueMappedTo;
+            anyChanges ||= !Object.is(key, finalKey) ||
+              !Object.is(value, valueMappedTo);
             break;
           }
 
           case undefined: {
-            keyMappedTo = undefined;
             break;
           }
 
           default: {
             // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(keyResult);
+            this.#throwShouldntHappenResultType(entryResult);
           }
             // deno-coverage-ignore-stop
-        }
-
-        const valueResult = this.#handleMappingAsAppropriate(
-          entryValue,
-          settled ?? this.#visitValue(entryValue),
-        );
-        let valueMappedTo: ResultType | undefined;
-
-        switch (valueResult?.type) {
-          case "mainResult": {
-            return valueResult;
-          }
-
-          case "mapTo": {
-            valueMappedTo = valueResult.value;
-            break;
-          }
-
-          case undefined: {
-            valueMappedTo = undefined;
-            break;
-          }
-
-          default: {
-            // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(valueResult);
-          }
-            // deno-coverage-ignore-stop
-        }
-
-        if (mapResult) {
-          // `keyMappedTo!` is safe, because if we made it here, it necessarily
-          // got set to a `string`.
-          const finalKey: string = keyMappedTo!;
-          const result = vis.mappedFabricPlainObjectEntry(
-            plainObj,
-            key,
-            value,
-            finalKey,
-            valueMappedTo,
-          );
-
-          if (result?.type === "mainResult") {
-            return result;
-          }
-
-          mapResult[finalKey] = valueMappedTo;
-          anyChanges ||= !Object.is(key, finalKey) ||
-            !Object.is(value, valueMappedTo);
         }
       }
 
@@ -826,6 +753,121 @@ export class VisitInProgress<
       default: {
         // deno-coverage-ignore-start
         this.#throwShouldntHappenResultType(visitingResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  /**
+   * Helper for `#recurseFabricPlainObject()`, which acts on a
+   * `visitingFabricPlainObjectEntry()` result for the entry `key` and `value`,
+   * as `#resolveVisitingResult()` does for a value-only one. A `mainResult`,
+   * whether that result or one from visiting either half of the entry, is
+   * returned as-is. Otherwise this returns an entry `mapTo` of the final key and
+   * mapped value when mapping, and `undefined` when not.
+   *
+   * A `mapTo` settles the entry without visiting either half of it, a `replace`
+   * visits its key and value in place of the entry's own, and `undefined`
+   * visits the entry's own. A key is visited only when `doKeys`. A final key
+   * which `mapResult` already holds is refused before the value is visited.
+   */
+  #resolveVisitingEntryResult(
+    key: string,
+    value: FabricValuePlus<PlusType>,
+    doKeys: boolean,
+    visitingResult: VisitingEntryResult<PlusType, ResultType>,
+    mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined,
+  ): MainResultForm<ResultType> | MapToEntryForm<ResultType> | undefined {
+    let settled: MapToEntryForm<ResultType> | undefined;
+    let entryKey = key;
+    let entryValue = value;
+
+    switch (visitingResult?.type) {
+      case "mainResult": {
+        return visitingResult;
+      }
+
+      case "mapTo": {
+        settled = visitingResult;
+        break;
+      }
+
+      case "replace": {
+        entryKey = visitingResult.key;
+        entryValue = visitingResult.value;
+        break;
+      }
+
+      case undefined: {
+        break;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitingResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+
+    const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
+      entryKey,
+      settled
+        ? { type: "mapTo", value: settled.key }
+        : doKeys
+        ? this.#visitValue(entryKey)
+        : undefined,
+    );
+    let keyMappedTo: string | undefined;
+
+    switch (keyResult?.type) {
+      case "mainResult": {
+        return keyResult;
+      }
+
+      case "mapTo": {
+        keyMappedTo = keyResult.value;
+        if (Object.hasOwn(mapResult!, keyMappedTo)) {
+          throw new Error(
+            debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
+          );
+        }
+        break;
+      }
+
+      case undefined: {
+        break;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(keyResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+
+    const valueResult = this.#handleMappingAsAppropriate(
+      entryValue,
+      settled ?? this.#visitValue(entryValue),
+    );
+
+    switch (valueResult?.type) {
+      case "mainResult": {
+        return valueResult;
+      }
+
+      case "mapTo": {
+        // `keyMappedTo!` is safe: when mapping, the key's result was a `mapTo`
+        // too, so it got set to a `string`.
+        return { type: "mapTo", key: keyMappedTo!, value: valueResult.value };
+      }
+
+      case undefined: {
+        return undefined;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(valueResult);
       }
         // deno-coverage-ignore-stop
     }
