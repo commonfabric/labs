@@ -31,6 +31,12 @@ export type SchemaHint = {
     readonly type: ts.Type;
     readonly typeNode?: ts.TypeNode;
   };
+
+  /**
+   * The member annotation a print is read in place of, where the annotation
+   * names a value binding that the print cannot spell.
+   */
+  readonly spelledBy?: ts.TypeNode;
 };
 
 export type ReactiveCapability =

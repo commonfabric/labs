@@ -9,9 +9,12 @@ import { expect } from "@std/expect";
 
 import {
   LIVE_PAGE_CLIENT,
+  livePage,
   type LivePageEvent,
+  livePageResponse,
   livePages,
 } from "./live-page.ts";
+import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
 import type { Route } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
 
@@ -285,5 +288,104 @@ describe("LIVE_PAGE_CLIENT", () => {
     expect(reloads).toBe(0);
     deliver(`${SERVING_VERSION}-next`);
     expect(reloads).toBe(1);
+  });
+});
+
+describe("LIVE_PAGE_CLIENT updates", () => {
+  it("announces a rendering to the page before bringing main up to date", () => {
+    let page: ((event: { data: string }) => void) | undefined;
+    class FakeSource {
+      readonly readyState = 1;
+      addEventListener(
+        type: string,
+        listener: (event: { data: string }) => void,
+      ): void {
+        if (type === "page") page = listener;
+      }
+      close(): void {}
+    }
+    const part = (html: string) => ({
+      outerHTML: html,
+      innerHTML: "",
+      children: [],
+      replaceWith: () => {},
+    });
+    const next = part("<main></main>");
+    const announced: CustomEvent[] = [];
+    const main = {
+      ...part("<main></main>"),
+      dispatchEvent: (event: CustomEvent) => announced.push(event),
+    };
+    class DOMParser {
+      parseFromString() {
+        return { querySelector: () => next };
+      }
+    }
+    new Function(
+      "document",
+      "location",
+      "EventSource",
+      "DOMParser",
+      "setInterval",
+      "addEventListener",
+      LIVE_PAGE_CLIENT.match(/^<script>([\s\S]*)<\/script>$/)![1],
+    )(
+      {
+        getElementById: () => null,
+        querySelector: () => main,
+        addEventListener: () => {},
+      },
+      { pathname: "/counted", search: "", reload: () => {} },
+      FakeSource,
+      DOMParser,
+      () => 0,
+      () => {},
+    );
+
+    page!({
+      data: JSON.stringify({ version: SERVING_VERSION, html: "<main></main>" }),
+    });
+    expect(announced.map((event) => event.type)).toEqual([LIVE_PAGE_UPDATE]);
+    expect(announced[0].detail).toBe(next);
+    expect(announced[0].bubbles).toBe(true);
+  });
+});
+
+describe("livePage()", () => {
+  const content = {
+    title: "Things",
+    styles: ".thing{color:red}",
+    head: "counted just now",
+    body: "<p>three things</p>",
+  };
+
+  it("puts everything a rendering changes inside main, and the client after it", () => {
+    const html = livePage(content);
+    const main = html.slice(html.indexOf("<main>"), html.indexOf("</main>"));
+    expect(html).toContain("<title>Things</title>");
+    expect(html).toContain(".thing{color:red}");
+    expect(main).toContain("<b>Things</b>");
+    expect(main).toContain(`id="live-badge"`);
+    expect(main).toContain("<span>counted just now</span>");
+    expect(main).toContain("<p>three things</p>");
+    expect(html.indexOf(LIVE_PAGE_CLIENT)).toBeGreaterThan(
+      html.indexOf("</main>"),
+    );
+    expect(html).not.toContain("<script>{}</script>");
+  });
+
+  it("runs the page's own script before the client opens the stream", () => {
+    const html = livePage({ ...content, script: "listen();" });
+    const own = html.indexOf("<script>{listen();}</script>");
+    expect(own).toBeGreaterThan(html.indexOf("</main>"));
+    expect(own).toBeLessThan(html.indexOf(LIVE_PAGE_CLIENT));
+  });
+
+  it("answers with the page as HTML, with the status it is given", async () => {
+    const ok = livePageResponse(content);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await ok.text()).toBe(livePage(content));
+    expect(livePageResponse(content, 503).status).toBe(503);
   });
 });

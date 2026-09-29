@@ -134,6 +134,7 @@ async function runFixture(
   return await new Deno.Command(Deno.execPath(), {
     args: [
       "test",
+      "--no-check",
       "--allow-read",
       ...(write ? ["--allow-write"] : []),
       "--allow-env",

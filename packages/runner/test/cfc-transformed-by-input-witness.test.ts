@@ -503,6 +503,64 @@ describe("TransformedBy input witnesses", () => {
       });
     });
 
+    it("refuses a secret-chosen selection of public documents", async () => {
+      // The documents the selection names carry no label, so nothing the
+      // tally reads in them is confidential: the choice reaches it through
+      // the reference alone, which the attacker wrote. The committed input
+      // read beside it must not lend the output its witness.
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await commitStances(runtime);
+        await seedPublic(runtime, "public-a", { votes: ["approve"] });
+        await seedPublic(runtime, "public-b", { votes: ["reject"] });
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, ATTACKER);
+        const alice = runtime.getCell(space, "alice-note", undefined, tx)
+          .getRaw() as { note: string };
+        const chosen = runtime.getCell(
+          space,
+          alice.note.charCodeAt(0) & 1 ? "public-a" : "public-b",
+          undefined,
+          tx,
+        );
+        runtime.getCell(space, "public-selection", SELECTION_SCHEMA, tx).set([
+          chosen,
+        ] as never);
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+
+        const tallyTx = runtime.edit();
+        setCfcImplementationIdentity(tallyTx, TALLY);
+        const committed = runtime.getCell(
+          space,
+          "committed",
+          undefined,
+          tallyTx,
+        )
+          .getRaw();
+        const selected = runtime.getCell(
+          space,
+          "public-selection",
+          undefined,
+          tallyTx,
+        ).key(0).get();
+        const ballotId = runtime.getCell(
+          space,
+          "public-ballot",
+          undefined,
+          tallyTx,
+        ).getAsNormalizedFullLink().id;
+        tallyTx.writeOrThrow(
+          { space, scope: "space", id: ballotId, path: ["value"] },
+          tally([committed, selected]),
+        );
+        tallyTx.prepareCfc();
+        expect((await tallyTx.commit()).error).toBeUndefined();
+
+        expect(refusedByCeiling(publish(runtime, "public-ballot"))).toBe(true);
+      });
+    });
+
     it("refuses an input whose writer is unattributed", async () => {
       await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
         await seedRoom(runtime);

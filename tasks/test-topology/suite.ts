@@ -74,6 +74,14 @@ export interface UnitRequest {
    * them, which is what a unit selected whole asks for.
    */
   skip: readonly string[];
+
+  /**
+   * Seconds one run of the unit is expected to take, as the manifest the
+   * lane planned from prices the identities it runs. Absent where nothing
+   * priced it. A runner that runs units side by side starts the costliest
+   * first by it.
+   */
+  cost?: number;
 }
 
 /** One JUnit report an invocation writes, and how to read it. */
@@ -92,6 +100,15 @@ export interface Invocation {
   cwd: string;
   env?: Record<string, string>;
   junit?: readonly JUnitOutput[];
+
+  /**
+   * Which of its suite's {@link Suite.processes} this invocation is. A
+   * lane measures the time before the earliest mark its runner leaves in
+   * the spool saying its units began as the process's setup, and counts
+   * nothing of an invocation that leaves no mark or names no process: what
+   * such an invocation spends is what its units took.
+   */
+  process?: string;
 }
 
 /** What a suite is given when it builds its commands. */
@@ -191,6 +208,27 @@ export interface Suite {
   whole: readonly Unit[];
 
   /**
+   * The process each unit runs in, for a suite whose processes spend time
+   * on setup before any of their units begins: a `deno test` type-checking
+   * the module graph of every file it was handed, the pattern test runner
+   * starting up. A lane pays that setup each time it starts such a
+   * process, however many of the process's units it runs, so the packer
+   * charges it the first time a lane opens a unit of that process, and
+   * again for each further run of it a repeated test asks for. What it
+   * charges is measured from the processes that mark when their units
+   * begin, and charged to every process named here, marking or not. The
+   * name is the `process` the invocation running the unit carries, and
+   * means nothing outside its suite.
+   *
+   * A suite names a process for every unit or for none, since the packer
+   * charges a suite's process setup only to the units named here. Absent
+   * where no process the suite starts marks when its units began, such as
+   * a repository gate or one type check over many paths, and whatever such
+   * a process spends is then part of what its units cost.
+   */
+  processes?: ReadonlyMap<Unit, string>;
+
+  /**
    * Tree paths this suite accounts for beyond its units. A suite whose
    * units are files needs none; a suite whose units are dispatch arms
    * names the scripts those arms run, so the drift guard can tell that
@@ -211,7 +249,9 @@ export interface Suite {
    * repository, since a declaration for such a unit comes to most
    * changes and places it in most lanes by declaration rather than by
    * what it has caught. Such a unit reaches a lane on what it is worth,
-   * or because nothing has a record of it.
+   * or because nothing has a record of it. The type check is the exception:
+   * a change reaches every type-check group importing what it touches,
+   * however many that is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
@@ -475,6 +515,37 @@ export function shuffleArguments(): string[] {
   return [shuffleFlag(shuffleSeed())];
 }
 
+/**
+ * The command that runs `deno test` over `files` under `flags`, recording
+ * and shuffling as every suite's `deno test` does, and writing its report to
+ * `junitPath`.
+ *
+ * It never type-checks. The `typecheck` suite checks every file a test
+ * loads, so a test process checking its module graph again repeats that
+ * work in every process a lane starts. Whatever `flags` say about checking
+ * is replaced by one `--no-check`.
+ */
+export function denoTestCommand(
+  flags: readonly string[],
+  context: CommandContext,
+  junitPath: string,
+  files: readonly string[],
+): string[] {
+  const unchecked = [
+    "--no-check",
+    ...flags.filter((flag) => !/^--(no-)?check(=|$)/.test(flag)),
+  ];
+  return [
+    Deno.execPath(),
+    "test",
+    ...unchecked,
+    ...shuffleArguments(),
+    ...recordingArguments(unchecked, context),
+    `--junit-path=${junitPath}`,
+    ...files,
+  ];
+}
+
 /** Writes a batch's skip list where its invocations will read it. */
 export async function writeSkipList(
   skipListPath: string,
@@ -579,6 +650,10 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     // Every unit here is a file the command names. The preload reads the skip
     // list under the same path.
     whole: [],
+    // One `deno test` per part.
+    processes: new Map(
+      [...partOf].map(([unit, part]) => [unit, part.junit.scope]),
+    ),
     ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
@@ -636,20 +711,18 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           env.CF_PATTERN_COVERAGE_DIR = context.patternCoverageDir;
         }
         invocations.push({
-          command: [
-            Deno.execPath(),
-            "test",
-            ...part.flags,
-            ...shuffleArguments(),
-            ...recordingArguments(part.flags, context),
-            `--junit-path=${junitPath}`,
-            ...group.map((request) =>
+          command: denoTestCommand(
+            part.flags,
+            context,
+            junitPath,
+            group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
-          ],
+          ),
           cwd,
           env,
           junit: [{ path: junitPath, ...part.junit }],
+          process: part.junit.scope,
         });
       }
       return invocations;

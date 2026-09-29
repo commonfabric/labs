@@ -4304,6 +4304,144 @@ interface HasImage {
     });
   });
 
+  describe("nodes spelled by a member annotation", () => {
+    // `typeof rules` is `unknown`, so `PolicyOf<unknown>` spells the same type
+    // as the annotation without naming the binding, as a print of it does.
+    const PROGRAM = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> =
+        Cfc<T, { confidentiality: X }>;
+      type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+      declare const rules: unknown;
+      type Root = {
+        field: Confidential<string, readonly [PolicyOf<unknown>]>;
+        maybe: Confidential<string, readonly [PolicyOf<unknown>]> | undefined;
+        nullable:
+          | Confidential<string, readonly [PolicyOf<unknown>]>
+          | null
+          | undefined;
+        count: number;
+      };
+      interface Members {
+        annotated: Confidential<string, readonly [PolicyOf<typeof rules>]>;
+        labeled: Confidential<string, readonly ["x"]>;
+        nullable: Confidential<string, readonly [PolicyOf<typeof rules>]> | null;
+        orUndefined:
+          | Confidential<string, readonly [PolicyOf<typeof rules>]>
+          | undefined;
+      }
+    `;
+
+    /** `Root`'s member `name`, generated with `hint` on its node. */
+    const fieldSchema = async (
+      hint: (
+        members: Map<string, ts.PropertySignature>,
+        checker: ts.TypeChecker,
+      ) => object,
+      name = "field",
+    ) => {
+      const { checker, sourceFile } = await createTestProgram(PROGRAM);
+      let rootNode: ts.TypeLiteralNode | undefined;
+      const members = new Map<string, ts.PropertySignature>();
+      ts.forEachChild(sourceFile, (node) => {
+        if (ts.isTypeAliasDeclaration(node) && node.name.text === "Root") {
+          rootNode = node.type as ts.TypeLiteralNode;
+        } else if (
+          ts.isInterfaceDeclaration(node) && node.name.text === "Members"
+        ) {
+          for (const member of node.members.filter(ts.isPropertySignature)) {
+            members.set((member.name as ts.Identifier).text, member);
+          }
+        }
+      });
+      const field = rootNode!.members.filter(ts.isPropertySignature).find(
+        (member) => (member.name as ts.Identifier).text === name,
+      )!.type!;
+      const schema = new SchemaGenerator().generateSchema(
+        checker.getTypeFromTypeNode(rootNode!),
+        checker,
+        rootNode,
+        undefined,
+        new WeakMap([[field, hint(members, checker)]]),
+      ) as { properties: Record<string, Record<string, unknown>> };
+      return schema.properties[name] as {
+        ifc?: Record<string, unknown>;
+        anyOf?: { ifc?: Record<string, unknown> }[];
+      };
+    };
+
+    const MODULE_POLICY = {
+      policyRefKind: "module",
+      __ctPolicyIdentityOf: { file: "test.ts", path: ["rules"] },
+    };
+
+    it("reads a node as the annotation it is spelled by", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }));
+
+      expect(schema.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
+    });
+
+    it("applies the hints of a node read as its annotation", async () => {
+      const schema = await fieldSchema((members, checker) => {
+        const labeled = members.get("labeled")!;
+        return {
+          spelledBy: members.get("annotated")!.type,
+          narrowedFrom: {
+            type: checker.getTypeFromTypeNode(labeled.type!),
+            typeNode: labeled.type,
+          },
+        };
+      });
+
+      expect(schema.ifc).toMatchObject({
+        confidentiality: [MODULE_POLICY, "x"],
+      });
+    });
+
+    it("reads a node as its annotation beside `undefined` where its type adds `undefined`", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }), "maybe");
+
+      expect(schema.anyOf).toMatchObject([
+        { type: "undefined" },
+        { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
+      ]);
+    });
+
+    it("reads a node as its annotation's members beside `undefined` where its type adds `undefined` to them", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("nullable")!.type,
+      }), "nullable");
+
+      expect(schema.anyOf).toMatchObject([
+        { type: ["null", "undefined"] },
+        { type: "string", ifc: { confidentiality: [MODULE_POLICY] } },
+      ]);
+    });
+
+    it("reads a node as its annotation's members other than `undefined` where its type has none", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("orUndefined")!.type,
+      }));
+
+      expect(schema).toMatchObject({
+        type: "string",
+        ifc: { confidentiality: [MODULE_POLICY] },
+      });
+    });
+
+    it("reads a node by its type where its annotation spells another", async () => {
+      const schema = await fieldSchema((members) => ({
+        spelledBy: members.get("annotated")!.type,
+      }), "count");
+
+      expect(schema).toEqual({ type: "number" });
+    });
+  });
+
   describe("non-serializable type rejection", () => {
     it("throws error for Map type", async () => {
       const generator = new SchemaGenerator();

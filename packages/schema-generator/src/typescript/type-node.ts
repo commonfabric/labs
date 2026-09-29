@@ -125,6 +125,25 @@ export function readAuthoredTypeNode(
 }
 
 /**
+ * Returns the member nodes of the union `node` writes, read through
+ * parentheses and aliases ({@link readAuthoredTypeNode}), each member that
+ * writes a union read for its own members in turn. Returns `[node]` for a node
+ * that writes no union, and for a union already read on the way to it.
+ */
+export function readUnionMemberNodes(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+  visited = new Set<ts.TypeNode>(),
+): ts.TypeNode[] {
+  const written = readAuthoredTypeNode(node, checker);
+  if (!ts.isUnionTypeNode(written) || visited.has(written)) return [node];
+  visited.add(written);
+  return written.types.flatMap((member) =>
+    readUnionMemberNodes(member, checker, visited)
+  );
+}
+
+/**
  * Returns the annotation written on `member`'s declaration when it denotes
  * exactly `type`, the member's type where it is read, apart from the
  * `undefined` that an optional member's `?` adds. Returns `undefined` for a
@@ -144,7 +163,7 @@ export function readMemberAnnotation(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): ts.TypeNode | undefined {
-  const declaration = member.valueDeclaration;
+  const declaration = member.valueDeclaration ?? member.declarations?.[0];
   const annotation = declaration &&
       (ts.isPropertySignature(declaration) ||
         ts.isPropertyDeclaration(declaration))
@@ -152,11 +171,25 @@ export function readMemberAnnotation(
     : undefined;
   if (!annotation) return undefined;
   const annotated = checker.getTypeFromTypeNode(annotation);
-  if (annotated === type) return annotation;
+  if (denotesSameType(annotated, type)) return annotation;
   const optional = (member.flags & ts.SymbolFlags.Optional) !== 0;
   return optional && sameBesidesUndefined(annotated, type)
     ? annotation
     : undefined;
+}
+
+/**
+ * Whether `a` and `b` denote one type: they are the same type, or unions of
+ * the same members. A union written through an alias is a type apart from
+ * the same union written out, though the two denote one type.
+ */
+export function denotesSameType(a: ts.Type, b: ts.Type): boolean {
+  if (a === b) return true;
+  if (!a.isUnion() || !b.isUnion() || a.types.length !== b.types.length) {
+    return false;
+  }
+  const members = new Set<ts.Type>(b.types);
+  return a.types.every((member) => members.has(member));
 }
 
 /** Whether `a` and `b` are unions of the same types once `undefined` is set aside. */

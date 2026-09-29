@@ -29,6 +29,7 @@ import {
 import { Identity } from "@commonfabric/identity";
 import {
   createQueryResultProxy,
+  isFabricInstanceOrView,
   ViewDriftError,
 } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -245,6 +246,48 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     } finally {
       resetModernCellRepConfig();
     }
+  });
+
+  it("reports no own properties, so it can be spread and copied", () => {
+    // An instance has no own properties by contract. Its one own key, the
+    // freeze shield, is machinery kept out of every structural view, and a
+    // view could not report it anyway: it is non-configurable on the
+    // instance and absent from the view's stub target, so the proxy
+    // invariant refuses the descriptor. Reporting it made a spread of the
+    // view throw a `TypeError` before the copy began.
+    const cell = runtime.getCell<unknown>(space, "ownKeys", undefined, tx);
+    cell.set(Object.assign(new Error("boom"), { code: 1 }));
+    const view = cell.get() as FabricError;
+
+    expect(Reflect.ownKeys(view)).toEqual([]);
+    expect(Object.getOwnPropertyDescriptors(view)).toEqual({});
+    expect({ ...view }).toEqual({});
+    expect(Object.assign({}, view)).toEqual({});
+    expect(view.message).toBe("boom");
+    expect(view.getExtra("code")).toBe(1);
+
+    // The descriptor trap agrees with the key list: none of an instance's
+    // own keys is an own property of the view, the freeze shield included,
+    // though any raw instance hands that key out to whoever asks it.
+    const rawKeys = Reflect.ownKeys(
+      FabricError.fromNativeError(new Error("x")),
+    );
+    expect(rawKeys.length).toBeGreaterThan(0);
+    for (const key of rawKeys) {
+      expect(Object.hasOwn(view, key)).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(view, key)).toBeUndefined();
+    }
+  });
+
+  it("is an instance to `isFabricInstanceOrView()`", () => {
+    const cell = runtime.getCell<unknown>(space, "predicate", undefined, tx);
+    cell.set({ err: new Error("boom"), list: [1], record: { a: 1 } });
+    const view = cell.get() as Record<string, unknown>;
+
+    expect(isFabricInstanceOrView(view.err)).toBe(true);
+    expect(isFabricInstanceOrView(view)).toBe(false);
+    expect(isFabricInstanceOrView(view.list)).toBe(false);
+    expect(isFabricInstanceOrView(view.record)).toBe(false);
   });
 
   it("refuses a member once the document no longer holds an instance", () => {

@@ -12,6 +12,7 @@
 
 import { testIdentityKey } from "@commonfabric/test-support/records";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { unitProcesses } from "../test-topology.ts";
 import {
   type Suite,
   unavailableUnits,
@@ -29,7 +30,7 @@ import {
   type Manifest,
   type ManifestEntry,
 } from "./manifest.ts";
-import type { SelectionReason } from "./plan.ts";
+import { calibrationFor, type SelectionReason } from "./plan.ts";
 import { UNMEASURED_COST_SECONDS, VALUE_FLOOR } from "./policy.ts";
 import { percentile90 } from "./score.ts";
 
@@ -352,7 +353,8 @@ export interface PricedCensus extends Census {
  * census — packing the lanes, ordering their batches, counting the full
  * run's lanes, and a report saying what a run would have chosen — prices
  * one suite alike. `pricedCalibration()` says what a suite no lane has
- * run that way is charged.
+ * run that way is charged, and `calibrationFor()` which suites are
+ * charged their process fit.
  */
 export function pricedForRun(
   seen: Census,
@@ -371,7 +373,7 @@ export function pricedForRun(
     ...seen,
     manifest: {
       ...seen.manifest,
-      calibration: priced.calibration,
+      calibration: calibrationFor(priced.calibration, unitProcesses(suites)),
       fitted: priced.fitted,
     },
   };

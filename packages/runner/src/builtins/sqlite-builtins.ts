@@ -1456,12 +1456,23 @@ export function sqliteQuery(
         // One path, not the document: a root read is recursive, so it would
         // materialize every row link and its metadata to answer a question
         // about one string — on the transaction that then writes the rows.
+        // And read where this builtin wrote it, as `setRawUntyped` reads its
+        // own destination: the store's fields hold values, never links, so
+        // resolving the path would add only its probe of `requestHash`. That
+        // probe is a pointer observation the marker does not cover, and a
+        // store created by a labeled issue carries its label on the pointer
+        // of every field — so it reached the rows after all.
         const storedRequestHash = (
           wtx: IExtendedStorageTransaction,
-        ): string | undefined =>
-          result.withTx(wtx).key("requestHash").getRaw({
+        ): string | undefined => {
+          const store = result.getAsNormalizedFullLink();
+          return wtx.readValueOrThrow({
+            ...store,
+            path: [...store.path, "requestHash"],
+          }, {
             meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
           }) as string | undefined;
+        };
         // The acting reader at flush time: the CAPTURED run principal for
         // a served request (the flush's own ambient is the service); the
         // ambient provider read for an unstamped one (the client/OFF

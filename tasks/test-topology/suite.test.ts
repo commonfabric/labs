@@ -210,6 +210,32 @@ describe("a suite of deno test files over several packages", () => {
     expect(invocation!.command).toContain(shuffleFlag(shuffleSeed()));
   });
 
+  it("replaces whatever a part says about checking with `--no-check`", async () => {
+    const checking = fileSuite({
+      id: "checking",
+      needs: ["deno"],
+      parts: [{
+        packageDir: "packages/mill",
+        flags: ["--check=all", "-A", "--no-check=remote"],
+        junit: { kind: "unit", scope: "mill" },
+        files: ["packages/mill/grind.test.ts"],
+      }],
+    });
+    for (const suite of [twoParts(), checking]) {
+      const [invocation] = await suite.command(
+        [{ unit: "packages/mill/integration/grind.test.ts", skip: [] }, {
+          unit: "packages/mill/grind.test.ts",
+          skip: [],
+        }],
+        context,
+      );
+      expect(
+        invocation!.command.filter((word) => /^--(no-)?check/.test(word)),
+      ).toEqual(["--no-check"]);
+      expect(invocation!.command).toContain("-A");
+    }
+  });
+
   it("builds nothing for a unit it does not hold", async () => {
     expect(await twoParts().command([{ unit: "elsewhere", skip: [] }], context))
       .toEqual([]);

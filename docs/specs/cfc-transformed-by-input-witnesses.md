@@ -112,7 +112,10 @@ read's confidential locations:
   A read of the slot itself resolves the slot's value stamp, which is where a
   reference the writer supplied carries its writer (see "References the
   writer supplied" below). A reference followed
-  to confidential content is a location of its own, below.
+  to confidential content is a location of its own, below, and so is a
+  followed reference whose own slot is confidential: the probe of a followed
+  slot contributes its confidentiality to the join and leaves its witnesses
+  to that location.
 
 ### References a transformation follows
 
@@ -124,6 +127,11 @@ slot, as a shallow read of it is, and it counts even when nothing labels the
 slot. So is a slot whose reference leads to another such slot. A reference
 counts when the transformation read the slot, or read recursively above it,
 and read the document it names at or below its target with confidentiality. A
+reference also counts when the transformation followed it and the label of
+its slot is confidential, whatever the document it names carries: a secret
+choice among public documents is a confidential input. Such a slot that no
+content read observed has no value stamp to resolve, and empties the
+witnesses. A
 write redirect counts like any other reference: pattern code can store one as
 data, and a read follows it as it follows any other. A transformation that read
 nothing confidential has no such location to account for.

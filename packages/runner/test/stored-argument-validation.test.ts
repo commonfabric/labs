@@ -14,7 +14,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { validateSchemaValue } from "../src/cfc/schema-sanitization.ts";
-import { extractDefaultValues } from "../src/runner-utils.ts";
+import {
+  extractDefaultValues,
+  mergeSchemaDefaults,
+} from "../src/runner-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
@@ -303,6 +306,66 @@ describe("stored-argument-validation", () => {
         storedArgumentValidationIssue(argument, incompatible, undefined, tx),
       )
         .toBe("failure: value does not match type string");
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("hands a stored instance under an object-typed slot through whole", () => {
+    // The materialized argument is a query-result view, and a view over a
+    // `FabricInstance` has `Object.prototype` for its prototype, so the
+    // defaults merge took one for a record and copied it: the copy threw a
+    // proxy-invariant `TypeError` before any verdict while the view reported
+    // the instance's freeze shield, and without that it would rebuild the
+    // instance as a record, with any default inside the slot filled in. The
+    // merge hands it back whole now. The untyped slot above (`failure:
+    // true`) never descends, which is why that case passed all along.
+    const tx = runtime.edit();
+    try {
+      const absent = runtime.getCell(space, "absent", undefined, tx);
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      argument.set({
+        pending: absent,
+        err: FabricError.fromNativeError(new Error("boom")),
+      });
+      const view = argument.asSchema(undefined).withTx(tx).get() as {
+        err: object;
+      };
+      const slotSchemas: JSONSchema[] = [
+        { type: "object" },
+        { anyOf: [{ type: "object" }, { type: "string" }] },
+        {
+          type: "object",
+          properties: { note: { type: "string", default: "filled" } },
+        },
+      ];
+      for (const err of slotSchemas) {
+        const schema: JSONSchema = {
+          type: "object",
+          properties: { pending: { type: "string" }, err },
+          required: ["pending"],
+        };
+        const merged = mergeSchemaDefaults(view, undefined, schema, {
+          mergeMaterializedLinks: true,
+        }) as { err: object };
+        expect(merged.err).toBe(view.err);
+        expect(merged.err.constructor.name).toBe("FabricError");
+        // The validator judges the view as the keyless record it looks like
+        // (the gap the marker in `query-result-proxy.ts` records), so the
+        // verdict is the one the untyped slot gets above. Whether
+        // `{ type: "object" }` should admit an instance at all is a separate
+        // question.
+        expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+          .toBeUndefined();
+      }
+      const incompatible: JSONSchema = {
+        type: "object",
+        properties: { pending: { type: "string" }, err: { type: "string" } },
+        required: ["pending"],
+      };
+      expect(
+        storedArgumentValidationIssue(argument, incompatible, undefined, tx),
+      ).toBe("err: value does not match type string");
     } finally {
       tx.abort();
     }

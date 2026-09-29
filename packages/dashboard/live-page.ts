@@ -3,24 +3,34 @@
  * screen shows what the dashboard knows now rather than what it knew when the
  * page loaded.
  *
- * A route marked `live` serves a page that carries `LIVE_PAGE_CLIENT` and
- * keeps everything that changes inside its `<main>` element. The page opens
- * an event stream naming itself, `/events?page=<its path and query>`. On
- * every serving tick the server sends a heartbeat down that stream and
- * renders the page again, and it sends the new markup whenever that differs
- * from what it sent before. The page replaces its `<main>` with the one in
- * the new markup. Every page event also names the
- * version the server is serving, and a page built by a different version
- * reloads instead, so the styles and script outside `<main>` follow a
- * deployment too.
+ * A route marked `live` serves a page built by `livePage`, which carries
+ * `LIVE_PAGE_CLIENT` and keeps everything that changes inside its `<main>`
+ * element. The page opens an event stream naming itself,
+ * `/events?page=<its path and query>`. On every serving tick the server sends
+ * a heartbeat down that stream and renders the page again, and it sends the
+ * new markup whenever that differs from what it sent before. The page brings
+ * its `<main>` up to date with the one in the new markup (`updateMain`). Every
+ * page event also names the version the server is serving, and a page built
+ * by a different version reloads instead, so the styles and script outside
+ * `<main>` follow a deployment too.
  *
  * The page reopens its stream the way the dashboard does (`stream-client.ts`),
  * and its badge says whether it can hear the server.
  */
 
 import { TICK_MS } from "./config.ts";
-import { statusLayer } from "./theme.ts";
-import { reconcileMain } from "./live-page-client.ts";
+import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
+import {
+  DASHBOARD_THEME_CLIENT,
+  DASHBOARD_THEME_HEAD,
+  dashboardThemeToggle,
+  statusLayer,
+} from "./theme.ts";
+import {
+  LIVE_PAGE_UPDATE,
+  reconcileMain,
+  updateMain,
+} from "./live-page-client.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import type { Route } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
@@ -162,22 +172,24 @@ export function livePages(
 }
 
 /** The styles of the badge a live page carries. */
-export const LIVE_PAGE_STYLES = `
+const LIVE_PAGE_STYLES = `
   .live-badge{font-size:11px;color:var(--status-good-text);border:1px solid ${
   statusLayer("good", 0.4)
 };border-radius:6px;padding:2px 8px}
   .live-badge.offline{color:var(--status-unknown-text);border-color:var(--status-unknown)}`;
 
 /** The badge saying whether a live page can hear the server. */
-export const LIVE_PAGE_BADGE =
+const LIVE_PAGE_BADGE =
   `<div class="live-badge" id="live-badge" role="status">● LIVE</div>`;
 
 /** Keeps the page it is placed in current. It belongs after `<main>`. */
 export const LIVE_PAGE_CLIENT = `<script>{
   const VERSION = ${JSON.stringify(SERVING_VERSION)};
+  const LIVE_PAGE_UPDATE = ${JSON.stringify(LIVE_PAGE_UPDATE)};
   const liveUpdateStream = ${liveUpdateStream.toString()};
   const followUpdates = ${followUpdates.toString()};
   const reconcileMain = ${reconcileMain.toString()};
+  const updateMain = ${updateMain.toString()};
   const paint = () => {
     const hearing = updates.check(Date.now());
     const badge = document.getElementById('live-badge');
@@ -197,7 +209,7 @@ export const LIVE_PAGE_CLIENT = `<script>{
         const next = new DOMParser().parseFromString(page.html, 'text/html')
           .querySelector('main');
         const main = document.querySelector('main');
-        if (next && main) reconcileMain(main, next);
+        if (next && main) updateMain(main, next);
       },
     },
   );
@@ -206,3 +218,53 @@ export const LIVE_PAGE_CLIENT = `<script>{
   document.addEventListener('visibilitychange', paint);
   addEventListener('online', paint);
 }</script>`;
+
+/** What one rendering of a live page shows, which `livePage` frames. */
+export interface LivePageContent {
+  /** The page's name, in its tab and at its top. */
+  title: string;
+  /** The styles the page needs beyond those every drill-down page has. */
+  styles: string;
+  /** The markup beside the name: what the page shows, and its age. */
+  head: string;
+  /** The markup of the rest of the page. */
+  body: string;
+  /** The page's own script, as source, run before it follows updates. */
+  script?: string;
+}
+
+/**
+ * The whole of a live page: the drill-down page's frame and theme, the name
+ * and the badge at the top, and `content`, with everything that changes from
+ * one rendering to the next inside `<main>`.
+ */
+export function livePage(content: LivePageContent): string {
+  const script = content.script === undefined
+    ? ""
+    : `<script>{${content.script}}</script>\n`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${content.title}</title>
+${DASHBOARD_THEME_HEAD}
+<style>
+${DETAIL_PAGE_STYLES}
+${LIVE_PAGE_STYLES}
+${content.styles}
+</style></head><body><main>
+  <div class="top"><a class="back" href="/">← dashboard</a><b>${content.title}</b>${LIVE_PAGE_BADGE}<span>${content.head}</span></div>
+  ${content.body}
+</main>
+${dashboardThemeToggle()}
+${DASHBOARD_THEME_CLIENT}
+${script}${LIVE_PAGE_CLIENT}
+</body></html>`;
+}
+
+/** `livePage(content)` as the response a live route answers with. */
+export function livePageResponse(
+  content: LivePageContent,
+  status = 200,
+): Response {
+  return new Response(livePage(content), {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}

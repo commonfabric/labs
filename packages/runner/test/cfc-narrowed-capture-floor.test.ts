@@ -176,6 +176,51 @@ describe("cfc-narrowed-capture-floor", () => {
     }]);
   });
 
+  it("labels the result of a lift reading a value whole with its declared policy", async () => {
+    expect(
+      await declaredLabelsOfOut(
+        "secret: Confidential<Secret, [PolicyOf<typeof rules>]>",
+        'JSON.stringify(secret) ? secret.a : ""',
+      ),
+    ).toMatchObject([{
+      confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
+    }]);
+  });
+
+  describe("a lift reading whole an optional value whose annotation writes a union", () => {
+    const WHOLE = 'JSON.stringify(secret) ? secret?.a ?? "" : ""';
+    const POLICY = [{
+      confidentiality: [{ policyRefKind: "module", symbol: "rules" }],
+    }];
+
+    it("labels the result with a nullable value's declared policy", async () => {
+      expect(
+        await declaredLabelsOfOut(
+          "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | null",
+          WHOLE,
+        ),
+      ).toMatchObject(POLICY);
+    });
+
+    it("labels the result with the declared policy of each value the union holds", async () => {
+      expect(
+        await declaredLabelsOfOut(
+          "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | Confidential<Other, [PolicyOf<typeof rules>]>",
+          WHOLE,
+        ),
+      ).toMatchObject(POLICY);
+    });
+
+    it("labels the result with the declared policy of a value whose annotation writes `undefined`", async () => {
+      expect(
+        await declaredLabelsOfOut(
+          "secret?: Confidential<Secret, [PolicyOf<typeof rules>]> | undefined",
+          WHOLE,
+        ),
+      ).toMatchObject(POLICY);
+    });
+  });
+
   it("labels nothing for a lift reading an unlabeled value", async () => {
     expect(await declaredLabelsOfOut("secret: Secret", "secret.a")).toEqual(
       [],

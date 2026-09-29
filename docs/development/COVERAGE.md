@@ -848,10 +848,10 @@ trees and the delta stops meaning anything, so rebase first and measure after.
 To see the per-group counts of a local run, score its profile directory:
 
 ```bash
-DENO_COVERAGE_DIR="$(pwd)/coverage/raw/local" deno task test
+DENO_COVERAGE_DIR="$(pwd)/coverage-raw/local" deno task test
 deno run --allow-read --allow-write --allow-run --allow-env \
   tasks/coverage-metrics.ts \
-  --profile-dir="$(pwd)/coverage/raw/local" --root="$(pwd)"
+  --profile-dir="$(pwd)/coverage-raw/local" --root="$(pwd)"
 ```
 
 A local group total will not match the repository-wide figure. That figure sums

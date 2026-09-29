@@ -324,7 +324,7 @@ function cliDenoSuite(): Suite {
     needs: ["deno", "toolshed", "cf"],
     parts: [{
       packageDir: "packages/cli",
-      flags: ["--no-check", "-A"],
+      flags: ["-A"],
       junit: {
         kind: "integration",
         scope: "cli",

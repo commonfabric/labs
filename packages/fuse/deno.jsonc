@@ -4,7 +4,7 @@
   "exports": { ".": "./mod.ts" },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-ffi --allow-read --allow-write --allow-env --allow-net --allow-run",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-ffi --allow-read --allow-write --allow-env --allow-net --allow-run",
     "bench": "deno run -A ../../scripts/fuse-bench.ts",
     "bench:entity-projection": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --v8-flags=--expose-gc entity-projection.bench.ts"
   }

@@ -62,6 +62,27 @@ function longest(suite: string, seconds: number, coverage = false): TestRecord {
 }
 
 /**
+ * What a lane writes about what the processes it started for one batch
+ * spent before their units began: the two figures, together.
+ */
+function started(
+  suite: string,
+  seconds: number,
+  processes: number,
+  coverage = false,
+): TestRecord[] {
+  return [
+    measured(batchMeasurementName(suite, coverage, "start"), seconds),
+    figure(batchMeasurementName(suite, coverage, "processes"), processes),
+  ];
+}
+
+/** What a lane writes about how many passes one batch made. */
+function passes(suite: string, count: number): TestRecord {
+  return figure(batchMeasurementName(suite, false, "passes"), count);
+}
+
+/**
  * Observations over every combination of a small and a large reading of
  * each of the two things a batch is charged for, far enough apart in the
  * seconds its tests took for a correction to be fitted.
@@ -183,6 +204,101 @@ describe("calibrate", () => {
           longest: 680,
         },
       ]);
+    });
+
+    it("joins how many passes it made, where the lane wrote that", () => {
+      // A count, like the units: read the way a duration is, three passes
+      // would arrive as 0.003.
+      const seen = observationsOf([
+        {
+          run: "a",
+          records: [
+            ...batch("pattern-unit", 900, 1400, 5),
+            longest("pattern-unit", 680),
+            passes("pattern-unit", 3),
+          ],
+        },
+      ]);
+      expect(seen.batches).toEqual([
+        {
+          suite: "pattern-unit",
+          measured: false,
+          ran: 900,
+          spent: 1400,
+          units: 5,
+          longest: 680,
+          passes: 3,
+        },
+      ]);
+    });
+
+    it("takes no pass count that is not a whole number of one or more", () => {
+      for (const count of [0, -1, 1.5]) {
+        const seen = observationsOf([
+          {
+            run: "a",
+            records: [
+              ...batch("pattern-unit", 900, 1400, 5),
+              { ...passes("pattern-unit", 1), durationMs: count },
+            ],
+          },
+        ]);
+        expect(seen.batches.map((one) => one.passes)).toEqual([undefined]);
+      }
+    });
+
+    it("joins what its processes spent before their units began, where the lane wrote both figures", () => {
+      const seen = observationsOf([
+        {
+          run: "a",
+          records: [
+            ...batch("workspace-unit", 40, 92, 17),
+            ...started("workspace-unit", 36, 3),
+          ],
+        },
+      ]);
+      expect(seen.batches).toEqual([
+        {
+          suite: "workspace-unit",
+          measured: false,
+          ran: 40,
+          spent: 92,
+          units: 17,
+          setup: { seconds: 36, processes: 3 },
+        },
+      ]);
+    });
+
+    it("reads a process count as a count rather than as a span of time", () => {
+      const seen = observationsOf([
+        {
+          run: "a",
+          records: [
+            ...batch("workspace-unit", 40, 92, 17),
+            ...started("workspace-unit", 36, 23),
+          ],
+        },
+      ]);
+      expect(seen.batches[0]!.setup?.processes).toBe(23);
+    });
+
+    it("takes no setup from a batch missing one of its two figures", () => {
+      // A setup without the processes it was spent over says nothing a
+      // charge per process can be read from.
+      for (const one of started("workspace-unit", 36, 3)) {
+        const seen = observationsOf([
+          { run: "a", records: [...batch("workspace-unit", 40, 92, 17), one] },
+        ]);
+        expect(seen.batches).toEqual([
+          {
+            suite: "workspace-unit",
+            measured: false,
+            ran: 40,
+            spent: 92,
+            units: 17,
+          },
+        ]);
+      }
     });
 
     it("takes nothing from a longest unit whose batch wrote nothing else", () => {
@@ -343,6 +459,43 @@ describe("calibrate", () => {
       }]);
     });
 
+    it("carries how many passes a batch made", () => {
+      const kept = laneObservationsOf(
+        "object-1",
+        [...batch("pattern-unit", 900, 1400, 5), passes("pattern-unit", 2)],
+        "2026-09-12",
+      );
+      expect(kept).toEqual([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        measured: false,
+        ran: 900,
+        spent: 1400,
+        units: 5,
+        passes: 2,
+      }]);
+    });
+
+    it("carries what a batch's processes spent before their units began", () => {
+      const kept = laneObservationsOf(
+        "object-1",
+        [
+          ...batch("pattern-unit", 900, 700, 3),
+          ...started("pattern-unit", 120, 1),
+        ],
+        "2026-09-12",
+      );
+      expect(kept).toEqual([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        measured: false,
+        ran: 900,
+        spent: 700,
+        units: 3,
+        setup: { seconds: 120, processes: 1 },
+      }]);
+    });
+
     it("carries the day, so a stored observation can be aged", () => {
       const kept = laneObservationsOf(
         "object-1",
@@ -376,6 +529,89 @@ describe("calibrate", () => {
   });
 
   describe("fitting one suite", () => {
+    describe("from batches that measured their processes' setup", () => {
+      /**
+       * Batches whose processes spent `setup` seconds each before their
+       * units began, whose tests shared out at a third of what they took,
+       * and whose units cost a second each.
+       */
+      const pooled = (setup: (i: number) => number) =>
+        Array.from({ length: 10 }, (_, i) => {
+          const processes = 1 + (i % 3);
+          const ran = 60 * (2 + i);
+          const units = 20;
+          return {
+            suite: "s",
+            measured: false,
+            ran,
+            units,
+            spent: processes * setup(i) + ran / 3 + units,
+            setup: { seconds: processes * setup(i), processes },
+          };
+        });
+
+      it("charges each process the ninetieth percentile of what one spent before its units began", () => {
+        // Per process, the ten batches spent 10 to 19 seconds. The ninth
+        // of ten is 18.
+        const fitted = fitSuite(pooled((i) => 10 + i));
+        expect(fitted.process?.setup).toBeCloseTo(18, 6);
+      });
+
+      it("fits the figures beside it as it would from batches that did not measure their setup", () => {
+        // They are what a packer that charges no process setup charges.
+        const said = pooled((i) => 10 + i);
+        const { process: _, ...beside } = fitSuite(said);
+        expect(beside).toEqual(
+          fitSuite(said.map(({ setup: _, ...one }) => one)),
+        );
+      });
+
+      it("fits the correction and the per-unit charge over what each batch spent once its setup is taken out", () => {
+        // The setup differs from batch to batch by more than anything else
+        // the batches differ by, and fitted over what they spent it would
+        // move the slope.
+        const fitted = fitSuite(pooled((i) => 40 * (i % 2))).process;
+        expect(fitted?.correction).toBeCloseTo(1 / 3, 6);
+        expect(fitted?.unitOverhead).toBeCloseTo(1, 6);
+        expect(fitted?.overhead).toBeCloseTo(0, 6);
+        expect(fitSuite(pooled((i) => 40 * (i % 2))).correction)
+          .not.toBeCloseTo(1 / 3, 2);
+      });
+
+      it("fits the process fit from those batches alone, and the figures beside it from every batch", () => {
+        // The batches that did not say where their setup ended spent
+        // minutes. They are as good a reading of what a packer charging no
+        // process setup should charge as the rest, and no reading at all of
+        // what a process's setup is.
+        const said = pooled((i) => 10 + i);
+        const unsaid = Array.from({ length: 4 }, () => ({
+          suite: "s",
+          measured: false,
+          ran: 100,
+          units: 10,
+          spent: 500,
+        }));
+        const { process, ...whole } = fitSuite([...said, ...unsaid]);
+        expect(process).toEqual(fitSuite(said).process);
+        expect(whole).toEqual(
+          fitSuite([...said.map(({ setup: _, ...one }) => one), ...unsaid]),
+        );
+        expect(whole.overhead).toBeGreaterThan(fitSuite(said).overhead);
+      });
+
+      it("makes no process fit where no batch started a process that marks when its units began", () => {
+        // Such a suite's setup cannot be told from its units' time, so it is
+        // charged as it would be from batches that did not measure it.
+        const unmarked = withOneSlow(12);
+        const fitted = fitSuite(
+          unmarked.map((o) => ({ ...o, setup: { seconds: 0, processes: 0 } })),
+        );
+        expect(fitted).toEqual(fitSuite(unmarked));
+        expect(fitted.process).toBeUndefined();
+        expect(fitted.overhead).toBeGreaterThan(0);
+      });
+    });
+
     it("charges one observation's whole cost to the units it opened", () => {
       // With one batch there is nothing to say about how much of what it
       // spent was the batch and how much was the units inside it.
@@ -393,6 +629,21 @@ describe("calibrate", () => {
         }]),
       )
         .toEqual({ overhead: 0, correction: 1, unitOverhead: 13 });
+    });
+
+    it("charges its intercept once for each pass a batch made", () => {
+      // None of these opened a unit, so all a batch spent beyond its tests
+      // is the intercept, paid once a pass: 15 by every batch, where read
+      // as one pass the two batches that made two would say 30.
+      const batches = [
+        { ran: 10, spent: 40, passes: 2 },
+        { ran: 20, spent: 50, passes: 2 },
+        { ran: 5, spent: 20, passes: 1 },
+      ].map((one) => ({ suite: "s", measured: false, units: 0, ...one }));
+      expect(fitSuite(batches))
+        .toEqual({ overhead: 15, correction: 1, unitOverhead: 0 });
+      expect(fitSuite(batches.map(({ passes: _, ...one }) => one)).overhead)
+        .toBe(30);
     });
 
     it("tells what the tests cost from what the units cost, where a suite pays nothing to open a batch", () => {
@@ -908,6 +1159,36 @@ describe("calibrate", () => {
       expect(fitSuite(bounded).correction).toBe(1);
     });
 
+    it("narrows to the batches that say how many passes they made, where enough do", () => {
+      // The three batches that said nothing ran their one unit twice, 150
+      // seconds a run, and spent another 100 starting the suite a second
+      // time. Read as one pass, that 100 would set the intercept.
+      const said = Array.from({ length: 15 }, (_, i) => ({
+        suite: "s",
+        measured: false,
+        units: 30,
+        ran: 60 * (2 + i),
+        spent: 60 * (2 + i) / 3,
+        longest: 10,
+        passes: 1,
+      }));
+      const unsaid = Array.from({ length: 3 }, () => ({
+        suite: "s",
+        measured: false,
+        units: 1,
+        ran: 300,
+        spent: 400,
+        longest: 300,
+      }));
+      const fitted = fitSuite([...said, ...unsaid]);
+      expect(fitted.correction).toBeCloseTo(1 / 3, 6);
+      expect(fitted.overhead).toBeCloseTo(0, 6);
+      expect(
+        fitSuite([...said.map(({ passes: _, ...one }) => one), ...unsaid])
+          .overhead,
+      ).toBeCloseTo(100, 6);
+    });
+
     it("fits a suite from every batch while too few say whether coverage was on", () => {
       const unmarked = Array.from({ length: 15 }, (_, i) => ({
         suite: "s",
@@ -1338,6 +1619,37 @@ describe("calibrate", () => {
       ).toBe(true);
     });
 
+    it("returns `true` for a batch carrying what its processes spent before their units began", () => {
+      expect(isLaneObservation({
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        ran: 900,
+        spent: 700,
+        units: 3,
+        setup: { seconds: 120, processes: 1 },
+      })).toBe(true);
+    });
+
+    it("returns `false` for a process setup that is not two finite numbers", () => {
+      for (
+        const setup of [
+          120,
+          { seconds: "120", processes: 1 },
+          { seconds: 120, processes: Infinity },
+          { seconds: 120 },
+        ]
+      ) {
+        expect(isLaneObservation({
+          day: "2026-09-12",
+          suite: "pattern-unit",
+          ran: 900,
+          spent: 700,
+          units: 3,
+          setup,
+        })).toBe(false);
+      }
+    });
+
     it("returns `false` for a longest unit that is not a finite number", () => {
       for (const figure of [null, "8", Infinity]) {
         expect(
@@ -1363,6 +1675,34 @@ describe("calibrate", () => {
         units: 4,
         invocations: 3,
       })).toBe(true);
+    });
+
+    it("returns `true` for a batch carrying how many passes it made", () => {
+      expect(
+        isLaneObservation({
+          day: "d",
+          suite: "s",
+          ran: 10,
+          spent: 30,
+          units: 4,
+          passes: 2,
+        }),
+      ).toBe(true);
+    });
+
+    it("returns `false` for a pass count that is not a whole number of one or more", () => {
+      for (const figure of [null, "2", Infinity, 0, -1, 1.5]) {
+        expect(
+          isLaneObservation({
+            day: "d",
+            suite: "s",
+            ran: 10,
+            spent: 30,
+            units: 4,
+            passes: figure,
+          }),
+        ).toBe(false);
+      }
     });
 
     it("returns `false` for anything that is not one", () => {
@@ -1415,6 +1755,44 @@ describe("calibrate", () => {
         spent: 700,
         units: 3,
         longest: 680,
+      }]);
+    });
+
+    it("reads how many passes a stored batch made", () => {
+      const seen = laneObservations([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        measured: false,
+        ran: 900,
+        spent: 1400,
+        units: 5,
+        passes: 2,
+      }]);
+      expect(seen.batches).toEqual([{
+        suite: "pattern-unit",
+        measured: false,
+        ran: 900,
+        spent: 1400,
+        units: 5,
+        passes: 2,
+      }]);
+    });
+
+    it("reads what a stored batch's processes spent before their units began", () => {
+      const seen = laneObservations([{
+        day: "2026-09-12",
+        suite: "pattern-unit",
+        ran: 900,
+        spent: 700,
+        units: 3,
+        setup: { seconds: 120, processes: 1 },
+      }]);
+      expect(seen.batches).toEqual([{
+        suite: "pattern-unit",
+        ran: 900,
+        spent: 700,
+        units: 3,
+        setup: { seconds: 120, processes: 1 },
       }]);
     });
 

@@ -12,6 +12,17 @@ import {
   setupMeasurement,
 } from "./lane-measurement.ts";
 
+/** Every kind of figure a lane writes about a batch. */
+const KINDS = [
+  "spent",
+  "ran",
+  "units",
+  "longest",
+  "passes",
+  "start",
+  "processes",
+] as const;
+
 describe("lane-measurement", () => {
   describe("batchMeasurementName()", () => {
     it("names what a lane spent on a batch", () => {
@@ -55,9 +66,27 @@ describe("lane-measurement", () => {
       });
     });
 
+    it("returns the suite a pass-count measurement names", () => {
+      expect(batchMeasurement("ci-lane passes batch pattern-unit")).toEqual({
+        suite: "pattern-unit",
+        measured: false,
+        kind: "passes",
+      });
+    });
+
+    it("returns the suite a process setup measurement names, and one a process count names", () => {
+      expect(batchMeasurement("ci-lane start batch pattern-unit")).toEqual({
+        suite: "pattern-unit",
+        measured: false,
+        kind: "start",
+      });
+      expect(batchMeasurement("ci-lane processes batch pattern-unit"))
+        .toEqual({ suite: "pattern-unit", measured: false, kind: "processes" });
+    });
+
     it("returns every name `batchMeasurementName()` composes", () => {
       for (const measured of [false, true]) {
-        for (const kind of ["spent", "ran", "units", "longest"] as const) {
+        for (const kind of KINDS) {
           const name = batchMeasurementName("runner-unit", measured, kind);
           expect(batchMeasurement(name))
             .toEqual({ suite: "runner-unit", measured, kind });
@@ -72,6 +101,21 @@ describe("lane-measurement", () => {
         .toBeUndefined();
       expect(batchMeasurement(batchMeasurementName("", false, "ran")))
         .toBeUndefined();
+    });
+
+    it("composes no name that starts as another kind's does, or as a capability's setup does", () => {
+      // A reader that predates a kind tells the kinds apart by these
+      // beginnings, so it reads a name of a kind it does not know as no
+      // measurement at all, rather than as one of the kinds it does.
+      for (const kind of KINDS) {
+        const name = batchMeasurementName("runner-unit", false, kind);
+        for (const other of KINDS) {
+          if (other === kind) continue;
+          expect(name.startsWith(batchMeasurementName("", false, other)))
+            .toBe(false);
+        }
+        expect(setupMeasurement(name)).toBeUndefined();
+      }
     });
 
     it("returns `undefined` for a name that is not a batch measurement", () => {

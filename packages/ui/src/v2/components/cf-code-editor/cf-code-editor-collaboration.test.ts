@@ -766,6 +766,7 @@ describe("CFCodeEditor collaboration", () => {
         error: new Error("memory session closed"),
       });
       expect(events).toEqual([
+        ["cf-presence-join", undefined],
         ["cf-presence-error", { category: "connection" }],
       ]);
       expect(failed.leaves).toBe(1);
@@ -781,6 +782,7 @@ describe("CFCodeEditor collaboration", () => {
       expect(runtime.joins).toHaveLength(2);
       const handle = runtime.handles[1];
       expect((element as any)._presenceParticipantId).toBe("participant:self");
+      expect(events.at(-1)).toEqual(["cf-presence-join", undefined]);
 
       handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
       expect(
@@ -805,7 +807,7 @@ describe("CFCodeEditor collaboration", () => {
       expect(
         [...codeMirrorPresenceState(view.state)!.participants.keys()],
       ).toEqual(["peer:3"]);
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(3);
     } finally {
       (element as any)._cleanupPresence();
     }

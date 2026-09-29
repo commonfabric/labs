@@ -17,6 +17,7 @@ import {
 import {
   capabilitiesBySuite,
   loadTopology,
+  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 
@@ -29,7 +30,7 @@ import {
   COMPILE_CACHE_STATE_FILE,
   convertCoverage,
   COVERAGE_FAILURE_MARKER,
-  COVERAGE_PROFILE_DIR,
+  COVERAGE_PROFILE_SUFFIX,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
   describeAccounting,
@@ -369,9 +370,11 @@ describe("turning a lane's selections into batches", () => {
   });
 
   it("skips the identities inside a chosen unit that were not chosen", () => {
+    // What the unit is expected to cost is what the chosen identities
+    // cost, since the skipped ones do not run.
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
     const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
@@ -382,12 +385,14 @@ describe("turning a lane's selections into batches", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "packages/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
+      cost: 3,
     }]);
   });
 
   it("skips nothing inside a unit its suite declares whole", () => {
     // The runner of such a unit reads no skip list. The batch therefore carries
     // none, and the lane's report of what it ran lists every test in the unit.
+    // The unit is expected to cost what every test in it costs.
 
     const member = suite({
       id: "workspace-unit",
@@ -395,10 +400,11 @@ describe("turning a lane's selections into batches", () => {
       whole: ["packages/bakery"],
     });
     const manifest = manifestOf([
-      { unit: "packages/bakery" },
+      { unit: "packages/bakery", cost: 2 },
       {
         test: { k: "unit", s: "bakery", n: "glaze > browns" },
         unit: "packages/bakery",
+        cost: 7,
       },
     ]);
     const batches = batchesOf([member], pricedFor([member], manifest), [{
@@ -406,7 +412,9 @@ describe("turning a lane's selections into batches", () => {
       reason: "value",
       repeats: 1,
     }]);
-    expect(batches[0]!.units).toEqual([{ unit: "packages/bakery", skip: [] }]);
+    expect(batches[0]!.units).toEqual([
+      { unit: "packages/bakery", skip: [], cost: 9 },
+    ]);
   });
 
   it("skips nothing when every identity of a unit was chosen", () => {
@@ -502,6 +510,7 @@ function unitsPerLane(
     mandatory: seen.mandatory,
     capabilities: capabilitiesBySuite(suites),
     wholeUnits: wholeUnits(suites),
+    processes: unitProcesses(suites),
     lanes,
     ...(policy === undefined ? {} : { policy }),
   });
@@ -885,6 +894,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -918,6 +928,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1036,6 +1047,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(suites),
       wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
       policy: "everything",
       lanes,
     });
@@ -1133,6 +1145,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1197,6 +1210,7 @@ describe("how many lanes the full run asks for", () => {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
       wholeUnits: wholeUnits(deps.suites),
+      processes: unitProcesses(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -1272,6 +1286,7 @@ describe("what the two runs agree about", () => {
       mandatory: new Map<string, SelectionReason>(),
       capabilities: capabilitiesBySuite(suites),
       wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
       lanes: 3,
       budgetSeconds: 1_000_000,
     };
@@ -1606,6 +1621,44 @@ describe("running a lane's work", () => {
     // Every cost in this lane was measured, so the projection stands on
     // nothing but measurements and the line says only what it comes to.
     expect(printed).not.toContain("nothing has measured");
+  });
+
+  it("counts a test in its batch's own time once for each run of its unit", () => {
+    // The unit runs twice because one of its tests asks for two runs, and
+    // every test in it runs each time: 1.5 and 2.5 seconds, twice over.
+    const [repeated, once] = manifestOf([
+      { test: { k: "unit", s: "bakery", n: "glaze > sets" }, cost: 1.5 },
+      { test: { k: "unit", s: "bakery", n: "glaze > cracks" }, cost: 2.5 },
+    ]).entries;
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [{
+          suite: runnable(["true"], "workspace-unit"),
+          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+        }],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        {
+          manifest: manifestOf([]),
+          selections: [
+            { entry: repeated!, reason: "value", repeats: 2 },
+            { entry: once!, reason: "value", repeats: 1 },
+          ],
+          projectedSeconds: 96,
+        },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n")).toContain("│ 8s ");
   });
 
   /**
@@ -2250,7 +2303,7 @@ describe("the lane's own housekeeping", () => {
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
     const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
     const dir =
-      `${root}/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const bare: Suite = {
@@ -2728,12 +2781,13 @@ describe("what a lane records about itself", () => {
     }
   });
 
-  it("writes what its longest unit took over every run of it", async () => {
-    // A batch finishes no sooner than its longest unit, and a unit's runs
-    // follow one another. `slow` takes three seconds and runs twice, and
-    // `quick` takes one and runs once, so the figure is six seconds: not
-    // the three one run of `slow` takes, and not the seven every record
-    // comes to.
+  it("writes the longest unit of each pass, the units its passes opened, and the passes it made", async () => {
+    // A pass finishes no sooner than its longest unit, and the passes
+    // follow one another. `slow` takes three seconds and runs once, and
+    // `quick` takes one and runs three times, so the passes' longest
+    // units come to five seconds: not the three either unit takes over
+    // its own runs, and not the six every record comes to. The first pass
+    // opens both units and the other two open `quick`.
     const workDir = await Deno.makeTempDir({ prefix: "lane-longest-" });
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const took: Record<string, number> = { slow: 3000, quick: 1000 };
@@ -2768,7 +2822,7 @@ describe("what a lane records about itself", () => {
             },
           }),
           units: [{ unit: "slow", skip: [] }, { unit: "quick", skip: [] }],
-          runs: new Map([["slow", 2], ["quick", 1]]),
+          runs: new Map([["slow", 1], ["quick", 3]]),
         },
         lane,
         workDir,
@@ -2784,16 +2838,149 @@ describe("what a lane records about itself", () => {
       const spooled = written.join("");
       expect(spooled).toContain(
         '"n":"ci-lane longest batch pattern-unit"},"outcome":"pass"' +
-          ',"durationMs":6000',
+          ',"durationMs":5000',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane units batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":4',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane passes batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":3',
       );
       expect(spooled).toContain(
         '"n":"ci-lane ran batch pattern-unit"},"outcome":"pass"' +
-          ',"durationMs":7000',
+          ',"durationMs":6000',
       );
     } finally {
       await Deno.remove(workDir, { recursive: true });
       await Deno.remove(spool, { recursive: true });
     }
+  });
+
+  describe("what the processes a batch started spent before their units began", () => {
+    /**
+     * The figures a batch writes whose invocations each run `script`, a
+     * program `deno eval` runs with the batch's spool named in its
+     * environment, and carry the process names given, one invocation
+     * apiece.
+     */
+    const measure = async (
+      invocations: { script: string; process?: string }[],
+    ): Promise<Map<string, number>> => {
+      const workDir = await Deno.makeTempDir({ prefix: "lane-start-" });
+      const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+      try {
+        await runBatch(
+          {
+            suite: suite({
+              id: "pattern-unit",
+              units: ["one"],
+              command: (_units, context) =>
+                Promise.resolve(invocations.map(({ script, process }) => ({
+                  command: [Deno.execPath(), "eval", script],
+                  cwd: context.root,
+                  ...(process === undefined ? {} : { process }),
+                }))),
+            }),
+            units: [{ unit: "one", skip: [] }],
+            runs: new Map([["one", 1]]),
+          },
+          lane,
+          workDir,
+          spool,
+          {},
+        );
+        const figures = new Map<string, number>();
+        for await (const entry of Deno.readDir(spool)) {
+          if (!entry.isFile) continue;
+          const text = await Deno.readTextFile(`${spool}/${entry.name}`);
+          for (const line of text.split("\n")) {
+            if (line.length === 0) continue;
+            const record = JSON.parse(line);
+            figures.set(record.test.n, record.durationMs);
+          }
+        }
+        return figures;
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+        await Deno.remove(spool, { recursive: true });
+      }
+    };
+
+    /** A program that marks its units as having begun at `at`. */
+    const marking = (at: string) =>
+      `Deno.writeTextFileSync(
+        Deno.env.get("CF_TEST_RECORDS_DIR") + "/began-a.json",
+        JSON.stringify(${at}),
+      )`;
+
+    it("counts the time until the process marked its units as having begun", async () => {
+      // A mark before the process started is read as nothing spent.
+      const figures = await measure([{ script: marking("0"), process: "a" }]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts the time until the mark, and not the time after it", async () => {
+      // The process marks as soon as it runs, and then runs a Deno program
+      // of its own and waits for it, which the batch spends after the mark:
+      // more than ten milliseconds, since starting Deno takes that long.
+      const figures = await measure([{
+        script: `${marking("Date.now()")};
+          new Deno.Command(Deno.execPath(), { args: ["eval", "0"] })
+            .outputSync();`,
+        process: "a",
+      }]);
+      const start = figures.get("ci-lane start batch pattern-unit")!;
+      expect(start).toBeGreaterThan(0);
+      expect(start).toBeLessThan(
+        figures.get("ci-lane batch pattern-unit")! - 10,
+      );
+    });
+
+    it("counts no more than the process took", async () => {
+      // A mark after the process ended says its units began once it had
+      // ended, and the batch did not wait that long.
+      const figures = await measure([
+        { script: marking("Date.now() + 3_600_000"), process: "a" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(
+        figures.get("ci-lane batch pattern-unit"),
+      );
+    });
+
+    it("counts nothing of a process that marked nothing", async () => {
+      // A `deno test` that cannot write to its spool is one. What it spent
+      // stays with its units rather than being read as setup.
+      const figures = await measure([
+        { script: "0", process: "a" },
+        { script: marking("0"), process: "b" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit")).toBe(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts nothing of an invocation that is not one of its suite's processes, whatever it marks", async () => {
+      // The first invocation's mark is the earlier of the two, so were it
+      // read as the second's, the second would count nothing.
+      const figures = await measure([
+        { script: marking("0") },
+        { script: marking("Date.now() + 3_600_000"), process: "a" },
+      ]);
+      expect(figures.get("ci-lane start batch pattern-unit"))
+        .toBeGreaterThan(0);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(1);
+    });
+
+    it("counts every process it started", async () => {
+      const figures = await measure([
+        { script: marking("0"), process: "a" },
+        { script: marking("0"), process: "b" },
+        { script: marking("0") },
+      ]);
+      expect(figures.get("ci-lane processes batch pattern-unit")).toBe(2);
+    });
   });
 
   /**
@@ -2936,8 +3123,8 @@ describe("what a lane records about itself", () => {
 describe("the last corners of a lane's bookkeeping", () => {
   it("puts two identities of one unit in one batch, and skips neither", () => {
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
     const bakery = suite({
       id: "workspace-unit",
@@ -2956,6 +3143,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "packages/bakery/glaze.test.ts",
       skip: [],
+      cost: 8,
     }]);
   });
 
@@ -3687,7 +3875,7 @@ describe("what a lane measures", () => {
       gated("packages/bakery"),
     );
     expect(coverage?.dir)
-      .toBe(`/repo/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit`);
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit`);
     expect([...coverage!.members!]).toEqual(["packages/bakery"]);
   });
 
@@ -3704,7 +3892,7 @@ describe("what a lane measures", () => {
     );
     expect(coverage?.members).toBeUndefined();
     expect(coverage?.dir)
-      .toBe(`/repo/coverage/${COVERAGE_PROFILE_DIR}/runner-unit`);
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
     // The authored-pattern instrumentation writes its reports where the
     // lane's upload carries them to the repository-wide figure.
     expect(coverage?.patternDir)
@@ -3728,7 +3916,7 @@ describe("what a lane measures", () => {
       gated("packages/bakery"),
     );
     expect(coverage?.dir)
-      .toBe(`/repo/elsewhere/${COVERAGE_PROFILE_DIR}/runner-unit`);
+      .toBe(`/repo/elsewhere${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
   });
 
   describe("what it charges a suite it measures", () => {
@@ -3887,7 +4075,7 @@ describe("converting what a lane collected", () => {
   async function collected(sets: readonly string[]): Promise<string> {
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
     for (const set of sets) {
-      const dir = `${root}/coverage/${COVERAGE_PROFILE_DIR}/${set}`;
+      const dir = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/${set}`;
       await Deno.mkdir(dir, { recursive: true });
       // An empty profile directory converts to an empty report, which is
       // enough to prove the walk found it and named it.
@@ -3930,8 +4118,7 @@ describe("converting what a lane collected", () => {
     // An absent directory is a lane that measured nothing, which is
     // ordinary. Anything else is a failure worth ending on.
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
-    const at = `${root}/coverage/${COVERAGE_PROFILE_DIR}`;
-    await Deno.mkdir(`${root}/coverage`, { recursive: true });
+    const at = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}`;
     await Deno.writeTextFile(at, "");
     await expect(convertCoverage({ ...options(root) })).rejects.toThrow();
   });
@@ -3942,7 +4129,7 @@ describe("converting what a lane collected", () => {
     // report that was never complete.
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
     const dir =
-      `${root}/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const converted = await convertCoverage({ ...options(root) });

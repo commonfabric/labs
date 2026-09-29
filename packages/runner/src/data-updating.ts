@@ -1488,6 +1488,11 @@ export function normalizeAndDiff(
       ) {
         // Preserve this attempt: preparation must refuse changed policy or any
         // additional write attempt, even when the reference bytes stay equal.
+        //
+        // A write-destination read (spec §18.6.2): it records the attempt at
+        // the destination, and its result is discarded, so no written value
+        // or address is taken from it. The reference recorded below comes
+        // from the verifier read above.
         tx.readValueOrThrow(link, {
           ...options,
           meta: {

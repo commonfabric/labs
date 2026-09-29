@@ -249,11 +249,38 @@ export interface UnschedulableEntry {
 }
 
 /**
- * What one suite's batches were fitted to cost: the intercept, the slope
- * on what its own tests take, and what one more of its units costs a
- * batch already running others.
+ * What one suite's batches were fitted to cost beyond what its tests take:
+ * the intercept, charged once per lane holding the suite; the slope on
+ * what its own tests take; and what one more of its units costs a batch
+ * already running others. What the suite's processes spend before their
+ * units begin is spread through these three.
  */
 export interface SuiteFit {
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+
+  /**
+   * The same suite fitted with its processes' setup measured and taken
+   * out, where some batch started a process that marks when its units
+   * begin. A reader that knows it charges it in place of the three figures
+   * beside it, which stay what a reader that does not know it charges.
+   */
+  process?: ProcessFit;
+}
+
+/** What a suite costs where what its processes spend on setup is measured. */
+export interface ProcessFit {
+  /**
+   * Seconds each process a lane starts for the suite spends before its
+   * units begin, charged each time a lane starts one.
+   */
+  setup: number;
+
+  /**
+   * Seconds charged once per lane holding the suite, for what its batches
+   * spent beyond their setup, their tests, and their units.
+   */
   overhead: number;
   correction: number;
   unitOverhead: number;
@@ -607,13 +634,35 @@ function parseFits(
       ? 0
       : carried;
     if (!isFiniteNumber(unitOverhead) || unitOverhead < 0) return undefined;
+    const process = fitted.process === undefined
+      ? undefined
+      : parseProcessFit(fitted.process);
+    if (fitted.process !== undefined && process === undefined) {
+      return undefined;
+    }
     suites[suite] = {
       overhead: fitted.overhead,
       correction: fitted.correction,
       unitOverhead,
+      ...(process === undefined ? {} : { process }),
     };
   }
   return suites;
+}
+
+/** Reads a suite's process fit, or `undefined` for one it cannot read. */
+function parseProcessFit(value: unknown): ProcessFit | undefined {
+  if (!isRecord(value)) return undefined;
+  const { setup, overhead, correction, unitOverhead } = value;
+  if (
+    !isFiniteNumber(setup) || setup < 0 ||
+    !isFiniteNumber(overhead) || overhead < 0 ||
+    !isFiniteNumber(correction) || correction <= 0 ||
+    !isFiniteNumber(unitOverhead) || unitOverhead < 0
+  ) {
+    return undefined;
+  }
+  return { setup, overhead, correction, unitOverhead };
 }
 
 function parseLane(value: unknown): LanePlan | undefined {

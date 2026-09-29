@@ -8,6 +8,7 @@ __pycache__
 cache
 artifact
 coverage
+coverage-raw
 _deno.lock
 .claude-prompt.tmp
 .pr-desc.tmp

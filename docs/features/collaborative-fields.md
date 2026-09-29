@@ -77,7 +77,9 @@ the session's termination — clears only ephemeral decorations, is reported
 once through `cf-presence-error` as a category with no room, name, or server
 payload in it, and never makes Memory collaboration read-only. A
 `configuration` failure stays reported until the room or participant name
-changes; any other is tried again on the next editor focus.
+changes; any other is tried again on the next editor focus. The editor fires
+`cf-presence-join`, with no detail, each time it joins its room, so a host that
+shows a presence failure can clear it once the editor has joined again.
 
 ## Authority and lifecycle
 

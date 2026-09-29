@@ -9,6 +9,7 @@ import {
   slashSeparated,
   taskEnvironment,
   testBatches,
+  testBatchOf,
   unmatchedGlobs,
   unquote,
 } from "./deno-task.ts";
@@ -276,6 +277,23 @@ describe("splitting a member's files by the flags they need", () => {
     serial: ["**/*.serial.test.ts"],
     allAccess: ["test/proc.test.ts"],
   };
+
+  it("numbers each file's run the same whatever files run beside it", () => {
+    // The number names the `deno test` process a file runs in, and the
+    // packer charges that process's setup once for all of the files in it.
+    const files = [
+      "test/a.test.ts",
+      "test/proc.test.ts",
+      "test/b.serial.test.ts",
+      "test/proc.serial.test.ts",
+    ];
+    const task = { ...TASK, allAccess: ["test/proc*.test.ts"] };
+    expect(files.map((file) => testBatchOf(task, file))).toEqual([0, 1, 2, 3]);
+    for (const batch of testBatches(task, files)) {
+      expect(new Set(batch.files.map((file) => testBatchOf(task, file))).size)
+        .toBe(1);
+    }
+  });
 
   it("runs a serial file without `--parallel`, apart from the rest", () => {
     expect(

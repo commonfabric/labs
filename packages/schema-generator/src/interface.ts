@@ -48,6 +48,12 @@ export interface SchemaHint {
   readonly cfcUiContract?: UiContractHint;
   /** The value the node narrows, whose CFC labels its schema keeps. */
   readonly narrowedFrom?: NarrowedFrom;
+  /**
+   * The annotation a print of a member's type is read in place of: one that
+   * names a value binding, such as `PolicyOf<typeof rules>`, which a print
+   * spells as the structural type of the value it names.
+   */
+  readonly spelledBy?: ts.TypeNode;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;

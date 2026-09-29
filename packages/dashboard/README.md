@@ -49,7 +49,7 @@ dashboard/
   dashboard-message.ts  shared message storage and fade timing
   render.ts     renderTile(label, view) + the page shell/CSS
   detail-page.ts  the frame, navigation and type a drill-down page starts from
-  live-page.ts  the event streams that keep an open drill-down page current
+  live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
@@ -180,25 +180,30 @@ altogether, so the page checks its stream on becoming visible and on the browser
 regaining the network as well as on its own tick.
 
 A drill-down page can be kept current the same way. A route that declares
-`live: true` serves a page that carries the client script from `live-page.ts`
-and keeps everything that changes inside its `<main>` element. The page opens
-`/events?page=<its path and query>`. On every serving tick the server sends a
-heartbeat down that stream and renders the page again by calling the route's
-handler, and it sends the new markup when that differs from what it last sent. A
-page that connects is sent the current markup whether or not it changed. The
-browser keeps every element whose tags, attributes, and text between its
-children match the new markup's, and whose children match in number, and
-compares those children the same way; any other element that differs is
+`live: true` serves a page built by `livePage` in `live-page.ts`, which carries
+the client script and keeps everything that changes inside its `<main>` element.
+The page opens `/events?page=<its path and query>`. On every serving tick the
+server sends a heartbeat down that stream and renders the page again by calling
+the route's handler, and it sends the new markup when that differs from what it
+last sent. A page that connects is sent the current markup whether or not it
+changed. The browser keeps every element whose tags, attributes, and text
+between its children match the new markup's, and whose children match in number,
+and compares those children the same way; any other element that differs is
 replaced whole. So when the header's age ticks over, only the text giving the
 age is replaced, and the rest of the page keeps a reader's focus and selection.
 A manifest that adds or removes a section of the page replaces the whole of
-`<main>`. Every rendering it sends names the version being served, and a page
-built by another version reloads instead. The page follows its stream with the
-dashboard's own code (`followUpdates` in `stream-client.ts`), reopens it once it
-has heard nothing for three heartbeat periods, and its badge reads OFFLINE while
-it cannot hear the server. A page is rendered only while some browser is showing
-it. The test selection page is live, so a screen left on it follows the
-manifests as the publisher writes them.
+`<main>`. Before it compares, the page sends its `<main>` a `live-page-update`
+event carrying the new `<main>`, which bubbles to the document. A page the
+reader can rearrange listens for it and arranges the new markup the same way, so
+a rearranged part that did not change still compares equal and is kept. Every
+rendering it sends names the version being served, and a page built by another
+version reloads instead. The page follows its stream with the dashboard's own
+code (`followUpdates` in `stream-client.ts`), reopens it once it has heard
+nothing for three heartbeat periods, and its badge reads OFFLINE while it cannot
+hear the server. A page is rendered only while some browser is showing it. The
+test selection page and the CI jobs page are live, so a screen left on either
+follows the manifests as the publisher writes them, or the ci tile's collections
+as it makes them.
 
 The tab favicon follows the most urgent visible tile. It is red when any tile is
 red, orange when there are no red tiles but at least one orange tile, and green
@@ -371,7 +376,7 @@ to the next; a view supplies everything under it.
 | tile | source | needs |
 |---|---|---|
 | ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
-| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | your metric here | a place in the grid for a metric nobody has chosen yet. It reads nothing, so it carries no figure, and it is green because there is nothing wrong with an empty slot | none |

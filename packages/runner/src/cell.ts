@@ -1822,6 +1822,14 @@ export class CellImpl<T extends FabricValue>
     );
 
     // Check if we're dealing with a stream
+    //
+    // A write-destination read (spec §18.6.2): the marker read is the write
+    // path asking which of two ways to write. No written value or address is
+    // taken from its result: the event or stored value is the caller's
+    // `newValue`. A stored write lands at `resolvedToValueLink`, and an
+    // event goes to the scheduler's queue or the stream's entries document,
+    // each addressed from `resolvedToValueLink`, which the unmarked
+    // resolution above produced.
     if (
       this.isStream(resolvedToValueLink, {
         ...ignoreReadForScheduling,
