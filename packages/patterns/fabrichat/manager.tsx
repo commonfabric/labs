@@ -26,6 +26,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { isPrincipal } from "./logic.ts";
 import FabriChatRoom from "./room.tsx";
 import {
   CHAT_START_SURFACE,
@@ -133,10 +134,6 @@ export interface ManagerActState {
   /** A rendered control's notice id. */
   id?: string;
 }
-
-/** Whether `text` looks like a principal: a DID. */
-const isPrincipal = (text: unknown): text is string =>
-  typeof text === "string" && /^did:[a-z0-9]+:\S+$/.test(text);
 
 /** A fresh request id, for an event a rendered control sends without one. */
 const freshRequestId = (): string =>

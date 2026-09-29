@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import {
   chooseRecordedTime,
   isInMain,
+  isPrincipal,
   isSingleEmoji,
   mainView,
   threadReplyCounts,
@@ -139,6 +140,24 @@ describe("logic", () => {
 
     it("returns `false` for a non-string", () => {
       expect(isSingleEmoji(42)).toBe(false);
+    });
+  });
+
+  describe("isPrincipal()", () => {
+    it("returns `true` for a `did:key`", () => {
+      expect(isPrincipal("did:key:z6MkBob")).toBe(true);
+    });
+
+    it("returns `false` for text that is not a DID", () => {
+      expect(isPrincipal("not a did")).toBe(false);
+    });
+
+    it("returns `false` for a DID holding a parenthesis", () => {
+      expect(isPrincipal("did:key:z6Mk(Bob)")).toBe(false);
+    });
+
+    it("returns `false` for a DID holding a direction override", () => {
+      expect(isPrincipal("did:key:z6Mk\u202eBob")).toBe(false);
     });
   });
 

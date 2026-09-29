@@ -46,6 +46,7 @@ import {
 import {
   chooseRecordedTime,
   isInMain,
+  isPrincipal,
   isSingleEmoji,
   type ShownIn,
   threadReplyCounts,
@@ -913,10 +914,6 @@ const performReactionAct = (
   }
   rememberRequest(requests, requestKey, clock);
 };
-
-/** Whether `text` looks like a principal: a DID. */
-const isPrincipal = (text: unknown): text is string =>
-  typeof text === "string" && /^did:[a-z0-9]+:\S+$/.test(text);
 
 /**
  * Performs one membership act: showing the sender's profile, leaving, adding
