@@ -1289,7 +1289,10 @@ describe("CFC render resolver — grants at the display boundary", () => {
     await runtime.idle();
   };
 
-  /** Resolves the owner's `PolicyOf` label as the viewer, through `source`. */
+  /**
+   * Resolves the owner's `PolicyOf` label as the viewer, through the
+   * runtime's grant source, reporting consulted candidates to `consulted`.
+   */
   const resolveAsViewer = (
     runtime: Runtime,
     { label = [shareRef], consulted }: {
@@ -1300,8 +1303,8 @@ describe("CFC render resolver — grants at the display boundary", () => {
     createRenderConfidentialityResolver({
       actingPrincipal: VIEWER,
       modulePolicyResolver: () => shareManifest,
-      grantSource: createRuntimeCfcGrantSource(runtime),
-    })({ confidentiality: label }, { grant: consulted });
+      grantResolver: createRuntimeCfcGrantSource(runtime).resolve,
+    })({ confidentiality: label }, consulted);
 
   describe("releasing", () => {
     it("adds `User(viewer)` to the owner's clause when the owner's grant names the viewer, which then fits the ceiling", async () => {
@@ -1313,19 +1316,27 @@ describe("CFC render resolver — grants at the display boundary", () => {
       });
     });
 
-    it("reports the candidate it consulted, whether or not the grant is there", async () => {
+    it("reports the candidate it consulted, and no other, whether or not the grant is there", async () => {
+      // The fixpoint re-queries the guard on each pass, so the candidate may
+      // be reported more than once; what is pinned is which document.
       await withGrantRuntime(async (runtime) => {
         const consulted: CfcGrantCandidate[] = [];
         resolveAsViewer(runtime, {
           consulted: (candidate) => consulted.push(candidate),
         });
-        expect(consulted).toEqual([answerCandidate]);
+        expect(consulted.length).toBeGreaterThan(0);
+        for (const candidate of consulted) {
+          expect(candidate).toEqual(answerCandidate);
+        }
         await writeGrant(runtime);
         consulted.length = 0;
         resolveAsViewer(runtime, {
           consulted: (candidate) => consulted.push(candidate),
         });
-        expect(consulted).toEqual([answerCandidate]);
+        expect(consulted.length).toBeGreaterThan(0);
+        for (const candidate of consulted) {
+          expect(candidate).toEqual(answerCandidate);
+        }
       });
     });
   });
@@ -1433,7 +1444,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
         const resolve = createRenderConfidentialityResolver({
           actingPrincipal: VIEWER,
           modulePolicyResolver: () => shareManifest,
-          grantSource: source,
+          grantResolver: source.resolve,
         });
         let changes = 0;
         const cancel = source.subscribe(answerCandidate, () => changes++);
@@ -1588,7 +1599,7 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
             actingPrincipal: READER,
             memberSpaces: reader === "hasRole" ? [OWNER] : [],
             modulePolicyResolver: () => manifest,
-            grantSource: createRuntimeCfcGrantSource(runtime),
+            grantResolver: createRuntimeCfcGrantSource(runtime).resolve,
           })(label);
 
         it("adds `User(reader)` when the owner's grant names the reader and the reader's names the owner", async () => {

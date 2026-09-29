@@ -235,7 +235,6 @@ export {
 export type {
   RenderConfidentialityResolver,
   RenderConfidentialityResolverConfig,
-  RenderConsulted,
   RenderLabelInput,
 } from "./render-ceiling.ts";
 export {

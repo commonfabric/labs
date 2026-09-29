@@ -12,6 +12,7 @@ import {
   buildCfcPolicyArtifactManifest,
   buildCfcPolicySnapshot,
   type CfcGrantCandidate,
+  cfcGrantCandidateOf,
   type CfcGrantSource,
   createRenderConfidentialityResolver,
   type SpaceMembershipProvider,
@@ -4261,18 +4262,17 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         // The one document the guard names, and whether it currently holds
         // a live grant to the acting user.
-        const candidate: CfcGrantCandidate = {
-          space: signer.did(),
-          id: "grant:cfc:hand-built-answer-grant" as never,
-        };
+        const candidate = cfcGrantCandidateOf({
+          kind: "ShareGrant",
+          fields: { owner: signer.did(), resource: "of:answer" },
+        })!;
         let granted = false;
         const listeners: Array<
           { candidate: CfcGrantCandidate; onChange: () => void }
         > = [];
         const grantSource: CfcGrantSource = {
-          resolve: (_query, consulted) => {
-            consulted?.(candidate);
-            return granted
+          resolve: () =>
+            granted
               ? [{
                 kind: "ShareGrant",
                 space: signer.did(),
@@ -4281,8 +4281,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
                 audience: cfcAtom.user(signer.did()),
                 grantedAt: 1,
               } as never]
-              : [];
-          },
+              : [],
           subscribe: (candidate, onChange) => {
             const entry = { candidate, onChange };
             listeners.push(entry);
@@ -4309,7 +4308,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               actingPrincipal: signer.did(),
               memberSpaces: [signer.did()],
               modulePolicyResolver: () => manifest,
-              grantSource,
+              grantResolver: grantSource.resolve,
             }),
             grantSource,
           });
@@ -4365,7 +4364,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             actingPrincipal: signer.did(),
             memberSpaces: [signer.did()],
             modulePolicyResolver: () => manifest,
-            grantSource,
+            grantResolver: grantSource.resolve,
           }),
           grantSource: {
             subscribe: () => {

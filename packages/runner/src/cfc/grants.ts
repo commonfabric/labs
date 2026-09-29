@@ -882,15 +882,11 @@ export interface CfcGrantSource {
    * entry, read from the local replica; none when the query names no
    * document, or the document is absent, malformed, revoked, expired or
    * single-use, and the guard then stays unsatisfied. Synchronous: a document
-   * not yet synced resolves nothing while its load is kicked off. `consulted`
-   * hears the candidate the query names, whether or not a document was there,
-   * so the caller can watch it: a candidate is named by the rule and its
-   * bindings, so nothing the label alone says can name one.
+   * not yet synced resolves nothing while its load is kicked off. The
+   * candidate a query names is {@link cfcGrantCandidateOf} over the query,
+   * which is what a caller watching for change passes to `subscribe`.
    */
-  resolve(
-    query: CfcGrantResolverQuery,
-    consulted?: (candidate: CfcGrantCandidate) => void,
-  ): readonly CfcAtom[];
+  readonly resolve: CfcGrantResolver;
 
   /**
    * Calls `onChange` when `candidate`'s document later syncs or changes,
@@ -932,7 +928,7 @@ export const createRuntimeCfcGrantSource = (
     return cell;
   };
   return {
-    resolve(query, consulted) {
+    resolve: (query) => {
       let candidate: CfcGrantCandidate | undefined;
       try {
         candidate = cfcGrantCandidateOf(query);
@@ -941,7 +937,6 @@ export const createRuntimeCfcGrantSource = (
         return [];
       }
       if (candidate === undefined) return [];
-      consulted?.(candidate);
       let value: unknown;
       try {
         value = cellFor(candidate).get();

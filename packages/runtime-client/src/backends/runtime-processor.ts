@@ -636,7 +636,7 @@ export function renderConfidentialityResolverFor(
     modulePolicyResolver: modulePolicySource?.resolve,
     // The grant documents a `policyState` guard names are read through the
     // reconciler's source too, so what it watches is what this read.
-    grantSource,
+    grantResolver: grantSource?.resolve,
   });
 }
 

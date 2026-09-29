@@ -10,10 +10,10 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
+  type CfcGrantResolver,
   evaluateExchangeRules,
-  type ExchangeEvalContext,
 } from "./exchange-eval.ts";
-import type { CfcGrantCandidate, CfcGrantSource } from "./grants.ts";
+import { type CfcGrantCandidate, cfcGrantCandidateOf } from "./grants.ts";
 import {
   buildCfcPolicySnapshot,
   type ExchangeRule,
@@ -45,8 +45,8 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  * this evaluates beside the deployment's records; the switch, since this runs
  * wherever the render ceiling is on, whatever the `cfcPolicyEvaluation` dial
  * says; and the grant read, which holds no transaction, so it reads the
- * replica, binds nothing, and reports what it consulted for the caller to
- * watch, and is observing, so a single-use grant resolves nothing. The
+ * replica and binds nothing, reporting each candidate it names for the caller
+ * to watch, and is observing, so a single-use grant resolves nothing. The
  * reconciler consumes the resolved label; it never runs the evaluator itself.
  */
 
@@ -173,15 +173,15 @@ export type RenderConfidentialityResolverConfig = {
 
   /**
    * Grant lookup for a `policyState`-guarded rule (spec §4.3.5), whether a
-   * deployment record's or a module policy's: the `resolve` half of a
-   * {@link CfcGrantSource}, reading the local replica without a transaction,
-   * since a render commits nothing. Each candidate it names is reported to
-   * the resolver's caller through {@link RenderConsulted}, so the caller can
-   * watch it. A render is an observing site, so a single-use grant never
-   * resolves here. Absent, every policyState guard is unsatisfied (fail
+   * deployment record's or a module policy's, resolving grants through the
+   * same context field as the sink gate. A render commits nothing, so the
+   * resolver here reads the local replica without a transaction, and a
+   * render is an observing site, so a single-use grant never resolves. The
+   * candidate each query names is reported to the resolver's caller, which
+   * watches it. Absent, every policyState guard is unsatisfied (fail
    * closed), exactly like `trustResolver`.
    */
-  readonly grantSource?: Pick<CfcGrantSource, "resolve">;
+  readonly grantResolver?: CfcGrantResolver;
 
   /**
    * Manifest lookup for a label that selects a module policy (`PolicyOf<...>`,
@@ -276,31 +276,23 @@ export type RenderLabelInput = {
 };
 
 /**
- * What a render evaluation read beyond the label, reported as it reads it so
- * the caller can watch for change. The manifests and spaces a label names are
- * the caller's to derive from the label; a grant candidate is named by a rule
- * and the bindings its guards established, so only the evaluation can say
- * which documents it consulted.
- */
-export type RenderConsulted = {
-  /**
-   * Hears each grant candidate a `policyState` guard named, once per
-   * evaluation, whether or not a document was there.
-   */
-  readonly grant?: (candidate: CfcGrantCandidate) => void;
-};
-
-/**
  * Resolves one rendered cell's confidentiality label at the display boundary.
  * Returns the exchange-rewritten confidentiality clause set; the reconciler
  * fits it against the ceiling. Fuel exhaustion returns the ORIGINAL label
  * (fail closed, invariant 6 — it will not have gained the resolving
  * alternative, so it stays outside the ceiling and renders blocked).
- * `consulted` hears what the evaluation read beyond the label.
+ *
+ * `onGrantConsulted` hears each grant candidate a `policyState` guard named
+ * during the evaluation, whether or not a document was there, so the caller
+ * can watch it for change. It is the one thing an evaluation reads that the
+ * caller cannot derive from the label: the manifests and spaces a label names
+ * are visible in the label, while a candidate is named by a rule and the
+ * bindings its guards established. The fixpoint re-queries a guard on every
+ * pass, so a candidate may be reported more than once per evaluation.
  */
 export type RenderConfidentialityResolver = (
   label: RenderLabelInput,
-  consulted?: RenderConsulted,
+  onGrantConsulted?: (candidate: CfcGrantCandidate) => void,
 ) => readonly CfcConfClause[];
 
 /** `HasRole(principal, space, reader)` facts for a principal's reader spaces. */
@@ -327,26 +319,33 @@ export const createRenderConfidentialityResolver = (
   const staticMemberSpaces = config.memberSpaces ?? [];
   const provider = config.membershipProvider;
   const modulePolicyResolver = config.modulePolicyResolver;
-  const grantSource = config.grantSource;
+  const grantResolver = config.grantResolver;
   /**
-   * The grant resolver for one evaluation, reporting each candidate to
-   * `hear` the first time a pass names it: the fixpoint re-queries a guard
-   * on every pass, and the caller is owed one report per document.
+   * Helper for the resolver, which wraps `grantResolver` for one evaluation
+   * so the candidate each query names reaches `onGrantConsulted` before the
+   * read. The candidate is derived from the query the way the resolver
+   * derives it, so what is reported is what is read; a query naming no
+   * document, or one whose bound fields cannot be digested, reports nothing,
+   * and the resolver fails that guard closed on its own.
    */
-  const grantResolverFor = (
-    hear: RenderConsulted["grant"],
-  ): ExchangeEvalContext["grantResolver"] => {
-    if (grantSource === undefined) return undefined;
-    const heard = new Set<string>();
-    return (query) =>
-      grantSource.resolve(query, (candidate) => {
-        const key = JSON.stringify([candidate.space, candidate.id]);
-        if (hear === undefined || heard.has(key)) return;
-        heard.add(key);
-        hear(candidate);
-      });
+  const consultingGrantResolver = (
+    onGrantConsulted: ((candidate: CfcGrantCandidate) => void) | undefined,
+  ): CfcGrantResolver | undefined => {
+    if (grantResolver === undefined || onGrantConsulted === undefined) {
+      return grantResolver;
+    }
+    return (query) => {
+      let candidate: CfcGrantCandidate | undefined;
+      try {
+        candidate = cfcGrantCandidateOf(query);
+      } catch {
+        candidate = undefined;
+      }
+      if (candidate !== undefined) onGrantConsulted(candidate);
+      return grantResolver(query);
+    };
   };
-  return (label, consulted) => {
+  return (label, onGrantConsulted) => {
     if (label.confidentiality.length === 0) {
       return label.confidentiality as readonly CfcConfClause[];
     }
@@ -377,7 +376,7 @@ export const createRenderConfidentialityResolver = (
         boundary,
         trustResolver,
         actingPrincipal,
-        grantResolver: grantResolverFor(consulted?.grant),
+        grantResolver: consultingGrantResolver(onGrantConsulted),
         // Consulted only for a label that selects a module policy.
         modulePolicyResolver: modulePolicyResolver === undefined
           ? undefined

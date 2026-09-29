@@ -42,6 +42,7 @@ import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-p
 import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
+  type CfcGrantCandidate,
   type CfcLabelView,
   cfcLabelViewForCell,
   type CfcLabelViewSource,
@@ -51,7 +52,6 @@ import {
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   type RenderConfidentialityResolver,
-  type RenderConsulted,
   reportCfcDenial,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
@@ -1300,13 +1300,13 @@ export class WorkerReconciler {
    * confidentiality label (its schema's, when it carries none) sits under
    * the ceiling or is declassified, resolved through the display-boundary
    * exchange rules when a resolver is wired and a ceiling is in force. A
-   * label that cannot be read fails closed. `consulted` hears what the
-   * resolution read beyond the label, the grant candidates its rules named.
+   * label that cannot be read fails closed. `onGrantConsulted` hears each
+   * grant candidate the resolution's rules named.
    */
   #canRenderCellUnderPolicy(
     cell: Cell<unknown>,
     policy: RenderPolicy,
-    consulted?: RenderConsulted,
+    onGrantConsulted?: (candidate: CfcGrantCandidate) => void,
   ): boolean {
     if (
       policy.maxConfidentiality === undefined &&
@@ -1355,7 +1355,7 @@ export class WorkerReconciler {
         this.#integrityLabels(labelView),
         () => labelSpaces,
         policy,
-        consulted,
+        onGrantConsulted,
       );
     }
     for (const atom of confidentiality) {
@@ -1382,13 +1382,13 @@ export class WorkerReconciler {
     integrity: readonly CfcAtom[],
     spaces: () => readonly string[],
     policy: RenderPolicy,
-    consulted?: RenderConsulted,
+    onGrantConsulted?: (candidate: CfcGrantCandidate) => void,
   ): boolean {
     const resolved = this.#resolveRenderConfidentiality!({
       confidentiality,
       integrity,
       spaces,
-    }, consulted);
+    }, onGrantConsulted);
     const offending = atomsOutsideCeiling(resolved, policy.maxConfidentiality);
     for (const clause of offending) {
       // Ungrantable: the marker means "the label could not be read" — no
@@ -1659,18 +1659,16 @@ export class WorkerReconciler {
     watched: Set<string>,
     addCancel: (cancel: Cancel) => void,
     reeval: () => void,
-  ): RenderConsulted | undefined {
+  ): ((candidate: CfcGrantCandidate) => void) | undefined {
     const grants = this.#grantSource;
     if (grants === undefined) return undefined;
-    return {
-      grant: (candidate) =>
-        this.#watchRenderDocument(
-          watched,
-          addCancel,
-          `grant:${JSON.stringify([candidate.space, candidate.id])}`,
-          () => grants.subscribe(candidate, reeval),
-        ),
-    };
+    return (candidate) =>
+      this.#watchRenderDocument(
+        watched,
+        addCancel,
+        `grant:${JSON.stringify([candidate.space, candidate.id])}`,
+        () => grants.subscribe(candidate, reeval),
+      );
   }
 
   #confidentialityLabelsFromCellSchema(
