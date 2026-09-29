@@ -90,8 +90,19 @@ export const REALM_CODEC: unique symbol = Symbol("data-model.realmCodec");
  * by which base class a codec extends, which is where it stays: a registry
  * refuses a codec extending neither and otherwise stores it unaltered, and a
  * walker reads the class when it dispatches.
+ *
+ * `State` is the codec's own state type, a subtype of `Encoded`: what {@link
+ * #encode} emits, what {@link #canDecode} narrows to, and the only thing {@link
+ * #decode} is handed. One declaration serving all three members is what says
+ * the three agree. A codec that works over the whole of `Encoded` leaves it at
+ * the default, and so does whatever holds codecs that agree on nothing
+ * narrower, as a registry does.
  */
-export interface FabricCodec<PlusType, Encoded> {
+export interface FabricCodec<
+  PlusType,
+  Encoded,
+  State extends Encoded = Encoded,
+> {
   /**
    * The unique _direct_ class of instances, if any, that is associated with the
    * format this instance encodes. The codec system uses this to make a quick
@@ -125,6 +136,14 @@ export interface FabricCodec<PlusType, Encoded> {
    * kind of question about whether a value is in the domain this codec works
    * over.
    *
+   * `state` is a member of `Encoded` already. Whether it is one at all is
+   * settled by whatever produced it -- a wire format's parser, a realm
+   * crossing, the codec engine's own walk -- and is not asked again here. What
+   * is asked is narrower: whether that member has the shape of this codec's
+   * `State`. So a part of the state which `State` allows to be any member of
+   * `Encoded`, as an external reference such as a `FabricError`'s `cause` is,
+   * leaves this method nothing to check.
+   *
    * What belongs here is what is cheap to ask and not already asked by the
    * decoding: the state's type, the presence and types of the parts a decode
    * reads, membership in a fixed set of literals. What does not belong is a
@@ -133,14 +152,14 @@ export interface FabricCodec<PlusType, Encoded> {
    * twice; {@link #decode} keeps such a question and is where a state failing
    * it is refused.
    *
-   * An implementation states this as a type predicate over its own state type,
-   * which is what lets its {@link #decode} declare that same type and read the
-   * state's parts without re-checking them. See {@link BaseFabricCodec}.
+   * Stated as a type predicate over `State`, which is what makes the check
+   * pay: the narrowing carries across to {@link #decode}, which then reads the
+   * state's parts as the types this method established them to be.
    *
    * Called on every state before {@link #decode} sees it, so an implementation
    * of the latter may take the check as done.
    */
-  canDecode(state: Encoded): boolean;
+  canDecode(state: Encoded): state is State;
 
   /**
    * Returns the wire type tag to use when encoding the given value. Only ever
@@ -164,10 +183,10 @@ export interface FabricCodec<PlusType, Encoded> {
    *
    * Only ever called on a state for which {@link #canDecode} has returned
    * `true`, which is the decode side's counterpart to the way {@link
-   * #canEncode} precedes {@link #encode}. That is what lets an implementation
-   * declare the narrower state type it actually decodes and read its parts as
-   * such. `state` is the whole of `Encoded` here because this interface is what
-   * a registry holds, and the codecs in one agree on nothing narrower.
+   * #canEncode} precedes {@link #encode}. That is what makes `state` a `State`,
+   * whose parts an implementation reads as such. Where a codec is held at a
+   * wider `State` than its own, as a registry holds every codec at `Encoded`,
+   * the types do not carry that ordering, and it rests on the caller.
    *
    * A `state` need not come from {@link #encode}, so a nonterminal codec's
    * implementation which keeps a container from `state` as part of the value it
@@ -189,7 +208,7 @@ export interface FabricCodec<PlusType, Encoded> {
    */
   decode(
     typeTag: string,
-    state: Encoded,
+    state: State,
     env: LiveEnvironment,
     mutable?: boolean,
   ): FabricValuePlus<PlusType>;
@@ -222,7 +241,7 @@ export interface FabricCodec<PlusType, Encoded> {
    * may be is that format's business. It is best made as frozen as the format
    * allows: a record is frozen, though an `ArrayBuffer` in it cannot be.
    */
-  encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): Encoded;
+  encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): State;
 }
 
 /**
@@ -245,14 +264,18 @@ export interface FabricCodec<PlusType, Encoded> {
  * codec exposes an instance's contents, that type included, to a walker that
  * admits it, and has no wire form.
  *
+ * `State` is as {@link FabricCodec} describes it, bounded by that same domain.
+ * It comes after `PlusType` so that it can default to the whole of the domain
+ * it bounds.
+ *
  * `FabricError` is the clearest case. Its state carries `cause` and every
  * `extraEntries()` pair, so it can hold arbitrary nested values -- including
  * other instances -- and only the walker can know what to do with them.
  */
-export type NonterminalCodec<PlusType = never> = FabricCodec<
-  PlusType,
-  FabricValuePlus<PlusType>
->;
+export type NonterminalCodec<
+  PlusType = never,
+  State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
+> = FabricCodec<PlusType, FabricValuePlus<PlusType>, State>;
 
 /**
  * A codec whose essential state is **terminal**: it is already in the domain of
@@ -278,8 +301,12 @@ export type NonterminalCodec<PlusType = never> = FabricCodec<
  *
  * The value side is at `never`: a wire format carries `FabricValue`s, and a
  * value holding anything beyond those has no wire form to terminate into.
+ *
+ * `State` is as {@link FabricCodec} describes it: this codec's own states,
+ * within the one format it serves.
  */
-export type TerminalCodec<Encoded> = FabricCodec<never, Encoded>;
+export type TerminalCodec<Encoded, State extends Encoded = Encoded> =
+  FabricCodec<never, Encoded, State>;
 
 /**
  * A codec usable for the wire format whose value type is `Encoded`: either

@@ -16,7 +16,7 @@ import type { NonterminalCodec } from "./interface.ts";
  * `PlusType` is as {@link NonterminalCodec} describes it. It comes first so
  * that `State` can default to the whole of the domain it bounds; a subclass
  * naming its state alone writes `never` ahead of it. `State` is as {@link
- * BaseFabricCodec} describes it, passed straight through, and is bounded by
+ * FabricCodec} describes it, passed straight through, and is bounded by
  * `FabricValuePlus<PlusType>` here for the same reason `Encoded` is fixed to
  * it: these are the states a walker will expand.
  */
@@ -24,6 +24,6 @@ export abstract class BaseNonterminalCodec<
   PlusType = never,
   State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
 > extends BaseFabricCodec<PlusType, FabricValuePlus<PlusType>, State>
-  implements NonterminalCodec<PlusType> {
+  implements NonterminalCodec<PlusType, State> {
   // This space intentionally left blank.
 }
