@@ -42,6 +42,10 @@ export type MapToForm<ResultType> = {
 /**
  * A `mapToEntry` form. This is analogous to `MapToForm` in every way except
  * that a string `key` is additionally included.
+ *
+ * `key` is held to the rules a visited key's result is: it must be a key which
+ * is safe to set on a plain object, and it may not be a key already mapped in
+ * the same result.
  */
 export type MapToEntryForm<ResultType> = {
   readonly type: "mapTo";
@@ -95,6 +99,10 @@ export type ReplaceForm<PlusType> = {
 /**
  * A `replaceEntry` form. This is analogous to `ReplaceForm` in every way except
  * that a string `key` is additionally included.
+ *
+ * `key` is visited only when the `recurse` that caused the iteration asked for
+ * keys to be visited, and is otherwise taken as the entry's final key. Either
+ * way, the final key is held to the rules a `MapToEntryForm`'s `key` is.
  */
 export type ReplaceEntryForm<PlusType> = {
   readonly type: "replace";

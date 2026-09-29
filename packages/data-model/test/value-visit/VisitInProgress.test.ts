@@ -1745,6 +1745,24 @@ describe("VisitInProgress", () => {
             );
           });
 
+          it("throws for a `visitingFabricPlainObjectEntry()` `replace` naming a key already mapped, when keys are not visited", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "b") ? replaceEntry("a", 9) : undefined;
+
+            expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
+              "mapped to already-mapped key",
+            );
+          });
+
+          it("throws for a `visitingFabricPlainObjectEntry()` `replace` naming an unsafe key, when keys are not visited", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = () =>
+              replaceEntry("__proto__", 9);
+
+            expect(() => map({ a: 1 }, rec)).toThrow("Visit of unsafe key");
+          });
+
           it("throws for a `visitingFabricPlainObjectEntry()` `mapTo` naming an unsafe key", () => {
             const rec = new Recorder();
             rec.onVisitingFabricPlainObjectEntry = () =>
