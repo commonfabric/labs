@@ -1477,19 +1477,20 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         throw error;
       }
       if (result.exitCode !== 0 && !(await this.#containerRunning(state))) {
-        // runsc answers 128 with nothing on stdout when it could not reach
-        // the container at all: the command never ran, the session was
-        // already gone. Anything else is a command that took the container
-        // down with it, whose own result stands.
-        const neverRan = result.exitCode === 128 && result.stdout === "";
+        // runsc returns 128 with nothing on stdout when it could not reach
+        // the container at all, and a command that ran can exit the same
+        // way, so whether the command ran is not known. Anything else is a
+        // command that took the container down with it, whose own result
+        // stands.
+        const unknownIfRan = result.exitCode === 128 && result.stdout === "";
         await this.#dropSession(
           state,
-          neverRan ? undefined : "its container exited",
+          unknownIfRan ? undefined : "its container exited",
         );
-        if (neverRan) {
+        if (unknownIfRan) {
           throw new SandboxSessionUnavailableError(
             `sandbox session "${session}" ended (its container exited) and its state is lost; name it again to start an empty session`,
-            "session-lost",
+            "session-ended-during-call",
           );
         }
       }

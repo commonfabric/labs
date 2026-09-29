@@ -56,6 +56,12 @@ class FakeRunscRunner implements ProcessRunner {
   /** When set, an exec in a session throws this. */
   execError: Error | undefined;
 
+  /**
+   * When set, called with the argument list of each exec in a session as the
+   * exec is made, which is where a test has a command do what it does.
+   */
+  onExec: ((args: readonly string[]) => void) | undefined;
+
   /** When set, starting a session's container throws this. */
   spawnError: Error | undefined;
 
@@ -83,6 +89,7 @@ class FakeRunscRunner implements ProcessRunner {
     }
     if (subcommand === "exec") {
       this.execCount += 1;
+      this.onExec?.(request.args);
       return this.execError !== undefined
         ? Promise.reject(this.execError)
         : Promise.resolve(this.execResult);
@@ -122,6 +129,9 @@ class FakeRunscRunner implements ProcessRunner {
 
 const SESSION_LOST_TEXT =
   "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`";
+
+const SESSION_ENDED_DURING_CALL_TEXT =
+  "the sandbox session ended while this call was in it and its state is lost: files outside the mounts and background processes are gone; the command may have run in whole or in part, and its output was not kept; check what it changed before running it again; the same `session` named again starts an empty session";
 
 describe("bash session refusals", () => {
   let scratchDir: string;
@@ -262,6 +272,39 @@ describe("bash session refusals", () => {
         "invalid-name",
       );
     });
+
+    it("is `session-ended-during-call` for an exec that returned 128 and nothing from a container that is gone", async () => {
+      await runtime.run({ argv: ["/bin/true"], session: "build" });
+      runner.absent.add(runner.sessionContainerIds[0]);
+      runner.execResult = { stdout: "", stderr: "gone", exitCode: 128 };
+
+      const refusal = await runtime.run({
+        argv: ["/bin/true"],
+        session: "build",
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(SandboxSessionUnavailableError);
+      expect((refusal as SandboxSessionUnavailableError).reason).toBe(
+        "session-ended-during-call",
+      );
+      expect(runner.execCount).toBe(2);
+    });
+
+    it("is `session-lost` for the call after a session's container exited, which executes nothing", async () => {
+      await runtime.run({ argv: ["/bin/true"], session: "build" });
+      await runner.endLatestSession();
+
+      const refusal = await runtime.run({
+        argv: ["/bin/true"],
+        session: "build",
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(SandboxSessionUnavailableError);
+      expect((refusal as SandboxSessionUnavailableError).reason).toBe(
+        "session-lost",
+      );
+      expect(runner.execCount).toBe(1);
+    });
   });
 
   describe("what the model is shown", () => {
@@ -319,13 +362,68 @@ describe("bash session refusals", () => {
       expect(output.stderr).toBe(SESSION_LOST_TEXT);
     });
 
-    it("says the same of a session `runsc` no longer knows at the call", async () => {
+    it("says a command may have run in a session that an exec found gone", async () => {
+      // A command the runner executed: it changes the workspace, takes its
+      // own exit trap away so that nothing is printed, ends the container
+      // and exits 128, which is also what `runsc` returns for a container
+      // it could not reach.
+
+      await engine.invokeBuiltinTool("bash", {
+        command: "make",
+        session: "build",
+      });
+      const command =
+        "trap - EXIT; rm -rf /workspace/src; kill -9 -1; exit 128";
+      const executed: string[] = [];
+      runner.onExec = (args) => {
+        executed.push(...args.filter((arg) => arg.endsWith(command)));
+        runner.absent.add(runner.sessionContainerIds[0]);
+      };
+      runner.execResult = {
+        stdout: "",
+        stderr: "what the command wrote to its standard error",
+        exitCode: 128,
+      };
+
+      const { output } = await engine.invokeBuiltinTool("bash", {
+        command,
+        cwd: "repo",
+        session: "build",
+      });
+
+      expect(executed.length).toBe(1);
+      expect(output).toEqual({
+        outputId: output.outputId,
+        stdout: "",
+        stderr: SESSION_ENDED_DURING_CALL_TEXT,
+        exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+        cwd: "/workspace",
+      });
+      expect(output.stderr).not.toContain("did not run");
+      expect(loggedLines().length).toBe(1);
+      expect(loggedLines()[0]).toContain(
+        'reason `"session-ended-during-call"`',
+      );
+      // The call was the report, so the name starts a second container and
+      // no call after it is refused for the first.
+      runner.onExec = undefined;
+      runner.execResult = { stdout: "", stderr: "", exitCode: 0 };
+      const again = await engine.invokeBuiltinTool("bash", {
+        command: "make test",
+        session: "build",
+      });
+      expect(again.output.exitCode).toBe(0);
+      expect(runner.sessionContainerIds.length).toBe(2);
+    });
+
+    it("says the same of a session `runsc` could not reach at the call", async () => {
       await engine.invokeBuiltinTool("bash", {
         command: "make",
         session: "build",
       });
       // The container is gone and its child has not been reaped: the exec
-      // is what finds out.
+      // is what finds out, with the same exit code and the same empty
+      // standard output as the command above.
       runner.absent.add(runner.sessionContainerIds[0]);
       runner.execResult = {
         stdout: "",
@@ -340,7 +438,7 @@ describe("bash session refusals", () => {
       });
 
       expect(output.exitCode).toBe(BASH_SESSION_UNAVAILABLE_EXIT_CODE);
-      expect(output.stderr).toBe(SESSION_LOST_TEXT);
+      expect(output.stderr).toBe(SESSION_ENDED_DURING_CALL_TEXT);
     });
 
     it("says a run at its bound of sessions may reuse one, and names none", async () => {

@@ -3657,6 +3657,10 @@ const SESSION_REFUSAL_TEXTS: Array<
     "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
   ],
   [
+    "session-ended-during-call",
+    "the sandbox session ended while this call was in it and its state is lost: files outside the mounts and background processes are gone; the command may have run in whole or in part, and its output was not kept; check what it changed before running it again; the same `session` named again starts an empty session",
+  ],
+  [
     "session-limit",
     "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
   ],
@@ -3743,7 +3747,7 @@ Deno.test("bash tool shows the model a refusal of its own for a reason it does n
     );
     assertEquals(
       output.stderr,
-      "the sandbox runtime refused the `session` of this call; the command did not run; rerun it without `session`",
+      "the sandbox runtime refused the `session` of this call; whether the command ran is not known, and no output of it was kept; check what it changed before running it again, and run it without `session`",
       String(reason),
     );
   }

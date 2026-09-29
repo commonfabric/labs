@@ -194,8 +194,13 @@ export interface SandboxCommandResult {
  *
  * - `invalid-name`: the name is not a session name.
  * - `enforcing-mode`: the run's CFC enforcement mode allows no session.
- * - `session-lost`: the session ended and what it held is gone. Naming it
- *   again starts an empty one.
+ * - `session-lost`: the session ended before the call and what it held is
+ *   gone. The call's command was not executed. Naming the session again
+ *   starts an empty one.
+ * - `session-ended-during-call`: the session ended while the call's command
+ *   was handed to it, and what it held is gone. Whether the command ran, in
+ *   whole or in part, is not known, and its output was not kept. Naming the
+ *   session again starts an empty one.
  * - `session-limit`: the run holds as many sessions as it may.
  * - `start-failed`: the session's sandbox did not start.
  */
@@ -203,6 +208,7 @@ export type SandboxSessionUnavailableReason =
   | "invalid-name"
   | "enforcing-mode"
   | "session-lost"
+  | "session-ended-during-call"
   | "session-limit"
   | "start-failed";
 

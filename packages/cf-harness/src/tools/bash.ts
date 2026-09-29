@@ -43,11 +43,13 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 // `timeout`), which agents already recognize.
 export const BASH_TIMEOUT_EXIT_CODE = 124;
 /**
- * The command did not run: it named a sandbox session the runtime cannot
- * honor (no sessions, or not for this call), or a name that is not a
- * session name. Recoverable, and what the model does next depends on which
- * refusal it was, so the text beside this exit code says: rerun without the
- * session, with a name that is one, or with the same name to start over.
+ * The call named a sandbox session the runtime cannot honor (no sessions,
+ * or not for this call), or a name that is not a session name. The call has
+ * no output of a command. Whether a command ran depends on the refusal: one
+ * made before a command is executed says the command did not run, and one
+ * made for a session that ended with a command in it says the command may
+ * have. Recoverable, and what the model does next depends on which refusal
+ * it was, so the text beside this exit code says.
  */
 export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
 
@@ -162,11 +164,12 @@ export const bashToolDescriptorForRuntime = (
     : bashToolDescriptor;
 
 /**
- * A refusal over `session`. The command did not run, so `cwd` is the working
- * directory the run already had and the refusal leaves it there. Whether the
- * run holds an invocation record for the call depends on who refuses: the
- * tool refuses before it makes one, and the runtime can only refuse a call
- * that was handed to it, which is after.
+ * A refusal over `session`. No output of a command was kept, so nothing says
+ * where a command left the working directory: `cwd` is the working directory
+ * the run already had and the refusal leaves it there. Whether the run holds
+ * an invocation record for the call depends on who refuses: the tool refuses
+ * before it makes one, and the runtime can only refuse a call that was
+ * handed to it, which is after.
  */
 const sessionRefusal = (
   outputId: BashToolOutput["outputId"],
@@ -193,6 +196,11 @@ const INVALID_SESSION_NAME_REFUSAL =
  * session that was lost starts empty under the same name. A run at its bound
  * of sessions has sessions to reuse. A session that did not start is not
  * worth starting again.
+ *
+ * A text says the command did not run only for a reason a runtime gives
+ * before it executes the command. A session that ended with the command in
+ * it has a reason of its own, whose text says neither that the command ran
+ * nor that it did not.
  */
 const SESSION_REFUSAL_BY_REASON: Readonly<
   Record<SandboxSessionUnavailableReason, string>
@@ -202,6 +210,8 @@ const SESSION_REFUSAL_BY_REASON: Readonly<
     "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
   "session-lost":
     "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
+  "session-ended-during-call":
+    "the sandbox session ended while this call was in it and its state is lost: files outside the mounts and background processes are gone; the command may have run in whole or in part, and its output was not kept; check what it changed before running it again; the same `session` named again starts an empty session",
   "session-limit":
     "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
   "start-failed":
@@ -211,10 +221,11 @@ const SESSION_REFUSAL_BY_REASON: Readonly<
 /**
  * The text for a reason outside the set. A runtime is handed to a run
  * through an interface, so what arrives as `reason` is checked and not
- * assumed.
+ * assumed. A reason this tool does not know says nothing of how far the call
+ * got, so the text does not say whether the command ran.
  */
 const SESSION_REFUSAL_FOR_UNKNOWN_REASON =
-  "the sandbox runtime refused the `session` of this call; the command did not run; rerun it without `session`";
+  "the sandbox runtime refused the `session` of this call; whether the command ran is not known, and no output of it was kept; check what it changed before running it again, and run it without `session`";
 
 const sessionRefusalForReason = (reason: unknown): string =>
   typeof reason === "string" && Object.hasOwn(SESSION_REFUSAL_BY_REASON, reason)
@@ -384,10 +395,10 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
       }
       if (error instanceof SandboxSessionUnavailableError) {
         // The runtime has sessions but not for this call (an enforcing
-        // mode, a session that ended, too many sessions): recoverable, and
-        // the model is told which in this file's words, selected by the
-        // error's reason. The runtime's message goes to the operator's log
-        // and nowhere the model reads.
+        // mode, a session that ended before the call or during it, too many
+        // sessions): recoverable, and the model is told which in this
+        // file's words, selected by the error's reason. The runtime's
+        // message goes to the operator's log and nowhere the model reads.
         console.error(sessionRefusalLogLine(context.runId, outputId, error));
         // This refusal is the runtime's, so it arrives after the invocation
         // record above was made, and the record stays. It says the call was
@@ -395,7 +406,8 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         // it is the record that accounts for this output. Whether a session
         // is there is known by starting it, and a session that ended is
         // reported once, so there is nothing to ask the runtime beforehand.
-        // Nothing ran, so the working directory is the one the run had.
+        // No output was kept, so the working directory is the one the run
+        // had, whether or not a command ran.
         return sessionRefusal(
           outputId,
           context.currentDir,
