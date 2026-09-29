@@ -46,10 +46,11 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { detailList } from "../detail-list.ts";
+import { livePageResponse } from "../live-page.ts";
 import {
   type CiJobs,
   CI_JOBS_PATH,
-  ciJobsResponse,
+  ciJobsPage,
   type Job,
 } from "../ci-jobs-page.ts";
 import {
@@ -436,6 +437,7 @@ async function jobOf(
   const job = {
     repo: shortName(inventory.repo),
     workflow: workflow.name,
+    path: workflow.path,
     pinned: isPinned(inventory.repo, workflow.path),
     href: workflowUrl(inventory.repo, workflow.path),
   };
@@ -538,6 +540,7 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
     ...unreadableRepos.map((repo): Job => ({
       repo: shortName(repo),
       workflow: "workflows",
+      path: "",
       pinned: false,
       status: "warn",
       failing: false,
@@ -638,7 +641,8 @@ export function createCiHealth(): Tile {
     intervalMs: 300_000,
     routes: [{
       path: CI_JOBS_PATH,
-      handler: () => ciJobsResponse(collected),
+      handler: () => livePageResponse(ciJobsPage(collected)),
+      live: true,
     }],
     async collect(ctx): Promise<TileView> {
       const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");

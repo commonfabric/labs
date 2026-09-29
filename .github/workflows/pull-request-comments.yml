@@ -119,4 +119,4 @@ jobs:
           TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
         run: >-
           deno run --allow-net --allow-env --allow-read --allow-write
-          --allow-run=git,unzip tasks/post-main-report.ts
+          --allow-run=git,unzip,deno tasks/post-main-report.ts

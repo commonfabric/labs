@@ -1589,6 +1589,17 @@ boardTest("sse: a serving tick sends an open live page its new markup, and only 
   }
 });
 
+boardTest("sse: the CI jobs page is live", async () => {
+  const res = await handle(req(`/events?page=${encodeURIComponent("/ci")}`));
+  assertEquals(res.headers.get("content-type"), "text/event-stream");
+  const reader = res.body!.getReader();
+  assertEquals(await chunk(reader), ": connected\n\n");
+  const opened = await chunk(reader);
+  assertStringIncludes(opened, "event: page\n");
+  assertStringIncludes(opened, "has not finished a collection yet");
+  await reader.cancel();
+});
+
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
   const gantt = await handle(req("/bench?view=gantt&repo=loom"));
   assertEquals(gantt.status, 200);

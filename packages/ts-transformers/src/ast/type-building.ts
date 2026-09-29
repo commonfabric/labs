@@ -2,6 +2,7 @@ import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import {
   readAuthoredTypeNodeOnce,
+  readMemberAnnotation,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
 import type { CrossStageState, TransformationContext } from "../core/mod.ts";
@@ -1414,25 +1415,29 @@ export function buildTypeElementsFromCaptureTree(
     if (childNode.expression) {
       // Leaf node with source expression - use it directly
       typeNode = expressionToTypeNode(childNode.expression, context);
+      const declaring = ts.isIdentifier(childNode.expression)
+        ? destructuredSourceProperty(childNode.expression, propName, checker) ??
+          checker.getSymbolAtLocation(childNode.expression)
+        : ts.isPropertyAccessExpression(childNode.expression)
+        ? checker.getSymbolAtLocation(childNode.expression.name)
+        : undefined;
       // A node narrowed from this one narrows the value the leaf's declaration
       // spells, which a print of its type may not.
-      const declared = declaredTypeNode(
-        ts.isIdentifier(childNode.expression)
-          ? destructuredSourceProperty(
-            childNode.expression,
-            propName,
-            checker,
-          ) ??
-            checker.getSymbolAtLocation(childNode.expression)
-          : ts.isPropertyAccessExpression(childNode.expression)
-          ? checker.getSymbolAtLocation(childNode.expression.name)
-          : undefined,
-      );
+      const declared = declaredTypeNode(declaring);
       if (declared && declared !== typeNode) {
         context.state.recordDeclaredValue(typeNode, {
           type: checker.getTypeAtLocation(childNode.expression),
           typeNode: declared,
         });
+      }
+      // A print spells a `typeof` binding as the structural type of the value
+      // it names, from which no reader can tell the binding, so where the
+      // member's annotation names one, the print is read as that annotation.
+      const printedType = context.state.printedFrom(typeNode);
+      const annotation = declaring && printedType &&
+        readMemberAnnotation(declaring, printedType, checker);
+      if (annotation && namesValueBinding(annotation, checker)) {
+        context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
       }
 
       // Judge unknown-ness from the type that drives the emitted schema — the

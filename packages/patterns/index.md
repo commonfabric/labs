@@ -121,7 +121,8 @@ file-sharing example: bytes go to the blob store, cells hold descriptors),
 `habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
 `project-list/`, [`recommend-a-book/`](recommend-a-book/README.md) (personal
 reading shelf and private visitor recommendations), `router/`,
-`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`,
+`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`, `shared-note/` (a
+shared Markdown document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
 `weekly-calendar/`.
 
@@ -156,6 +157,9 @@ itself. Two groups sit outside the marker's reach and are fixture anyway:
 
 The remaining legacy patterns each carry the legacy marker:
 
+- `collaborative-note/` — a minimal co-presence note, superseded by
+  `shared-note/`, which adds an editable title, an embeddable view, and notices
+  for editing and live-cursor failures.
 - `factory-outputs/` and its support file `vehicles.ts` — machine-generated
   pattern-factory outputs, kept with their eval scores and never intended as
   style references. `parking-coordinator/main.tsx` is also a live integration
@@ -955,37 +959,37 @@ interface Output {
 }
 ```
 
-## `collaborative-note/main.tsx`
+## `shared-note/main.tsx`
 
-A minimal multiplayer note built on `cf-code-editor`. The note body is durable
-per-space state synchronized through Memory's operation protocol. Names, carets,
-and selections travel separately as ephemeral co-presence data. Each viewer
-selects or creates a Fabric profile with `wish({ query: "#profile" })`; the
-editor uses that profile's `#profileName` field as its participant label. The
-host provides the WebSocket endpoint, while `cf-code-editor` derives an opaque
-room identifier from the shared note field.
+A shared Markdown document built on `cf-code-editor` in collaborative prose
+mode. The title and body are durable per-space state; body edits synchronize
+through Memory's operation protocol. Names, carets, and selections travel
+separately as ephemeral co-presence data over each viewer's memory connection.
+Each viewer selects or creates a Fabric profile with
+`wish({ query: "#profile" })`, and the editor uses that profile's `#profileName`
+field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
+so the note embeds in other surfaces, and editing or live-cursor failures show
+as notices above the editor.
 
-**Keywords:** multiplayer, collaborative editor, note, profile, wish,
+**Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror
 
 ### Input Schema
 
 ```ts
-interface CollaborativeNoteInput {
-  note?: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
+interface SharedNoteInput {
+  title?: PerSpace<string | Default<"Untitled note">>;
+  content?: PerSpace<string | Default<"">>;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface CollaborativeNoteOutput {
-  note: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
-  participantName: string;
+interface SharedNoteOutput {
+  title: PerSpace<string>;
+  content: PerSpace<string>;
+  participantName: PerUser<string>;
 }
 ```
 

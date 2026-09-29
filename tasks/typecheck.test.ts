@@ -1,18 +1,20 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
-import { parse as parseJsonc } from "@std/jsonc";
-import { dirname, fromFileUrl, globToRegExp, join, relative } from "@std/path";
+import { dirname, fromFileUrl, join, relative } from "@std/path";
 
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
 
 import {
   checkGroup,
   collectPathsByScope,
+  excludedByManifest,
   isTestModule,
   main,
+  MODULE_EXTENSIONS,
   runTypecheck,
   scopeOfPath,
+  scopesReached,
   selectScopes,
   UNCHECKED_TREES,
   type UncheckedTree,
@@ -22,96 +24,9 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
-/**
- * The extensions a checked path can put in front of the type checker.
- *
- * JavaScript earns its place here: `deno check` opens a `.js` or `.jsx` file
- * a checked path names, and type-checks the ones carrying `// @ts-check`,
- * which is a diagnostic this repository would want and would otherwise lose
- * in silence. A coverage claim stated over a narrower population than the
- * gate actually reads is the defect this whole test exists to catch, so the
- * population is every module extension the checker accepts rather than the
- * ones the tree happens to hold today.
- */
-const CHECKABLE_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-];
-
 /** Whether a checked path or unchecked tree covers a repository file. */
 function covers(tree: string, file: string): boolean {
   return file === tree || file.startsWith(`${tree}/`);
-}
-
-/**
- * The paths a manifest's `exclude` keeps `deno check` from opening.
- *
- * A checked path names a directory, and this test reads that as covering the
- * tree beneath it — which is true only of the files the checker itself would
- * reach. Deno drops these before it walks, so a module under one is opened by
- * nothing however a path above it reads. Every manifest is consulted rather
- * than the root alone, because a member declares its own and the checker
- * honors it.
- *
- * These are matched against a repository-relative path, so they filter the
- * walk's results rather than steering it: `walk()` takes a `skip`, but it
- * tests the absolute path an entry carries, which an anchored pattern from
- * `globToRegExp` never matches, and the exclusion would quietly stop firing.
- *
- * Only the top-level `exclude` counts. A `fmt`, `lint` or `test` block
- * carries one for its own subcommand, and reading such a block as though it
- * reached the type check would drop files the checker does open — the same
- * defect pointed the other way, and the worse direction, since it shrinks
- * what the gate is held to rather than widening it.
- */
-async function excludedByManifest(
-  root: string,
-  members: readonly string[],
-): Promise<RegExp[]> {
-  const patterns: RegExp[] = [];
-  for (const directory of ["", ...members]) {
-    // `deno.json` wins where both exist, and Deno ignores the other whole.
-    let text: string | undefined;
-    for (const name of ["deno.json", "deno.jsonc"]) {
-      text = await Deno.readTextFile(join(root, directory, name))
-        .catch(() => undefined);
-      if (text !== undefined) break;
-    }
-    if (text === undefined) continue;
-    const manifest = parseJsonc(text) as { exclude?: string[] };
-    for (const pattern of manifest.exclude ?? []) {
-      // Deno un-excludes on a bare leading `!` and on nothing else: measured
-      // against 2.9.4, `!build/keep.ts` restores that file to the check while
-      // `./!build/keep.ts` restores nothing and matches nothing, so the prefix
-      // is not stripped before the negation is looked for. `globToRegExp`
-      // reads `!` as a literal either way, which for the spelling Deno
-      // negates lands on the shrinking side: the entry matches nothing, the
-      // broader exclusion goes on firing, and a file the checker opens is
-      // counted as excused. Refusing it fails this file instead. Read on the
-      // pattern as written, which is what Deno reads.
-      if (pattern.startsWith("!")) {
-        throw new Error(
-          `${join(directory, "deno.json(c)")} un-excludes ${pattern}, which ` +
-            `this check cannot read; teach it the negation or the census is ` +
-            `short by whatever the entry restores.`,
-        );
-      }
-      const stripped = pattern.replace(/^\.\//, "");
-      const scoped = directory === "" ? stripped : `${directory}/${stripped}`;
-      patterns.push(
-        globToRegExp(scoped.endsWith("/") ? `${scoped}**` : scoped, {
-          globstar: true,
-        }),
-      );
-    }
-  }
-  return patterns;
 }
 
 /**
@@ -219,7 +134,7 @@ describe("typecheck", () => {
         for await (
           const entry of walk(join(REPO_ROOT, member), {
             includeDirs: false,
-            exts: CHECKABLE_EXTENSIONS,
+            exts: MODULE_EXTENSIONS,
           })
         ) {
           const file = relative(REPO_ROOT, entry.path);
@@ -263,7 +178,7 @@ describe("typecheck", () => {
       for await (
         const entry of walk(join(REPO_ROOT, "packages", "patterns"), {
           includeDirs: false,
-          exts: CHECKABLE_EXTENSIONS,
+          exts: MODULE_EXTENSIONS,
         })
       ) {
         const file = relative(REPO_ROOT, entry.path);
@@ -324,7 +239,7 @@ describe("typecheck", () => {
         for await (
           const found of walk(join(REPO_ROOT, entry.tree), {
             includeDirs: false,
-            exts: CHECKABLE_EXTENSIONS,
+            exts: MODULE_EXTENSIONS,
           })
         ) {
           const file = relative(REPO_ROOT, found.path);
@@ -392,6 +307,183 @@ describe("typecheck", () => {
         expect(patterns).not.toContain(
           "packages/patterns/plain-name/contract.ts",
         );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("scopesReached()", () => {
+    /** A tree of the given files, each group checking its own directory. */
+    async function tree(files: Record<string, string>): Promise<string> {
+      const root = await Deno.makeTempDir({ prefix: "typecheck-reach-" });
+      for (
+        const [file, contents] of Object.entries({
+          "deno.jsonc": '{ "workspace": [] }\n',
+          ...files,
+        })
+      ) {
+        await Deno.mkdir(join(root, dirname(file)), { recursive: true });
+        await Deno.writeTextFile(join(root, file), contents);
+      }
+      return root;
+    }
+
+    it("reaches every group importing a changed file, however indirectly", async () => {
+      const root = await tree({
+        "packages/base/mod.ts": "export const base = 1;\n",
+        "packages/middle/mod.ts": 'export { base } from "../base/mod.ts";\n',
+        "packages/top/mod.test.ts":
+          'import { base } from "../middle/mod.ts";\n' +
+          "console.log(base);\n",
+        "packages/apart/mod.ts": "export const apart = 1;\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map(
+            ["apart", "base", "middle", "top"].map((
+              scope,
+            ) => [scope, [`packages/${scope}`]]),
+          ),
+        );
+        expect(reached(new Set(["packages/base/mod.ts"])))
+          .toEqual(["base", "middle", "top"]);
+        expect(reached(new Set(["packages/top/mod.test.ts"])))
+          .toEqual(["top"]);
+        // A file that is no module still belongs to its group's check.
+        expect(reached(new Set(["packages/apart/README.md"])))
+          .toEqual(["apart"]);
+        // A member's manifest decides how its modules resolve, so it
+        // reaches whatever imports them.
+        expect(reached(new Set(["packages/middle/deno.json"])))
+          .toEqual(["middle", "top"]);
+        // The lock file decides that for every module.
+        expect(reached(new Set(["deno.lock"])))
+          .toEqual(["apart", "base", "middle", "top"]);
+        expect(reached(new Set(["README.md"]))).toEqual([]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("reaches every group from a declaration file every check loads", async () => {
+      const root = await tree({
+        "deno.jsonc": JSON.stringify({
+          workspace: [],
+          compilerOptions: { types: ["./types/ambient.d.ts"] },
+        }),
+        "types/ambient.d.ts": 'import type { Shape } from "./shape.ts";\n' +
+          "declare global { const shape: Shape; }\n",
+        "types/shape.ts": "export type Shape = { sides: number };\n",
+        "packages/base/mod.ts": "export const base = 1;\n",
+        "packages/apart/mod.ts": "export const apart = 1;\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map([
+            ["apart", ["packages/apart"]],
+            ["base", ["packages/base"]],
+          ]),
+        );
+        // Through the file the manifest names, and through what it imports.
+        for (const changed of ["types/ambient.d.ts", "types/shape.ts"]) {
+          expect(reached(new Set([changed]))).toEqual(["apart", "base"]);
+        }
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("reaches the importers of a member naming a declaration file", async () => {
+      const root = await tree({
+        "deno.jsonc": JSON.stringify({ workspace: ["./packages/base"] }),
+        "packages/base/deno.json": JSON.stringify({
+          compilerOptions: { types: ["./ambient.d.ts"] },
+        }),
+        "packages/base/ambient.d.ts": "declare const ambient: number;\n",
+        "packages/base/mod.ts": "export const base = 1;\n",
+        "packages/top/mod.test.ts": 'import { base } from "../base/mod.ts";\n' +
+          "console.log(base);\n",
+        "packages/apart/mod.ts": "export const apart = 1;\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map(
+            ["apart", "base", "top"].map((
+              scope,
+            ) => [scope, [`packages/${scope}`]]),
+          ),
+        );
+        expect(reached(new Set(["packages/base/ambient.d.ts"])))
+          .toEqual(["base", "top"]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("reaches the importers of a module that was deleted", async () => {
+      // The graph is read from the tree after the change, where nothing
+      // holds the deleted module, so the import naming it is what leads
+      // back to the group whose check it breaks.
+      const root = await tree({
+        "packages/top/mod.test.ts":
+          'import { gone } from "../base/gone.ts";\n' +
+          "console.log(gone);\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map([["top", ["packages/top"]]]),
+        );
+        expect(reached(new Set(["packages/base/gone.ts"]))).toEqual(["top"]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("reaches a group importing a module under a query", async () => {
+      const root = await tree({
+        "packages/base/mod.ts": "export const base = 1;\n",
+        "packages/top/mod.test.ts":
+          'import { base } from "../base/mod.ts?fresh";\n' +
+          "console.log(base);\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map([["base", ["packages/base"]], ["top", ["packages/top"]]]),
+        );
+        expect(reached(new Set(["packages/base/mod.ts"])))
+          .toEqual(["base", "top"]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("follows an import through a module no group checks", async () => {
+      // A test reaching another package through a fixture is checked
+      // against that package all the same, so the fixture is a way in.
+      const root = await tree({
+        "packages/base/mod.ts": "export const base = 1;\n",
+        "packages/top/fixtures/helper.ts":
+          'export { base } from "../../base/mod.ts";\n',
+        "packages/top/mod.test.ts":
+          'import { base } from "./fixtures/helper.ts";\n' +
+          "console.log(base);\n",
+      });
+      try {
+        const reached = await scopesReached(
+          root,
+          new Map([
+            ["base", ["packages/base"]],
+            ["top", ["packages/top/mod.test.ts"]],
+          ]),
+        );
+        expect(reached(new Set(["packages/base/mod.ts"])))
+          .toEqual(["base", "top"]);
       } finally {
         await Deno.remove(root, { recursive: true });
       }

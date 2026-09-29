@@ -155,6 +155,17 @@ for. Either way the scope is applied before ambiguity is judged, or a
 name two packages happen to share would cost each of them a file it held
 unambiguously.
 
+The preload writes one more kind of file into the spool, and so does the pattern
+test runner: a mark saying when a process began running its units, named
+`began-<uuid>.json` and holding that moment as a JSON number of milliseconds
+since the epoch. Deno runs the preload before loading each test file, after
+type-checking every file the process was handed, so a `deno test` permitted to
+write to its spool leaves a mark per file and the earliest falls where the
+process's setup ends, and one that is not leaves none; the pattern test runner
+leaves one before it compiles its files' programs. A lane reads the earliest
+mark once the process has ended, to measure that setup. Nothing that reads
+records reads a mark, and a spool shipped as a run ships only its records.
+
 The context line carries `schema` (this document describes version 1, the
 `v1` in object paths), a per-object ULID `reportId`, the canonical `repo`
 name (a constant owned by the repository's tooling, never derived from git
@@ -230,12 +241,15 @@ they carry no variant whatever the batch they measure carried. Nothing
 enumerates them, nothing scores them, and no lane can be asked to run
 one.
 
-Their figures are not all durations. A lane writes five measurements
-per batch — what the batch spent, what its own tests took between them,
-how many times its passes opened a unit, what the longest unit of each
-pass took added together, and how many passes it made — and the record
-format carries one number and calls it a duration, so which of the five a
-record holds is decided by its name.
+Their figures are not all durations. A lane writes seven measurements per
+batch — what the batch spent, what its own tests took between them, how many
+times its passes opened a unit, what the longest unit of each pass took added
+together, how many passes it made, what the processes it started spent before
+their units began, and how many such processes it started — and the record
+format carries one number and calls it a duration, so which of the seven a
+record holds is decided by its name. No name starts the way the name of
+another kind does, so a reader that predates a kind reads a record of that
+kind as no measurement at all rather than as one it knows.
 A batch that ended badly is written as a failure, and a test in it
 failing is enough to end it badly.
 

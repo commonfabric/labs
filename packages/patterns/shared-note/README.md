@@ -54,6 +54,13 @@ collaboration epoch changes while edits are pending, a session-local recovery
 field preserves the unsent text for copying before the user reopens the note.
 That recovery field does not replace the shared document.
 
+Live cursors can fail on their own while editing carries on. The note then shows
+a status line saying cursors are unavailable, and removes it when the editor
+joins its presence room again. A server without presence stays that way until
+the viewer's profile name changes; any other failure is tried again the next
+time the editor gains focus, so the status line asks the viewer to click outside
+the note and back into it.
+
 ## Tests
 
 ```sh
@@ -61,5 +68,5 @@ deno run --no-lock -A packages/cli/mod.ts test packages/patterns/shared-note/mai
 ```
 
 The pattern test covers initial text, compact views, profile setup, editor
-bindings, error display, and recovery. Browser integration covers multiple
-identities and the actual editor protocol.
+bindings, error display, recovery, and the live-cursor notice. Browser
+integration covers multiple identities and the actual editor protocol.

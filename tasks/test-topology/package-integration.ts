@@ -113,7 +113,7 @@ export async function loadPackageIntegrationSuites(
     parts: [
       {
         packageDir: "packages/cf-harness",
-        flags: ["--no-check", "-A"],
+        flags: ["-A"],
         junit: {
           kind: "integration",
           scope: "cf-harness",

@@ -1,57 +1,71 @@
 /**
- * What a lane costs beyond the tests it runs, fitted from what lanes
- * have spent.
+ * What a lane costs beyond the tests it runs, read from what lanes have
+ * measured about themselves.
  *
  * A test's own cost is what the runner measured for it. A lane pays
- * more: it opens the capabilities its batches need, it starts a runner
- * per batch, and it loads a module per file. None of that is in any
- * test's duration, and all of it is in the five minutes a lane has.
+ * more: it opens the capabilities its batches need, it starts processes
+ * to run them, each of which may spend time before its first unit begins,
+ * and it loads a module per file. None of that is in any test's duration,
+ * and all of it is in the five minutes a lane has.
  *
  * The packer already charges each of those — `setupCost` the first time
- * a lane opens a capability, a suite's `overhead` for each pass a lane's
+ * a lane opens a capability, a suite's process `setup` each time a lane
+ * starts one of its processes, its `overhead` for each pass a lane's
  * batch of the suite makes, its `unitOverhead` each time one of those
  * passes opens one of its units, and its `correction` against what the
  * batch's tests take. What it charges them from is this.
  *
  * A batch makes one pass for each time its most repeated unit runs. Each
  * pass invokes the suite's command afresh over the units still running,
- * so it pays the suite's startup again and runs every selected test of
- * each of those units again.
+ * so it starts the suite's processes again and runs every selected test
+ * of each of those units again.
  *
  * The inputs are the lane's own measurements of itself, which travel to
  * the store as ordinary records. A lane writes one per capability it
- * opened and five per batch: what the batch spent, what its tests took
+ * opened and seven per batch: what the batch spent, what its tests took
  * between them, how many times its passes opened a unit, what the longest
- * unit of each pass took added together, and how many passes it made. The
- * second and third are what make a fit possible at all — neither can be
- * recovered from the records the batch produced, because a reader cannot
- * tell which of a report's records came from which batch, and a unit
- * whose tests all recorded nothing leaves no trace of having been opened.
+ * unit of each pass took added together, how many passes it made, what the
+ * processes it started spent before their units began, and how many such
+ * processes it started. None of the batch's seven can be recovered from
+ * the records the batch produced, because a reader cannot tell which of a
+ * report's records came from which batch, and a unit whose tests all
+ * recorded nothing leaves no trace of having been opened.
  *
- * The fourth is what a suite running its units side by side is bounded
- * by. The pattern unit suite runs five files at a time, so a batch of many
- * files spends about a third of what they took between them, and the
- * correction fitted from such batches says so. A batch holding one file
- * that takes minutes spends at least those minutes, and twice them where
- * the file runs twice, whatever the correction makes of it. A fit reading
- * that batch through the correction alone puts the difference in the
- * intercept, where every lane holding one of the suite's files pays it,
- * and a single file taking longer than the bound a lane is packed to
- * finish inside puts the intercept past that bound and every test of the
- * suite out of every pull request. So a batch's tests are charged
- * whichever is more: the correction times what they took, or what the
- * longest unit of each pass took added together.
+ * Two of the charges are measured, and read off what lanes saw: how long
+ * a capability took to open, and how long a process spent before its
+ * units began, which its runner marks and the lane times. The other two
+ * are fitted, because what they describe happens inside a process where
+ * no lane can see it. How far a runner running its files side by side
+ * shares their time out is the correction, and what loading one more
+ * file costs is the per-unit charge. Both are read from what each batch
+ * spent once its processes' setup is taken out. So is the intercept, what
+ * a batch spent beyond everything else here, which a lane is charged once
+ * for each pass.
+ *
+ * A suite whose processes mark nothing, such as the repository gates or
+ * one type check over many paths, keeps what they spend before their
+ * units in what its units cost. A process of a suite whose other
+ * processes mark, but which leaves no mark itself, such as a `deno test`
+ * with no permission to write to its spool, is charged the setup
+ * measured from the rest.
+ *
+ * The fourth figure is what a suite running its units side by side is
+ * bounded by. The pattern unit suite runs five files at a time, so a batch
+ * of many files spends about a third of what they took between them, and
+ * the correction fitted from such batches says so. A batch holding one
+ * file that takes minutes spends at least those minutes, and twice them
+ * where the file runs twice, whatever the correction makes of it. So a
+ * batch's tests are charged whichever is more: the correction times what
+ * they took, or what the longest unit of each pass took added together.
  *
  * What the batch's tests took, rather than what the packer expected them
  * to take. The two differ by however wrong the manifest's costs are, and
  * a unit nothing has measured is charged a stand-in that can be wrong by
  * a factor of ten. Fitting against the expectation would put that error
- * in the intercept, where every lane holding the suite pays it for as long as the
- * measurement is kept, long after the costs behind it were measured, and
- * a suite whose intercept passes the bound a lane is packed to finish
- * inside places no discretionary identity at all. The error a suite's
- * cost model should carry is the machine's, which is what the tests' own
- * time leaves.
+ * in the per-unit charge and the correction, where it is charged to every
+ * lane for as long as the measurement is kept, long after the costs
+ * behind it were measured. The error a suite's cost model should carry is
+ * the machine's, which is what the tests' own time leaves.
  *
  * What that costs is worth being plain about, because it is charged to
  * every lane rather than to the occasional bad window. The packer reads
@@ -63,37 +77,35 @@
  * whatever margin the cost figures carry. That margin is one of three
  * things between what a lane is projected to spend and its bound; the
  * others are the charges below, each read high, and the safety margin
- * `LANE_SAFETY_SECONDS`. Under-packing is the direction every fit here
- * errs in; it is the price of an intercept that measures the machine
- * rather than the manifest.
+ * `LANE_SAFETY_SECONDS`. The correction and the per-unit charge are each
+ * read from the middle of what batches did, and the intercept beside them
+ * covers a batch that spent more than that on its units.
  *
- * Every fit here errs high: above what the typical lane pays. A cost
+ * The fixed charges err high: above what the typical lane pays. A cost
  * model that under-estimates puts a lane past the bound it is packed to
  * finish inside, where one that over-estimates leaves a lane finishing
- * early. The two charges that are read off what lanes have spent, a
- * suite's fixed cost and a capability's setup, are each read at the
- * ninetieth percentile of what lanes have seen. That is well above the
- * typical observation, and it is not the slowest one: up to one
- * observation in ten exceeds its charge, by an amount nothing here
- * bounds. The safety margin `LANE_SAFETY_SECONDS` leaves between a lane's
- * budget and its bound absorbs such an excess up to its own size, and a
- * lane whose observations exceed their charges by more than that between
- * them runs past its bound. Each charge is paid by every lane that holds the suite or
- * opens the capability, for as long as the window keeps the observations
- * it was read from. Read at the slowest observation, a single slow batch
- * would set what every lane is charged, and every lane would pack short
- * by the whole of that batch's excess.
+ * early. A capability's setup, a process's setup, and a suite's intercept
+ * are each read at the ninetieth percentile of what lanes have seen. That
+ * is well above the typical observation, and it is not the slowest one:
+ * up to one observation in ten exceeds its charge, by an amount nothing
+ * here bounds. The safety margin `LANE_SAFETY_SECONDS` leaves between a
+ * lane's budget and its bound absorbs such an excess up to its own size,
+ * and a lane whose observations exceed their charges by more than that
+ * between them runs past its bound. Each charge is paid by every lane
+ * that starts the process, holds the suite or opens the capability, for
+ * as long as the window keeps the observations it was read from. Read at
+ * the slowest observation, a single slow runner would set what every lane
+ * is charged, and every lane would pack short by the whole of that
+ * runner's excess.
  *
  * What a run is charged errs high too, with one exception:
  * `pricedCalibration` charges a run with coverage on the fit without
  * coverage for a suite no lane has yet run with coverage on, and that is
  * short by whatever instrumenting the suite costs.
  *
- * One reading cannot manage it at both ends. A suite's fixed cost and
- * what one of its units costs are measured from batches of much the same
- * size, which cannot tell the two apart, so whichever way the split falls
- * the model is under a batch of some size. `fitSuite` says which end it
- * chooses and what bounds the error there.
+ * A process whose runner marks nothing, and a batch stored by a lane that
+ * did not measure its processes' setup, cannot say where that setup ends.
+ * `fitSuite` says what a suite is charged from them.
  */
 
 import type { TestRecord } from "@commonfabric/test-support/records";
@@ -145,7 +157,15 @@ export function isLaneObservation(value: unknown): value is LaneObservation {
     (one.longest === undefined || finite(one.longest)) &&
     (one.passes === undefined ||
       (typeof one.passes === "number" && Number.isInteger(one.passes) &&
-        one.passes >= 1));
+        one.passes >= 1)) &&
+    (one.setup === undefined || isProcessSetup(one.setup));
+}
+
+/** Whether a stored value is a batch's processes' setup. */
+function isProcessSetup(value: unknown): boolean {
+  if (!isObjectOrArray(value)) return false;
+  const setup = value as Record<string, unknown>;
+  return finite(setup.seconds) && finite(setup.processes);
 }
 
 /**
@@ -190,6 +210,21 @@ export interface BatchObservation {
    * pass.
    */
   passes?: number;
+
+  /**
+   * What the processes the batch started spent before their units began,
+   * where their runners mark when that is, summed over every run.
+   */
+  setup?: ProcessSetup;
+}
+
+/** What a batch's processes spent before their units began. */
+export interface ProcessSetup {
+  /** Seconds, over every process the batch started and every run. */
+  seconds: number;
+
+  /** How many such processes the batch started, over every run. */
+  processes: number;
 }
 
 /** The figures a `BatchObservation` may lack. */
@@ -209,6 +244,7 @@ const CARRIES: {
   measured: (observation) => observation.measured !== undefined,
   longest: (observation) => observation.longest !== undefined,
   passes: (observation) => observation.passes !== undefined,
+  setup: (observation) => observation.setup !== undefined,
 };
 
 /** Batches a suite is fitted from, narrowest first, ending with all of them. */
@@ -228,7 +264,7 @@ export interface Observations {
 
 /**
  * What the aggregate has kept, in the shape the fit reads. The fold
- * pairs a batch's five measurements as it reads them, so what is stored
+ * pairs a batch's seven measurements as it reads them, so what is stored
  * is already paired and this only sorts it.
  */
 export function laneObservations(
@@ -259,12 +295,13 @@ export function laneObservations(
  * nothing a fit can use, and a lane stopped part way through a batch
  * leaves exactly that — a lane writes a batch's measurements together, so
  * a batch that never finished contributes none of them. What its longest
- * units took, and how many passes it made, are read where they are present.
+ * units took, and how many passes it made, are read where they are present,
+ * and so is its processes' setup, where both of its figures are.
  *
  * They are keyed by the run, the suite, and whether coverage was on,
  * because five lanes of one run may each run the same suite and adding
  * two lanes' figures would describe a batch neither of them ran. Not by
- * the measurement's name, which is what tells the five apart and would
+ * the measurement's name, which is what tells the seven apart and would
  * therefore keep them apart.
  */
 export function observationsOf(
@@ -276,6 +313,8 @@ export function observationsOf(
   const units = new Map<string, number>();
   const longest = new Map<string, number>();
   const passes = new Map<string, number>();
+  const start = new Map<string, number>();
+  const processes = new Map<string, number>();
   const batchOf = new Map<string, { suite: string; measured: boolean }>();
   for (const { run, records } of runs) {
     for (const record of records) {
@@ -294,7 +333,7 @@ export function observationsOf(
       }
       const batch = batchMeasurement(record.test.n);
       if (batch === undefined) continue;
-      // The suite and the coverage marker, not the name: a batch's five
+      // The suite and the coverage marker, not the name: a batch's seven
       // measurements are named differently, and that is what tells them
       // apart. The marker is in the key so that a batch run with
       // coverage on pairs with the time its own tests took rather than
@@ -303,16 +342,19 @@ export function observationsOf(
       batchOf.set(key, { suite: batch.suite, measured: batch.measured });
       // A count is not a duration. The record format carries one number
       // and calls it a duration, and the name is what says which of the
-      // five this is, so a count is read back as it was written.
+      // seven this is, so a count is read back as it was written.
       if (batch.kind === "units") units.set(key, record.durationMs);
-      // A batch makes a whole number of passes, at least one, and the fit
-      // divides by the count.
-      else if (batch.kind === "passes") {
+      else if (batch.kind === "processes") {
+        processes.set(key, record.durationMs);
+      } else if (batch.kind === "passes") {
+        // A batch makes a whole number of passes, at least one, and the fit
+        // divides by the count.
         if (Number.isInteger(record.durationMs) && record.durationMs >= 1) {
           passes.set(key, record.durationMs);
         }
       } else if (batch.kind === "ran") ran.set(key, seconds);
       else if (batch.kind === "longest") longest.set(key, seconds);
+      else if (batch.kind === "start") start.set(key, seconds);
       else spent.set(key, seconds);
     }
   }
@@ -330,6 +372,7 @@ export function observationsOf(
       units: opened,
       ...(bound === undefined ? {} : { longest: bound }),
       ...(made === undefined ? {} : { passes: made }),
+      ...setupOf(start.get(key), processes.get(key)),
     });
   }
   return { setup, batches };
@@ -352,6 +395,19 @@ export function laneObservationsOf(
     ),
     ...seen.batches.map((batch) => ({ day, ...batch })),
   ];
+}
+
+/**
+ * A batch's processes' setup, as the fields of an observation holding it,
+ * from its two figures, or nothing where either is missing.
+ */
+function setupOf(
+  seconds: number | undefined,
+  processes: number | undefined,
+): { setup?: ProcessSetup } {
+  return seconds === undefined || processes === undefined
+    ? {}
+    : { setup: { seconds, processes } };
 }
 
 /** The widest gap between two observations' readings of `of`. */
@@ -391,9 +447,10 @@ function slopeOf(
  * The slope is read far outside the range it was fitted over: a suite
  * whose every batch anybody has seen held six seconds of tests may be
  * charged thousands the first time a lane packs it whole. Inside a narrow
- * range the fixed cost dominates and the slope is noise, so it is fitted
- * only where the suite's batches have disagreed enough about that reading
- * for a slope to mean anything, and otherwise is not fitted at all.
+ * range what a batch spends apart from its tests dominates and the slope
+ * is noise, so it is fitted only where the suite's batches have disagreed
+ * enough about that reading for a slope to mean anything, and otherwise
+ * is not fitted at all.
  * `fitSuite()` then charges one, which is the reading that needs no
  * evidence: a second of test time costs a second.
  *
@@ -407,18 +464,15 @@ function slopeOf(
  * is refused whole, so publishing one would leave every lane with no
  * manifest at all.
  *
- * Nothing bounds it above. The intercept absorbs whatever a bound would
- * have moved, and the intercept is charged for each pass whatever the
- * batch holds where this is charged in proportion, so bounding it makes a suite
- * dearer to reach rather than cheaper.
+ * Nothing bounds it above. A slope fitted too high only over-charges.
  *
  * It is not believed either where the line it belongs to passes below
- * the origin. A suite is charged a fixed cost of nothing or more, so
- * such a line is not one the model can carry, and a slope steep enough
- * to need it has taken what the batch spent on something else: within a
- * suite more units usually means more seconds of tests, so what it has
- * taken is what the units cost, and every batch then reads as having
- * spent nothing on them.
+ * the origin. A batch spends nothing or more beyond its tests, so such a
+ * line is not one the model can carry, and a slope steep enough to need
+ * it has taken what the batch spent on something else: within a suite
+ * more units usually means more seconds of tests, so what it has taken
+ * is what the units cost, and every batch then reads as having spent
+ * nothing on them.
  *
  * A batch whose floor, the longest unit of each pass added together,
  * outlasted what the slope makes of the rest spent what those units took,
@@ -513,15 +567,14 @@ function floorOf(observation: BatchObservation): number {
  *
  * What a batch does say on its own is a rate: what it spent beyond its
  * own tests, over the units that spending opened, a unit counting once for
- * each pass that opened it. Whatever the batch paid
- * for itself is in that rate, which is what carries a reading above what
- * a unit costs rather than below it. The middle reading is the one taken.
- * The largest charges every unit a small batch's whole fixed cost. The
- * smallest lands under the figure the same suites have been measured at
- * directly, because a batch's wall time moves by several seconds for
- * reasons that have nothing to do with what the batch held, and because
- * a correction fitted from the tests alone takes some of what a unit
- * costs with it.
+ * each pass that opened it. The middle reading is
+ * the one taken. The largest charges every unit whatever one small batch
+ * spent beyond its tests, which for a process marking nothing includes
+ * the whole of its setup. The smallest lands under the figure the same
+ * suites have been measured at directly, because a batch's wall time
+ * moves by several seconds for reasons that have nothing to do with what
+ * the batch held, and because a correction fitted from the tests alone
+ * takes some of what a unit costs with it.
  *
  * A batch whose spending is under what its own tests are charged has
  * nothing left to attribute to its units, which is where a suite running
@@ -546,9 +599,66 @@ function unitCostOf(
 }
 
 /**
- * What the share of a batch that is not its tests comes to, as an
- * intercept and two figures charged in proportion to what the batch
- * holds.
+ * What a suite costs a lane beyond its tests, fitted twice.
+ *
+ * The first fit reads each batch as a whole: an intercept charged once
+ * per lane holding the suite, and a correction and a per-unit charge in
+ * proportion to what the lane holds. What the suite's processes spend
+ * before their units begin is spread through those three, however many
+ * processes a lane starts. It is what a packer charges that does not know
+ * the second fit, so it reads what that packer's lanes spent: a batch that
+ * does not say what its processes spent on setup is as good a reading of
+ * it as one that does, and the first fit prefers neither.
+ *
+ * The second fit, `process`, is made where some batch measured its
+ * processes' setup and started a process that marks when its units begin,
+ * and only from batches that measured it. Its `setup` is the ninetieth
+ * percentile, over those batches, of what each batch's processes spent on
+ * average before their units began, and a lane is charged it for each
+ * process it starts. A batch's average is read rather than each process's
+ * own figure, because what a lane pays is the sum over the processes it
+ * starts, and over the twenty-odd a lane of the workspace unit suite
+ * starts, the ninetieth percentile of the average comes near the
+ * ninetieth percentile of what they come to together. It is below that
+ * for a lane starting one process, and the process fit's intercept is
+ * what covers the difference. The rest of the second fit is made the way
+ * the first is, over what each batch spent once that setup is taken out,
+ * since what the correction and the per-unit charge describe happens
+ * inside a process where no lane can see it: how a runner shares out its
+ * files' time between them, and what loading one more file costs.
+ */
+export function fitSuite(all: readonly BatchObservation[]): SuiteFit {
+  const measured = all.flatMap(({ setup, ...o }) =>
+    setup === undefined ? [] : [{ ...o, setup }]
+  );
+  const perProcess = measured
+    .flatMap(({ setup }) =>
+      setup.processes === 0 ? [] : [setup.seconds / setup.processes]
+    )
+    .sort((a, b) => a - b);
+  // The first fit reads no setup, so it prefers no batch for carrying one.
+  const whole = Object.entries(CARRIES).flatMap(([figure, carries]) =>
+    figure === "setup" ? [] : [carries]
+  );
+  return {
+    ...fitOver(all, whole),
+    ...(perProcess.length === 0 ? {} : {
+      process: {
+        setup: percentile90(perProcess),
+        ...fitOver(
+          measured.map((o) => ({ ...o, spent: o.spent - o.setup.seconds })),
+          Object.values(CARRIES),
+        ),
+      },
+    }),
+  };
+}
+
+/**
+ * Helper for `fitSuite()`, which fits one of its two fits: what the share
+ * of a batch that is not its tests, or its processes' setup where that is
+ * taken out, comes to, as an intercept and two figures charged in
+ * proportion to what the batch holds.
  *
  * What a batch's tests took is read through `testsCost()`, so a batch
  * whose floor outlasted what the correction makes of the rest leaves the
@@ -572,8 +682,9 @@ function unitCostOf(
  * rarely run is charged what its slowest batch cost, which errs high
  * where there are too few batches to tell a slow one from the suite.
  *
- * The per-unit cost is read at a rate carrying a share of the suite's own
- * fixed cost, and the intercept is what that rate leaves. So a batch far
+ * The per-unit cost is read at a rate carrying a share of whatever fixed
+ * cost is left in what is fitted, and the intercept is what that rate
+ * leaves. So a batch far
  * smaller than any this has seen is charged less than the whole of that
  * fixed cost, and what that can be wrong by is bounded by the fixed cost
  * itself. Charging nothing per unit is wrong by the per-unit cost times
@@ -581,15 +692,16 @@ function unitCostOf(
  * left would grow with the units, so a lane packing a thousand of a
  * suite's cheapest units would be charged what a lane packing three is.
  *
- * A batch that lacks a figure is read at a guess. One that does not say
- * whether coverage was on is read as run the way the fit is for, one that
- * does not say what its longest units took is charged no floor, and one
- * that does not say how many passes it made is read as one pass, though
- * where it repeated a unit its later passes' startup is then left in its
- * remainder. At the ninetieth percentile a few batches read wrongly set
- * the intercept for as long as the window keeps them, where the batches
- * beside them that do say would not. So each figure `CARRIES` names, in
- * turn, narrows the batches to those that carry it, wherever there are
+ * A batch that lacks a figure the fit reads is read at a guess. One that
+ * does not say whether coverage was on is read as run the way the fit is
+ * for, one that does not say what its longest units took is charged no
+ * floor, and one that does not say how many passes it made is read as one
+ * pass, though where it repeated a unit its later passes' startup is then
+ * left in its remainder. At the ninetieth percentile a few batches read
+ * wrongly set the intercept for as long as the window keeps them, where
+ * the batches beside them that do say would not. So each of `narrowing`,
+ * the tests `CARRIES` holds for the figures the fit reads, in turn narrows
+ * the batches to those that carry its figure, wherever there are
  * `MIN_CORRECTION_SAMPLES` of those or more, and the intercept and the
  * per-unit rate are read from the batches left.
  *
@@ -601,10 +713,11 @@ function unitCostOf(
  * proportion to that batch's share of the fit, where a ninetieth
  * percentile is set outright by the few batches at its top.
  */
-export function fitSuite(
+function fitOver(
   all: readonly BatchObservation[],
+  narrowing: readonly ((observation: BatchObservation) => boolean)[],
 ): { overhead: number; correction: number; unitOverhead: number } {
-  const narrowed = Object.values(CARRIES).reduce<Narrowed>((sets, carries) => {
+  const narrowed = narrowing.reduce<Narrowed>((sets, carries) => {
     const carrying = sets[0].filter(carries);
     return carrying.length < MIN_CORRECTION_SAMPLES
       ? sets
@@ -624,14 +737,14 @@ export function fitSuite(
   return { overhead, correction, unitOverhead };
 }
 
-/** What a lane pays beyond its tests, fitted from what lanes have spent. */
+/** What a lane pays beyond its tests, read from what lanes have measured. */
 export function calibrate(observations: Observations): Calibration {
   const setupCost: Record<string, number> = {};
   // The ninetieth percentile of the openings lanes have seen, which is the
-  // reading the intercept takes, for the same reason: the slowest opening
-  // in the window is one runner's, and it would otherwise be charged to
-  // every lane that opens the capability. Over nine or fewer openings it
-  // is the slowest of them.
+  // reading a process's setup takes, for the same reason: the slowest
+  // opening in the window is one runner's, and it would otherwise be
+  // charged to every lane that opens the capability. Over nine or fewer
+  // openings it is the slowest of them.
   for (const [capability, seconds] of observations.setup) {
     const sorted = [...seconds].sort((a, b) => a - b);
     setupCost[capability] = percentile90(sorted);

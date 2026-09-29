@@ -42,6 +42,7 @@ import {
   recordsDir,
   testIdentityKey,
   type TestRecord,
+  unitsBegan,
 } from "@commonfabric/test-support/records";
 import {
   commitMoment,
@@ -58,6 +59,7 @@ import type { CompileCacheState } from "./ci-check-lib.ts";
 import {
   capabilitiesBySuite,
   loadTopology,
+  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 import {
@@ -99,6 +101,7 @@ import {
 } from "./test-selection/coverage.ts";
 import type {
   Manifest,
+  ManifestEntry,
   UnschedulableEntry,
   WithheldReason,
 } from "./test-selection/manifest.ts";
@@ -158,8 +161,8 @@ export interface LaneOptions {
   at?: string;
 
   /**
-   * Where coverage profiles and the reports converted from them go,
-   * relative to the root. The job uploads what is under it.
+   * Where the reports converted from coverage profiles go, relative to
+   * the root. The job uploads what is under it. The profiles go beside it.
    */
   coverageDir?: string;
 
@@ -169,8 +172,14 @@ export interface LaneOptions {
 /** Where coverage goes when the command line names nowhere else. */
 export const DEFAULT_COVERAGE_DIR = "coverage";
 
-/** Where a lane puts the profiles it collects, under its coverage directory. */
-export const COVERAGE_PROFILE_DIR = "raw";
+/**
+ * What a lane appends to its coverage directory's name to name the
+ * directory it puts the profiles it collects in. The profiles sit beside
+ * the directory the job uploads, not in it: one directory of them can
+ * hold hundreds of thousands of files, and the upload walks every
+ * directory under the path it is given, excluded or not.
+ */
+export const COVERAGE_PROFILE_SUFFIX = "-raw";
 
 /**
  * Where a lane puts the reports the authored-pattern instrumentation
@@ -223,6 +232,11 @@ export function coverageRoot(options: LaneOptions): string {
     options.root,
     options.coverageDir ?? DEFAULT_COVERAGE_DIR,
   );
+}
+
+/** Where this lane's coverage profiles go, absolute. */
+export function profileRoot(options: LaneOptions): string {
+  return `${coverageRoot(options)}${COVERAGE_PROFILE_SUFFIX}`;
 }
 
 /** Reads the command line, or returns undefined for a malformed one. */
@@ -421,10 +435,10 @@ export function batchesOf(
   const wholeOf = new Map<Suite, ReadonlySet<Unit>>(
     suites.map((suite) => [suite, new Set(suite.whole)]),
   );
-  const inUnit = new Map<string, string[]>();
+  const inUnit = new Map<string, ManifestEntry[]>();
   for (const entry of manifest.entries) {
     const key = `${entry.suite}\t${entry.unit}`;
-    inUnit.set(key, [...inUnit.get(key) ?? [], entry.test.n]);
+    inUnit.set(key, [...inUnit.get(key) ?? [], entry]);
   }
   const batches = new Map<string, Batch>();
   // What each unit was selected for: the names to run, and the most
@@ -448,11 +462,16 @@ export function batchesOf(
     const suite = bySuite.get(suiteId);
     if (suite === undefined) continue;
     const all = inUnit.get(key) ?? [];
-    const skip = wholeOf.get(suite)!.has(unit)
-      ? []
-      : all.filter((name) => !names.has(name));
+    // A unit declared whole runs every identity in it, chosen or not.
+    const whole = wholeOf.get(suite)!.has(unit);
+    const runs = whole ? all : all.filter((entry) => names.has(entry.test.n));
+    const request: UnitRequest = {
+      unit,
+      skip: whole ? [] : all.filter((entry) => !names.has(entry.test.n))
+        .map((entry) => entry.test.n),
+      cost: runs.reduce((total, entry) => total + entry.cost, 0),
+    };
     const batch = batches.get(suiteId);
-    const request: UnitRequest = { unit, skip };
     if (batch === undefined) {
       batches.set(suiteId, {
         suite,
@@ -552,9 +571,9 @@ export async function runInvocation(
 
 /**
  * One figure a lane measured about itself, as a record measuring the lane
- * machinery rather than a test. The publisher fits `setupCost`,
- * `suiteOverhead`, `correction` and `unitOverhead` from these, so they
- * travel as ordinary records through the machinery that already exists
+ * machinery rather than a test. The publisher reads `setupCost` and a
+ * suite's process setup from these, and fits its other figures to them, so
+ * they travel as ordinary records through the machinery that already exists
  * and need no pipeline of their own. They stay unmarked whatever variant
  * the batch they measure carried: they measure the lane, not an alternate
  * execution of one test.
@@ -632,7 +651,7 @@ export function batchCoverage(
 ): BatchCoverage | undefined {
   if (!measuresSuite(gate, suiteId, options.full)) return undefined;
   const root = coverageRoot(options);
-  const dir = path.join(root, COVERAGE_PROFILE_DIR, suiteId);
+  const dir = path.join(profileRoot(options), suiteId);
   return options.full
     ? { dir, patternDir: path.join(root, PATTERN_COVERAGE_DIR, suiteId) }
     : { dir, members: measuredMembersOf(gate, suiteId) };
@@ -725,7 +744,7 @@ export async function convertCoverage(
   options: LaneOptions,
 ): Promise<{ ok: boolean; reports: string[] }> {
   const root = coverageRoot(options);
-  const profiles = path.join(root, COVERAGE_PROFILE_DIR);
+  const profiles = profileRoot(options);
   const reports: string[] = [];
   let ok = true;
   for (const suiteId of await directoriesIn(profiles)) {
@@ -809,6 +828,10 @@ export async function runBatch(
   // What the unit that took longest in each pass took, added up over the
   // passes.
   let longest = 0;
+  // The processes started that mark when their units began, and what they
+  // spent before then between them, over every pass.
+  let processes = 0;
+  let setup = 0;
   for (let run = 1; run <= batchRepeats(batch); run++) {
     console.log(
       `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
@@ -840,6 +863,7 @@ export async function runBatch(
       }),
     });
     for (const invocation of invocations) {
+      const startedAt = Date.now();
       const outcome = await runInvocation(invocation, {
         ...env,
         // Each execution writes into a spool of its own, so a repeat
@@ -850,6 +874,18 @@ export async function runBatch(
       });
       seconds += outcome.seconds;
       if (!outcome.ok) ok = false;
+      // A process that marked nothing says nothing about where its setup
+      // ended, so all of what it spent stays with its units.
+      const began = invocation.process === undefined
+        ? undefined
+        : await unitsBegan(batchSpool);
+      if (began !== undefined) {
+        processes += 1;
+        setup += Math.min(
+          outcome.seconds,
+          Math.max(0, began - startedAt) / 1000,
+        );
+      }
       const collected = await collectRecords({
         spoolDir: batchSpool,
         junit: (invocation.junit ?? []).map((output) => ({
@@ -895,14 +931,17 @@ export async function runBatch(
       ...records,
       // What the batch spent, what its tests took between them, how many
       // times its passes opened a unit, what the longest unit of each
-      // pass took added together, and how many passes it made. The
-      // publisher fits a suite's cost beyond its tests from the five
-      // together: the first two differ by everything the batch paid that
-      // no test's duration holds, the third is the part of that which
-      // grows with the units opened, the fourth is the least the batch
-      // could have spent on its tests however many of them ran side by
-      // side, since its passes follow one another, and the fifth is how
-      // many times it paid for starting the suite's command.
+      // pass took added together, how many passes it made, what the
+      // processes it started spent before their units began, and how many
+      // such processes it started. The publisher reads a suite's cost
+      // beyond its tests from the seven together: the first two differ by
+      // everything the batch paid that no test's duration holds, the third
+      // is the part of that which grows with the units opened, the fourth
+      // is the least the batch could have spent on its tests however many
+      // of them ran side by side, since its passes follow one another, the
+      // fifth is how many times it paid for starting the suite's command,
+      // and the last two measure what each process it started paid before
+      // its units began.
       //
       // The tests' own time is summed here rather than read back from
       // the records, because a reader has no way to tell which of a
@@ -950,6 +989,24 @@ export async function runBatch(
           "passes",
         ),
         batchRepeats(batch),
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "start",
+        ),
+        setup,
+        ok,
+      ),
+      measurementRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "processes",
+        ),
+        processes,
         ok,
       ),
     ]);
@@ -1456,6 +1513,7 @@ export function planOver(input: {
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(input.suites),
       wholeUnits: wholeUnits(input.suites),
+      processes: unitProcesses(input.suites),
       lanes: input.lanes,
       ...(input.full ? { policy: "everything" as const } : {}),
     }),
@@ -1625,6 +1683,7 @@ function fullLanesNeeded(
       manifest: seen.manifest,
       capabilities: capabilitiesBySuite(suites),
       wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
     });
     const lanes = Math.max(1, running.length, byCost);
     console.error(
@@ -1639,6 +1698,7 @@ function fullLanesNeeded(
     manifest: seen.manifest,
     capabilities: capabilitiesBySuite(suites),
     wholeUnits: wholeUnits(suites),
+    processes: unitProcesses(suites),
   });
 }
 

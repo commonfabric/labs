@@ -304,20 +304,16 @@ because two different things happen to the files there. The one pointing at
 `deno task cfcheck` may excuse only files the collector in
 `tasks/pattern-files.ts` hands that gate, and no single entry may span both
 sides of that line; a test cross-checks both against the collector itself. The
-other covers pattern tests, which the lane that runs them also type-checks —
-`deno test` for a `.test.ts`, since `packages/patterns` runs without
-`--no-check`, and `cf test` for a `.test.tsx`, whose harness reports a type
-error as a failed test. That entry is scoped to what those two lanes take, not
-to the test suffix in general. A test module under another extension has no
-lane; a `.browser.test.ts` is kept out of the `deno test` pass and bundled to
-its browser by a step that transpiles without checking; and a nested
-`integration` tree is excluded from that pass by the package's test config while
-the `integration` task names its top-level paths explicitly. Each falls through
-and is reported unless a checked path names it. An entry claiming coverage is
-the one that can mislead most quietly, since a file it wrongly matches is one
-every later reader believes is checked — and where these keep going wrong is a
-predicate matching by a file's shape while the reason beside it names a lane,
-the two agreeing in the middle and parting at the edges.
+other covers pattern tests, the `.test.tsx` files that `cf test` compiles
+through the runtime harness the way a running pattern is compiled. That compile
+is the behavior those tests exercise, and the harness reports a type error as a
+failed test. Every other test file in the workspace is named by a checked path,
+because every `deno test` runs under `--no-check` and a checked path is then the
+only type check a test file gets. An entry claiming coverage is the one that can
+mislead most quietly, since a file it wrongly matches is one every later reader
+believes is checked — and where these keep going wrong is a predicate matching
+by a file's shape while the reason beside it names a lane, the two agreeing in
+the middle and parting at the edges.
 
 The reasons that do not name another gate say what a tree _is_ rather than
 asserting a property of each file in it. That is why the three above are

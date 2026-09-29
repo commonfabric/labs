@@ -72,6 +72,7 @@ import {
 import {
   capabilitiesBySuite,
   loadTopology,
+  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
@@ -861,6 +862,7 @@ export async function publish(
     mandatory: new Map(),
     capabilities: capabilitiesBySuite(suites),
     wholeUnits: wholeUnits(suites),
+    processes: unitProcesses(suites),
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every

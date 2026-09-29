@@ -31,7 +31,10 @@ import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
+  denotesSameType,
   readAuthoredTypeNode,
+  readUnionMemberNodes,
+  sameBesidesUndefined,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import {
@@ -1000,6 +1003,15 @@ export class SchemaGenerator {
   #anonymousNameCounter: number = 0;
 
   /**
+   * The node `#spelling()` builds for each annotation, by whether the type it
+   * spells holds `undefined`.
+   */
+  #optionalSpellings: WeakMap<
+    ts.TypeNode,
+    Map<boolean, ts.TypeNode | undefined>
+  > = new WeakMap();
+
+  /**
    * Generate JSON Schema for a TypeScript type.
    * AUTO-DETECTS whether to use type-based or node-based analysis.
    */
@@ -1221,6 +1233,18 @@ export class SchemaGenerator {
       if ((type.flags & ts.TypeFlags.TypeParameter) === 0) return {};
     }
 
+    // A print whose member annotation names a value binding is read as that
+    // annotation spells the type at hand, and keeps the print's hints.
+    const spelledBy = typeNode && context.schemaHints?.get(typeNode)?.spelledBy;
+    const spelling = spelledBy &&
+      this.#spelling(type, spelledBy, context.typeChecker);
+    if (spelling) {
+      return this.#applyNodeSchemaHints(
+        this.formatChildType(type, context, spelling),
+        { ...context, typeNode },
+      );
+    }
+
     const readInPlace = typeReadForPrintedNode(
       type,
       typeNode,
@@ -1275,6 +1299,54 @@ export class SchemaGenerator {
       this.#formatType(readType, childContext, false),
       childContext,
     );
+  }
+
+  /**
+   * The node that spells `type` as `annotation`, a member's annotation, does
+   * (`SchemaHint.spelledBy`), or `undefined` where it spells neither. That is
+   * the annotation, where it denotes `type`. Where the two differ only by the
+   * `undefined` of an optional member's `?`, which a reader may add to the
+   * annotation's type or take out of it, it is the members the annotation
+   * writes (`readUnionMemberNodes()`) other than `undefined`, beside
+   * `undefined` where `type` holds it, so that each member of `type` is read
+   * at the node that writes it.
+   */
+  #spelling(
+    type: ts.Type,
+    annotation: ts.TypeNode,
+    checker: ts.TypeChecker,
+  ): ts.TypeNode | undefined {
+    const annotated = checker.getTypeFromTypeNode(annotation);
+    if (denotesSameType(annotated, type)) return annotation;
+    if (!sameBesidesUndefined(annotated, type)) return undefined;
+    const holdsUndefined = (type.isUnion() ? type.types : [type]).some(
+      (member) => (member.flags & ts.TypeFlags.Undefined) !== 0,
+    );
+    let spellings = this.#optionalSpellings.get(annotation);
+    if (!spellings) {
+      spellings = new Map();
+      this.#optionalSpellings.set(annotation, spellings);
+    }
+    if (!spellings.has(holdsUndefined)) {
+      const members = readUnionMemberNodes(annotation, checker).filter(
+        (member) =>
+          (checker.getTypeFromTypeNode(member).flags &
+            ts.TypeFlags.Undefined) === 0,
+      );
+      const spelled = holdsUndefined
+        ? [
+          ...members,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword),
+        ]
+        : members;
+      spellings.set(
+        holdsUndefined,
+        spelled.length < 2
+          ? spelled[0]
+          : ts.factory.createUnionTypeNode(spelled),
+      );
+    }
+    return spellings.get(holdsUndefined);
   }
 
   #bindingId(value: object): number {

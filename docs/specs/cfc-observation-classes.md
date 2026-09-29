@@ -269,19 +269,30 @@ normative from C1 on:
   consumed nothing for probes.
 - **The §4 row 3 / row 4 boundary is the dereference trace.** A probe issued
   while *following* a reference — its slot path covered at-or-above by a
-  same-tx recorded trace source — is resolution machinery (row 4,
-  unchanged); the follow's taint arrives via the ordinary reads of the
-  target. Only standalone probes (no covering trace: `lastNode:"top"` link
-  reads, raw link handles, unfollowed redirect checks) are row-3 followRef
-  observations. Without this boundary every value read's own traversal
-  probes consume each hop's pointer label, and a list coordinator's J joins
-  every slot's transport label — the same pointwise re-smear.
+  same-tx recorded trace source — belongs to that dereference (row 4). The
+  follow's content taint arrives via the ordinary reads of the target, and
+  its pointer taint via one probe: the probe of the followed slot itself,
+  the trace's source, is a followRef observation and consumes the
+  followRef-class entries that resolve at that slot, as a standalone probe
+  of the slot does. A dereference thereby retains the restrictions of the
+  reference it follows (spec §4.6.3, §8.2.4). The other covered probes,
+  which walk the path beneath the followed slot and find no reference,
+  consume nothing, and the plain reads resolution journals at the followed
+  slot skip the runtime-minted `*` templates. Standalone probes (no
+  covering trace: `lastNode:"top"` link reads, raw link handles, unfollowed
+  redirect checks) are row-3 followRef observations. A list coordinator's
+  scaffolding probes carry the machinery marker (§6.2) and consume nothing,
+  so a coordinator's J does not join every slot's transport label.
 - **followRef observations contribute confidentiality only.** The §8.9.3
   hereditary integrity meet quantifies over the transformation's *content*
   inputs; standalone probes rarely resolve any label, and admitting them
   would empty the weakest-link meet on virtually every transaction,
   silently ending TransformedBy / PolicyCertified propagation. Pointer
   integrity evidence stays on the link entry (the LinkReference chain).
+  The probe of a followed slot leaves its input witnesses to the followed
+  reference's own location, which resolves them over the value stamps at the
+  slot, and which counts whenever the slot's label is confidential
+  (`cfc-transformed-by-input-witnesses.md`).
 
 ### 6.2 The runtime's own wiring is the second non-standalone probe (2026-09-16)
 

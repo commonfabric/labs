@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
-import { reconcileMain } from "./live-page-client.ts";
+import {
+  LIVE_PAGE_UPDATE,
+  reconcileMain,
+  updateMain,
+} from "./live-page-client.ts";
 
 // The `<main>` of a page holding `html`.
 function mainOf(html: string): Element {
@@ -63,6 +67,33 @@ Deno.test("the header's age changing leaves focus on the link beside it", () => 
     expect(document.activeElement).toBe(back);
     expect(main.querySelector("span")?.textContent).toBe("2h ago");
   } finally {
+    main.remove();
+  }
+});
+
+Deno.test("an update is announced with the fresh rendering, which the page may arrange first", () => {
+  const main = document.createElement("main");
+  // The page shows its list in the reverse of the order it is served in.
+  main.innerHTML = `<ol><li id="b">b</li><li id="a">1h</li></ol>`;
+  document.body.append(main);
+  const kept = main.querySelector("#b");
+  const reverse = (event: Event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const list = event.detail.querySelector("ol");
+    list.append(...[...list.children].reverse());
+  };
+  document.addEventListener(LIVE_PAGE_UPDATE, reverse);
+  try {
+    expect(updateMain(
+      main,
+      mainOf(`<main><ol><li id="a">2h</li><li id="b">b</li></ol></main>`),
+    )).toBe(true);
+    expect([...main.querySelectorAll("li")].map((item) => item.id))
+      .toEqual(["b", "a"]);
+    expect(main.querySelector("#b")).toBe(kept);
+    expect(main.querySelector("#a")?.textContent).toBe("2h");
+  } finally {
+    document.removeEventListener(LIVE_PAGE_UPDATE, reverse);
     main.remove();
   }
 });

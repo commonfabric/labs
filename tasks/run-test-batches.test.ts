@@ -129,8 +129,14 @@ describe("run-test-batches", () => {
       try {
         const junit = ["--junit-path", `${dir}/report.xml`];
         const code = await runTestBatches([
-          { flags: ["--no-config", ...junit], files: [`${dir}/a.test.ts`] },
-          { flags: ["--no-config", ...junit], files: [`${dir}/b.test.ts`] },
+          {
+            flags: ["--no-config", "--no-check", ...junit],
+            files: [`${dir}/a.test.ts`],
+          },
+          {
+            flags: ["--no-config", "--no-check", ...junit],
+            files: [`${dir}/b.test.ts`],
+          },
         ]);
         expect(code).toBe(0);
         expect(await outcomes(`${dir}/report.xml`)).toEqual(
@@ -180,6 +186,7 @@ describe("run-test-batches", () => {
             "--serial=**/*.serial.test.ts",
             "--",
             "--no-config",
+            "--no-check",
             "--parallel",
             `--junit-path=${report}`,
           ],

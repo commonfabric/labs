@@ -724,6 +724,11 @@ caller. Five shapes cover the tree today:
 - **Treat it as the atomic value it is.** Three sites in `data-updating.ts`
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
+  `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
+  in place of merging into it, and asks `isFabricInstanceOrView()` rather
+  than `instanceof`, so an instance seen through a cell read -- whose
+  prototype the view erases -- gets the same answer instead of being rebuilt
+  as a record with defaults filled into it.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty
@@ -992,9 +997,9 @@ export const set = (cache: Cache, key: string, value: string) =>
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
 - Run all tests using `deno task test` (NOT `deno test`). It is not a
-  substitute for `deno task check`: some packages' tests skip type checking
-  outright, and the rest check only the modules their tests reach.
-- To run a single test file use `deno test path/to/test.ts`.
+  substitute for `deno task check`: every package's tests run under
+  `--no-check`.
+- To run a single test file use `deno test --no-check path/to/test.ts`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1031,7 +1036,7 @@ suite will break.
      "exports": { ".": "./mod.ts" },
      "tasks": {
        "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-       "deno-test": "deno test --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+       "deno-test": "deno test --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
      }
    }
    ```

@@ -237,12 +237,14 @@ A lane uploads three artifacts. `lane-failure-tests-<lane>-a<attempt>`, where
 the lane failed, holds the working directory it kept and the core of any process
 in the lane that crashed natively: the lane step runs with `ulimit -c unlimited`
 and puts cores under `$RUNNER_TEMP/ci-lane-cores`. `lane-coverage-tests-<lane>`
-holds `coverage/` without its raw profiles: each report at
+holds `coverage/`: each report at
 `lcov/sets/<suite>/<member>/coverage.lcov`, where a `/` in the member's path is
 written `__`, the file saying whether the compile cache was restored, and the
 markers beside the reports of measured sets the lane saw fail. In the full run
 it also holds the authored-pattern reports under
-`lcov/pattern-runtime/<suite>`.
+`lcov/pattern-runtime/<suite>`. The raw profiles the reports are converted
+from stay behind in `coverage-raw/`, outside the uploaded directory, because
+the upload walks every directory under its path.
 `test-records-tests-<lane>-a<attempt>` holds its test records.
 
 The lane step is bounded at 60 minutes and its job at 70, by the lane job's own
@@ -442,13 +444,15 @@ three look identical in a source file, and somebody who tunes a measured
 value is arguing with a tape measure while somebody who tries to tune a
 derived one is editing a line that is not there.
 
-Four more numbers are measured, and they are not in the table because
-they are not in `policy.ts`: `setupCost` for each capability, and
-`suiteOverhead`, `correction` and `unitOverhead` for each suite. They are
-fitted from the lanes' own timing records and published in the manifest,
-one set per publisher run, which is where to read them. Nothing hand-edits
-them, and a manifest carrying a strange one is a measurement to look at
-rather than a setting to fix.
+More numbers come from measurement, and they are not in the table
+because they are not in `policy.ts`: `setupCost` for each capability, and
+for each suite `suiteOverhead`, `correction` and `unitOverhead`, and,
+where its processes' setup is measured, a process fit holding that setup
+and those three again. The setups are read off the lanes' own timing
+records, the rest are fitted to them, and all of them are published in
+the manifest, one set per publisher run, which is where to read them.
+Nothing hand-edits them, and a manifest carrying a strange one is a
+measurement to look at rather than a setting to fix.
 
 | Dial | Default | Units | Set by | Why you would move it, and which way |
 | --- | --- | --- | --- | --- |
@@ -946,37 +950,65 @@ next. Each asks it of the identity the lane wrote, before the alias file
 rewrites anything, so no line in that file can turn a lane's overhead
 into a test's score.
 
-Left out of everything scored, they are not discarded. The publisher
-keeps them in its rolling aggregate over `COST_WINDOW_DAYS`, the same
-window it measures a test's cost over, and fits `setupCost`,
-`suiteOverhead`, `correction` and `unitOverhead` from them for the next
-manifest. A lane writes one record per capability it opens and five per
-batch — what the batch spent, what its own tests took between them, how
-many times its passes opened a unit, what the longest unit of each pass
-took added together, and how many passes it made — and it is the second
-and third that make a fit possible. Neither can be recovered from the
-records the batch produced: a reader of a report cannot tell which of its
-records came from which batch, and a unit whose tests all recorded
-nothing leaves no trace of having been opened. The fourth bounds what the
-batch spent on its tests from below, for a suite that runs its units side
-by side, and the fifth is how many times the batch paid for starting the
-suite's command, since a batch that repeats a unit runs in one pass per
-run; [the cost model](../plans/pull-request-test-selection.md#the-cost-model)
+Left out of everything scored, they are not discarded. The publisher keeps
+them in its rolling aggregate over `COST_WINDOW_DAYS`, the same window it
+measures a test's cost over, and reads `setupCost` and each suite's fit from
+them for the next manifest. A lane writes one record per capability it opens
+and seven per batch: what the batch spent, what its own tests took between
+them, how many times its passes opened a unit, what the longest unit of each
+pass took added together, how many passes it made, what the processes it
+started spent before their units began, and how many such processes it
+started. None of the seven can be recovered from the records the batch
+produced: a reader of a report cannot tell which of its records came from
+which batch, and a unit whose tests all recorded nothing leaves no trace of
+having been opened. The second and third are what the correction and the
+per-unit charge are fitted from. The fourth bounds what the batch spent on
+its tests from below, for a suite that runs its units side by side. The fifth
+is how many times the batch paid for starting the suite's command, since a
+batch that repeats a unit runs in one pass per run. The last two are what a
+suite's process setup is read from, and what the other figures are fitted
+without. [The cost model](../plans/pull-request-test-selection.md#the-cost-model)
 says how. A stored batch carries the figures its lane wrote and no others,
-and the fit prefers the batches that carry each figure over those that
-lack it, which the same section also covers.
+and the fit prefers the batches that carry each figure over those that lack
+it, which the same section also covers.
+
+A process's setup is what it spends before its first unit begins, such
+as `deno test` type-checking the module graph of every file it was
+handed. The process says when its units began by leaving a mark in its
+spool, which the records preload does before each test file and the
+pattern test runner does before it compiles its files' programs, and the
+lane times the process against the earliest mark. What the pattern test
+runner's compile takes grows with the files it compiles, so it is
+counted as its files' time rather than as setup. A suite says which
+process each of its units runs in, in `Suite.processes`, and the
+invocation that runs them carries the same name as `process`. A lane
+charges a suite's process setup once for each process it starts, so a
+lane holding files of twenty workspace members pays it twenty times. A
+suite names a process for every unit or for none. A suite whose
+processes mark nothing, such as the repository gates, names none, and
+their setup is counted as part of what their units took. A process that
+leaves no mark in a suite whose others do, such as a `deno test` with no
+permission to write to its spool, is charged the setup measured from
+the rest.
+
+A suite's fit is published twice. The figures every packer reads,
+`suiteOverhead`, `correction` and `unitOverhead`, are fitted from every
+batch as a whole, with the processes' setup inside them. Where some
+batch measured its processes' setup and started a process that marks,
+the fit also carries `process`: that setup, and an intercept, a
+correction and a per-unit charge fitted over what those batches spent
+once it is taken out. A packer that knows `process` charges it in place
+of the three beside it, so a packer older than the manifest it reads
+still charges a model it understands.
 
 What its tests took, rather than what the packer expected them to take.
 The two differ by however wrong the manifest's costs are, and a unit
 nothing has measured is charged a stand-in that can be out by a factor of
 ten. Fitting against the expectation would put that error in the
-intercept, which is charged once to every lane that holds the suite and
-kept for the whole window, long after the costs behind it were measured.
-A suite whose intercept passes `LANE_BOUND_SECONDS` can place no
-discretionary identity at all, so an expectation that was briefly wrong
-would hold a whole suite out of every pull request for a week. What a
-suite's cost model should carry is the machine's error, which is what the
-tests' own time leaves.
+correction and the per-unit charge, which every lane holding the suite
+pays for the whole window, long after the costs behind it were measured.
+What a suite's cost model should carry is the machine's error, which is
+what the tests' own time leaves.
 
 The publisher leaves all of those out rather than putting an entry in the
 manifest that no lane could run. The next record that says enough puts the
@@ -1050,23 +1082,24 @@ on is read into either fit only where fewer than `MIN_CORRECTION_SAMPLES` of the
 suite's batches say they ran that way. The line counts each suite once whether
 it has one fit or two, and the last figure is how many have a coverage-on fit.
 
-The two fixed charges, a suite's `suiteOverhead` and a capability's
-`setupCost`, are each the ninetieth percentile of what lanes have seen in
-the window, the same percentile a test's own cost is read at: for a
-suite, of what each batch spent beyond what its tests and its units
-account for, and for a capability, of how long each opening took. That
-is well above the typical observation of either. Up to one in ten
-exceeds its charge, by an amount the fit does not bound. The safety
-margin `LANE_SAFETY_SECONDS` absorbs such an excess up to its own size,
-and a lane whose observations exceed their charges by more than that
-between them runs past its bound. The charge is not the slowest observation,
-because each charge is paid by every lane that holds the suite or
-opens the capability: read at the slowest observation, one slow runner
-would set what every lane pays, and every lane would pack short by that
-runner's excess. The percentile is the observation at its rank rather
-than a value between two, so over nine or fewer observations it is the
-slowest of them, and a suite lanes have rarely run is charged its
-slowest batch.
+The fixed charges, a suite's process setup, a suite's intercept and a
+capability's `setupCost`, are each the ninetieth percentile of what lanes
+have seen in the window, the same percentile a test's own cost is read at:
+for a process's setup, over the suite's batches, of what each batch's
+processes spent on average before their units began; for an intercept, of
+what each batch spent beyond what everything else the fit charges accounts
+for; and for a capability, of how long each opening took. That is well above
+the typical observation of any of them. Up to one in ten exceeds its charge,
+by an amount the fit does not bound. The safety margin `LANE_SAFETY_SECONDS`
+absorbs such an excess up to its own size, and a lane whose observations
+exceed their charges by more than that between them runs past its bound. The
+charge is not the slowest observation, because each charge is paid by every
+lane that starts the process, holds the suite or opens the capability: read
+at the slowest observation, one slow runner would set what every lane pays,
+and every lane would pack short by that runner's excess. The percentile is
+the observation at its rank rather than a value between two, so over nine or
+fewer observations it is the slowest of them, and a suite lanes have rarely
+run is charged its slowest batch.
 
 A run charges each suite the fit for how it runs that suite's batches:
 `pricedForRun` in `tasks/test-selection/census.ts` charges the coverage-on fit
@@ -1148,8 +1181,9 @@ object the publisher folds for the first time gives up its lane
 measurements, so one run puts a figure in the model and seven days of
 runs fill the window `COST_WINDOW_DAYS` names. Until then the model is
 not merely thin. Its fixed charges are ninetieth percentiles of what
-lanes have seen: of each capability's openings, and of what each batch
-spent beyond what its tests and its units account for. A model fitted
+lanes have seen: of each capability's openings, of what a suite's
+processes spent before their units began, and of what its batches spent
+beyond everything else its fit charges. A model fitted
 over part of a window may not yet have seen the slow runs that set those
 percentiles, so it can read lower than one fitted over all of it, and
 reading low is the direction that overruns a lane. A suite with nothing

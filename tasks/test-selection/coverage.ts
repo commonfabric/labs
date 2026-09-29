@@ -10,6 +10,7 @@
  */
 
 import { duration } from "./duration.ts";
+import { unitProcesses } from "../test-topology.ts";
 import {
   coverageMemberDirectory,
   type MeasuredSet,
@@ -19,7 +20,7 @@ import {
 } from "../test-topology/suite.ts";
 import { memberScope } from "../test-topology/unit.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
-import { chargedTests, testsOf } from "./plan.ts";
+import { calibrationFor, chargedTests, chargesOf, testsOf } from "./plan.ts";
 import {
   COST_WINDOW_DAYS,
   EXCLUDED_FROM_COVERAGE_GATE,
@@ -196,10 +197,18 @@ export interface MeasuredCost {
   units: { overhead: number; entries: number }[];
 
   /**
+   * Each process's setup, over every time it starts, and how many of the
+   * entries run in it. Every lane holding one of those entries starts the
+   * process as many times as the most any of them runs, so a process is
+   * started in at most as many lanes as it holds entries.
+   */
+  processes: { setup: number; entries: number }[];
+
+  /**
    * The most any one entry charges a lane holding nothing else, its
-   * suite's and its unit's overheads included. All of one entry's runs go
-   * in one lane, so no number of lanes holds an entry costing more than
-   * one lane does.
+   * suite's, its unit's and its process's overheads included. All of one
+   * entry's runs go in one lane, so no number of lanes holds an entry
+   * costing more than one lane does.
    */
   largest: number;
 }
@@ -215,15 +224,25 @@ export interface MeasuredCost {
 export function measuredCost(
   calibration: Calibration,
   entries: readonly ManifestEntry[],
+  processes: ReadonlyMap<string, string>,
 ): MeasuredCost | undefined {
   const bySuite = new Map<string, ManifestEntry[]>();
   for (const entry of entries) {
     bySuite.set(entry.suite, [...bySuite.get(entry.suite) ?? [], entry]);
   }
-  const cost: MeasuredCost = { overhead: 0, spread: 0, units: [], largest: 0 };
+  const charged = calibrationFor(calibration, processes);
+  const cost: MeasuredCost = {
+    overhead: 0,
+    spread: 0,
+    units: [],
+    processes: [],
+    largest: 0,
+  };
   for (const [suite, held] of bySuite) {
-    const fitted = calibration.suitesWithCoverage?.[suite];
-    if (fitted === undefined) return undefined;
+    const fit = charged.suitesWithCoverage?.[suite];
+    if (fit === undefined) return undefined;
+    const fitted = chargesOf(fit);
+    const setup = fitted.setup;
     /** What `entries` take, and their overheads past one lane's first. */
     const beyond = (entries: readonly ManifestEntry[]) => {
       const tests = testsOf(
@@ -234,10 +253,21 @@ export function measuredCost(
         fitted.overhead * (tests.longest.length - 1) +
         fitted.unitOverhead * (tests.opened - units);
     };
+    const started = new Map<string, { runs: number; entries: number }>();
     for (const entry of held) {
+      const process = processes.get(`${suite}\t${entry.unit}`);
+      if (process !== undefined) {
+        const was = started.get(process) ?? { runs: 0, entries: 0 };
+        started.set(process, {
+          runs: Math.max(was.runs, entry.repeats),
+          entries: was.entries + 1,
+        });
+      }
       cost.largest = Math.max(
         cost.largest,
-        fitted.overhead + fitted.unitOverhead + beyond([entry]),
+        fitted.overhead + fitted.unitOverhead +
+          (process === undefined ? 0 : setup * entry.repeats) +
+          beyond([entry]),
       );
     }
     cost.spread += beyond(held);
@@ -247,6 +277,9 @@ export function measuredCost(
         overhead: fitted.unitOverhead,
         entries: entries.length,
       });
+    }
+    for (const { runs, entries } of started.values()) {
+      cost.processes.push({ setup: setup * runs, entries });
     }
   }
   return cost;
@@ -260,7 +293,8 @@ export function measuredCost(
  *
  * Spread over some number of lanes, it charges its spread once, its
  * suites' overheads and the setup in every one of them, and each unit's
- * overhead in as many of them as the unit can be split over. Those lanes
+ * overhead and each process's setup in as many of them as the unit or
+ * the process can be split over. Those lanes
  * hold it where that fits inside their budgets together and its largest
  * entry, with the setup, fits inside one of them. A lane's prologue is
  * already outside its budget.
@@ -274,6 +308,11 @@ function lanesHolding(
     const seconds = cost.spread + lanes * (cost.overhead + setup) +
       cost.units.reduce(
         (sum, unit) => sum + unit.overhead * Math.min(lanes, unit.entries),
+        0,
+      ) +
+      cost.processes.reduce(
+        (sum, process) =>
+          sum + process.setup * Math.min(lanes, process.entries),
         0,
       );
     if (seconds <= lanes * LANE_BUDGET_SECONDS) return { lanes, seconds };
@@ -304,7 +343,8 @@ function setupCost(
  * units are packed across lanes like any other mandatory work and the
  * totals meet again afterwards. A set spread over several lanes pays its
  * suites' overheads and its capabilities' setup in each of them, and
- * each unit's overhead in each lane holding part of that unit. A set and
+ * each unit's overhead and each process's setup in each lane holding part
+ * of that unit or that process. A set and
  * a member alike are charged that over the fewest lanes holding them,
  * with each unit split over as many of those lanes as its entries allow.
  * The units a set's suite declares unavailable are not run, so they are
@@ -323,12 +363,13 @@ export function measuredCostLines(
 ): string[] {
   const lines: string[] = [];
   const unfitted = new Set<string>();
+  const processes = unitProcesses(suites);
   let unjudged = 0;
   const judged = (
     entries: readonly ManifestEntry[],
   ): MeasuredCost | undefined => {
     if (entries.length === 0) return undefined;
-    const cost = measuredCost(manifest.calibration, entries);
+    const cost = measuredCost(manifest.calibration, entries, processes);
     if (cost !== undefined) return cost;
     unjudged += 1;
     for (const { suite } of entries) {

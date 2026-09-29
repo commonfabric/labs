@@ -1,7 +1,8 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { preloadArgument } from "@commonfabric/test-support/records";
+import { shuffledPaths } from "@commonfabric/test-support/shuffle";
 import {
   buildFilteredTestArgs,
   chooseGeneratedPortOffset,
@@ -9,7 +10,10 @@ import {
   GENERATED_PORT_OFFSET_RANGE,
   integrationTestDir,
   offsetPorts,
+  patternTestListLine,
+  patternTestStartOrder,
   precompilePatternTests,
+  readPatternTestList,
   runFilteredIntegration,
   runPackageIntegration,
   selectIntegrationTestFiles,
@@ -29,6 +33,80 @@ Deno.test("selectPatternTestFiles returns the files slash-separated and sorted",
       "packages/patterns/notes/note.test.tsx",
     ],
   );
+});
+
+Deno.test("readPatternTestList reads each path and the cost written after it", () => {
+  const text = [
+    patternTestListLine("packages/patterns/dice.test.tsx", 12.5),
+    "",
+    patternTestListLine("packages\\patterns\\notes\\note.test.tsx"),
+    patternTestListLine("packages/patterns/chat.test.tsx", 0),
+  ].join("\n") + "\n";
+  const { files, costs } = readPatternTestList(text);
+  assertEquals(files, [
+    "packages/patterns/dice.test.tsx",
+    "packages/patterns/notes/note.test.tsx",
+    "packages/patterns/chat.test.tsx",
+  ]);
+  assertEquals([...costs], [
+    ["packages/patterns/dice.test.tsx", 12.5],
+    ["packages/patterns/chat.test.tsx", 0],
+  ]);
+});
+
+Deno.test("readPatternTestList refuses a line whose cost is not a number of seconds", () => {
+  for (
+    const line of [
+      "dice.test.tsx\tslow",
+      "dice.test.tsx\t-1",
+      "dice.test.tsx\t4\t5",
+    ]
+  ) {
+    assertThrows(
+      () => readPatternTestList(line),
+      Error,
+      "Malformed pattern test list line",
+    );
+  }
+});
+
+Deno.test("patternTestStartOrder starts the costliest files first and unpriced ones before them", () => {
+  const costs = new Map([
+    ["a.test.tsx", 5],
+    ["b.test.tsx", 300],
+    ["c.test.tsx", 40],
+  ]);
+  const files = ["a.test.tsx", "b.test.tsx", "c.test.tsx", "d.test.tsx"];
+  for (const seed of [1, 20260928]) {
+    assertEquals(patternTestStartOrder(files, costs, seed), [
+      "d.test.tsx",
+      "b.test.tsx",
+      "c.test.tsx",
+      "a.test.tsx",
+    ]);
+  }
+});
+
+Deno.test("patternTestStartOrder puts files of equal cost in the seed's order, not the path's", () => {
+  const tied = Array.from({ length: 8 }, (_, at) => `tied-${at}.test.tsx`);
+  const files = ["long.test.tsx", ...tied];
+  const costs = new Map<string, number>([
+    ["long.test.tsx", 100],
+    ...tied.map((file) => [file, 10] as [string, number]),
+  ]);
+  const orders = new Set<string>();
+  for (let seed = 1; seed <= 5; seed++) {
+    const order = patternTestStartOrder(files, costs, seed);
+    assertEquals(order[0], "long.test.tsx");
+    assertEquals(
+      order.slice(1),
+      shuffledPaths(files, seed).filter((file) => file !== "long.test.tsx"),
+    );
+    orders.add(order.join());
+  }
+  // Five seeds give more than one order, so the ties are not left in the
+  // order the paths sort in.
+  assert(orders.size > 1);
 });
 
 Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {
@@ -143,7 +221,13 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
 Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", () => {
   assertEquals(
     buildFilteredTestArgs("runner", "integration", ["a.test.ts", "b.test.ts"]),
-    ["test", "-A", "./integration/a.test.ts", "./integration/b.test.ts"],
+    [
+      "test",
+      "--no-check",
+      "-A",
+      "./integration/a.test.ts",
+      "./integration/b.test.ts",
+    ],
   );
 });
 
@@ -152,6 +236,7 @@ Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
     buildFilteredTestArgs("patterns", "integration", ["home-profile.test.ts"]),
     [
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -169,6 +254,7 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
     ),
     [
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",
@@ -182,6 +268,7 @@ Deno.test("buildFilteredTestArgs adds a junit path when a junit dir is given", (
     buildFilteredTestArgs("shell", "integration", ["a.test.ts"], "out/junit"),
     [
       "test",
+      "--no-check",
       "-A",
       "--junit-path=out/junit/shell.xml",
       preloadArgument(),
@@ -237,6 +324,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
     assertEquals(captured?.cmd, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -270,6 +358,7 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
     assertEquals(captured, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",

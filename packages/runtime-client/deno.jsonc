@@ -7,9 +7,8 @@
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
     "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-read --allow-write --allow-ffi --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" test/",
-    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\"",
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --no-check -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\"",
     // --allow-read so that a benchmark may start a `Worker`, which reads the
     // worker's module from disk. The crossing benchmark measures a real
     // `postMessage()`, that being the boundary the connection is. --allow-ffi

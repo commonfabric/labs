@@ -31,6 +31,7 @@ export type {
   LanePlan,
   Manifest,
   ManifestEntry,
+  ProcessFit,
   ScoreInputs,
   SuiteFit,
   UnavailableEntry,
