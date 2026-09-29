@@ -12,7 +12,7 @@ same role. Everything in this document binds every implementation.
 ```ts
 // Shown for illustration only.
 interface ChatRoomOutput {
-  about: ChatAbout;
+  about: ChatRoomAbout;
 
   /** The conversation, oldest first, each with its reactions and history. */
   messages: ChatMessage[];
@@ -101,8 +101,8 @@ put (see [`leave`](#leave)).
 
 ## Facts
 
-- **`about`** is a [`ChatAbout`](ChatAbout.md), set once when the room is
-  created.
+- **`about`** is a [`ChatRoomAbout`](ChatRoomAbout.md), set once when the room
+  is created.
 - **`messages`** are [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`,
   which is unique in the room. An obliterated message stays as a tombstone. Each
   version of a message is labeled `authored-by` the principal who recorded it. A
@@ -292,12 +292,19 @@ Records one of the sender's messages as deleted.
 
 - **Admitted:** as a trusted gesture on `ChatDeleteSurface`, and only from the
   message's sender (see [`ChatMessage`](ChatMessage.md#open-questions)).
-- **Effect:** makes the message's `body` exactly `{ deleted: true }`, recorded
-  at the handler clock as `editedAt`, made unique as [unique
-  times](ChatMessage.md#unique-times) states. What becomes of its earlier
-  versions, reactions, and replies is the implementation's choice. The message
-  stays in `messages`, so replies to it and threads rooted at it keep their
-  links.
+- **Effect:** depends on whether the implementation makes deletion obliteration
+  (see [implementation-defined behavior](#implementation-defined-behavior)):
+  - If it does, the message is obliterated, exactly as `obliterateMessage` would
+    by its sender: a tombstone labeled with the sender, with no `authorProfile`,
+    history, or reactions (see [obliterated
+    messages](ChatMessage.md#obliterated-messages)).
+  - If it doesn't, the message's `body` becomes exactly `{ deleted: true }`,
+    recorded at the handler clock as `editedAt`, made unique as [unique
+    times](ChatMessage.md#unique-times) states, and its reactions are removed.
+    Its `authorProfile` and `earlierVersions` stay.
+
+  Either way, no reaction outlives the deletion, and the message stays in
+  `messages`, so replies to it and threads rooted at it keep their links.
 - **Refused:** a `message` in another room, sent by someone else, or already
   deleted.
 
@@ -305,8 +312,7 @@ Records one of the sender's messages as deleted.
 
 - `message: Cell<ChatMessage>` — The message to obliterate. Must be a message in
   this room that the sender may obliterate: in a direct room, one the sender
-  sent; elsewhere, anyone's if the sender is an OWNER, and their own if the
-  implementation lets members obliterate their own messages.
+  sent; elsewhere, anyone's, if the sender is an OWNER.
 
 Removes a message entirely, with its history. In a group room or a space's own
 chat, it is how an OWNER curates the conversation, and an outward act, since it
@@ -316,9 +322,11 @@ their own words completely.
 - **Admitted:** as a trusted gesture on `ChatObliterateSurface`. In a direct
   room, from either member, for their own messages only: being the room's
   creator, and so its OWNER, doesn't extend to the other person's messages.
-  Elsewhere, from a member the room space's access list makes OWNER, and from a
-  message's own sender if the implementation allows it (see
-  [implementation-defined behavior](#implementation-defined-behavior)).
+  Elsewhere, only from a member the room space's access list makes OWNER, if the
+  implementation allows OWNERs to obliterate (see [implementation-defined
+  behavior](#implementation-defined-behavior)). A member who isn't an OWNER
+  takes back their own message completely by deleting it, where the
+  implementation makes deletion obliteration.
 - **Effect:** reduces the message to a tombstone (see [obliterated
   messages](ChatMessage.md#obliterated-messages)): its `body` becomes
   `{ deleted: true }`, its `editedAt` the handler clock, made unique as [unique
@@ -330,8 +338,9 @@ their own words completely.
   sending the message again: the room keeps the original sender's proposal as it
   would for any send.
 - **Refused:** a `message` in another room, a direct room's message sent by the
-  other person, or, elsewhere, a sender the implementation doesn't admit.
-  Obliterating a message that is already obliterated changes nothing.
+  other person, or, elsewhere, a sender who isn't an OWNER, or an OWNER the
+  implementation doesn't allow to obliterate. Obliterating a message that is
+  already obliterated changes nothing.
 
 ### `sendReaction(message: Cell<ChatMessage>, emoji: string)`
 
@@ -484,14 +493,15 @@ group rooms of their own.
 This contract leaves some of what a room allows to its implementation, because
 rooms legitimately differ. A room where people share personal details may let
 anyone take back what they said, while a room under a strict retention
-requirement may be legally required to keep everything. The contract is agnostic
-on each of these, so a client MUST NOT assume either way:
+requirement may be legally required to keep everything. The contract doesn't fix
+these, and an implementation MUST state its choice for each in its rooms'
+`about.policy`:
 
-- **Self-obliteration in group rooms.** Whether a member of a group room, or of
-  a space's own chat, may obliterate their own messages, as either person in a
-  direct room may.
+- **Deletion as obliteration.** Whether a sender deleting their own message
+  obliterates it, which is how a member of a group room, or of a space's own
+  chat, takes back what they said completely.
 - **Obliteration at all.** Whether an OWNER may obliterate messages.
-- **What an edit or a deletion keeps** in a message's history (see
+- **What an edit keeps** in a message's history (see
   [`ChatMessage`](ChatMessage.md#open-questions)).
 - **The window of plausible proposed times** (see [recorded
   times](#recorded-times)).
@@ -499,6 +509,11 @@ on each of these, so a client MUST NOT assume either way:
 An implementation may make these configurable, per room or otherwise, and how it
 does so is its own business (see
 [`FabriChatRoom`](FabriChatRoom.md#configuration)).
+
+`about.policy` is a [`ChatRoomPolicy`](ChatRoomPolicy.md), and an implementation
+MUST state it correctly: a client reads a room's choices there, and can rely on
+them. One thing is not a choice: a direct room MUST let either person obliterate
+their own messages.
 
 ## Open questions
 
@@ -509,8 +524,3 @@ does so is its own business (see
   can be made a member of a room they never agreed to, and appear in its member
   set, before any notice reaches them. `leave` lets them get out, but not stop
   it happening.
-- **Discovering what a room allows.** A client can't see an implementation's
-  choices (see [implementation-defined
-  behavior](#implementation-defined-behavior)) before an event is refused,
-  silently. Whether the contract should offer facts saying what a room allows,
-  so a client can show a person before they write in it, is open.

@@ -26,8 +26,9 @@ interface ChatIndexEntry {
 - **`room`** links the room ([`ChatRoomOutput`](ChatRoomOutput.md)). An entry is
   a link and never a copy: what a room holds is read from the room, under the
   reader's own access.
-- **`kind`** repeats the room's own `about.kind` ([`ChatAbout`](ChatAbout.md)),
-  so a client can list and filter rooms without reading each one.
+- **`kind`** repeats the room's own `about.kind`
+  ([`ChatRoomAbout`](ChatRoomAbout.md)), so a client can list and filter rooms
+  without reading each one.
 - **`counterpart`** is set only for a direct room: the principal of its other
   member, which is the key `direct` is indexed by. It is a principal and not a
   profile, because a person can have several profiles, and one conversation with

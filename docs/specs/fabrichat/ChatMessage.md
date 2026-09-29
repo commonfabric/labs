@@ -101,9 +101,10 @@ message's writer can set.
 A message can be removed entirely, with its history, using the room's
 `obliterateMessage` (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)): by an
 OWNER curating a group room or a space's own chat, or by either person in a
-direct room, for their own messages. Whether a group room's members may also
-obliterate their own messages, and whether a room allows obliteration at all,
-are left to the implementation
+direct room, for their own messages. A sender's `deleteMessage` does the same to
+their own message where the implementation makes deletion obliteration. Whether
+a sender deleting their own message obliterates it, and whether a room allows
+OWNERs to obliterate at all, are left to the implementation
 ([`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior)). What is
 left is a tombstone, kept so that replies to the message and a thread rooted at
 it aren't orphaned:
@@ -167,22 +168,20 @@ implementation (see
 
 - **Who may edit or delete.** `editMessage` and `deleteMessage` admit only the
   message's sender. A room's OWNERs curate others' messages only by obliterating
-  them (see [obliterated messages](#obliterated-messages)). Whether group-room
-  members may obliterate their own messages, and whether obliteration is allowed
-  at all, are left to the implementation, since retention requirements can
-  forbid it.
+  them (see [obliterated messages](#obliterated-messages)). Whether a sender's
+  deletion obliterates their message, and whether OWNERs may obliterate at all,
+  are left to the implementation, since retention requirements can forbid
+  removing anything.
 - **What an edit keeps.** Whether every edit adds its previous version to
   `earlierVersions`, or only some do, and whether history is kept at all.
-- **What a deletion keeps.** Whether deleting a message also clears its
-  `earlierVersions`, replacing each earlier body with `{ deleted: true }` or
-  dropping them, so that deleted text doesn't survive in history. A deleted
-  version in `earlierVersions` is also how a message that was deleted and then
-  edited again would show its deletion.
+- **What a deletion keeps.** Settled: a deletion either keeps the message's
+  author and history, or, where the implementation makes deletion obliteration,
+  removes both. Either way, it removes the reactions.
 - **Deleting a single earlier version.** Whether a sender can redact one version
   in `earlierVersions` without deleting the message.
-- **Reactions and replies.** Whether a deleted message keeps its reactions, and
-  can take new ones or new replies. A reply to it, and a thread rooted at it,
-  still link to it either way.
+- **Reactions and replies.** A deleted message loses its reactions. Whether it
+  can take new reactions or replies is open. A reply to it, and a thread rooted
+  at it, still link to it either way.
 - **Labels on moved text.** Recording an edit writes the previous body into
   `earlierVersions` from the editor's handler, which labels it with the editor.
   That is the original author only as long as only senders edit.
@@ -196,7 +195,7 @@ shape above doesn't close them off.
   to render the same way in every client, since the rule that a person sends
   exactly what they saw applies to the formatting as much as to the words. A
   room's title could use the same format (see
-  [`ChatAbout`](ChatAbout.md#future-directions)).
+  [`ChatRoomAbout`](ChatRoomAbout.md#future-directions)).
 - **Attachments.** Images and other media sent with a message. An attachment
   would be linked rather than copied into the message, so it keeps its own label
   and is read under the reader's own access, as profiles are.

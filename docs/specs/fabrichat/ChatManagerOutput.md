@@ -176,8 +176,8 @@ Creates a group room. This is an outward act: it grants other people access.
 - `counterpart?: string` — For a direct room, the DID of its other member.
   Required for a direct room, and ignored for a group room. It must be the
   room's creator, as the room's `about` is labeled (see
-  [`ChatAbout`](ChatAbout.md#who-created-the-room)); a notice's claim of who
-  sent it is only a hint.
+  [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)); a notice's claim of
+  who sent it is only a hint.
 
 Records a room this user has been admitted to.
 
@@ -256,8 +256,8 @@ knowledge that a room exists.
 A notice is also unauthenticated: it travels by whatever channel a client has,
 so its claim of who sent it can be false. A recipient MUST NOT rely on that
 claim. Who created a room is what the room's `about` is labeled with (see
-[`ChatAbout`](ChatAbout.md#who-created-the-room)), and `accept` checks a direct
-room's `counterpart` against that label.
+[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), and `accept` checks a
+direct room's `counterpart` against that label.
 
 ## Crossing creations
 

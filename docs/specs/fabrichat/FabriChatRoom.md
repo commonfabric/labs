@@ -60,15 +60,19 @@ the message), so a repeated send or edit finds what it already recorded without
 reading the list. Its plausibility window for proposed times is a constant of
 the pattern, documented beside it.
 
-`commitEdit` and `commitDelete` are admitted only for the message's own sender,
-and move the current version into `earlierVersions` before recording the new
-one. They have the same kind of write policy as `commitSend`.
+`commitEdit` and `commitDelete` are admitted only for the message's own sender.
+`commitEdit` moves the current version into `earlierVersions` before recording
+the new one. `commitDelete` records the deletion and clears the reactions, or,
+when the room's `deletionIsObliteration` setting is on, does exactly what
+`commitObliterate` does. They have the same kind of write policy as
+`commitSend`.
 
 `commitObliterate` is admitted for an OWNER in a group room or a space's own
-chat, and for a message's own sender in a direct room. It rewrites the message
-to its tombstone, and clears its reactions, so the message's write policy admits
-it alongside `commitSend`, `commitEdit`, and `commitDelete`, and the reactions'
-write policy admits it alongside the reaction handlers.
+chat, when the room's `ownersMayObliterate` setting is on, and for a message's
+own sender in a direct room. It rewrites the message to its tombstone and clears
+its reactions. So the message's write policy admits it alongside `commitSend`,
+`commitEdit`, and `commitDelete`, and the reactions' write policy admits both it
+and `commitDelete` alongside the reaction handlers.
 
 `commitSend`, `commitEdit`, `commitDelete`, and `commitSendReaction` choose a
 recorded time in the same transaction that records it: the chosen time, or the
@@ -107,7 +111,7 @@ list. They are the only handlers that reach beyond the room's own record.
 `commitAdd` also adds a notice to `outgoingNotices`, and `commitDelivered`
 removes one.
 
-`about` is stored as `AuthoredByCurrentUser<ChatAbout>`, written once by the
+`about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
 handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves,
 as today's room computes `cannotSend`.
@@ -120,16 +124,17 @@ configuring each of them: a room's settings, read by the handlers the setting
 governs, and kept apart from the room's record. The configuration itself isn't
 built at first. The first build fixes each setting at an initial value:
 
-| Setting | Initial value |
-| --- | --- |
-| Members may obliterate their own messages in group rooms | no |
-| OWNERs may obliterate messages | yes |
-| An edit keeps the version it replaces in `earlierVersions` | yes, every version |
-| A deletion clears the message's earlier versions | no |
-| Window of plausible proposed times, around the handler clock | a pattern constant |
+| Setting | `ChatRoomPolicy` key | Initial value |
+| --- | --- | --- |
+| OWNERs may obliterate messages | `ownersMayObliterate` | yes |
+| An edit keeps the version it replaces in `earlierVersions` | `editKeepsHistory` | yes, every version |
+| A sender's deletion obliterates their message | `deletionIsObliteration` | no |
+| Window of plausible proposed times, before the handler clock | `proposedTimeWindowNsec` | a pattern constant |
 
 These are the first build's values. Once the configuration exists, rooms can
-differ from them.
+differ from them. A room states its settings in `about.policy`
+([`ChatRoomPolicy`](ChatRoomPolicy.md)), with every key present, written when
+the room is created from the same settings the handlers read.
 
 ## Prerequisites
 

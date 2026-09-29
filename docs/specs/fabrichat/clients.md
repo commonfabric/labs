@@ -31,11 +31,12 @@ a room to anyone its space doesn't admit.
   space are that space's member set.
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated, so a client shows who created the room from the
-  room's `about` label (see [`ChatAbout`](ChatAbout.md#who-created-the-room)),
-  never from the notice. The client follows it with `accept` to their manager,
-  passing that creator as `counterpart` for a direct room. Whether to add the
-  room to their list is the person's decision, so a client SHOULD accept only
-  after showing them who created the room, and what it is.
+  room's `about` label (see
+  [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), never from the
+  notice. The client follows it with `accept` to their manager, passing that
+  creator as `counterpart` for a direct room. Whether to add the room to their
+  list is the person's decision, so a client SHOULD accept only after showing
+  them who created the room, and what it is.
 
 ## Showing a room
 
