@@ -108,7 +108,7 @@ What works today:
   `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions on the direct driver: a long-lived container that later
   calls execute in, offered to the model only where the run's sandbox has
-  sessions
+  sessions and its CFC enforcement mode allows them
 - under the Docker driver, sandbox containers default to Docker
   `--network bridge` so local Loom/Fabric helper services can be reached through
   Docker Desktop's `host.docker.internal` host alias during early integration
@@ -919,11 +919,12 @@ executes. With no policy named, it uses the one the Docker path's installer
 places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
 so both drivers label the same files the same way.
 
-Under the direct driver `bash` takes an optional `session`. A call that names a
-session executes in a container the harness keeps for the rest of the run, and a
-call that names none runs in a fresh container of its own. Sessions are refused
-in the enforcing CFC modes. Under Docker the `bash` descriptor has no `session`
-argument.
+Under the direct driver `bash` takes an optional `session`, in a run whose CFC
+enforcement mode allows one. A call that names a session executes in a container
+the harness keeps for the rest of the run, and a call that names none runs in a
+fresh container of its own. Sessions are refused in the enforcing CFC modes, so
+a run in one of them, `enforce-strict` by default, is offered `bash` with no
+`session`, as a run under Docker is in every mode.
 
 The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any

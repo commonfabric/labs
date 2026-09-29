@@ -225,19 +225,22 @@ drivers.
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | the network mode, in Docker's vocabulary, on either driver                                    |
 
 The batch CLI's `--sandbox-runtime`, `--sandbox-rootfs` and
-`--sandbox-cfc-policy` are refused here, naming the variable to set instead:
-`console:launch` reads the same environment to decide whether Docker is involved
-at all, and a flag it cannot see would leave the launch and the console
-describing two different sandboxes. The Docker image and the Docker runtime name
-are not configurable on the console.
+`--sandbox-cfc-policy` are refused here and by `console:launch`, in any
+spelling, naming the variable to set instead: the launcher reads the same
+environment to decide whether Docker is involved at all, and a flag one of them
+read and the other did not would leave the launch and the console describing two
+different sandboxes. The Docker image and the Docker runtime name are not
+configurable on the console.
 
-Under `runsc` the console builds the direct driver: no Docker, `bash` takes a
-`session`, and the runtime description reads `runsc-cfc`. `console:launch` reads
-no Docker runtime table, sites no sidecar directory, and refuses
-`--cfc-result-dir` and `--cfc-invocation-context-dir`, which it takes on the
-Docker driver only, because only that driver reads them; it prints the `runsc`
-binary, rootfs and CFC policy in their place, and so does the server when it
-binds. A console that names no runtime, or names `docker`, builds the Docker
+Under `runsc` the console builds the direct driver: no Docker, and the runtime
+description reads `runsc-cfc`. `bash` takes no `session`, as on Docker: the
+console's turns run at `enforce-strict`, and no enforcing run can use a sandbox
+session. `console:launch` reads no Docker runtime table, sites no sidecar
+directory, and refuses `--cfc-result-dir` and `--cfc-invocation-context-dir`,
+which it takes on the Docker driver only, because only that driver reads them;
+it prints the `runsc` binary, rootfs and CFC policy in their place, and so does
+the server when it binds. With no CFC policy, both say that every turn is
+refused. A console that names no runtime, or names `docker`, builds the Docker
 driver exactly as it would with no variable set.
 
 Every turn scans the skills root and records the registry on its run before the
@@ -323,18 +326,23 @@ External rows check the selected sandbox driver and the configured index's
 health and enrollment for the console identity. On the Docker driver the sandbox
 rows read the running daemon's `runsc-cfc` registration. On the direct `runsc`
 driver they ask Docker nothing: they resolve the driver's configuration the way
-a turn resolves it, and report whether the `runsc` binary is an executable file
-and whether a CFC policy is configured and present. With no policy, the runtime
-row is failed where the console's turns enforce CFC, which is the default,
-because the engine refuses every such turn before any tool runs; where they only
-observe it is degraded, because commands run untracked. Each probe caches
-independently for 30 seconds. Reading the route returns the current snapshot
-immediately and schedules stale checks in the background, sharing any in-flight
-check. No probe is awaited by the route. The timestamp remains visible while an
-observation is being refreshed. Model rows describe the startup provider and
-credential source without exposing credentials or making a model request; a
-configured API key does not prove provider acceptance. Neither a Docker
-registration nor an executable `runsc` proves a sandbox can execute a task.
+a turn resolves it, and report whether the `runsc` binary is an executable file,
+whether the rootfs is a directory, and whether a CFC policy is configured,
+readable and a JSON object. A policy that is missing, not a file, unreadable for
+want of permission or malformed is failed: runsc cannot use it, and every
+command's output then arrives without a CFC result and is denied to the model.
+The console takes no enforcement mode, so its turns run at `enforce-strict`, and
+with no policy the runtime row is failed because the engine refuses every turn
+before any tool runs. Each probe caches independently for 30 seconds. Reading
+the route returns the current snapshot immediately and schedules stale checks in
+the background, sharing any in-flight check. No probe is awaited by the route.
+The timestamp remains visible while an observation is being refreshed. Model
+rows describe the startup provider and credential source without exposing
+credentials or making a model request; a configured API key does not prove
+provider acceptance. Neither a Docker registration nor an executable `runsc`
+proves a sandbox can execute a task, nor does a rootfs directory or a policy
+that parses: on macOS the rootfs is a marker the darwin `runsc` maps to a block
+image the probe does not look at, and only `runsc` knows a policy's schema.
 Fabric-session liveness remains unverified, and Loom, toolshed, and application
 pin status belong to the application that observes them directly.
 

@@ -91,12 +91,13 @@ It resolves the identity, the space and the toolshed URL from the instance's
 `pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
 directories from the `runsc-cfc` registration `docker info` reports. A console
 whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
-which Loom hands an instance on its native runtime) needs no sidecar directory
-and reads no Docker registration; the printout names its `runsc` binary, rootfs
-and CFC policy instead. It prints every value beside the record that decided it,
-and serves on 8135 — the port Weaver's harness console setting and loom's proxy
-both address. Read the printout before opening Weaver: a value that is wrong
-names where to fix it, and those are three different places.
+which a Loom that offers its native runtime sets for an instance that chose it)
+needs no sidecar directory and reads no Docker registration; the printout names
+its `runsc` binary, rootfs and CFC policy instead. It prints every value beside
+the record that decided it, and serves on 8135 — the port Weaver's harness
+console setting and loom's proxy both address. Read the printout before opening
+Weaver: a value that is wrong names where to fix it, and those are three
+different places.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
