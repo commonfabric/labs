@@ -42,8 +42,8 @@ import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-sqlite-control");
