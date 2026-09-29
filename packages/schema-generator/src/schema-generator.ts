@@ -49,7 +49,6 @@ import {
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
-  literalKeysOfType,
   safeGetIndexTypeOfType,
   safeGetTypeOfSymbolAtLocation,
   soleNonNullishMember,
@@ -1505,36 +1504,19 @@ export class SchemaGenerator {
   }
 
   /**
-   * `schema` viewed as `name`, a default-library alias that maps an object's
-   * members (`Readonly`, `Partial`, `Required`, `Pick`, `Omit`), is viewed
-   * where it is written (`#analyzeLibraryAliasReference()`), with `keys` the
-   * type of a `Pick`'s or `Omit`'s key argument; `undefined` for keys that are
-   * no list of string literals, and for a name that is none of these.
+   * `type` as the formatters after `CommonFabricFormatter` read it: for a type
+   * that formatter claims for the labels it adds, whose value is the type as
+   * the checker builds it (`Readonly<Sec<X>>`). Called within the type's own
+   * `#formatType()`, which names and stores what it returns.
    */
-  public viewThroughLibraryAlias(
-    name: string,
-    schema: MutableJSONSchema,
-    keys: ts.Type | undefined,
+  public formatStructure(
+    type: ts.Type,
     context: GenerationContext,
-  ): MutableJSONSchema | undefined {
-    switch (name) {
-      case "Readonly":
-        return schema;
-      case "Partial":
-        return mapArms(schema, context, partialArm);
-      case "Required":
-        return mapArms(schema, context, (arm) => requiredArm(arm, context));
-      case "Pick":
-      case "Omit": {
-        const names = keys && literalKeysOfType(keys);
-        return names && pickedView(
-          schema,
-          context,
-          name === "Pick" ? { pick: names } : { omit: names },
-        );
-      }
-    }
-    return undefined;
+  ): MutableJSONSchema {
+    return this.#formatters.find((formatter) =>
+      formatter !== this.#commonFabricFormatter &&
+      formatter.supportsType(type, context)
+    )?.formatType(type, context) ?? {};
   }
 
   /**
@@ -3444,11 +3426,20 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second);
         if (keys === undefined) return undefined;
-        return pickedView(
-          analyze(first, instantiatedAs),
+        // The picked members are the labelled value's, so its label stays.
+        const operand = analyze(first, instantiatedAs);
+        const { ifc, ...payload } = isObjectOrArray(operand) &&
+            !Array.isArray(operand)
+          ? operand as Record<string, unknown>
+          : { ifc: undefined };
+        const picked = pickedView(
+          ifc === undefined ? operand : payload as MutableJSONSchema,
           context,
           name === "Pick" ? { pick: keys } : { omit: keys },
         );
+        return picked && isObjectOrArray(ifc) && !Array.isArray(ifc)
+          ? withIfcLabels(picked, ifc as Record<string, unknown>)
+          : picked;
       }
       case "Record": {
         if (second === undefined) return undefined;

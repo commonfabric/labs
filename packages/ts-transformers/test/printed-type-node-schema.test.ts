@@ -1551,6 +1551,123 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
       }
     });
 
+    describe("a default-library alias mapping a labelled type the checker builds apart", () => {
+      // The alias's value is the type the checker builds from the operand, and
+      // its labels the operand's: a recursion through the alias keeps the
+      // alias, a tuple its slots, and a pick of a primitive's members is an
+      // object. Both sides read alike.
+      const secret = { confidentiality: ["secret"] };
+      for (
+        const [spelling, declarations, check] of [
+          [
+            "`Partial` over a labelled type still being read",
+            "type A = Sec<{ value: string; next?: Partial<A> }>;",
+            (next: Schema) => expect(next.required).toBeUndefined(),
+          ],
+          [
+            "`Required` over a labelled type still being read",
+            "type A = Sec<{ value?: string; next?: Required<A> }>;",
+            (next: Schema) => expect(next.required).toEqual(["value", "next"]),
+          ],
+          [
+            "`Pick` over a labelled type still being read",
+            'type A = Sec<{ value: string; secret: number; next?: Pick<A, "value" | "next"> }>;',
+            (next: Schema) =>
+              expect(Object.keys(next.properties as Schema)).toEqual([
+                "value",
+                "next",
+              ]),
+          ],
+        ] as const
+      ) {
+        it(`keeps ${spelling}, on both sides`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, ["secret"]>;
+${declarations}
+export default pattern<{ a: A }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          for (const root of [input, output]) {
+            const definitions = (root.$defs ?? {}) as Record<string, Schema>;
+            const resolve = (schema: Schema): Schema =>
+              typeof schema.$ref === "string"
+                ? definitions[schema.$ref.split("/").pop()!]!
+                : schema;
+            const top = resolve((root.properties as Record<string, Schema>).a!);
+            const next = resolve(
+              (top.properties as Record<string, Schema>).next!,
+            );
+            check(next);
+            expect(next.ifc).toEqual(secret);
+          }
+        });
+      }
+
+      for (
+        const [a, expected] of [
+          [
+            "Required<Sec<[string | undefined, number?]>>",
+            {
+              type: "array",
+              items: { type: ["number", "string", "undefined"] },
+              ifc: secret,
+            },
+          ],
+          [
+            'Pick<Sec<string>, "length">',
+            {
+              type: "object",
+              properties: { length: { type: "number" } },
+              required: ["length"],
+              ifc: secret,
+            },
+          ],
+        ] as const
+      ) {
+        it(`reads \`${a}\` as the type the checker builds, on both sides`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, ["secret"]>;
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
+
+      it("keeps the label of a `Pick` in a payload read under bindings, on both sides", async () => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, ["secret"]>;
+type Outer<T> = Confidential<{ inner: Pick<Sec<{ x: T; y: number }>, "x"> }, ["b"]>;
+export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        for (const root of [input, output]) {
+          const definitions = (root.$defs ?? {}) as Record<string, Schema>;
+          const resolve = (schema: Schema): Schema =>
+            typeof schema.$ref === "string"
+              ? definitions[schema.$ref.split("/").pop()!]!
+              : schema;
+          const a = resolve((root.properties as Record<string, Schema>).a!);
+          expect((a.properties as Record<string, Schema>).inner!.ifc).toEqual(
+            secret,
+          );
+        }
+      });
+    });
+
     describe("an annotation whose syntax the label reader does not evaluate", () => {
       for (
         const [spelling, declarations, expected] of [

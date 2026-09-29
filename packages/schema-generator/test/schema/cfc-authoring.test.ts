@@ -2502,6 +2502,29 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics).toEqual([]);
     });
 
+    for (
+      const alias of [
+        'Pick<Sec<{ x: T; y: number }>, "x">',
+        'Omit<Sec<{ x: T; y: number }>, "y">',
+      ]
+    ) {
+      it(`keeps the label of \`${alias}\` in a payload read under bindings`, async () => {
+        // The picked members are the labelled value's.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<string> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          ifc: { confidentiality: ["a"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
@@ -2598,9 +2621,9 @@ describe("Schema: CFC authoring aliases", () => {
       type Pair = { x?: string; y: number };
     `;
 
-    const generate = async (value: string) => {
+    const generate = async (value: string, declarations = "") => {
       const { checker, sourceFile } = await createTestProgram(
-        ALIASES + `interface Holder { value: ${value} }`,
+        ALIASES + declarations + `interface Holder { value: ${value} }`,
       );
       const holder = checker.getSymbolsInScope(
         sourceFile,
@@ -2622,18 +2645,18 @@ describe("Schema: CFC authoring aliases", () => {
     const secret = { confidentiality: ["a"] };
     const x = { type: "string" };
     const y = { type: "number" };
-    // `Readonly` views its operand as it is, so a named payload stays a
-    // reference to its definition, labelled where it is referred to.
-    const pair = {
-      $ref: "#/$defs/Pair",
-      $defs: {
-        Pair: { type: "object", properties: { x, y }, required: ["y"] },
-      },
-    };
 
     for (
       const [value, expected] of [
-        ["Readonly<Sec<Pair>>", { ...pair, ifc: secret }],
+        [
+          "Readonly<Sec<Pair>>",
+          {
+            type: "object",
+            properties: { x, y },
+            required: ["y"],
+            ifc: secret,
+          },
+        ],
         [
           "Partial<Sec<Pair>>",
           { type: "object", properties: { x, y }, ifc: secret },
@@ -2667,7 +2690,12 @@ describe("Schema: CFC authoring aliases", () => {
         ],
         [
           'Readonly<Confidential<Sec<Pair>, readonly ["b"]>>',
-          { ...pair, ifc: { confidentiality: ["a", "b"] } },
+          {
+            type: "object",
+            properties: { x, y },
+            required: ["y"],
+            ifc: { confidentiality: ["a", "b"] },
+          },
         ],
         [
           "Partial<Readonly<Sec<Pair>>>",
@@ -2696,6 +2724,84 @@ describe("Schema: CFC authoring aliases", () => {
       it(`keeps the label of \`${value}\` and holds no carrier`, async () => {
         const { schema, diagnostics } = await generate(value);
         expect(schema).toEqual(expected);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads `Required` of a labelled tuple as the tuple it builds, a required slot keeping its `undefined`", async () => {
+      const { schema, diagnostics } = await generate(
+        "Required<Sec<[string | undefined, number?]>>",
+      );
+      expect(schema).toEqual({
+        type: "array",
+        items: { type: ["number", "string", "undefined"] },
+        ifc: secret,
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    for (const value of ['Pick<Sec<string>, "length">', "Length"]) {
+      it(`reads \`${value}\`, a pick of a primitive's members, as the object it builds`, async () => {
+        // A user's alias of a `Pick` names the object the `Pick` builds, so
+        // the alias is followed to the `Pick` its body writes.
+        const { schema, diagnostics } = await generate(
+          value,
+          `type Length = Pick<Sec<string>, "length">;`,
+        );
+        const definitions = (schema as Record<string, any>).$defs ?? {};
+        const at = schema as Record<string, any>;
+        const shape = typeof at.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()!]
+          : at;
+        expect(shape).toEqual({
+          type: "object",
+          properties: { length: y },
+          required: ["length"],
+          ifc: secret,
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    for (
+      const [alias, node, properties, required] of [
+        [
+          "Partial",
+          "{ value: string; next?: Partial<Node> }",
+          ["value", "next"],
+          [],
+        ],
+        [
+          "Required",
+          "{ value?: string; next?: Required<Node> }",
+          ["value", "next"],
+          ["value", "next"],
+        ],
+        [
+          "Pick",
+          '{ value: string; secret: number; next?: Pick<Node, "value" | "next"> }',
+          ["value", "next"],
+          ["value"],
+        ],
+      ] as const
+    ) {
+      it(`keeps \`${alias}\` over a labelled type still being read, as a definition of its own`, async () => {
+        // The operand's own definition is not yet written, so the value is
+        // the type the alias builds, which refers to itself.
+        const { schema, diagnostics } = await generate(
+          "Node",
+          `type Node = Sec<${node}>;`,
+        );
+        const definitions = (schema as Record<string, any>).$defs ?? {};
+        const resolve = (at: any) =>
+          typeof at?.$ref === "string"
+            ? definitions[at.$ref.split("/").pop()]
+            : at;
+        const next = resolve(resolve(schema).properties.next);
+        expect(Object.keys(next.properties)).toEqual([...properties]);
+        expect(next.required ?? []).toEqual([...required]);
+        expect(next.ifc).toEqual(secret);
+        expect(resolve(next.properties.next)).toBe(next);
         expect(diagnostics).toEqual([]);
       });
     }

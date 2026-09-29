@@ -396,20 +396,6 @@ export function instantiatedValueType(
 }
 
 /**
- * The keys `keys`, a `Pick` or `Omit` key argument, names: a string literal
- * type or a union of them. Anything else (a `keyof`, a `string`) is no key
- * list and is `undefined`.
- */
-export function literalKeysOfType(keys: ts.Type): Set<string> | undefined {
-  const names = new Set<string>();
-  for (const member of keys.isUnion() ? keys.types : [keys]) {
-    if (!member.isStringLiteral()) return undefined;
-    names.add(member.value);
-  }
-  return names;
-}
-
-/**
  * TypeScript internal API type extensions for safer casting
  */
 export interface TypeWithInternals extends ts.Type {
