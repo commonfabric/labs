@@ -1,0 +1,1 @@
+{"date": "2026-09-29", "from": {"k": "unit", "s": "runner", "n": "private-space > resumes a FabriChat creation and publishes its private room only after granting members"}, "to": {"k": "integration", "s": "patterns", "n": "FabriChat manager > resumes a FabriChat creation and publishes its private room only after granting members"}}

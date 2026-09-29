@@ -58,4 +58,4 @@ no access; `accept` checks actual admission before indexing a room.
 Run `deno task cf test packages/patterns/fabrichat` for protocol assertions and
 `deno task integration patterns fabrichat` for the browser conversation test.
 Private creation and membership integration tests live in
-`packages/runner/test/private-space.test.ts`.
+`packages/patterns/integration/fabrichat-manager.test.ts`.
