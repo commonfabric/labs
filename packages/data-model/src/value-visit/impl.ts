@@ -9,8 +9,9 @@ import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
  * Performs a one-off structural-map of a value, with the given visitor, with
- * the structure it builds frozen: every container the map builds, and every
- * `FabricInstance` it rebuilds, is frozen.
+ * the structure it builds frozen: every container the map builds is frozen,
+ * and every `FabricInstance` it rebuilds is as its codec's `decode()` builds
+ * one when asked for a frozen value.
  *
  * What the map places into that structure without building it is left as it
  * is, frozen or not. A visited value or subvalue which is itself frozen _and_
@@ -34,8 +35,9 @@ export function mapValue<PlusType, ResultType>(
 
 /**
  * Performs a one-off structural-map of a value, with the given visitor, with
- * the structure it builds left mutable: every container the map builds, and
- * every `FabricInstance` it rebuilds, is mutable.
+ * the structure it builds left mutable: every container the map builds is
+ * mutable, and every `FabricInstance` it rebuilds is as its codec's `decode()`
+ * builds one when asked for a mutable value.
  *
  * The map copies every container it recurses into, even one it leaves
  * unchanged (that is, which mapped to itself). A value a visitor supplies with
