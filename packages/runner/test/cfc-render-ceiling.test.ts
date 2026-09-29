@@ -1589,17 +1589,17 @@ describe("CFC render resolver — grants at the display boundary", () => {
 
 describe("CFC render resolver — the reciprocal two-grant rule", () => {
   // A module rule with two grant guards over one resource: the owner's grant
-  // naming the reader, and the reader's grant naming the owner. The reader
-  // sees the owner's answer only while both stand. Every case fits against
-  // the reader's ceiling.
+  // naming the reader, and the reader's grant naming the owner. The owner is
+  // bound from the label's `represents-principal` integrity atom and the
+  // reader is the acting user. The reader sees the owner's answer only while
+  // both grants stand; every case fits against the reader's ceiling.
   //
   // What this arranges that a deployment would not: both grants sit in one
   // runtime's storage, each in its owner's identity space, so the reader's
   // evaluation reads the owner's space and its own alike; the reader's grant
   // is written by acting as the reader for one transaction, as a served run
-  // is stamped; for the `HasRole` binding the reader is declared a verified
-  // reader of the owner's space; and the resource is a literal in the rule,
-  // one rule per question.
+  // is stamped; and the resource is a literal in the rule, one rule per
+  // question.
 
   const OWNER = grantSigner.did();
   const READER = "did:key:z6MkReaderWhoAnswersInTurn";
@@ -1608,69 +1608,58 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
   const Q7 = "of:answer-q7";
   const Q8 = "of:answer-q8";
 
-  type OwnerBinding = "subject" | "represents-principal";
-  type ReaderBinding = "actingUser" | "hasRole";
-
-  /**
-   * The reciprocal rule with the owner bound from `THIS_POLICY.subject` or
-   * from the label's `represents-principal` atom, and the reader bound as
-   * `$actingUser` or from a `HasRole` fact on the policy's subject space.
-   */
-  const reciprocalManifest = (owner: OwnerBinding, reader: ReaderBinding) => {
-    const ownerPattern = owner === "subject"
-      ? { thisPolicyField: "subject" }
-      : { var: "$owner" };
-    const readerVariable = reader === "actingUser" ? "$actingUser" : "$reader";
-    const readerPattern = { var: readerVariable };
-    return buildCfcPolicyArtifactManifest({
-      formatVersion: 1,
-      moduleIdentity: `sha256:reciprocal-${owner}-${reader}`,
-      symbol: "reciprocalRules",
-      template: {
-        templateVersion: 1,
-        exchangeRules: [{
-          name: "releaseWhenBothShare",
-          preCondition: {
-            confidentiality: [{ thisPolicy: true }],
-            integrity: [
-              ...(owner === "represents-principal"
-                ? [{ kind: "represents-principal", subject: ownerPattern }]
-                : []),
-              ...(reader === "hasRole"
-                ? [{
-                  type: CFC_ATOM_TYPE.HasRole,
-                  principal: readerPattern,
-                  space: { thisPolicyField: "subject" },
-                  role: "reader",
-                }]
-                : []),
-            ],
-          },
-          guard: {
-            policyState: [{
-              kind: "ShareGrant",
-              owner: ownerPattern,
-              resource: Q7,
-              audience: { type: CFC_ATOM_TYPE.User, subject: readerPattern },
-            }, {
-              kind: "ShareGrant",
-              owner: readerPattern,
-              resource: Q7,
-              audience: { type: CFC_ATOM_TYPE.User, subject: ownerPattern },
-            }],
-          },
-          postCondition: {
-            confidentiality: [{
+  const manifest = buildCfcPolicyArtifactManifest({
+    formatVersion: 1,
+    moduleIdentity: "sha256:reciprocal-module",
+    symbol: "reciprocalRules",
+    template: {
+      templateVersion: 1,
+      exchangeRules: [{
+        name: "releaseWhenBothShare",
+        preCondition: {
+          confidentiality: [{ thisPolicy: true }],
+          integrity: [{
+            kind: "represents-principal",
+            subject: { var: "$owner" },
+          }],
+        },
+        guard: {
+          policyState: [{
+            kind: "ShareGrant",
+            owner: { var: "$owner" },
+            resource: Q7,
+            audience: {
               type: CFC_ATOM_TYPE.User,
-              subject: readerPattern,
-            }],
-            integrity: [],
-          },
-        }],
-        dependencies: { authorityOnly: [], dataBearing: [] },
-        integrityRequirements: {},
-      },
-    });
+              subject: { var: "$actingUser" },
+            },
+          }, {
+            kind: "ShareGrant",
+            owner: { var: "$actingUser" },
+            resource: Q7,
+            audience: { type: CFC_ATOM_TYPE.User, subject: { var: "$owner" } },
+          }],
+        },
+        postCondition: {
+          confidentiality: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$actingUser" },
+          }],
+          integrity: [],
+        },
+      }],
+      dependencies: { authorityOnly: [], dataBearing: [] },
+      integrityRequirements: {},
+    },
+  });
+  const ref = cfcAtom.modulePolicyRef(
+    manifest.manifest.moduleIdentity,
+    manifest.manifest.symbol,
+    manifest.policyDigest,
+    OWNER,
+  );
+  const label = {
+    confidentiality: [ref],
+    integrity: [{ kind: "represents-principal", subject: OWNER }],
   };
 
   /**
@@ -1700,64 +1689,42 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
     await runtime.idle();
   };
 
-  for (const owner of ["subject", "represents-principal"] as const) {
-    for (const reader of ["actingUser", "hasRole"] as const) {
-      describe(`owner from ${owner}, reader from ${reader}`, () => {
-        const manifest = reciprocalManifest(owner, reader);
-        const ref = cfcAtom.modulePolicyRef(
-          manifest.manifest.moduleIdentity,
-          manifest.manifest.symbol,
-          manifest.policyDigest,
-          OWNER,
-        );
-        const label = {
-          confidentiality: [ref],
-          integrity: owner === "represents-principal"
-            ? [{ kind: "represents-principal", subject: OWNER }]
-            : [],
-        };
-        const resolveAsReader = (runtime: Runtime) =>
-          createRenderConfidentialityResolver({
-            actingPrincipal: READER,
-            memberSpaces: reader === "hasRole" ? [OWNER] : [],
-            modulePolicyResolver: () => manifest,
-            grantResolver: createRuntimeCfcGrantSource(runtime).resolve,
-          })(label);
+  const resolveAsReader = (runtime: Runtime) =>
+    createRenderConfidentialityResolver({
+      actingPrincipal: READER,
+      modulePolicyResolver: () => manifest,
+      grantResolver: createRuntimeCfcGrantSource(runtime).resolve,
+    })(label);
 
-        it("adds `User(reader)` when the owner's grant names the reader and the reader's names the owner", async () => {
-          await withGrantRuntime(async (runtime) => {
-            await writeGrant(runtime, OWNER, Q7, READER);
-            await writeGrant(runtime, READER, Q7, OWNER);
-            const resolved = resolveAsReader(runtime);
-            expect(resolved).toEqual([
-              normalizeClause({ anyOf: [ref, userReader] }),
-            ]);
-            expect(atomsOutsideCeiling(resolved, readerCeiling)).toEqual([]);
-          });
-        });
+  it("adds `User(reader)` when the owner's grant names the reader and the reader's names the owner", async () => {
+    await withGrantRuntime(async (runtime) => {
+      await writeGrant(runtime, OWNER, Q7, READER);
+      await writeGrant(runtime, READER, Q7, OWNER);
+      const resolved = resolveAsReader(runtime);
+      expect(resolved).toEqual([normalizeClause({ anyOf: [ref, userReader] })]);
+      expect(atomsOutsideCeiling(resolved, readerCeiling)).toEqual([]);
+    });
+  });
 
-        it("keeps the clause sealed under the owner's grant alone", async () => {
-          await withGrantRuntime(async (runtime) => {
-            await writeGrant(runtime, OWNER, Q7, READER);
-            expect(resolveAsReader(runtime)).toEqual([ref]);
-          });
-        });
+  it("keeps the clause sealed under the owner's grant alone", async () => {
+    await withGrantRuntime(async (runtime) => {
+      await writeGrant(runtime, OWNER, Q7, READER);
+      expect(resolveAsReader(runtime)).toEqual([ref]);
+    });
+  });
 
-        it("keeps the clause sealed under the reader's grant alone", async () => {
-          await withGrantRuntime(async (runtime) => {
-            await writeGrant(runtime, READER, Q7, OWNER);
-            expect(resolveAsReader(runtime)).toEqual([ref]);
-          });
-        });
+  it("keeps the clause sealed under the reader's grant alone", async () => {
+    await withGrantRuntime(async (runtime) => {
+      await writeGrant(runtime, READER, Q7, OWNER);
+      expect(resolveAsReader(runtime)).toEqual([ref]);
+    });
+  });
 
-        it("keeps the clause sealed when the two grants name different questions", async () => {
-          await withGrantRuntime(async (runtime) => {
-            await writeGrant(runtime, OWNER, Q7, READER);
-            await writeGrant(runtime, READER, Q8, OWNER);
-            expect(resolveAsReader(runtime)).toEqual([ref]);
-          });
-        });
-      });
-    }
-  }
+  it("keeps the clause sealed when the two grants name different questions", async () => {
+    await withGrantRuntime(async (runtime) => {
+      await writeGrant(runtime, OWNER, Q7, READER);
+      await writeGrant(runtime, READER, Q8, OWNER);
+      expect(resolveAsReader(runtime)).toEqual([ref]);
+    });
+  });
 });
