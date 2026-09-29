@@ -5,7 +5,7 @@ Status: proposed design (see [`README.md`](README.md)).
 One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)), with its
 reactions and its edit history. A client reads a room's newest messages from its
 [`ChatMessageList`](ChatMessageList.md), and the rest through its session's
-[windows](ChatRoomSession.md#windows).
+[windows](ChatMessageList.md#windows).
 
 ```ts
 // Shown for illustration only.

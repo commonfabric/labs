@@ -23,9 +23,9 @@ integrity, readable by everyone the container admits ([cross-space
 integrity](../cfc-cross-space-integrity.md), §1). Everything the placement
 offers is computed from the link when it is read, under the viewer's own access.
 
-It holds no presentation state either. The draft and the reply target are in the
-room's `PerSession` session, since its composer is the room's surface, and
-whatever draws a placement keeps the rest, such as its scroll position.
+It holds no presentation state either. The draft and the reply target belong to
+the room's own `[UI]`, since its composer is the room's surface, and whatever
+draws a placement keeps the rest, such as its scroll position.
 
 ## Viewers who aren't members
 
@@ -50,9 +50,8 @@ client that can't learn it MUST treat the container as admitting others.
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `messages` and `canSend`, from the room (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
-  - `session`: the reader's own [`ChatRoomSession`](ChatRoomSession.md), through
-    the room: its windows onto the messages.
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)). Through `messages` the reader
+    reaches their own windows onto the room's messages.
   - `about`, `recentActivity`, `participants`, and `reactionTallies` (per
     message in `messages.latest` and in the session's windows: emoji, count,
     whether the viewer is among them, and the reactors' profiles), each read

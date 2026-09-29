@@ -26,14 +26,11 @@ interface ChatRoomOutput {
   /** The highest `seq` dropped from `recentActivity` for age; 0 for none. */
   recentActivityExpiredThrough: number;
 
-  /** Facts about the room's messages, and the newest of them. */
+  /** The room's messages: facts, the newest, and this session's windows. */
   messages: ChatMessageList;
 
   /** Whether this reader can send, edit, delete, react, and show a profile. */
   canSend: boolean;
-
-  /** This session's view of the room (`PerSession`). */
-  session: Cell<ChatRoomSession>;
 
   sendMessage: Stream<{
     requestId: string;
@@ -142,8 +139,8 @@ gesture, or the room's last OWNER staying put (see
   is created.
 - **Messages.** The room holds its [`ChatMessage`](ChatMessage.md)s, ordered by
   `sentAt`, which is unique in the room. A client reads the newest of them from
-  `messages`, and the rest through its session's windows (see
-  [`ChatRoomSession`](ChatRoomSession.md#windows)), a window at a time. An
+  `messages`, and the rest through windows (see
+  [`ChatMessageList`](ChatMessageList.md#windows)), a window at a time. An
   obliterated message stays as a tombstone. Each version of a message is labeled
   `authored-by` the principal who recorded it. A message changes only through
   `editMessage`, `deleteMessage`, and `obliterateMessage`, and is never removed.
@@ -161,16 +158,14 @@ gesture, or the room's last OWNER staying put (see
   Neither is proof of access.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, and `latest`, the newest messages of
-  the main conversation. It needs no request, so every member can read it, a
-  READ member included.
+  the main conversation, which every member can read, a READ member included. It
+  also holds the reading session's own windows onto the messages, and the
+  streams that open and close them.
 - **`canSend`** says whether the reader can send, edit, delete, react, and show
   a profile right now: their access is WRITE or OWNER, and their profile
   resolves. It lets a client tell a READ member why their gestures would be
   refused before they make one. Knowing the reader's access level needs the
   space's member set (see [shared spaces](README.md#shared-spaces)).
-- **`session`** is the reading session's
-  [`ChatRoomSession`](ChatRoomSession.md): its windows onto the messages, and
-  its composer's state. Each session reading the room gets its own.
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, each reaction added or removed, and
   each change to the roster or membership, as a
@@ -194,23 +189,21 @@ A room's fields fall into two [scopes](../scoped-cell-instances.md#summary), and
 the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
-  room's space admits. That is `about`, the messages, offered as `messages`,
+  room's space admits. That is nearly everything: `about`, the messages,
   `recentActivity` and `recentActivityExpiredThrough`, `roster`, `participants`,
-  and `outgoingNotices`, and the streams. These are the room: a link to the room
+  `outgoingNotices`, and the streams. These are the room: a link to the room
   names them, and passing the link around, to another component or another
   person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
-  `session` and everything under it (see
-  [`ChatRoomSession`](ChatRoomSession.md)): the windows onto the messages, with
-  `openWindow` and `closeWindow`, and the composer's state. Reading `session`
-  gives the reader's own session. Passing the room's link to someone else never
-  passes a session: they read their own.
+  only `messages.windows`, the windows a session has opened onto the messages
+  (see [`ChatMessageList`](ChatMessageList.md#scope)). Passing the room's link
+  to someone else never passes a session's windows: they read their own.
 
-`messages` is derived from the stored messages when it's read, and stored
-nowhere, so reading it needs no instance of anything. `canSend` is derived the
-same way, but for the particular reader. Neither needs a session. A session's
-stored parts come into being with its first write, such as opening a window, so
-a READ member, who can't write, never has one, and can still read `messages`.
+Some values are derived when they're read, and stored nowhere, so reading them
+needs no instance of anything: `participants`, and in `messages`, everything but
+`windows`. `canSend` is derived the same way, but for the particular reader. A
+session's windows come into being with its first `openWindow`, so a READ member,
+who can't write, never has any, and can still read `messages.latest`.
 
 Nothing in a room is `PerUser`.
 
@@ -633,14 +626,17 @@ group rooms of their own.
 
 ## Renderings
 
-- **`[UI]`** is the room's own rendering, with its reviewed surfaces. Its
-  composer's state is the reading session's (`session.composer`). An adapter's
-  rendering embeds it, so a composer is always the room's own surface.
+- **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
+  adapter's rendering embeds it, so a composer is always the room's own surface.
+  What the composer holds while a person writes, such as the draft and the reply
+  being composed, is the rendering's own state, and not part of this contract.
+  It MUST NOT be stored in the room's record, or anywhere another reader could
+  see it.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. It includes `messages`, `canSend`, and `session`, through
-  whose link a client reaches its own session: its windows and their streams. A
-  client uses it to show a room outside any container. Inside a container, it
-  reads the placement's `chat` group instead
+  that draw natively. It includes `messages`, through whose link a client
+  reaches its own windows and their streams, and `canSend`. A client uses it to
+  show a room outside any container. Inside a container, it reads the
+  placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
 
 ## Implementation-defined behavior

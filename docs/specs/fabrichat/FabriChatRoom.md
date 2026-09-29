@@ -42,13 +42,17 @@ profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
 computed from the messages, and `canSend` from the reader's access and profile,
 when they're read. Neither is stored.
 
-`session` is a sub-pattern the room instantiates per session, as a `PerSession`
-value, over the same record: it holds the composer's state, and the session's
-windows. Its state comes into being with the session's first write to it, so a
-session that only reads, as a READ member's does, has none. The composer is the
-room's own reviewed surface, reading its state from the session, so two
-placements of the same room open in one session show the same composer state, as
-one conversation shown twice should.
+The one `PerSession` value in the contract is `messages.windows`, the session's
+windows, kept as a `PerSession` keyed collection. It comes into being with the
+session's first `openWindow`, so a session that only reads, as a READ member's
+does, has none.
+
+The room's `[UI]` keeps its composer's state, the draft and the reply being
+composed, as a `PerSession` value of its own, apart from the windows and from
+the room's record. It is state of this rendering, not of the contract, so a
+client that draws natively never sees it. Keeping it per session, rather than
+per rendering, means two placements of the same room open in one session show
+the same composer state, as one conversation shown twice should.
 
 ## Writers
 
@@ -172,10 +176,10 @@ its last step (see above). Entries older than the window are dropped as new ones
 are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
 remove the message's earlier entries.
 
-The session keeps `windows` as a `PerSession` keyed collection, and fulfills
-`openWindow` and `closeWindow` by setting and removing entries in it. A window
-is a computed selection over the record, so it stays live as the messages in it
-change.
+The message list keeps `windows` as a `PerSession` keyed collection, and
+fulfills `openWindow` and `closeWindow` by setting and removing entries in it. A
+window is a computed selection over the record, so it stays live as the messages
+in it change.
 
 ## Configuration
 
@@ -220,12 +224,12 @@ the room is created from the same settings the handlers read.
   behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
-- **A session per memory session.** `session` assumes the room can give each
-  memory session its own `ChatRoomSession`, instantiating the session's
-  sub-pattern as a `PerSession` value (see [scoped cell
-  instances](../scoped-cell-instances.md)). That fits the scoped-cell design,
-  but whether the runtime supports a sub-pattern per session today is still to
-  check.
+- **Per-session state written by a handler.** `windows` is a `PerSession` value
+  inside the room, which the scoped-cell design provides (see [scoped cell
+  instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
+  the instance belonging to the session that sent the event, including when the
+  handler runs somewhere other than that session's client. Whether the runtime
+  does that today is still to check.
 - **A write policy split within one document.** A message's reactions are
   written only by the reaction handlers (and obliteration), and the rest of the
   message only by the message handlers (see

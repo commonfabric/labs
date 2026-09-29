@@ -47,9 +47,8 @@ a container holds re-exports, or a room's `room` group for a room shown outside
 any container, and drives the manager through its `chats` group. It reads a
 room's newest messages from its `messages`
 ([`ChatMessageList`](ChatMessageList.md)), and the rest a window at a time,
-through its session ([`ChatRoomSession`](ChatRoomSession.md#windows)), and never
-asks for the whole conversation at once. Both are in `[VIEWS]` (see [views a
-host draws
+through windows it opens there, and never asks for the whole conversation at
+once. Both are in `[VIEWS]` (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
 

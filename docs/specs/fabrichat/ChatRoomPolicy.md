@@ -82,7 +82,7 @@ A proposal outside both bounds is refused.
   entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
   It MUST be at least `proposedTimeMaxAgeNsec`.
 - **`maxWindowCount`**: the most messages a message window holds (see
-  [`ChatRoomSession`](ChatRoomSession.md#limits)). A request for more gets this
+  [`ChatMessageList`](ChatMessageList.md#limits)). A request for more gets this
   many.
 - **`maxOpenWindows`**: the most message windows a session can have open at
   once. Opening one more is refused.

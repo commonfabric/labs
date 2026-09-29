@@ -14,17 +14,16 @@ requires of the runtime and of the programs that use it.
   - [`FabriChatAdapter`](FabriChatAdapter.md): a placement's rendering.
 - Contracts, named for their roles:
   - [`ChatRoomOutput`](ChatRoomOutput.md): what a room offers.
-  - [`ChatRoomSession`](ChatRoomSession.md): one session's view of a room.
   - [`ChatManagerOutput`](ChatManagerOutput.md): what `#chatManager` resolves
     to.
-- Records a session holds:
+- Windows onto a room's messages:
   - [`ChatMessageWindow`](ChatMessageWindow.md): one window of them.
   - [`ChatWindowAnchor`](ChatWindowAnchor.md): where a window sits: at either
     end, or around one message.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
-  - [`ChatMessageList`](ChatMessageList.md): facts about a room's messages, and
-    the newest of them.
+  - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
+    newest, and each session's windows.
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
     message.
@@ -105,8 +104,7 @@ provide, the document says so, under the heading "Prerequisites".
    another space, and what a viewer may see of it.
 4. [`FabriChatAdapter.md`](FabriChatAdapter.md): rendering a placement for hosts
    that render VDOM.
-5. The contracts: [`ChatRoomOutput.md`](ChatRoomOutput.md),
-   [`ChatRoomSession.md`](ChatRoomSession.md), and
+5. The contracts: [`ChatRoomOutput.md`](ChatRoomOutput.md) and
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
@@ -260,9 +258,9 @@ names the ones it needs, and they are gathered here:
 - **Delivering a notice.** Nothing in this repository lets a pattern deliver a
   message to a principal who shares no space with the sender (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
-- **Scoped sub-patterns and split write policies**, both still to check: a room
-  giving each memory session its own session object, and one message document
-  written by two sets of writers (see
+- **Scoped sub-patterns and split write policies**, both still to check: a
+  room's handler writing the sending session's own windows, and one message
+  document written by two sets of writers (see
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **Host-issued trusted gestures.** A client that draws natively needs a
   sanctioned way to issue a reviewed gesture without a DOM. That is the
@@ -284,9 +282,10 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
-   the user's home space. Drafts are `PerSession`, in the room's session
-   ([`ChatRoomSession`](ChatRoomSession.md)), since they belong to one
-   connection and not to the room.
+   the user's home space. Drafts belong to whatever draws the composer: the
+   room's own `[UI]` keeps them `PerSession`, since they belong to one
+   connection and not to the room, and a client that draws natively keeps its
+   own.
 4. **A person is identified** by cell reference with `equals()` for display, and
    by principal for direct-room lookup. Never by display name.
 5. **Authorship is attested.** Every message and reaction carries an
