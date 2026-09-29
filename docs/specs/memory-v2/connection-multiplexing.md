@@ -105,28 +105,80 @@ problems.
 
 ### 3.2 Protocol changes
 
-#### Concurrent session opens
+#### Nonce-based session-open signatures
 
-The server advertises a new capability flag, `sessionOpenConcurrent`. When
-both peers advertise it:
+The server-issued connection challenge is replaced by a nonce the client
+chooses. The server advertises the change with a new capability flag,
+`sessionOpenNonce`. When both peers advertise it, the signed invocation carries
+a `nonce` in place of `challenge`:
 
-- a `session.open` may sign any challenge the server issued on this connection
-  that has not expired, the one in `hello.ok` included
-- the server records each accepted challenge against the `(space, sessionId)`
-  the invocation opens, and refuses a second accepted open of the same
-  `(challenge, space, sessionId)` with a retriable `AuthorizationError`
-- the server still returns a fresh challenge in every `session.open` response,
-  so a long-lived connection always has a live challenge to sign
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+type DID = string;
 
-The challenge keeps its purpose: a signature is bound to this connection and to
-a time window. What changes is that one challenge admits several distinct
-sessions. The server holds the set of `(challenge, space, sessionId)` triples
-it has accepted until the challenge expires, so the state is bounded by the
-number of opens inside one challenge lifetime.
+interface NonceSessionOpenInvocation {
+  iss: DID;
+  cmd: "session.open";
+  sub: SpaceId;
+  aud: DID;
+  args: {
+    protocol: "memory";
+    session: {
+      sessionId?: SessionId;
+      seenSeq?: number;
+      sessionToken?: string;
+    };
+  };
+  /** 32 random bytes as 64 hexadecimal characters, chosen by the client. */
+  nonce: string;
+  iat: number;
+  exp: number;
+}
+```
 
-Against a server that does not advertise the flag, the client serializes
-session opens on the connection: sign, send, receive the response and its new
-challenge, and only then sign the next.
+The server accepts the invocation when:
+
+- the signature verifies against `iss`, and `aud`, `sub`, and the session
+  descriptor match as they do today
+- `iat` is not later than the server clock plus the clock-skew grace
+- `exp` is not earlier than the server clock minus the clock-skew grace
+- `exp - iat` is at most the server's session-open window, 300 seconds by
+  default, which is the validity clients already stamp on a signed open
+- the server has not already accepted an open carrying the same
+  `(iss, sub, nonce)`
+
+It then records `(iss, sub, nonce)` until `exp` plus the grace has passed and
+refuses a repeat with a retriable `AuthorizationError`. The record's size is
+bounded by the number of opens accepted inside one window.
+
+Nothing about a signed open depends on the connection it arrives on, so opens
+on one connection run concurrently, and a client signs each open without first
+waiting for a server round trip. `hello.ok` still carries `sessionOpen.audience`
+and no longer needs `sessionOpen.challenge`; a `session.open` response no
+longer carries a new challenge.
+
+What the change gives up is the binding of a signature to one connection. A
+signed open captured in transit could be presented on another connection before
+the original arrives, within its window. Reading an open in transit already
+requires breaking TLS or holding the client, and either of those exposes the
+session's traffic anyway; the window bounds the exposure in time and the replay
+record makes each open usable once.
+
+The replay record is kept in the memory of the server that owns the space. A
+server that restarts inside a window forgets the opens it accepted in that
+window, which lets a captured open from that window be used once more. Keeping
+the window short bounds this; writing the record into the space's store closes
+it at the cost of a write per open.
+
+Compatibility follows the flags:
+
+- a server advertising `sessionOpenNonce` keeps accepting challenge-signed
+  opens from clients that do not advertise it, until that path is retired
+- a client talking to a server without the flag signs challenges as today and
+  serializes its opens on the connection: sign, send, receive the response and
+  its new challenge, and only then sign the next
 
 #### Per-space receive order
 
@@ -181,9 +233,9 @@ of one room. Membership moves to `(connection, space, sessionId)`. The
 
 ### 3.3 Client library changes
 
-- `mount()` runs concurrently when the server advertises
-  `sessionOpenConcurrent`, and otherwise waits for the previous open on the
-  connection.
+- `mount()` signs a nonce-based open and runs concurrently with other mounts
+  when the server advertises `sessionOpenNonce`, and otherwise signs the
+  current challenge and waits for the previous open on the connection.
 - The reconnect loop runs `hello` once and then restores every session in
   parallel. A permanent authorization failure still terminates only the session
   it belongs to.
@@ -235,7 +287,7 @@ interface SpaceGenesisInvocation {
     /** The custom root intent, when the space reserves one. */
     genesisRoot?: unknown;
   };
-  challenge: string;
+  nonce: string;
   iat: number;
   exp: number;
 }
@@ -255,8 +307,8 @@ interface SpaceGenesisResult {
 }
 ```
 
-The server verifies the signature, the audience, and the challenge under the
-same rules as `session.open`, requires `iss` to be the space DID or a
+The server verifies the signature, the audience, the time window, and the nonce
+under the same rules as a nonce-based `session.open` (section 3.2), requires `iss` to be the space DID or a
 configured service DID, and applies the genesis commit under the admission
 rules of INV-12 and INV-13 in [09-invariants.md](./09-invariants.md). It needs
 no open session for the space: the request is its own authorization. When an
@@ -287,15 +339,14 @@ toolshed that owns its space. Two shapes are possible:
 
 ### 5.1 Requirements common to both modes
 
-**Signatures that survive a hop.** The connection challenge binds a signature
-to the connection the challenge came from. Behind a router the client's
-connection is not the toolshed's connection, so either every open costs a
-challenge round trip through the router, or the challenge is replaced. The
-proposal replaces it: the signed invocation carries a client-chosen `nonce` and
-a short `exp`, and the toolshed that owns the space refuses a
-`(iss, sub, nonce)` it has already accepted until `exp` passes. Signatures stay
-end to end, and the router is not trusted with authorization. A space lives on
-one toolshed at a time, so the replay record for a space lives in one place.
+**Signatures that survive a hop.** Nonce-based session opens (section 3.2)
+depend on nothing about the connection they arrive on, so the router forwards
+them unchanged and the toolshed that owns the space verifies them. Signatures
+stay end to end, and the router is not trusted with authorization. A space
+lives on one toolshed at a time, so the replay record for a space lives in one
+place. A router forwards only clients that advertise `sessionOpenNonce`: a
+challenge-signed open cannot pass it, since the challenge belongs to a
+connection the client never sees.
 
 The alternative — the router authenticates the client and asserts the
 principal to the toolshed as a delegating service identity — makes the router
@@ -395,11 +446,11 @@ limit.
 
 | Phase | Change | Depends on |
 | --- | --- | --- |
-| 1 | Server: `sessionOpenConcurrent`, per-space receive chains, `session.close`, presence membership per session | — |
-| 2 | Client: concurrent mounts, parallel restore, `session.close` on release | 1 |
+| 1 | Server: `sessionOpenNonce`, per-space receive chains, `session.close`, presence membership per session | — |
+| 2 | Client: nonce-signed concurrent mounts, parallel restore, `session.close` on release | 1 |
 | 3 | Runner: one pooled client per host, session release in place of client close | 2 |
 | 4 | `space.genesis` and its use in the ACL bootstrap | 1 |
-| 5 | Nonce-based session-open signatures, the space field in the binary envelope, `session/detached` | 2 |
+| 5 | The space field in the binary envelope, `session/detached` | 2 |
 | 6 | Mode A router and space directory | 5 |
 
 Phases 1 to 3 give the direct setup a single connection per host and do not
@@ -407,11 +458,12 @@ depend on anything after them.
 
 ## 7. Open questions
 
-- **Skip the concurrent challenge?** Nonce-based signatures (phase 5) also let
-  opens run concurrently on one connection. If a router is close, phase 1 could
-  adopt nonces directly and drop `sessionOpenConcurrent`. The cost is giving up
-  the binding of a signature to one connection earlier than the router
-  requires.
+- **Persisting the replay record.** Keeping `(iss, sub, nonce)` in server
+  memory leaves the restart gap described in section 3.2. Whether that gap is
+  accepted or the record is written to the space's store is not settled.
+- **Retiring challenge-signed opens.** A server keeps accepting them for
+  clients without `sessionOpenNonce`. When that path, and the challenge in
+  `hello.ok`, can be removed depends on how long older clients stay deployed.
 - **Detach grace after `session.close`.** Keeping a closed session resumable
   helps a client that remounts a space soon after releasing it. Whether the
   grace period should differ from the one after a dropped connection is not
