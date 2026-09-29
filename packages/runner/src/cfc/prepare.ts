@@ -6125,85 +6125,17 @@ const verifyInputRequirements = (
     .filter((read) => !isProvenanceOnlyConsumedLabel(read.label!))
     .length;
 
-  // A claim declared on a branch of an `anyOf`/`oneOf` applies to the values
-  // that branch admits. Where EVERY branch carries a writer claim, the
-  // position is the claim's whatever is written there (the persist loop marks
-  // it so, `writerClaimedPositions`), so a value that matches no branch — a
-  // `null` or a `0` at a `true`/`false` union — meets each branch's writer
-  // claim rather than none of them: otherwise a bare-link write of such a
-  // value would be the one write at the position no writer answers for.
-  // Only the writer claim is applied off-branch; a branch's floor or ceiling
-  // describes that branch's values.
-  const hasWriterClaim = (schema: JSONSchema): boolean =>
-    isObjectOrArray(schema) && isObjectOrArray(schema.ifc) &&
-    schema.ifc.writeAuthorizedBy !== undefined;
-  const everyBranchClaimed =
-    schemaEntries.some((entry) =>
-        entry.conditional === true && hasWriterClaim(entry.schema)
-      )
-      ? new Set(
-        writerClaimedPositions(schema).map((path) => pathKey(path)),
-      )
-      : undefined;
-  const branchAppliesAt = new Map<string, boolean>();
-  const someBranchAppliesAt = (path: readonly string[]): boolean => {
-    const key = pathKey(path);
-    let applies = branchAppliesAt.get(key);
-    if (applies === undefined) {
-      applies = schemaEntries.some((entry) =>
-        entry.conditional === true && pathKey(entry.path) === key &&
-        ifcEntryAppliesToAttemptedWrite(
-          tx,
-          target,
-          entry.path,
-          entry.schema,
-          entry.root,
-          true,
-        )
-      );
-      branchAppliesAt.set(key, applies);
-    }
-    return applies;
-  };
-
   for (const entry of schemaEntries) {
-    const applies = ifcEntryAppliesToAttemptedWrite(
-      tx,
-      target,
-      entry.path,
-      entry.schema,
-      entry.root,
-      entry.conditional === true,
-    );
-    const claimHoldsOffBranch = !applies && entry.conditional === true &&
-      everyBranchClaimed !== undefined &&
-      everyBranchClaimed.has(pathKey(entry.path)) &&
-      hasWriterClaim(entry.schema) &&
-      !someBranchAppliesAt(entry.path) &&
-      ifcEntryAppliesToAttemptedWrite(
+    if (
+      !ifcEntryAppliesToAttemptedWrite(
         tx,
         target,
         entry.path,
         entry.schema,
         entry.root,
-        false,
-      );
-    if (!applies && !claimHoldsOffBranch) {
-      continue;
-    }
-    if (claimHoldsOffBranch) {
-      for (const identity of identitiesForPath(entry.path)) {
-        const failure = writeAuthorizedByReason(
-          tx,
-          entry.schema,
-          entry.path,
-          target.space,
-          identity,
-        );
-        if (failure !== undefined) {
-          return { reason: failure, verdict: true };
-        }
-      }
+        entry.conditional === true,
+      )
+    ) {
       continue;
     }
     const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
