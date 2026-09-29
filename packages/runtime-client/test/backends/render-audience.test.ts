@@ -21,6 +21,8 @@ import {
 } from "@commonfabric/runner";
 import {
   buildCfcPolicyArtifactManifest,
+  type CfcGrantCandidate,
+  cfcGrantCandidateOf,
   prepareCfcGrantWrite,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -904,7 +906,9 @@ describe("render-audience", () => {
         ceiling,
       );
       const manifests = renderModulePolicySourceFor(runtime, ceiling);
-      const grants = renderGrantSourceFor(runtime, ceiling);
+      const grants = renderGrantSourceFor(runtime, ceiling)!;
+      // The documents the reconciler subscribed to through the source.
+      const watched: CfcGrantCandidate[] = [];
       const ops: VDomOp[] = [];
       const reconciler = new WorkerReconciler({
         onOps: (batch) => ops.push(...batch),
@@ -921,7 +925,12 @@ describe("render-audience", () => {
         ),
         membershipProvider: membership,
         modulePolicySource: manifests,
-        grantSource: grants,
+        grantSource: {
+          subscribe(candidate, onChange) {
+            watched.push(candidate);
+            return grants.subscribe(candidate, onChange);
+          },
+        },
       });
       const cancel = reconciler.mount({
         type: "vnode",
@@ -930,6 +939,12 @@ describe("render-audience", () => {
         children: [note],
       });
       return {
+        watched,
+        /** The one document the rule's guard names. */
+        candidate: cfcGrantCandidateOf({
+          kind: "ShareGrant",
+          fields: { owner: identity.did(), resource: ANSWER },
+        })!,
         /** Text emitted since the last call. */
         async settle(): Promise<string[]> {
           await runtime.storageManager.synced();
@@ -973,6 +988,8 @@ describe("render-audience", () => {
       const before = await view.settle();
       expect(before).toContain("Content hidden by policy");
       expect(before).not.toContain("Granted note");
+      // Watched through the worker's source: the grant the guard names.
+      expect(view.watched).toEqual([view.candidate]);
       await view.writeGrant(false);
       expect(await view.settle()).toContain("Granted note");
       await view.writeGrant(true);
