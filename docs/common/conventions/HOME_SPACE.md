@@ -289,3 +289,12 @@ Both the home pattern and the default app pattern follow the same mechanism:
 Runtime internals (ACL initialization, PiecesController home-space detection)
 are
 documented in [docs/features/home-space-internals.md](../../features/home-space-internals.md).
+
+## Conversation manager
+
+The home pattern owns one `chatManager`, resolved by
+`wish({ query: "#chatManager" })`. It keeps the user's conversation index,
+direct-room lookup, creation request outcomes, and outgoing notices. Home's
+Conversations tab renders its controls. The index is private to that user;
+rooms themselves live in their own shared spaces. See
+[FabriChat](../../../packages/patterns/fabrichat/README.md).

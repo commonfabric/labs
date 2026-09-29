@@ -277,8 +277,8 @@ by any repo test.
 | `string` / `number` / `boolean` | `{ type: "string"/"number"/"boolean" }` | `primitive-formatter.ts` | many fixtures |
 | String/number literal | `{ type: …, enum: [v] }` (type path); `{ type: …, const: v }` (node path) | `primitive-formatter.ts`; `schema-generator.ts` | divergence pinned by `test/literal-encoding-paths.test.ts` (unions diverge structurally: `enum` list vs `anyOf` of `const`s); runner validation treats both alike but `schemasEqualIgnoringWriterStamp` (deepEqual, `cfc/prepare.ts`) does not — a path flip defeats stored-schema reuse |
 | Boolean literal | `{ type: "boolean", enum: [true/false] }` via `intrinsicName` | `primitive-formatter.ts` | boolean-literals test |
-| `bigint` | `{ type: "integer" }` | `primitive-formatter.ts` | probe only |
-| bigint literal (`42n`) | `{ type: "integer", enum: [Number(v)] }` — converted through `Number`, so precision above 2^53 would be lost | `primitive-formatter.ts` | probe only |
+| `bigint` | `{ type: "bigint" }` | `primitive-formatter.ts` | `schema-generator.test.ts` |
+| bigint literal (`42n`) | Throws unless literals are widened; widening produces `{ type: "bigint" }` | `primitive-formatter.ts` | `schema-generator.test.ts` |
 | Template literal type | `{ type: "string" }` | `primitive-formatter.ts` | probe only |
 | `null` | `{ type: "null" }` | `primitive-formatter.ts` | fixtures |
 | `undefined` | `{ type: "undefined" }` — non-standard, deliberate (`api/index.ts`) | `primitive-formatter.ts`; node `schema-generator.ts` | fixtures |
@@ -1371,7 +1371,7 @@ declaration file is the default library's (the transformer supplies
 `src/typescript/default-library.ts`), and `widenLiterals`.
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
-(`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
+(`primitive-formatter.ts`; bigint literals widen to `{ type: "bigint" }`);
 (2) structurally-identical-modulo-enum union members merge recursively
 (`union-formatter.ts`). It does **not** widen all-literal
 unions (§8) and has no other effects. `test/widen-literals.test.ts` pins the
@@ -1437,7 +1437,7 @@ synthetic node resolution failure → `any` → `true`
    pre-widening) DOES widen literal unions — the two mechanisms disagree.
    Decide the policy (including nested enum-typed properties) before changing
    the in-package behavior.
-4. **bigint → `integer` via `Number`** — silent precision loss above 2^53
+4. **Bigint literals** — refused unless widened to the native `bigint` type
    (§4, probe); untested.
 5. **CFC alias detection is name-keyed**, no source check (§11); untested
    collision case.

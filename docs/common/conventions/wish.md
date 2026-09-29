@@ -306,6 +306,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#journal`          | User's journal (home space)                             |
 | `#learned`          | User's learned data (home space)                        |
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
+| `#chatManager` | User's private conversation manager (home space) |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
 | `#profile`          | Profile default pattern object                          |
 | `#profileName`      | User's profile display name                             |

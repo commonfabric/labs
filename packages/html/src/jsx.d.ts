@@ -3362,10 +3362,13 @@ interface CFSubmitInputAttributes<T> extends CFHTMLAttributes<T> {
   "buttonText"?: string;
   "inputId"?: string;
   "disabled"?: boolean | CellLike<boolean>;
-  // Optional initial text. The field is otherwise uncontrolled: it mirrors the
-  // typed text into its own `value` (read on the host as event.target.value on
-  // submit) and is not meant for two-way cell binding.
+  /** One-time initial text for an uncontrolled field. */
   "initialValue"?: string;
+  /** Controlled text, paired with onInput to retain a shared draft. */
+  "value"?: string | CellLike<string>;
+  /** Whether to clear locally after submission; defaults to true. */
+  "clearOnSubmit"?: boolean;
+  "onInput"?: EventHandler<{ target: { value: string } }>;
 }
 
 interface CTSendMessageAttributes<T> extends CFHTMLAttributes<T> {

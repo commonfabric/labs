@@ -88,6 +88,7 @@ export function conversationView(
   messages: readonly ChatMessage[],
   root?: Cell<ChatMessage>,
 ): ChatMessage[] {
+  if (root?.get() === undefined) root = undefined;
   return messages.filter((message) =>
     root
       ? equals(message, root) || equals(threadRoot(message), root)

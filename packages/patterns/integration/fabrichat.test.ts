@@ -77,15 +77,13 @@ describe("fabrichat integration test", () => {
     );
     const piece = await cc.create(program, { start: true });
     pieceId = piece.id;
-    const result = cc.getResult(piece.getCell());
-    pieceSinkCancel = result.sink(() => {});
+    const messages = cc.getResult(piece.getCell()).key("room").key("messages")
+      .key("latest").key("messages");
+    pieceSinkCancel = messages.sink(() => {});
     storedBodies = () =>
-      ((result.get() as {
-        room?: { messages?: { latest?: { messages?: { body?: string }[] } } };
-      } | undefined)
-        ?.room?.messages?.latest?.messages ?? []).map((message) =>
-          message?.body ?? ""
-        );
+      ((messages.get() as { body?: string }[] | undefined) ?? []).map((
+        message,
+      ) => message?.body ?? "");
   });
 
   afterAll(async () => {

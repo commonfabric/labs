@@ -73,12 +73,11 @@ export class PrimitiveFormatter implements TypeFormatter {
     }
     if (flags & ts.TypeFlags.BigIntLiteral) {
       if (context.widenLiterals) {
-        return { type: "integer" };
+        return { type: "bigint" };
       }
-      return {
-        type: "integer",
-        enum: [Number((type as ts.BigIntLiteralType).value.base10Value)],
-      };
+      throw new Error(
+        "Bigint literal schemas are unsupported; use bigint to preserve exact values.",
+      );
     }
 
     // Template literal types (e.g. `did:${string}:${string}`) are strings

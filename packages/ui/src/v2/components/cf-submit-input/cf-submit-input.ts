@@ -40,6 +40,8 @@ import "../cf-button/cf-button.ts";
  * @attr {string} button-text - Text for the submit button (default: "Submit")
  * @attr {string} input-id - id forwarded to the inner <input> so callers/tests
  *   can target the field directly
+ * @attr {boolean} clear-on-submit - Clear locally after submit (default: true);
+ *   set false when a caller controls `value` and clears it after acceptance
  * @attr {boolean} disabled - Whether the field and button are disabled
  * @attr {string} initial-value - Optional one-time seed copied into `value` on
  *   first render; the field is uncontrolled after that
@@ -91,12 +93,16 @@ export class CFSubmitInput extends BaseElement {
     disabled: { type: Boolean, reflect: true },
     initialValue: { type: String, attribute: "initial-value" },
     value: { type: String },
+    clearOnSubmit: { type: Boolean, attribute: "clear-on-submit" },
   };
 
   declare placeholder: string;
   declare buttonText: string;
   declare inputId: string;
   declare disabled: boolean;
+
+  /** Whether this control clears its own text after a submitted gesture. */
+  declare clearOnSubmit: boolean;
 
   /**
    * Optional one-time seed for the field text, copied into `value` on first
@@ -116,6 +122,7 @@ export class CFSubmitInput extends BaseElement {
     this.buttonText = "Submit";
     this.inputId = "";
     this.disabled = false;
+    this.clearOnSubmit = true;
     this.initialValue = "";
     this.value = "";
   }
@@ -196,6 +203,7 @@ export class CFSubmitInput extends BaseElement {
       event.stopPropagation();
       return;
     }
+    if (!this.clearOnSubmit) return;
     this._submitting = true;
     // Clear the field only after the submit click has been handled — the
     // framework's host-level click listener reads `event.target.value` while

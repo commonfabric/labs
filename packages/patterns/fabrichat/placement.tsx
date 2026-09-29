@@ -8,11 +8,13 @@ import {
   computed,
   pattern,
   type PerSpace,
+  spaceAccess,
   VIEWS,
 } from "commonfabric";
 import type {
   ChatMessageList,
   ChatProfile,
+  ChatReactionTallies,
   ChatRoomAbout,
   ChatRoomActivity,
   ChatRoomOutput,
@@ -21,11 +23,12 @@ import type {
 /** The facts exposed by a placed conversation. */
 export interface ChatPlacementView {
   state: "member" | "not-member" | "unavailable";
-  messages: Cell<ChatMessageList>;
-  canSend: Cell<boolean>;
-  about: Cell<ChatRoomAbout>;
-  recentActivity: Cell<ChatRoomActivity[]>;
-  participants: Cell<Cell<ChatProfile>[]>;
+  messages?: Cell<ChatMessageList>;
+  canSend?: Cell<boolean>;
+  about?: Cell<ChatRoomAbout>;
+  recentActivity?: Cell<ChatRoomActivity[]>;
+  participants?: Cell<Cell<ChatProfile>[]>;
+  reactionTallies?: Cell<ChatReactionTallies[]>;
 }
 
 /** One immutable room reference in a container. */
@@ -38,18 +41,39 @@ export interface ChatPlacementOutput {
 export const FabriChatPlacement = pattern<
   { room: PerSpace<Cell<ChatRoomOutput>> },
   ChatPlacementOutput
->(({ room }) => ({
-  room,
-  [VIEWS]: {
-    chat: {
-      state: computed(() => room.key("about").get() ? "member" : "unavailable"),
-      messages: room.key("messages"),
-      canSend: room.key("canSend"),
-      about: room.key("about"),
-      recentActivity: room.key("recentActivity"),
-      participants: room.key("participants"),
+>(({ room }) => {
+  const state = computed(() => {
+    const access = spaceAccess(room);
+    return access === "member" && !room.key("about").get()
+      ? "unavailable"
+      : access;
+  });
+  return {
+    room,
+    [VIEWS]: {
+      chat: {
+        state,
+        messages: computed(() =>
+          state === "member" ? room.key("messages") : undefined
+        ),
+        canSend: computed(() =>
+          state === "member" ? room.key("canSend") : undefined
+        ),
+        about: computed(() =>
+          state === "member" ? room.key("about") : undefined
+        ),
+        recentActivity: computed(() =>
+          state === "member" ? room.key("recentActivity") : undefined
+        ),
+        participants: computed(() =>
+          state === "member" ? room.key("participants") : undefined
+        ),
+        reactionTallies: computed(() =>
+          state === "member" ? room.key("reactionTallies") : undefined
+        ),
+      },
     },
-  },
-}));
+  };
+});
 
 export default FabriChatPlacement;

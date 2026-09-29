@@ -1,3 +1,4 @@
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import {
   isFabricDataUri,
   valueFromDataUri,
@@ -119,8 +120,8 @@ type AddressLike = {
   path: readonly unknown[];
 };
 
-type TrustedDomProvenance = {
-  origin: "dom";
+type TrustedUiProvenance = {
+  origin: "dom" | "native";
   trusted: true;
   ui?: {
     pattern?: unknown;
@@ -131,11 +132,11 @@ type TrustedDomProvenance = {
 
 const rendererTrustedEvents = new WeakSet<object>();
 
-const isTrustedDomProvenance = (
+const isTrustedUiProvenance = (
   provenance: unknown,
-): provenance is TrustedDomProvenance =>
+): provenance is TrustedUiProvenance =>
   isObjectOrArray(provenance) &&
-  provenance.origin === "dom" &&
+  (provenance.origin === "dom" || provenance.origin === "native") &&
   provenance.trusted === true;
 
 export const markRendererTrustedEvent = (event: unknown): void => {
@@ -196,27 +197,16 @@ const followSchemaRef = (
     return schema;
   }
   const ref = schema.$ref;
-  if (seenRefs.has(ref)) return schema;
-  seenRefs.add(ref);
+  const visit = ref.startsWith("#")
+    ? JSON.stringify([internSchemaAsTaggedHashString(root ?? schema), ref])
+    : ref;
+  if (seenRefs.has(visit)) return schema;
+  seenRefs.add(visit);
   return ContextualFlowControl.resolveSchemaRefs(
     schema,
     isObjectOrArray(root) ? root : schema,
   ) ?? schema;
 };
-
-// The seen refs to carry below a resolution. A resolution that enters another
-// document — its root is not the one the ref was read in — leaves the local
-// pointers followed so far behind: each named a definition of the document
-// being left, and the same pointer in the new document is another ref. An
-// embedded or external ref names its document wherever it sits, and stays.
-const seenRefsBelow = (
-  seenRefs: Set<string>,
-  root: JSONSchema | undefined,
-  resolvedRoot: JSONSchema,
-): Set<string> =>
-  resolvedRoot === root
-    ? seenRefs
-    : new Set([...seenRefs].filter((ref) => !ref.startsWith("#")));
 
 // The root a resolved ref's target resolves against: its own document where
 // the ref's chain ended in another one — a definition body that is an
@@ -246,7 +236,7 @@ const uiContractFromSchemaInternal = (
     return uiContractFromSchemaInternal(
       resolvedSchema,
       resolvedRoot,
-      seenRefsBelow(seenRefs, root, resolvedRoot),
+      seenRefs,
     );
   }
   if (
@@ -305,7 +295,7 @@ const uiContractsFromSchemaInternal = (
       resolvedSchema,
       resolvedRoot,
       path,
-      seenRefsBelow(branchRefs, root, resolvedRoot),
+      branchRefs,
       conditional,
       includeAlternatives,
     );
@@ -491,7 +481,7 @@ export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,
   contract: UiContract | undefined,
 ): boolean => {
-  if (contract === undefined || !isTrustedDomProvenance(provenance)) {
+  if (contract === undefined || !isTrustedUiProvenance(provenance)) {
     return false;
   }
   if (

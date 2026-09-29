@@ -1,9 +1,9 @@
 # FabriChat
 
-Status: proposed design. Nothing here is implemented yet. Today's FabriChat is
-the single pattern in `packages/patterns/fabrichat/`, one conversation per
-piece. This directory describes what it splits into, and what that split
-requires of the runtime and of the programs that use it.
+Status: implementation in progress. These protocol requirements remain
+normative. The implementation is in `packages/patterns/fabrichat`; its
+[README](../../../packages/patterns/fabrichat/README.md) describes the available
+surfaces and implementation choices.
 
 ## Quick links
 

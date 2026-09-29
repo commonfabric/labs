@@ -1,17 +1,22 @@
 /** Keeps one user's conversation index and resumable private-room creations. */
 import {
+  action,
   type AuthoredByCurrentUser,
   type Cell,
+  computed,
   currentPrincipal,
   equals,
   FabricEpochNsec,
   handler,
+  NAME,
   pattern,
   setSpaceMembers,
   spaceMembers,
   type Stream,
   type TrustedActionWrite,
+  UI,
   VIEWS,
+  type VNode,
   wish,
   Writable,
   type WriteAuthorizedBy,
@@ -53,6 +58,7 @@ interface ManagerState {
   requests: Writable<Record<string, ChatRequestOutcome>>;
   intents: Writable<Record<string, CreationIntent>>;
   pendingDirect: Writable<Record<string, string>>;
+  waiters: Writable<Record<string, string[]>>;
   outgoingNotices: Writable<
     { id: string; room: Cell<ChatRoomOutput>; recipient: string }[]
   >;
@@ -61,6 +67,7 @@ interface ManagerState {
 /** Creation handlers queue a continuation after their first durable step. */
 interface StartState extends ManagerState {
   resume: Stream<{ requestId: string }>;
+  uiTitle?: Writable<string>;
 }
 
 /** Continues only an intent already admitted for this authenticated creator. */
@@ -82,6 +89,9 @@ function canRequest(requestId: string, state: ManagerState): boolean {
 /** Records a terminal refusal without exposing it to the shared room. */
 function refuse(requestId: string, reason: string, state: ManagerState): void {
   state.requests.key(requestId).set({ status: "refused", reason });
+  for (const waiting of state.waiters.key(requestId).get() ?? []) {
+    state.requests.key(waiting).set({ status: "refused", reason });
+  }
 }
 
 /** Prepends an entry once, retaining its room's entity identity. */
@@ -147,13 +157,16 @@ function advance(requestId: string, state: ManagerState): void {
     state.outgoingNotices.addUnique(notice);
   }
   state.requests.key(requestId).set({ status: "done", entry });
+  for (const waiting of state.waiters.key(requestId).get() ?? []) {
+    state.requests.key(waiting).set({ status: "done", entry });
+  }
 }
 
 /** Finds the existing direct room, or resumes its single pending creation. */
-export const openDirect = handler<
-  { requestId: string; counterpart: string },
-  StartState
->((event, state) => {
+function writeOpenDirect(
+  event: { requestId: string; counterpart: string },
+  state: StartState,
+): void {
   if (!canRequest(event.requestId, state)) return;
   const actor = currentPrincipal();
   if (
@@ -185,24 +198,46 @@ export const openDirect = handler<
     state.pendingDirect.key(event.counterpart).set(creationId);
   }
   state.requests.key(event.requestId).set({ status: "pending" });
+  const waiting = state.waiters.key(creationId);
+  if (!(waiting.get() ?? []).includes(event.requestId)) {
+    waiting.set([...(waiting.get() ?? []), event.requestId]);
+  }
   advance(creationId, state);
   state.resume.send({ requestId: creationId });
   const outcome = state.requests.key(creationId).get();
   if (outcome && outcome.status !== "pending") {
     state.requests.key(event.requestId).set(outcome);
   }
-});
+}
+
+/** Admits the protocol request from its reviewed creation surface. */
+export const openDirect = handler<
+  { requestId: string; counterpart: string },
+  StartState
+>((event, state) => writeOpenDirect(event, state));
+
+/** Starts a direct room for the principal entered in the reviewed control. */
+const openDirectFromUi = handler<{ target?: { value?: string } }, StartState>((
+  event,
+  state,
+) =>
+  writeOpenDirect({
+    requestId: newRequestId(),
+    counterpart: event.target?.value?.trim() ?? "",
+  }, state)
+);
 
 /** Creates a distinct group for a new request and resumes that group on redelivery. */
-export const createGroup = handler<
-  { requestId: string; members: string[]; title: string },
-  StartState
->((event, state) => {
+function writeCreateGroup(
+  event: { requestId: string; members: string[]; title: string },
+  state: StartState,
+): void {
   if (!canRequest(event.requestId, state)) return;
   const actor = currentPrincipal();
   if (
     !actor || typeof event.title !== "string" || !event.title.trim() ||
-    !Array.isArray(event.members) || event.members.some((member) =>
+    !Array.isArray(event.members) ||
+    event.members.some((member) =>
       typeof member !== "string" || !member.startsWith("did:")
     )
   ) {
@@ -218,16 +253,41 @@ export const createGroup = handler<
       creator: actor,
       kind: "group",
       title: event.title,
-      members: [...new Set(event.members)].filter((member) =>
-        member !== actor
-      ),
+      members: [...new Set(event.members)].filter((member) => member !== actor),
       createdAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
     });
   }
   state.requests.key(event.requestId).set({ status: "pending" });
   advance(event.requestId, state);
   state.resume.send({ requestId: event.requestId });
-});
+}
+
+/** Admits the group protocol request from its reviewed creation surface. */
+export const createGroup = handler<
+  { requestId: string; members: string[]; title: string },
+  StartState
+>((event, state) => writeCreateGroup(event, state));
+
+/** Captures a group title and the principals shown in its start control. */
+const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>((
+  event,
+  state,
+) =>
+  writeCreateGroup({
+    requestId: newRequestId(),
+    title: state.uiTitle?.get() ?? "",
+    members: (event.target?.value ?? "").split(/[\s,]+/u).filter(Boolean),
+  }, state)
+);
+
+/** Gives each independent UI request its own idempotency key. */
+function newRequestId(): string {
+  return Array.from(
+    { length: 4 },
+    () =>
+      Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, "0"),
+  ).join("");
+}
 
 /** Accepts a readable admitted room; the client supplies its checked creator for a direct room. */
 export const accept = handler<
@@ -293,6 +353,18 @@ type Created<T> = AuthoredByCurrentUser<
   WritePolicyAnyOf<T, [
     TrustedActionWrite<
       unknown,
+      typeof openDirectFromUi,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof createGroupFromUi,
+      "ChatStart",
+      "ChatStartSurface"
+    >,
+    TrustedActionWrite<
+      unknown,
       typeof openDirect,
       "ChatStart",
       "ChatStartSurface"
@@ -349,6 +421,18 @@ type Managed<T> = WritePolicyAnyOf<T, [
   WriteAuthorizedBy<unknown, typeof resumeCreation>,
   TrustedActionWrite<
     unknown,
+    typeof openDirectFromUi,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  TrustedActionWrite<
+    unknown,
+    typeof createGroupFromUi,
+    "ChatStart",
+    "ChatStartSurface"
+  >,
+  TrustedActionWrite<
+    unknown,
     typeof openDirect,
     "ChatStart",
     "ChatStartSurface"
@@ -365,13 +449,17 @@ type Managed<T> = WritePolicyAnyOf<T, [
 ]>;
 
 /** The user's single chat manager, instantiated by the home pattern. */
-export default pattern<Record<string, never>, ChatManagerOutput>(() => {
+export default pattern<
+  Record<string, never>,
+  ChatManagerOutput & { [UI]: VNode; [NAME]: string }
+>(() => {
   const state: ManagerState = {
     rooms: new Writable<Managed<ChatIndexEntry[]>>([]),
     direct: new Writable<Managed<Record<string, ChatIndexEntry>>>({}),
     requests: new Writable<Managed<Record<string, ChatRequestOutcome>>>({}),
     intents: new Writable<Managed<Record<string, CreationIntent>>>({}),
     pendingDirect: new Writable<Managed<Record<string, string>>>({}),
+    waiters: new Writable<Managed<Record<string, string[]>>>({}),
     outgoingNotices: new Writable<
       Managed<{ id: string; room: Cell<ChatRoomOutput>; recipient: string }[]>
     >([]),
@@ -388,5 +476,81 @@ export default pattern<Record<string, never>, ChatManagerOutput>(() => {
     forget: forget(state),
     delivered: delivered(state),
   };
-  return { ...facts, [VIEWS]: { chats: facts } };
+  const title = new Writable.perSession("");
+  const selected = new Writable.perSession<{ room?: Cell<ChatRoomOutput> }>({});
+  const entries = computed(() => state.rooms.get());
+  const outcomes = computed(() =>
+    Object.entries(state.requests.get()).filter(([, outcome]) =>
+      outcome.status !== "done"
+    ).map(([id, outcome]) => ({ id, ...outcome }))
+  );
+  return {
+    ...facts,
+    [NAME]: "Conversations",
+    [UI]: (
+      <cf-screen>
+        <cf-heading slot="header" level={2}>Conversations</cf-heading>
+        <cf-vstack padding="4" gap="4">
+          <details>
+            <summary>Start a conversation</summary>
+            <cf-vstack
+              gap="3"
+              data-ui-pattern="ChatStartSurface"
+              data-ui-event-integrity="ChatStartSurface"
+            >
+              <cf-submit-input
+                placeholder="Person's principal"
+                buttonText="Start direct conversation"
+                data-ui-action="ChatStart"
+                onClick={openDirectFromUi(starts)}
+              />
+              <cf-input $value={title} placeholder="Group title" />
+              <cf-submit-input
+                placeholder="Member principals, separated by commas"
+                buttonText="Create group"
+                data-ui-action="ChatStart"
+                onClick={createGroupFromUi({ ...starts, uiTitle: title })}
+              />
+            </cf-vstack>
+          </details>
+          {outcomes.map((outcome) => (
+            <cf-text>
+              {outcome.status === "pending"
+                ? "Creating conversation…"
+                : outcome.status === "refused"
+                ? outcome.reason
+                : ""}
+            </cf-text>
+          ))}
+          {entries.map((entry) => (
+            <cf-hstack gap="2">
+              <cf-button
+                variant="ghost"
+                onClick={action(() => selected.set({ room: entry.room }))}
+              >
+                {entry.room.get().about.title || (entry.kind === "direct"
+                  ? "Direct conversation"
+                  : "Group conversation")}
+              </cf-button>
+              <cf-button
+                variant="ghost"
+                onClick={action(() =>
+                  facts.forget.send({
+                    requestId: newRequestId(),
+                    room: entry.room,
+                  })
+                )}
+              >
+                Forget
+              </cf-button>
+            </cf-hstack>
+          ))}
+          {selected.get().room?.get() !== undefined
+            ? <cf-render $cell={selected.get().room} />
+            : <cf-text>Select a conversation or start one.</cf-text>}
+        </cf-vstack>
+      </cf-screen>
+    ),
+    [VIEWS]: { chats: facts },
+  };
 });

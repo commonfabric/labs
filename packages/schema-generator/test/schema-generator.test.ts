@@ -9,6 +9,25 @@ import {
 } from "./utils.ts";
 
 describe("SchemaGenerator", () => {
+  describe("native bigint", () => {
+    it("preserves the native bigint type", async () => {
+      const { type, checker } = await getTypeFromCode("type T = bigint;", "T");
+      expect(new SchemaGenerator().generateSchema(type, checker)).toEqual({
+        type: "bigint",
+      });
+    });
+
+    it("refuses a bigint literal rather than rounding it through Number", async () => {
+      const { type, checker } = await getTypeFromCode(
+        "type T = -9007199254740993n;",
+        "T",
+      );
+      expect(() => new SchemaGenerator().generateSchema(type, checker)).toThrow(
+        "Bigint literal schemas are unsupported",
+      );
+    });
+  });
+
   describe("formatter chain", () => {
     it("should route primitive types to PrimitiveFormatter", async () => {
       const generator = new SchemaGenerator();

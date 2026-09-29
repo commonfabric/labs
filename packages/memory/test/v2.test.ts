@@ -143,6 +143,7 @@ describe("memory v2 flags", () => {
 
     assertEquals(getMemoryProtocolFlags(), {
       genesisRoot: true,
+      atomicAclChanges: true,
       modernCellRep: false,
       stableExpressionResultIds: true,
       commitPreconditions: false,
@@ -171,6 +172,7 @@ describe("memory v2 flags", () => {
 
     assertEquals(getMemoryProtocolFlags(), {
       genesisRoot: true,
+      atomicAclChanges: true,
       modernCellRep: true,
       stableExpressionResultIds: true,
       commitPreconditions: true,
@@ -248,6 +250,14 @@ describe("memory v2 flags", () => {
 });
 
 describe("parseMemoryProtocolFlags", () => {
+  it("requires an explicit atomic ACL capability", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.atomicAclChanges, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ atomicAclChanges: true })?.atomicAclChanges,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ atomicAclChanges: "true" }), null);
+  });
   it("requires an explicit custom-root capability", () => {
     assertEquals(parseMemoryProtocolFlags({})?.genesisRoot, false);
     assertEquals(
@@ -303,6 +313,7 @@ describe("parseMemoryProtocolFlags", () => {
   it("accepts the modernCellRep key", () => {
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: true }), {
       genesisRoot: false,
+      atomicAclChanges: false,
       modernCellRep: true,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -323,6 +334,7 @@ describe("parseMemoryProtocolFlags", () => {
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
+      atomicAclChanges: false,
       modernCellRep: false,
       stableExpressionResultIds: false,
       commitPreconditions: false,
@@ -350,6 +362,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: true,
@@ -396,6 +409,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -422,6 +436,7 @@ describe("parseMemoryProtocolFlags", () => {
       parseMemoryProtocolFlags({ messageCompressionV1: true }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -450,6 +465,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -486,6 +502,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -515,6 +532,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -541,6 +559,7 @@ describe("parseMemoryProtocolFlags", () => {
       parseMemoryProtocolFlags({ entityIdListing: true }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,
@@ -574,6 +593,7 @@ describe("parseMemoryProtocolFlags", () => {
       }),
       {
         genesisRoot: false,
+        atomicAclChanges: false,
         modernCellRep: false,
         stableExpressionResultIds: false,
         commitPreconditions: false,

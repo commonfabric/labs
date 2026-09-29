@@ -125,6 +125,17 @@ export interface MessageRequest {
   message: Cell<ChatMessage>;
 }
 
+/** Display counts retain their original message and reactor profile links. */
+export interface ChatReactionTallies {
+  message: Cell<ChatMessage>;
+  reactions: {
+    emoji: string;
+    count: number;
+    mine: boolean;
+    profiles: Cell<ChatProfile>[];
+  }[];
+}
+
 /** The public room facts and direct writer streams. */
 export interface ChatRoomFacts {
   about: ChatRoomAbout;
@@ -134,6 +145,7 @@ export interface ChatRoomFacts {
   participants: Cell<ChatProfile>[];
   messages: ChatMessageList;
   canSend: boolean;
+  reactionTallies: ChatReactionTallies[];
   sendMessage: Stream<SendMessageRequest>;
   editMessage: Stream<MessageRequest & { version: ChatMessageVersion }>;
   deleteMessage: Stream<MessageRequest>;

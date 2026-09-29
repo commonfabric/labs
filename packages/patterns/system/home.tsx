@@ -260,7 +260,11 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
+              <cf-tab value="chats">Conversations</cf-tab>
             </cf-tab-list>
+            <cf-tab-panel value="chats" id="home-chats">
+              {chatManager}
+            </cf-tab-panel>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
             </cf-tab-panel>

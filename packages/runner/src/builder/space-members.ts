@@ -5,6 +5,8 @@ import { stageAclChange } from "../storage/acl-change.ts";
 import type { Cell } from "@commonfabric/api";
 import { isCell } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
+import { currentPrincipal } from "./current-principal.ts";
+import { spaceReaderRole } from "../cfc/space-membership.ts";
 
 /** Spaces whose authoritative ACL has completed its initial replica load. */
 const loadedMemberships = new WeakMap<Runtime, Set<MemorySpace>>();
@@ -19,7 +21,12 @@ export async function loadSpaceMembership(
     id: aclDocId(space) as URI,
     path: [],
   });
-  await cell.sync();
+  try {
+    await cell.sync();
+  } catch {
+    // Access status is read separately from data so an unavailable room can
+    // render its state without failing the containing pattern.
+  }
   let loaded = loadedMemberships.get(runtime);
   if (!loaded) loadedMemberships.set(runtime, loaded = new Set());
   loaded.add(space);
@@ -54,6 +61,37 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
   if (value === undefined) return undefined;
   if (!isACL(value)) throw new Error("The space has an invalid access list.");
   return value;
+}
+
+/** Classifies the viewer's access without reading a room's content. */
+export function spaceAccess(
+  target?: Cell<unknown>,
+): "member" | "not-member" | "unavailable" {
+  const acl = spaceMembers(target);
+  const frame = topFrame()!;
+  const principal = currentPrincipal();
+  const space = target && isCell(target)
+    ? target.resolveAsCell().getAsNormalizedFullLink().space
+    : frame.space!;
+  const error = frame.runtime!.storageManager.spaceAccessError?.(space) ??
+    frame.runtime!.storageManager.authorizationError?.(space);
+  if (error) {
+    const evidence = error as Error & {
+      spaceAccessDenied?: boolean;
+      permanentEvidence?: boolean;
+      aclRevision?: number;
+      cause?: unknown;
+    };
+    if (
+      evidence.spaceAccessDenied === true ||
+      (evidence.name === "AuthorizationError" &&
+        evidence.permanentEvidence === true &&
+        typeof evidence.aclRevision === "number")
+    ) return "not-member";
+    return "unavailable";
+  }
+  if (!principal || acl === undefined) return "unavailable";
+  return spaceReaderRole(acl, space, principal) ? "member" : "not-member";
 }
 
 /** Atomically replaces the current space's ACL with the handler's metadata writes. */

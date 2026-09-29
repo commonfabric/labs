@@ -66,6 +66,19 @@ describe("CFSubmitInput", () => {
     expect(el.value).toBe("");
   });
 
+  it("retains controlled text until its caller accepts the submission", () => {
+    const el = new CFSubmitInput();
+    el.clearOnSubmit = false;
+    el.value = "Shared draft";
+    const event = clickEvent("button");
+    internals(el)._onClick(event);
+    expect(event.stopped).toBe(false);
+    expect(el.value).toBe("Shared draft");
+    expect(internals(el)._submitting).toBe(false);
+    el.value = "";
+    expect(el.value).toBe("");
+  });
+
   describe("willUpdate / initialValue seeding", () => {
     it("seeds value from initialValue once on first update", () => {
       const el = new CFSubmitInput();

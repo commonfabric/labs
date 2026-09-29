@@ -34,6 +34,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./native-ui": "./src/native-ui.ts",
     "./inbox": "./src/inbox.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",

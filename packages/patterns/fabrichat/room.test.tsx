@@ -80,6 +80,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { action: initialize },
+      { render: room[UI] },
       { action: room.sendMessage, event: sendEvent, trustedUi: sendGesture },
       { assertion: assert(() => room.messages.latest.messages.length === 1) },
       { render: room[UI] },
@@ -102,8 +103,8 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          room.messages.windows.get().main.messages.length === 1 &&
-          !room.messages.windows.get().main.hasNewer
+          room.messages.windows.get()?.main?.messages.length === 1 &&
+          !room.messages.windows.get()?.main?.hasNewer
         ),
       },
       {
@@ -130,9 +131,9 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          room.messages.windows.get().main.messages.length === 1 &&
-          room.messages.windows.get().main.messages[0].body === "Edited" &&
-          room.messages.windows.get().main.hasNewer
+          room.messages.windows.get()?.main?.messages.length === 1 &&
+          room.messages.windows.get()?.main?.messages[0].body === "Edited" &&
+          room.messages.windows.get()?.main?.hasNewer
         ),
       },
       { action: room.sendReaction, event: reactEvent, trustedUi: reactGesture },

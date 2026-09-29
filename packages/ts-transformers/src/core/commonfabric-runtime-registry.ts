@@ -28,6 +28,8 @@ export type CommonFabricRuntimeExportSpec =
   };
 
 export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
+  // Classifies access under the demanding principal without creating a node.
+  { exportName: "spaceAccess", category: "ignored", reactiveOrigin: false },
   // Stages an atomic ACL companion in the executing handler transaction.
   {
     exportName: "setSpaceMembers",

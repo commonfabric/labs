@@ -3306,6 +3306,11 @@ export type DID = `did:${string}`;
  */
 export declare function currentPrincipal(): DID | undefined;
 
+/** The demanding viewer's access, independent of whether a room has data. */
+export declare function spaceAccess(
+  target?: Cell<unknown>,
+): "member" | "not-member" | "unavailable";
+
 /** Reads the current space's authoritative access list, or no list when unavailable. */
 export declare function spaceMembers(
   target?: Cell<unknown>,

@@ -70,7 +70,7 @@ import {
   wish,
 } from "./built-in.ts";
 import { tagCollectionKey } from "./collection-key.ts";
-import { setSpaceMembers, spaceMembers } from "./space-members.ts";
+import { setSpaceMembers, spaceAccess, spaceMembers } from "./space-members.ts";
 import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
@@ -273,6 +273,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     inspectConfLabel,
     currentPrincipal,
     spaceMembers,
+    spaceAccess,
     setSpaceMembers,
     wish,
 

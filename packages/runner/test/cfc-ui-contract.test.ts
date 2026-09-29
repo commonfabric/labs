@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
-import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  internSchema,
+  internSchemaAsTaggedHashString,
+} from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -59,6 +62,39 @@ const rendererEvent = <T extends Record<string, unknown>>(event: T): T => {
 };
 
 describe("CFC UI contract matching", () => {
+  it("terminates across interned recursive schema views", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
+      },
+      $defs: {
+        ChatMessage: {
+          type: "object",
+          properties: { replyTo: { $ref: "#/$defs/ChatReply" } },
+        },
+        ChatReply: {
+          type: "object",
+          properties: {
+            message: { $ref: "#/$defs/ChatMessage", asCell: ["cell"] },
+          },
+        },
+      },
+    } as const;
+    // Resolved views can precede the containing schema in the intern cache.
+    for (const name of ["ChatMessage", "ChatReply"] as const) {
+      const copy = structuredClone(schema);
+      internSchema({
+        ...copy.$defs[name],
+        $defs: copy.$defs,
+        ...(name === "ChatMessage" ? { asCell: ["cell"] } : {}),
+      });
+    }
+    const frozen = internSchema(schema);
+    expect(uiContractsFromSchema(frozen)).toEqual([]);
+    expect(uiContractFromSchema(frozen)).toBeUndefined();
+  });
+
   it("matches UiAction contracts against trusted DOM dataset markers", () => {
     const contract = uiContractFromSchema({
       ...uiActionSchema,
