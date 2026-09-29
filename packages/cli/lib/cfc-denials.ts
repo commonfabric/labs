@@ -10,10 +10,29 @@ import {
   addCfcDenialListener,
   type CfcDenial,
   type CfcRefusalDetail,
+  isCfcDenialCode,
 } from "@commonfabric/runner/cfc";
 
 /** Input keys {@link formatCfcDenial} lays out rather than renders whole. */
 const LAID_OUT_KEYS = new Set(["reasons", "refusals"]);
+
+/**
+ * A `cfc` logger warning count as `console-capture.ts` writes it, possibly
+ * behind a multi-user participant's prefix, capturing the message key.
+ */
+const CFC_WARNING_LINE = /\[logger:cfc\] \d+ warning\(s\) \(key: ([^)]+)\)$/;
+
+/**
+ * Indicates whether any of `warnings`, as a test run collects them, counts a
+ * CFC denial. A `cfc` warning under any other key, such as a schema the
+ * runtime could not read, does not.
+ */
+export function warningsCountCfcDenial(warnings: readonly string[]): boolean {
+  return warnings.some((warning) => {
+    const key = CFC_WARNING_LINE.exec(warning)?.[1];
+    return key !== undefined && isCfcDenialCode(key);
+  });
+}
 
 /**
  * Returns the lines that describe one denial: a heading naming its kind, then

@@ -4,7 +4,9 @@ import { getLogger } from "@commonfabric/utils/logger";
 
 import {
   addCfcDenialListener,
+  CFC_DENIAL_CODES,
   type CfcDenial,
+  isCfcDenialCode,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "../../src/cfc/denial-report.ts";
@@ -162,6 +164,16 @@ describe("denial-report", () => {
       addCfcDenialListener((denial) => told.push(denial))();
       said(() => reportCfcDenial("write-policy-gate", SUMMARY, () => ({})));
       expect(told).toEqual([]);
+    });
+  });
+
+  describe("isCfcDenialCode()", () => {
+    it("returns `true` for every denial code", () => {
+      expect(CFC_DENIAL_CODES.every(isCfcDenialCode)).toBe(true);
+    });
+
+    it("returns `false` for any other key", () => {
+      expect(isCfcDenialCode("cfc")).toBe(false);
     });
   });
 

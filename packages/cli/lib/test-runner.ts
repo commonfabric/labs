@@ -91,7 +91,7 @@ import {
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
-import { printCfcDenials } from "./cfc-denials.ts";
+import { printCfcDenials, warningsCountCfcDenial } from "./cfc-denials.ts";
 import {
   evaluateReadBudget,
   parseReadBudgets,
@@ -2570,10 +2570,10 @@ export async function runTests(
             console.log(`    ${truncated}`);
           }
           // The `cfc` logger names each kind of denial once and keeps the
-          // reasons to itself, so say where the reasons are.
+          // reasons at debug, so say where the reasons are.
           if (
             !options.cfcDenials &&
-            result.consoleWarnings.some((msg) => msg.startsWith("[logger:cfc]"))
+            warningsCountCfcDenial(result.consoleWarnings)
           ) {
             console.log(
               "    Run again with `--cfc-denials` to see what CFC denied, and why.",

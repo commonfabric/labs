@@ -14,8 +14,8 @@ decision, so each gate says what it turned away at the moment it decides.
 
 ## The reporter
 
-`packages/runner/src/cfc/denial-report.ts` is one function, and both gates call
-it where they block:
+`packages/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
+call it where they block:
 
 ```ts
 // docs-context: none
@@ -32,10 +32,10 @@ reportCfcDenial(
 );
 ```
 
-`code` names the kind of decision. The current set is `write-policy-gate`,
-`write-prepare-crashed`, `write-unprepared`, `write-prepared-digest-mismatch`,
-`render-confidentiality-ceiling`, `render-text-integrity`, and
-`render-literal-text-integrity`.
+`code` names the kind of decision, and is one of `CFC_DENIAL_CODES`:
+`write-policy-gate`, `write-prepare-crashed`, `write-unprepared`,
+`write-prepared-digest-mismatch`, `render-confidentiality-ceiling`,
+`render-text-integrity`, and `render-literal-text-integrity`.
 
 Only a decision that stopped something reports. Under `observe` the write gate
 records its reasons and lets the commit through, so nothing was turned away and
@@ -130,15 +130,17 @@ reaches the gates running in the same process or worker and no others.
 
 A new gate decision that turns something away should report one.
 
-The `code` is what a search, the logger's per-key counts, and the once-per-kind
-warning all match on, so it is stable and names the kind of decision rather
-than the occasion. The `summary` is written without being asked for, so it is a
-fixed sentence: text chosen by the kind of decision, never assembled from a
-reason, a label, a value, or a path.
+The `code` is what a search, the logger's per-key counts, the once-per-kind
+warning, and `cf test`'s hint to run again with `--cfc-denials` all match on,
+so it is stable and names the kind of decision rather than the occasion. A new
+one joins `CFC_DENIAL_CODES`, since `reportCfcDenial()` takes no other. The
+`summary` is written without being asked for, so it is a fixed sentence: text
+chosen by the kind of decision, never assembled from a reason, a label, a
+value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
-only debug and a denial listener. Nothing derived from them may reach the surface the denial
-produced.
+only debug and a denial listener. Nothing derived from them may reach the
+surface the denial produced.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which
 input decided is the gate's business, and a gate reads them together: the
