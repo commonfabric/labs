@@ -37,9 +37,10 @@ import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import type { CellScope } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { setPatternCell, setResultCell } from "../result-utils.ts";
 import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
+import { schemaHasIfc } from "../schema-ifc.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
 import {
@@ -1914,8 +1915,24 @@ export function sqliteQuery(
                 const columnConfidentiality = staticConfidentialityOf(
                   labelSchema,
                 );
+                // A row that neither its columns nor its row rule label
+                // declares an empty label at its root when the store carries
+                // a label or is written under one. The link write policy
+                // governs the slots of such a store, and refuses a link
+                // there to a document that stores no label and that the
+                // transaction declares none for. A settle that finds a row's
+                // document standing writes the slot and not the document, so
+                // the declaration is made by every settle and does not rest
+                // on what the document stores. It stores nothing on the row
+                // document, and subjects no link written beneath the row's
+                // root to the policy, which counts a declaration only by the
+                // atoms it holds. Into a store carrying no label the row
+                // declares nothing, and the settle stays outside commit
+                // preparation.
+                const storeCarriesLabel = storedMetadata !== undefined ||
+                  schemaHasIfc(writeSchema as JSONSchema | undefined);
                 const storedRows = resultRows.map((row, i) => {
-                  const schema = {
+                  const labeled = {
                     ...rowSchemas[i],
                     ...(perRow[i] !== undefined
                       ? { ifc: perRow[i] }
@@ -1928,6 +1945,10 @@ export function sqliteQuery(
                           },
                         }),
                   };
+                  const schema =
+                    storeCarriesLabel && !schemaHasIfc(labeled as JSONSchema)
+                      ? { ...labeled, ifc: {} }
+                      : labeled;
                   const rowCell = createCell(
                     runtime,
                     {
