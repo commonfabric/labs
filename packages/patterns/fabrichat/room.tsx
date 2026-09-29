@@ -316,27 +316,8 @@ export interface AboutRecord {
   createdAt?: FabricEpochNsec;
 }
 
-/**
- * A room's `about`, stored: written once, by `commitRoom`, from whoever
- * creates the room. The runtime labels a value `authored-by` its writer only
- * when a trusted gesture made the write, and the creator's gesture is made on
- * their manager, not on the room, so `about` carries no such label.
- */
-export type StoredAbout = WriteAuthorizedBy<AboutRecord, typeof commitRoom>;
-
-/**
- * Where a room keeps its `about`. `record` is absent for a space's own chat,
- * which is a group room with no title.
- */
-export interface AboutValue {
-  /** What the room's creator said about it. */
-  record?: StoredAbout;
-}
-
-/** The cell holding a room's `about`. */
-export type AboutCell = Writable<
-  AboutValue | Default<Record<PropertyKey, never>>
->;
+/** A space's own chat: a group room with no title. */
+const SPACE_CHAT_ABOUT: AboutRecord = { kind: "group" };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -596,9 +577,6 @@ export interface RoomStreamEvent {
   /** The id of a notice delivered. */
   id?: string;
 
-  /** What the room says about itself, from its creator. */
-  about?: AboutRecord;
-
   /** A rendered control's text. */
   readonly target?: { readonly value?: string };
 }
@@ -635,8 +613,7 @@ export type RoomAct =
   | "leave"
   | "add"
   | "remove"
-  | "delivered"
-  | "setAbout";
+  | "delivered";
 
 /**
  * The room's records, and a rendered control's bindings, as `commitRoom` is
@@ -657,9 +634,6 @@ export interface RoomActState {
 
   /** The room's creator, the one OWNER the room knows. */
   creatorProfile?: ProfileCell;
-
-  /** What the room says about itself. */
-  about: AboutCell;
 
   /** The room's stored records. */
   messages: MessagesCell;
@@ -1008,30 +982,15 @@ const performMembershipAct = (
   const access = event?.access ?? "WRITE";
   if (op === "add") {
     if (access !== "WRITE" && access !== "OWNER") return;
-    const notice = notices.elementById(requestKey);
-    notice.set({ id: requestKey, recipient: principal });
+    // The adding client knows the id without reading it back: the person
+    // added, and its own request.
+    const id = JSON.stringify([principal, requestId]);
+    const notice = notices.elementById(id);
+    notice.set({ id, recipient: principal });
     notices.addUnique(notice);
   }
   appendActivity(activity, counters, usedTimes, clock, requestId, roster);
   rememberRequest(requests, requestKey, clock);
-};
-
-/**
- * Records what the room says about itself, once, from whoever creates the
- * room, which labels it `authored-by` them.
- */
-const performSetAbout = (
-  event: RoomStreamEvent,
-  state: RoomActState,
-): void => {
-  const given = event?.about;
-  if (state.about.get()?.record !== undefined || given === undefined) return;
-  if (given.kind !== "direct" && given.kind !== "group") return;
-  state.about.key("record").set({
-    kind: given.kind,
-    ...(given.title === undefined ? {} : { title: given.title }),
-    ...(given.createdAt === undefined ? {} : { createdAt: given.createdAt }),
-  } as StoredAbout);
 };
 
 /**
@@ -1050,8 +1009,6 @@ export const commitRoom = handler<RoomStreamEvent, RoomActState>(
       performMessageAct(event, state);
     } else if (act === "react" || act === "unreact") {
       performReactionAct(event, state);
-    } else if (act === "setAbout") {
-      performSetAbout(event, state);
     } else {
       performMembershipAct(event, state);
     }
@@ -1247,7 +1204,6 @@ export interface FabriChatMessageRowInput {
   composer: ComposerCell;
 
   /** The room's stored records. */
-  about: AboutCell;
   messages: MessagesCell;
   reactionLists: ReactionListsCell;
   requests: RequestsCell;
@@ -1308,7 +1264,6 @@ export const FabriChatMessageRow = pattern<
     ownSpace,
     creatorProfile,
     composer,
-    about,
     messages,
     reactionLists,
     requests,
@@ -1324,7 +1279,6 @@ export const FabriChatMessageRow = pattern<
     ownSpace,
     creatorProfile,
     composer,
-    about,
     messages,
     reactionLists,
     requests,
@@ -1789,22 +1743,13 @@ export interface ChatRoomOutput extends ChatRoomView {
   [VIEWS]: { room: ChatRoomView };
 }
 
-/**
- * What `FabriChatRoom` offers: `ChatRoomOutput`, and the stream its creator
- * sends what the room says about itself to.
- */
-export interface FabriChatRoomOutput extends ChatRoomOutput {
-  /** Records what the room says about itself, once. */
-  setAbout: Stream<RoomStreamEvent>;
-}
-
 /** What a room stores, and who is looking at it. */
 export interface FabriChatRoomCoreInput {
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: ProfileCell | undefined;
 
   /** What the room says about itself, as its creator wrote it. */
-  about: AboutCell;
+  about: AboutRecord;
 
   /** Whether the room lives in a space of its own. */
   ownSpace: boolean;
@@ -1838,7 +1783,7 @@ interface ShownMessage {
  */
 export const FabriChatRoomCore = pattern<
   FabriChatRoomCoreInput,
-  FabriChatRoomOutput
+  ChatRoomOutput
 >((input) => {
   const {
     myProfile,
@@ -1856,15 +1801,12 @@ export const FabriChatRoomCore = pattern<
     notices,
   } = input;
   const composer = new Writable.perSession<ComposerState>({});
-  const kind = computed((): ChatRoomKind =>
-    about.get()?.record?.kind ?? "group"
-  );
+  const kind = computed((): ChatRoomKind => about?.kind ?? "group");
   const records = {
     kind,
     ownSpace,
     creatorProfile,
     composer,
-    about,
     messages,
     reactionLists,
     requests,
@@ -1910,7 +1852,7 @@ export const FabriChatRoomCore = pattern<
   const canSend = computed(() => myProfile?.get() !== undefined);
   const cannotSend = computed(() => myProfile?.get() === undefined);
   const aboutView = computed((): ChatRoomAbout => {
-    const record = about.get()?.record;
+    const record = about;
     return {
       kind: record?.kind ?? "group",
       ...(record?.title === undefined ? {} : { title: record.title }),
@@ -2226,18 +2168,16 @@ export const FabriChatRoomCore = pattern<
     ),
     [VIEWS]: { room: view },
     ...view,
-    setAbout: commitRoom({ act: "setAbout", myProfile, ...records }),
   };
 });
 
 /** What a room stores. Every field has a default, for a space's own chat. */
 export interface FabriChatRoomInput {
   /**
-   * What the room says about itself, written once through `setAbout` by
-   * whoever creates it, which labels it `authored-by` them. A space's own chat
-   * says nothing: it is a group room with no title.
+   * What the room says about itself, written once by whoever creates it. A
+   * space's own chat is a group room with no title.
    */
-  about?: AboutCell;
+  about?: AboutRecord | Default<typeof SPACE_CHAT_ABOUT>;
 
   /** Whether the room lives in a space of its own. */
   ownSpace?: boolean | Default<false>;
@@ -2261,7 +2201,7 @@ export interface FabriChatRoomInput {
  * `ChatRoomOutput` its space's members share. A viewer with no profile can
  * read the conversation, and is offered the form that creates one.
  */
-const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
+const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
   (input) => {
     const profileWish = wish<ProfileCell>({ query: "#profile" });
     const hasProfile = computed(() => profileWish.result !== undefined);
@@ -2305,7 +2245,6 @@ const FabriChatRoom = pattern<FabriChatRoomInput, FabriChatRoomOutput>(
       remove: room.remove,
       delivered: room.delivered,
       outgoingNotices: room.outgoingNotices,
-      setAbout: room.setAbout,
       [UI]: (
         <cf-screen>
           {room[UI]}

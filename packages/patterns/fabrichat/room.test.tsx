@@ -15,7 +15,6 @@ import {
 } from "commonfabric";
 import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
 import {
-  type AboutValue,
   type ActivityCounters,
   type ComposerState,
   FabriChatMessageRow,
@@ -108,7 +107,7 @@ export default pattern(() => {
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const pendingProfile = Writable.of<TestProfile | undefined>(undefined);
   const records = {
-    about: Writable.of<AboutValue>({}),
+    about: { kind: "group" as const, title: "Team" },
     roster: Writable.of<RosterValue>({}),
     left: Writable.of<ProfileCell[]>([]),
     notices: Writable.of<ChatRoomNotice[]>([]),
@@ -168,17 +167,9 @@ export default pattern(() => {
   return {
     [TESTS]: [
       {
-        action: alice.setAbout,
-        event: { requestId: "about", about: { kind: "group", title: "Team" } },
-      },
-      // What a room says about itself is written once.
-      {
-        action: bob.setAbout,
-        event: { requestId: "about-2", about: { kind: "direct" } },
-      },
-      {
         assertion: assert(() =>
           alice.about.kind === "group" && alice.about.title === "Team" &&
+          alice.about.createdAt === undefined &&
           alice.about.policy.maxWindowCount === 100
         ),
       },
@@ -303,7 +294,9 @@ export default pattern(() => {
         event: typed("Back again"),
         trustedUi: messageGesture,
       },
-      { assertion: assert(() => typeof stored(messages)[1]?.body === "object") },
+      {
+        assertion: assert(() => typeof stored(messages)[1]?.body === "object"),
+      },
 
       // Obliteration in a group room: the OWNER may, anyone else may not.
       {
@@ -312,7 +305,9 @@ export default pattern(() => {
         trustedUi: messageGesture,
       },
       {
-        assertion: assert(() => stored(messages)[0]?.body === "Hello, everyone"),
+        assertion: assert(() =>
+          stored(messages)[0]?.body === "Hello, everyone"
+        ),
       },
       {
         action: aliceOnThird.obliterateMessage,

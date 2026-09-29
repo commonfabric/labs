@@ -1,0 +1,55 @@
+/**
+ * A FabriChat manager's refusals: the requests it turns down, each with its
+ * outcome recorded, and changing nothing else.
+ *
+ * DELIBERATELY NOT COVERED HERE: creating a room. A room is created in a space
+ * of its own with `inSpace()`, a cross-space commit whose closure replication
+ * is unavailable in the pattern-unit lane, which fails a test file on the
+ * error that logs. `packages/runner/test/fabrichat-manager.test.ts` covers
+ * creating, finding, forgetting, and re-finding rooms in the runner lane,
+ * where cross-space commits work.
+ */
+import { assert, pattern, TESTS } from "commonfabric";
+import FabriChatManager from "./manager.tsx";
+import { type ChatRequestOutcome } from "./schemas.tsx";
+
+const statusOf = (
+  requests: Record<string, ChatRequestOutcome> | undefined,
+  id: string,
+): string => requests?.[id]?.status ?? "none";
+
+export default pattern(() => {
+  const manager = FabriChatManager({});
+
+  return {
+    [TESTS]: [
+      { assertion: assert(() => manager.rooms.length === 0) },
+      {
+        action: manager.openDirect,
+        event: { requestId: "d-0", counterpart: "not a did" },
+      },
+      {
+        action: manager.createGroup,
+        event: { requestId: "g-0", title: "  ", members: [] },
+      },
+      {
+        assertion: assert(() =>
+          statusOf(manager.requests, "d-0") === "refused" &&
+          statusOf(manager.requests, "g-0") === "refused" &&
+          manager.rooms.length === 0 &&
+          manager.outgoingNotices.length === 0
+        ),
+      },
+      // A request already decided stays decided.
+      {
+        action: manager.createGroup,
+        event: { requestId: "g-0", title: "  ", members: [] },
+      },
+      {
+        assertion: assert(() =>
+          statusOf(manager.requests, "g-0") === "refused"
+        ),
+      },
+    ],
+  };
+});

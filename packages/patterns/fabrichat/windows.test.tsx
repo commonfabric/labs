@@ -1,0 +1,231 @@
+/**
+ * A FabriChat room's windows and membership: how a session opens, moves, and
+ * closes windows onto the main conversation, and how showing a profile,
+ * adding a member, reporting a notice delivered, and leaving change the
+ * room's record.
+ */
+import {
+  type AddIntegrity,
+  assert,
+  equals,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
+import {
+  type ActivityCounters,
+  type ChatMessageWindow,
+  type ChatMessageWindows,
+  FabriChatRoomCore,
+  type MessagesValue,
+  type ReactionList,
+  type RequestMemo,
+  type RosterValue,
+  type SentActivity,
+  type UsedTime,
+} from "./room.tsx";
+import {
+  CHAT_MEMBERS_SURFACE,
+  CHAT_MESSAGE_ACTION,
+  CHAT_MESSAGE_SURFACE,
+  type ChatProfile,
+  type ChatRoomNotice,
+  type ProfileCell,
+} from "./schemas.tsx";
+
+type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
+
+// A labeled stand-in for a viewer's `#profile`.
+type TestProfile = AddIntegrity<
+  ChatProfile,
+  readonly ["fabrichat-test-profile"]
+>;
+
+const messageGesture = {
+  surface: CHAT_MESSAGE_SURFACE,
+  action: CHAT_MESSAGE_ACTION,
+};
+const membersGesture = { surface: CHAT_MEMBERS_SURFACE, action: "ChatMembers" };
+
+const typed = (text: string) => ({ type: "click", target: { value: text } });
+
+// The session's windows, as the room's output offers them.
+const windowsOf = (windows: unknown): ChatMessageWindows => {
+  const cell = windows as { get?: () => unknown } | undefined;
+  const value = typeof cell?.get === "function" ? cell.get() : windows;
+  return (value ?? {}) as ChatMessageWindows;
+};
+
+// A window's bodies, oldest first, with `<` and `>` where there is more.
+const windowText = (window: ChatMessageWindow | undefined): string =>
+  window === undefined ? "<closed>" : [
+    window.hasOlder ? "<" : "",
+    ...window.messages.map((each) => each.get()?.body),
+    window.hasNewer ? ">" : "",
+  ].filter((part) => part !== "").join(" ");
+
+export default pattern(() => {
+  const messages = Writable.of<MessagesValue>([] as MessagesValue);
+  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
+  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const roster = Writable.of<RosterValue>({});
+  const left = Writable.of<ProfileCell[]>([]);
+  const notices = Writable.of<ChatRoomNotice[]>([]);
+  const records = {
+    about: { kind: "group" as const },
+    ownSpace: true,
+    creatorProfile: aliceProfile,
+    messages,
+    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
+    requests: Writable.of<RequestMemo[]>([]),
+    usedTimes: Writable.of<UsedTime[]>([]),
+    activity: Writable.of<SentActivity[]>([]),
+    counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
+    roster,
+    left,
+    notices,
+  };
+  const alice = FabriChatRoomCore(
+    { myProfile: aliceProfile, ...records } as RoomArg,
+  );
+  const bob = FabriChatRoomCore(
+    { myProfile: bobProfile, ...records } as RoomArg,
+  );
+  // The same room as a space's own chat, which nobody leaves.
+  const bobInSpaceChat = FabriChatRoomCore(
+    { myProfile: bobProfile, ...records, ownSpace: false } as RoomArg,
+  );
+
+  return {
+    [TESTS]: [
+      {
+        action: alice.sendMessage,
+        event: typed("One"),
+        trustedUi: messageGesture,
+      },
+      {
+        action: alice.sendMessage,
+        event: typed("Two"),
+        trustedUi: messageGesture,
+      },
+      {
+        action: alice.sendMessage,
+        event: typed("Three"),
+        trustedUi: messageGesture,
+      },
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "w-1",
+          windowId: "w",
+          from: { before: "end" },
+          count: 2,
+        },
+      },
+      {
+        assertion: assert(() =>
+          windowText(windowsOf(alice.messages.windows).w) === "< Two Three" &&
+          windowsOf(alice.messages.windows).w?.requestId === "w-1"
+        ),
+      },
+      // Paging is opening the same window again.
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "w-2",
+          windowId: "w",
+          from: { after: "start" },
+          count: 2,
+        },
+      },
+      {
+        assertion: assert(() =>
+          windowText(windowsOf(alice.messages.windows).w) === "One Two >"
+        ),
+      },
+      // A count beyond the room's limit gets the limit.
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "x-1",
+          windowId: "x",
+          from: { before: "end" },
+          count: 5000,
+        },
+      },
+      {
+        action: alice.messages.closeWindow,
+        event: { requestId: "w-3", windowId: "w" },
+      },
+      {
+        assertion: assert(() =>
+          windowText(windowsOf(alice.messages.windows).w) === "<closed>" &&
+          windowText(windowsOf(alice.messages.windows).x) === "One Two Three"
+        ),
+      },
+      // Windows are the session's own.
+      {
+        assertion: assert(() =>
+          Object.keys(windowsOf(bob.messages.windows)).length === 0
+        ),
+      },
+
+      // Showing a profile lists it once, however often it is shown.
+      { action: alice.showProfile, event: { requestId: "show-a" } },
+      { action: bob.showProfile, event: { requestId: "show-b" } },
+      { action: bob.showProfile, event: { requestId: "show-b2" } },
+      {
+        assertion: assert(() =>
+          alice.roster.length === 2 && equals(alice.roster[1], bobProfile)
+        ),
+      },
+
+      // Only an OWNER adds a member, and adding one leaves a notice for a
+      // client to deliver.
+      {
+        action: bob.add,
+        event: { requestId: "add-b", principal: "did:key:z6MkBob" },
+        trustedUi: membersGesture,
+      },
+      {
+        action: alice.add,
+        event: { requestId: "add-a", principal: "not a did" },
+        trustedUi: membersGesture,
+      },
+      {
+        action: alice.add,
+        event: { requestId: "add-a2", principal: "did:key:z6MkCarol" },
+        trustedUi: membersGesture,
+      },
+      {
+        assertion: assert(() =>
+          alice.outgoingNotices.length === 1 &&
+          alice.outgoingNotices[0].recipient === "did:key:z6MkCarol"
+        ),
+      },
+      // Only the OWNER reports the notice delivered.
+      {
+        action: bob.delivered,
+        event: { requestId: "d-b", id: '["did:key:z6MkCarol","add-a2"]' },
+      },
+      { assertion: assert(() => alice.outgoingNotices.length === 1) },
+      {
+        action: alice.delivered,
+        event: { requestId: "d-a", id: '["did:key:z6MkCarol","add-a2"]' },
+      },
+      { assertion: assert(() => alice.outgoingNotices.length === 0) },
+
+      // Leaving takes the member's roster entry with it, from a room of its
+      // own; a space's own chat is left by leaving the space.
+      { action: bobInSpaceChat.leave, event: { requestId: "leave-0" } },
+      { assertion: assert(() => alice.roster.length === 2) },
+      { action: bob.leave, event: { requestId: "leave-1" } },
+      {
+        assertion: assert(() =>
+          alice.roster.length === 1 && equals(alice.roster[0], aliceProfile) &&
+          (left.get() ?? []).length === 1
+        ),
+      },
+    ],
+  };
+});
