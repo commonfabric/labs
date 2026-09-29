@@ -262,18 +262,17 @@ jobs:
       # sits beside the reports. A re-run of the lane replaces what the
       # attempt before it uploaded, so Status reads each lane once.
       #
-      # An artifact is rooted at the directory its paths share, and the
+      # An artifact is rooted at the directory its path names, and the
       # readers find a set's report by the layout under the coverage
-      # directory, so the paths name that directory and leave out the raw
-      # profiles below it rather than naming the reports' own directory.
+      # directory, so the path names that directory rather than the
+      # reports' own. The lane keeps its raw profiles beside it, in
+      # `coverage-raw/`, where this does not walk them.
       - name: 📤 Upload the lane's coverage reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lane-coverage-${{ github.job }}-${{ matrix.lane }}
-          path: |
-            coverage/
-            !coverage/raw/
+          path: coverage/
           overwrite: true
           retention-days: 90
           if-no-files-found: ignore

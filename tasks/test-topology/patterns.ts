@@ -11,6 +11,7 @@
  */
 
 import * as path from "@std/path";
+import { patternTestListLine } from "../integration.ts";
 import { PATTERN_TREES } from "../pattern-files.ts";
 import { SERVER_EXECUTION_ON_SKIPS } from "../server-execution-on-skips.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
@@ -257,13 +258,13 @@ async function patternUnitSuite(root: string): Promise<Suite> {
         : undefined;
     },
     async command(requests, context): Promise<Invocation[]> {
-      const files = requests
-        .map((request) => request.unit)
-        .filter((unit) => known.has(unit));
-      if (files.length === 0) return [];
+      const lines = requests
+        .filter((request) => known.has(request.unit))
+        .map((request) => patternTestListLine(request.unit, request.cost));
+      if (lines.length === 0) return [];
       const listPath = path.join(context.outputDir, "pattern-unit.files");
       await Deno.mkdir(context.outputDir, { recursive: true });
-      await Deno.writeTextFile(listPath, `${files.join("\n")}\n`);
+      await Deno.writeTextFile(listPath, `${lines.join("\n")}\n`);
       return [{
         command: [
           Deno.execPath(),

@@ -237,12 +237,14 @@ A lane uploads three artifacts. `lane-failure-tests-<lane>-a<attempt>`, where
 the lane failed, holds the working directory it kept and the core of any process
 in the lane that crashed natively: the lane step runs with `ulimit -c unlimited`
 and puts cores under `$RUNNER_TEMP/ci-lane-cores`. `lane-coverage-tests-<lane>`
-holds `coverage/` without its raw profiles: each report at
+holds `coverage/`: each report at
 `lcov/sets/<suite>/<member>/coverage.lcov`, where a `/` in the member's path is
 written `__`, the file saying whether the compile cache was restored, and the
 markers beside the reports of measured sets the lane saw fail. In the full run
 it also holds the authored-pattern reports under
-`lcov/pattern-runtime/<suite>`.
+`lcov/pattern-runtime/<suite>`. The raw profiles the reports are converted
+from stay behind in `coverage-raw/`, outside the uploaded directory, because
+the upload walks every directory under its path.
 `test-records-tests-<lane>-a<attempt>` holds its test records.
 
 The lane step is bounded at 60 minutes and its job at 70, by the lane job's own

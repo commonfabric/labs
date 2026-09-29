@@ -1,6 +1,6 @@
 /**
- * Tests imported text, editor bindings, recovery, and the live-cursor notice,
- * without a notebook.
+ * Tests imported text, editor bindings, recovery, the live-cursor notice, and
+ * the profile-name sanitizer's co-presence bounds, without a notebook.
  */
 
 import {
@@ -21,6 +21,7 @@ import {
   readValue,
 } from "../test/vnode-helpers.ts";
 import SharedNote from "./main.tsx";
+import { normalizePresenceParticipantName } from "./participant-name.ts";
 
 const MARKDOWN =
   "---\ntitle: Preserve this\n---\n# Team 😀\n\n- [ ] task\n\n```ts\nconst x = `${literal}`;\n```\n";
@@ -44,6 +45,13 @@ export default pattern(() => {
   });
   const assert_profile_setup = assert(() =>
     findNodeById(subject[UI], "shared-note-profile-setup") !== undefined
+  );
+  const assert_profile_name_is_safe_for_presence = assert(() =>
+    normalizePresenceParticipantName("  Ada\u0000\u0085 Lovelace  ") ===
+      "Ada Lovelace" &&
+    normalizePresenceParticipantName("a".repeat(81)) === "a".repeat(80) &&
+    normalizePresenceParticipantName("😀".repeat(65)) === "😀".repeat(64) &&
+    normalizePresenceParticipantName("\ud800") === ""
   );
   const assert_embeddable_view = assert(() =>
     readValue(
@@ -118,6 +126,7 @@ export default pattern(() => {
       { assertion: assert_imported_content },
       { assertion: assert_collaborative_editor },
       { assertion: assert_profile_setup },
+      { assertion: assert_profile_name_is_safe_for_presence },
       { assertion: assert_embeddable_view },
       { action: action_error },
       { assertion: assert_error_visible },

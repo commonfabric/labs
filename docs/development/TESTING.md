@@ -273,6 +273,17 @@ choose:
   than an accident of it.
 - The CLI's shell harnesses under `packages/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
+- `deno task integration pattern-tests` runs each `.test.tsx` file in a
+  `cf test` process of its own, five at a time. Each process has its own
+  store, so the order the files start in decides how long the run takes and
+  nothing else. The files a continuous-integration lane expects to take
+  longest start first, so the lane finishes close to the time it was charged
+  for. Files of equal expected time, and every file of a local run, which has
+  no such figures, start in the order the seed puts them in. A local run can
+  therefore start the files in a different order from a lane at the same
+  commit. That changes nothing a test sees, because each file runs alone in
+  its process and its steps run in the order they are written, so every step
+  runs locally in the order it ran in the lane.
 
 #### Writing a task that runs tests
 

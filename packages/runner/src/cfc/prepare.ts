@@ -1840,6 +1840,12 @@ const storedMetadataFor = (
     meta: INTERNAL_VERIFIER_META,
   });
 
+/** A source's projected view and the principal claims its root owns. */
+type LinkSourceProjection = {
+  view?: CfcLabelView;
+  principalClaims: CfcAtom[];
+};
+
 /**
  * Resolves input envelopes during one boundary preparation.
  *
@@ -1860,7 +1866,7 @@ class VerifierMetadataResolver {
   >();
   #seenWrites = 0;
   #viewIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
-  #views = new WeakMap<CfcMetadata, Map<string, CfcLabelView | undefined>>();
+  #views = new WeakMap<CfcMetadata, Map<string, LinkSourceProjection>>();
   #labelIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
   #labels = new WeakMap<CfcMetadata, Map<string, IFCLabel | undefined>>();
   #coverIndexes = new WeakMap<CfcLabelView, ConsumedLabelIndex>();
@@ -1930,11 +1936,11 @@ class VerifierMetadataResolver {
     return label;
   }
 
-  /** Reuses rebased views while their validated source envelope is unchanged. */
-  view(
+  /** Reuses projections while their validated source envelope is unchanged. */
+  projection(
     metadata: CfcMetadata | undefined,
     path: readonly string[],
-  ): CfcLabelView | undefined {
+  ): LinkSourceProjection | undefined {
     if (metadata === undefined) return undefined;
     let views = this.#views.get(metadata);
     if (views === undefined) {
@@ -1953,15 +1959,29 @@ class VerifierMetadataResolver {
         });
         this.#viewIndexes.set(metadata, index);
       }
-      const entries = index.overlapping(canonicalizeLogicalPath(path))
-        .map(({ entry }) => entry);
-      views.set(
-        key,
-        cfcLabelViewFromMetadata({
+      const logicalPath = canonicalizeLogicalPath(path);
+      const matching = index.overlapping(logicalPath);
+      // Match claims in the view's logical coordinates, including stored
+      // paths spelled with a leading `value`. Preserve the stored spelling
+      // below: the view builder owns its own path normalization.
+      const projected = withoutShadowedPrincipalClaims(
+        matching.map(({ entry, path }) => ({ ...entry, path })),
+        logicalPath,
+      );
+      const entries = projected.map((entry, index) => ({
+        ...entry,
+        path: matching[index].entry.path,
+      }));
+      views.set(key, {
+        view: cfcLabelViewFromMetadata({
           ...metadata,
           labelMap: { ...metadata.labelMap, entries },
         }, path),
-      );
+        principalClaims: (labelForEntriesAtPath(projected, logicalPath)
+          ?.integrity ?? []).filter((atom) =>
+            principalClaimSpelling(atom) !== undefined
+          ),
+      });
     }
     return views.get(key);
   }
@@ -2048,7 +2068,7 @@ class VerifierMetadataResolver {
       const types = documents?.get(write.id);
       for (const metadata of types?.values() ?? []) {
         if (metadata === undefined) continue;
-        for (const view of this.#views.get(metadata)?.values() ?? []) {
+        for (const { view } of this.#views.get(metadata)?.values() ?? []) {
           if (view === undefined) continue;
           this.#coverIndexes.delete(view);
           this.#covers.delete(view);
@@ -6895,39 +6915,54 @@ const gateRuntimeMintedIntegrity = (
   };
 };
 
+/** Derives the covering schema labels a source projection persists. */
 const persistedLabelFromSchemaAtPath = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
   path: readonly string[],
-  owningSpace: MemorySpace,
-  options: LabelMintOptions = {},
+  source: LinkWritePolicyInput["source"],
+  checkedSchema: JSONSchema | undefined,
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
-  let match:
-    | { path: readonly string[]; label: IFCLabel; schema: JSONSchema }
-    | undefined;
-  for (const entry of entries) {
-    if (!isPrefix(entry.path, logicalPath)) {
-      continue;
-    }
-    if (match === undefined || match.path.length < entry.path.length) {
-      match = entry;
-    }
-  }
-  if (match === undefined) {
-    return undefined;
-  }
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
-  return derivePersistedLabel(
-    tx,
-    match.schema,
-    match.label,
-    entryLabels,
-    owningSpace,
-    options,
+  const labels: CfcLabelView["entries"] = [];
+  const reference = pathHoldsStagedReference(tx, source, logicalPath);
+  for (const entry of entries) {
+    if (!isPrefix(entry.path, logicalPath)) continue;
+    const declarationPath = entry.path.map((segment, index) =>
+      segment === "*" ? logicalPath[index] : segment
+    );
+    // Each declaration contributes what its own value earns. Authorship of a
+    // container does not author the content of a reference staged inside it.
+    const label = withCheckedPrincipalClaims(
+      derivePersistedLabel(
+        tx,
+        entry.schema,
+        entry.label,
+        entryLabels,
+        source.space,
+        labelMintOptionsAt(tx, source, declarationPath),
+      ),
+      reference || checkedSchema === undefined
+        ? []
+        : checkedSchemaPrincipalClaims(
+          tx,
+          checkedSchema,
+          linkDocument(source),
+          entry.path,
+        ),
+    );
+    if (hasLabelValues(label) || hasPersistedPolicyClaim(entry.schema)) {
+      labels.push({ path: entry.path, label });
+    }
+  }
+  return labels.length === 0 ? undefined : joinLabels(
+    withoutShadowedPrincipalClaims(labels, logicalPath).map(({ label }) =>
+      label
+    ),
   );
 };
 
@@ -7059,6 +7094,25 @@ const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
   );
   if (kept.length === integrity.length) return label;
   return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
+/** Keeps principal claims only on the most specific cover of a source path. */
+const withoutShadowedPrincipalClaims = <
+  Entry extends { path: readonly string[]; label: IFCLabel },
+>(entries: Entry[], path: readonly string[]): Entry[] => {
+  if (path.length === 0) return entries;
+  let depth = -1;
+  for (const entry of entries) {
+    if (isPrefix(entry.path, path)) {
+      depth = Math.max(depth, entry.path.length);
+    }
+  }
+  if (depth <= 0) return entries;
+  return entries.map((entry) =>
+    entry.path.length < depth && isPrefix(entry.path, path)
+      ? { ...entry, label: withoutPrincipalClaims(entry.label) }
+      : entry
+  );
 };
 
 /** The document a link write's source or target address names. */
@@ -7204,24 +7258,13 @@ const derivePersistedLinkLabel = (
   // Only a schema this transaction's writes to the source are checked
   // against can vouch for a principal claim; a setup result schema is not.
   const sourceCandidate = candidateSchemas.get(targetKey(input.source));
-  // A source that is itself a reference staged in this transaction, or a
-  // value initialized on nobody's behalf, mints nothing for the acting
-  // principal, as its own slot does not.
   let pendingSourceLabel = pendingSourceSchema !== undefined
-    ? withCheckedPrincipalClaims(
-      persistedLabelFromSchemaAtPath(
-        tx,
-        pendingSourceSchema,
-        input.source.path,
-        input.source.space,
-        labelMintOptionsAt(tx, input.source, input.source.path),
-      ) ?? {},
-      sourceCandidate === undefined ? [] : checkedSchemaPrincipalClaims(
-        tx,
-        sourceCandidate,
-        linkDocument(input.source),
-        input.source.path,
-      ),
+    ? persistedLabelFromSchemaAtPath(
+      tx,
+      pendingSourceSchema,
+      input.source.path,
+      input.source,
+      sourceCandidate,
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -7248,24 +7291,12 @@ const derivePersistedLinkLabel = (
           targetCandidate,
           tx.getCfcState().trustSnapshot?.actingPrincipal,
         );
-        // A reference the runtime staged at the target is not the inline
-        // value this derivation stands for, so it mints nothing for the
-        // principal staging it; nor does a value the runtime initialized
-        // there on nobody's behalf.
-        pendingSourceLabel = withCheckedPrincipalClaims(
-          persistedLabelFromSchemaAtPath(
-            tx,
-            pendingSourceSchema,
-            input.target.path,
-            input.target.space,
-            labelMintOptionsAt(tx, input.target, input.target.path),
-          ) ?? {},
-          checkedSchemaPrincipalClaims(
-            tx,
-            targetCandidate,
-            linkDocument(input.target),
-            input.target.path,
-          ),
+        pendingSourceLabel = persistedLabelFromSchemaAtPath(
+          tx,
+          pendingSourceSchema,
+          input.target.path,
+          input.target,
+          targetCandidate,
         );
       }
     }
@@ -7329,18 +7360,22 @@ const derivePersistedLinkLabel = (
   ) {
     return {};
   }
-  const storedSourceView = metadataResolver.view(
+  const storedSource = metadataResolver.projection(
     sourceMetadata,
     input.source.path,
   );
+  const storedSourceView = storedSource?.view;
   const sourceView = pendingSourceView === undefined
     ? storedSourceView
     : mergeCfcLabelViews([storedSourceView, pendingSourceView]);
   const sourceLabel = joinLabels([
-    sourceMetadata === undefined ? undefined : metadataResolver.label(
-      sourceMetadata,
-      canonicalizeLogicalPath(input.source.path),
-    ) ?? {},
+    sourceMetadata === undefined ? undefined : withoutPrincipalClaims(
+      metadataResolver.label(
+        sourceMetadata,
+        canonicalizeLogicalPath(input.source.path),
+      ) ?? {},
+    ),
+    { integrity: storedSource?.principalClaims },
     pendingSourceLabel,
     metadataResolver.cover(pendingSourceView, [], undefined),
   ]);
@@ -7693,7 +7728,10 @@ const createLinkLabelDeriver = (
         relative,
         undefined,
       );
-      views.push(rebaseCfcLabelView({ version: 1, entries: linked }, relative));
+      views.push(rebaseCfcLabelView({
+        version: 1,
+        entries: withoutShadowedPrincipalClaims(linked, relative),
+      }, relative));
       if (label !== undefined) {
         views.push({ version: 1, entries: [{ path: [], label }] });
       }

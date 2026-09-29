@@ -30,7 +30,7 @@ import {
   COMPILE_CACHE_STATE_FILE,
   convertCoverage,
   COVERAGE_FAILURE_MARKER,
-  COVERAGE_PROFILE_DIR,
+  COVERAGE_PROFILE_SUFFIX,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
   describeAccounting,
@@ -370,9 +370,11 @@ describe("turning a lane's selections into batches", () => {
   });
 
   it("skips the identities inside a chosen unit that were not chosen", () => {
+    // What the unit is expected to cost is what the chosen identities
+    // cost, since the skipped ones do not run.
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
     const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
@@ -383,12 +385,14 @@ describe("turning a lane's selections into batches", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "packages/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
+      cost: 3,
     }]);
   });
 
   it("skips nothing inside a unit its suite declares whole", () => {
     // The runner of such a unit reads no skip list. The batch therefore carries
     // none, and the lane's report of what it ran lists every test in the unit.
+    // The unit is expected to cost what every test in it costs.
 
     const member = suite({
       id: "workspace-unit",
@@ -396,10 +400,11 @@ describe("turning a lane's selections into batches", () => {
       whole: ["packages/bakery"],
     });
     const manifest = manifestOf([
-      { unit: "packages/bakery" },
+      { unit: "packages/bakery", cost: 2 },
       {
         test: { k: "unit", s: "bakery", n: "glaze > browns" },
         unit: "packages/bakery",
+        cost: 7,
       },
     ]);
     const batches = batchesOf([member], pricedFor([member], manifest), [{
@@ -407,7 +412,9 @@ describe("turning a lane's selections into batches", () => {
       reason: "value",
       repeats: 1,
     }]);
-    expect(batches[0]!.units).toEqual([{ unit: "packages/bakery", skip: [] }]);
+    expect(batches[0]!.units).toEqual([
+      { unit: "packages/bakery", skip: [], cost: 9 },
+    ]);
   });
 
   it("skips nothing when every identity of a unit was chosen", () => {
@@ -2296,7 +2303,7 @@ describe("the lane's own housekeeping", () => {
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
     const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
     const dir =
-      `${root}/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const bare: Suite = {
@@ -3116,8 +3123,8 @@ describe("what a lane records about itself", () => {
 describe("the last corners of a lane's bookkeeping", () => {
   it("puts two identities of one unit in one batch, and skips neither", () => {
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
     const bakery = suite({
       id: "workspace-unit",
@@ -3136,6 +3143,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "packages/bakery/glaze.test.ts",
       skip: [],
+      cost: 8,
     }]);
   });
 
@@ -3867,7 +3875,7 @@ describe("what a lane measures", () => {
       gated("packages/bakery"),
     );
     expect(coverage?.dir)
-      .toBe(`/repo/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit`);
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit`);
     expect([...coverage!.members!]).toEqual(["packages/bakery"]);
   });
 
@@ -3884,7 +3892,7 @@ describe("what a lane measures", () => {
     );
     expect(coverage?.members).toBeUndefined();
     expect(coverage?.dir)
-      .toBe(`/repo/coverage/${COVERAGE_PROFILE_DIR}/runner-unit`);
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
     // The authored-pattern instrumentation writes its reports where the
     // lane's upload carries them to the repository-wide figure.
     expect(coverage?.patternDir)
@@ -3908,7 +3916,7 @@ describe("what a lane measures", () => {
       gated("packages/bakery"),
     );
     expect(coverage?.dir)
-      .toBe(`/repo/elsewhere/${COVERAGE_PROFILE_DIR}/runner-unit`);
+      .toBe(`/repo/elsewhere${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
   });
 
   describe("what it charges a suite it measures", () => {
@@ -4067,7 +4075,7 @@ describe("converting what a lane collected", () => {
   async function collected(sets: readonly string[]): Promise<string> {
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
     for (const set of sets) {
-      const dir = `${root}/coverage/${COVERAGE_PROFILE_DIR}/${set}`;
+      const dir = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/${set}`;
       await Deno.mkdir(dir, { recursive: true });
       // An empty profile directory converts to an empty report, which is
       // enough to prove the walk found it and named it.
@@ -4110,8 +4118,7 @@ describe("converting what a lane collected", () => {
     // An absent directory is a lane that measured nothing, which is
     // ordinary. Anything else is a failure worth ending on.
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
-    const at = `${root}/coverage/${COVERAGE_PROFILE_DIR}`;
-    await Deno.mkdir(`${root}/coverage`, { recursive: true });
+    const at = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}`;
     await Deno.writeTextFile(at, "");
     await expect(convertCoverage({ ...options(root) })).rejects.toThrow();
   });
@@ -4122,7 +4129,7 @@ describe("converting what a lane collected", () => {
     // report that was never complete.
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
     const dir =
-      `${root}/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const converted = await convertCoverage({ ...options(root) });

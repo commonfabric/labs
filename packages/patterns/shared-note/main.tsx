@@ -14,7 +14,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { normalizePresenceParticipantName } from "../collaborative-note/participant-name.ts";
+import { normalizePresenceParticipantName } from "./participant-name.ts";
 
 /** Initial document values, shared by every viewer of this piece. */
 export interface SharedNoteInput {

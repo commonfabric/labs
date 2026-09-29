@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { dirname } from "@std/path";
+import { dirname, relative } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
@@ -11,11 +11,13 @@ import {
   COMPILE_CACHE_FILE,
 } from "./ci-capabilities.ts";
 import {
-  COVERAGE_PROFILE_DIR,
   COVERAGE_REPORT_DIR,
   COVERAGE_REPORT_FILE,
+  coverageRoot,
   DEFAULT_COVERAGE_DIR,
   measuredSetOfReport,
+  parseLaneArgs,
+  profileRoot,
 } from "./ci-lane.ts";
 import { measuredSetDirectory } from "./test-selection/coverage.ts";
 import {
@@ -696,14 +698,19 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   const job = ci.jobs.tests;
 
   // The whole of what the lane converted, so a marker beside a report and
-  // the compile cache's state travel with the reports, and the raw profiles
-  // stay behind.
+  // the compile cache's state travel with the reports. The raw profiles
+  // are outside it, because the upload walks every directory under the
+  // path it is given, and one directory of them can hold more entries
+  // than the walk can take in one call.
   const coverage = namedStep(job, "📤 Upload the lane's coverage reports");
   const paths = String(coverage.with?.path).trim().split("\n");
-  assertEquals(paths, [
-    `${DEFAULT_COVERAGE_DIR}/`,
-    `!${DEFAULT_COVERAGE_DIR}/${COVERAGE_PROFILE_DIR}/`,
-  ]);
+  assertEquals(paths, [`${DEFAULT_COVERAGE_DIR}/`]);
+  const options = parseLaneArgs([], "/repo")!;
+  assertEquals(coverageRoot(options), `/repo/${paths[0]!.replace(/\/$/, "")}`);
+  assert(
+    relative(coverageRoot(options), profileRoot(options)).startsWith("../"),
+    "the raw profiles are inside the uploaded directory",
+  );
   assertEquals(
     coverage.with?.name,
     "lane-coverage-${{ github.job }}-${{ matrix.lane }}",
@@ -716,9 +723,7 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   // download of several artifacts puts each under a directory named for it.
   // A report the lane wrote therefore arrives at the path below, and the
   // readers have to find its set there.
-  const included = paths.filter((at) => !at.startsWith("!"));
-  assertEquals(included.length, 1);
-  const root = included[0]!.replace(/\/$/, "");
+  const root = paths[0]!.replace(/\/$/, "");
   const set = measuredSetDirectory({
     suite: "workspace-unit",
     set: { member: "packages/bakery", reachedBy: [], units: [] },

@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
+import { readPatternTestList } from "../integration.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import { loadPatternSuites } from "./patterns.ts";
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
@@ -279,6 +280,22 @@ describe("the pattern and package suites", () => {
     const flag = invocation!.command.find((arg) => arg.startsWith("--files="))!;
     const listed = await Deno.readTextFile(flag.slice("--files=".length));
     expect(listed.trim().split("\n")).toEqual(chosen);
+  });
+
+  it("hands the pattern unit tests the cost of each file that has one", async () => {
+    const suite = byId("pattern-unit");
+    const out = await outputDir();
+    const [priced, unpriced] = suite.units;
+    const [invocation] = await suite.command(
+      [{ unit: priced!, skip: [], cost: 12.5 }, { unit: unpriced!, skip: [] }],
+      { root, outputDir: out, spoolDir: "/spool" },
+    );
+    const flag = invocation!.command.find((arg) => arg.startsWith("--files="))!;
+    const listed = readPatternTestList(
+      await Deno.readTextFile(flag.slice("--files=".length)),
+    );
+    expect(listed.files).toEqual([priced, unpriced]);
+    expect([...listed.costs]).toEqual([[priced, 12.5]]);
   });
 
   it("names a pattern test by its own path", () => {

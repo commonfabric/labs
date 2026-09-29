@@ -1,3 +1,5 @@
+// PATTERN TIER: legacy — superseded or non-idiomatic; kept for what
+// depends on it. Do not copy from this file. Tiers: packages/patterns/index.md
 import {
   computed,
   Default,
@@ -10,8 +12,7 @@ import {
   wish,
 } from "commonfabric";
 
-import { normalizePresenceParticipantName } from "./participant-name.ts";
-export { normalizePresenceParticipantName } from "./participant-name.ts";
+import { normalizePresenceParticipantName } from "../shared-note/participant-name.ts";
 
 const DEFAULT_NOTE = "# Collaborative note\n\nStart writing together.";
 export interface CollaborativeNoteInput {
@@ -31,6 +32,10 @@ export interface CollaborativeNoteOutput {
  * The runtime derives the editor's room from the shared field and relays it
  * over the memory connection, and the pattern derives each viewer's label
  * from their profile.
+ *
+ * Superseded by `../shared-note/main.tsx`, which adds an editable title, an
+ * embeddable view, and notices for editing and live-cursor failures. Start new
+ * work there.
  */
 export default pattern<CollaborativeNoteInput, CollaborativeNoteOutput>(
   ({ note }) => {

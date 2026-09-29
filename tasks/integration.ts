@@ -26,7 +26,11 @@ import {
   RECORDS_DIR_VARIABLE,
   recordsDir,
 } from "@commonfabric/test-support/records";
-import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
+import {
+  pinShuffleSeed,
+  shuffledPaths,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 import {
   finishRunRecording,
   type RunRecording,
@@ -217,13 +221,13 @@ function getCfCommand(rootDir: string): string[] {
 async function findPatternTests(
   rootDir: string,
   filter?: string,
-  only?: readonly string[],
+  only?: PatternTestList,
 ): Promise<string[]> {
   // An explicit list names the files outright, which is what the topology
   // hands over when a lane was asked for part of this suite. A name
   // filter cannot express a set of unrelated files, and a list of them is
   // exactly what selection produces.
-  if (only !== undefined) return selectPatternTestFiles(only);
+  if (only !== undefined) return selectPatternTestFiles(only.files);
   const testFiles: string[] = [];
   for (const tree of PATTERN_TREES) {
     for await (
@@ -244,6 +248,70 @@ async function findPatternTests(
 /** The pattern test paths `files` names, slash-separated and sorted. */
 export function selectPatternTestFiles(files: readonly string[]): string[] {
   return files.map((file) => file.replaceAll("\\", "/")).toSorted();
+}
+
+/**
+ * One line of a `--files` list: a pattern test's path and, where it is
+ * known, the seconds one run of it is expected to take, after a tab.
+ */
+export function patternTestListLine(file: string, cost?: number): string {
+  return cost === undefined ? file : `${file}\t${cost}`;
+}
+
+/** The pattern tests a `--files` list names, and what each is expected to take. */
+export interface PatternTestList {
+  files: string[];
+
+  /** Seconds by file, for the files whose line carries a cost. */
+  costs: Map<string, number>;
+}
+
+/**
+ * The list a `--files` file holds, in the form {@link patternTestListLine}
+ * writes. A cost that is not a finite number of seconds throws, as does a
+ * line with more than the two fields.
+ */
+export function readPatternTestList(text: string): PatternTestList {
+  const files: string[] = [];
+  const costs = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const [written, cost, ...extra] = line.trim().split("\t");
+    if (!written) continue;
+    const file = written.replaceAll("\\", "/");
+    files.push(file);
+    if (cost === undefined) continue;
+    const seconds = Number(cost);
+    if (
+      extra.length > 0 || !Number.isFinite(seconds) ||
+      seconds < 0
+    ) {
+      throw new Error(
+        `Malformed pattern test list line: ${JSON.stringify(line)}`,
+      );
+    }
+    costs.set(file, seconds);
+  }
+  return { files, costs };
+}
+
+/**
+ * The order the pool starts pattern test files in: the costliest first,
+ * so the files still running once the rest have finished are short ones.
+ * A file with no cost goes ahead of every file with one, because nothing
+ * says it is not the longest. Files of equal cost, and files of no cost,
+ * take the order the shuffle seed puts them in. Each file runs in a
+ * process of its own, so their order decides how long the run takes and
+ * nothing else.
+ */
+export function patternTestStartOrder(
+  files: readonly string[],
+  costs: ReadonlyMap<string, number>,
+  seed: number,
+): string[] {
+  const cost = (file: string) => costs.get(file) ?? Infinity;
+  return shuffledPaths(files, seed).sort((a, b) =>
+    cost(a) === cost(b) ? 0 : cost(b) - cost(a)
+  );
 }
 
 /**
@@ -349,7 +417,7 @@ async function runPatternTests(
   rootDir: string,
   filter?: string,
   junitDir?: string,
-  only?: readonly string[],
+  only?: PatternTestList,
 ): Promise<boolean> {
   const cfCmd = getCfCommand(rootDir);
   const testFiles = await findPatternTests(rootDir, filter, only);
@@ -362,6 +430,11 @@ async function runPatternTests(
   const concurrency = 5;
   console.log(
     `Found ${testFiles.length} pattern test(s), running ${concurrency} at a time`,
+  );
+  const startOrder = patternTestStartOrder(
+    testFiles,
+    only?.costs ?? new Map(),
+    shuffleSeed(),
   );
 
   // The files begin here. What this process spent before now is in no
@@ -393,8 +466,8 @@ async function runPatternTests(
   const running = new Set<Promise<void>>();
 
   function enqueue(): void {
-    while (running.size < concurrency && nextIndex < testFiles.length) {
-      const testFile = testFiles[nextIndex++];
+    while (running.size < concurrency && nextIndex < startOrder.length) {
+      const testFile = startOrder[nextIndex++];
       const p = (async () => {
         const startMs = performance.now();
         // A child that cannot even spawn is that file's failure, kept
@@ -677,7 +750,7 @@ export async function runPackageIntegration(
   rootDir: string,
   filter?: string,
   junitDir?: string,
-  only?: readonly string[],
+  only?: PatternTestList,
 ): Promise<boolean> {
   const packageDirName = pkg === "cli-fuse"
     ? "cli"
@@ -818,7 +891,9 @@ Arguments:
   --files=<path>    A file naming the pattern tests to run, one path per
                     line, in place of the name filter. This is how a
                     continuous-integration lane asks for the part of the
-                    suite it was given.
+                    suite it was given. A path may be followed by a tab
+                    and the seconds it is expected to take; the costliest
+                    files start first.
 
 Examples:
   deno task integration                       # Run all, auto-cleanup
@@ -905,9 +980,9 @@ async function main(): Promise<void> {
     await Deno.mkdir(junitDir, { recursive: true });
   }
 
-  const onlyFiles = onlyFilesPath === undefined ? undefined : (
-    await Deno.readTextFile(onlyFilesPath)
-  ).split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  const onlyList = onlyFilesPath === undefined
+    ? undefined
+    : readPatternTestList(await Deno.readTextFile(onlyFilesPath));
 
   const packageFilter = positionalArgs[0];
   const nameFilter = positionalArgs[1];
@@ -1053,7 +1128,7 @@ async function main(): Promise<void> {
         rootDir,
         nameFilter,
         junitDir,
-        onlyFiles,
+        onlyList,
       );
       results.push({ pkg, success });
     }
@@ -1070,7 +1145,7 @@ async function main(): Promise<void> {
         rootDir,
         nameFilter,
         junitDir,
-        onlyFiles,
+        onlyList,
       );
       results.push({ pkg, success });
     }

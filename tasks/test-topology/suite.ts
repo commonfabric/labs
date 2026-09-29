@@ -74,6 +74,14 @@ export interface UnitRequest {
    * them, which is what a unit selected whole asks for.
    */
   skip: readonly string[];
+
+  /**
+   * Seconds one run of the unit is expected to take, as the manifest the
+   * lane planned from prices the identities it runs. Absent where nothing
+   * priced it. A runner that runs units side by side starts the costliest
+   * first by it.
+   */
+  cost?: number;
 }
 
 /** One JUnit report an invocation writes, and how to read it. */

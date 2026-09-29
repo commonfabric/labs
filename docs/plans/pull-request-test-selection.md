@@ -1327,9 +1327,10 @@ lane that passed removes it. Step 7 also runs with `ulimit -c unlimited` and
 puts the core of any process in the lane that crashes natively under
 `$RUNNER_TEMP/ci-lane-cores`, which the same upload carries.
 
-Step 9 uploads the lane's coverage directory without its raw profiles, as
-`lane-coverage-<job>-<lane>`. An artifact is rooted at the directory its paths
-share, and the readers find a set's report by its place under that directory, at
+Step 9 uploads the lane's coverage directory as `lane-coverage-<job>-<lane>`.
+The raw profiles are beside it, in `coverage-raw/`, and stay behind. An artifact
+is rooted at the directory its path names, and the readers find a set's report
+by its place under that directory, at
 `lcov/sets/<suite>/<member>/coverage.lcov`, so the upload names the coverage
 directory rather than the reports' own. A measured set the lane saw fail is
 marked by a file beside its report, and the file saying whether the compile
@@ -2443,7 +2444,11 @@ times than the longest one, the later passes are set by the shorter unit,
 so the bound is more than any one unit takes over all its runs. No pass
 takes longer than every unit in it put together, so for a suite whose
 correction is one or more the corrected sum is always the larger, and
-the bound changes nothing.
+the bound changes nothing. The bound is close to exact only where the
+runner starts the longest unit of each pass first: a five-minute file
+started after every other file of its pass finishes about five minutes
+after the rest of the pass. The pattern unit runner is handed each file's
+cost by the lane and starts the costliest first for that reason.
 
 The measurements travel through the machinery that already exists: the
 lane runner writes them as ordinary test records of kind `gate` and
@@ -3111,9 +3116,7 @@ tests:
       uses: actions/upload-artifact
       with:
         name: lane-coverage-${{ github.job }}-${{ matrix.lane }}
-        path: |
-          coverage/
-          !coverage/raw/
+        path: coverage/
         overwrite: true
         if-no-files-found: ignore
     - name: 📤 Ship test records
