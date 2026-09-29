@@ -151,8 +151,9 @@ export type CfcTransportReadiness = {
  * runtime keeps alive for the rest of the run, so state a command leaves
  * behind (files outside the mounts, background processes, installed
  * packages) is there for the next call that names the same session. A call
- * that names none gets a fresh sandbox of its own. Sessions are scoped to
- * the run: two runs naming the same session never share a sandbox.
+ * that names none gets a fresh sandbox of its own. A session belongs to the
+ * runtime that started it: two runtimes naming the same session never share a
+ * sandbox, and runs that execute on one runtime share its sessions.
  */
 export type SandboxSessionName = string;
 

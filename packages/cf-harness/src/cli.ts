@@ -568,8 +568,8 @@ Options:
   --handle-value-origin <origin> Origin a handle's value may be sent to (repeatable; none by default)
   --input-cell <name>=<link>       Explicitly attach a cell in the fabric space to this run by reference, announced as a handle under <name>; its shape and labels live on the cell's declared schema (repeatable; requires --fabric-space)
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
-  --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (required for enforce-* modes)
-  --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (required for enforce-* modes)
+  --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (docker runtime only; required for enforce-* modes)
+  --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
   --sandbox-runtime <kind>      docker (the default) or runsc: run runsc directly with
@@ -633,7 +633,9 @@ Environment:
   CF_HARNESS_PROMPT_CACHE_MODE  Default value for --prompt-cache-mode
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
-  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge)
+  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
+                                runsc runtime is runsc's own network stack, reported
+                                as sandbox)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
