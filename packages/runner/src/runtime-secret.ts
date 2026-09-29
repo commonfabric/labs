@@ -6,10 +6,17 @@
  * confirm the guess without reading the row.
  *
  * The id namespace is reserved. The transaction write chokepoint refuses every
- * unprivileged write to it, so no code can plant a secret it knows before the
- * runtime mints one. `IExtendedStorageTransaction.ensureRuntimeSecret()` is
- * the one writer: it mints a random value when none is stored and hands none
- * back, so calling it tells the caller nothing.
+ * unprivileged write to it. `IExtendedStorageTransaction.ensureRuntimeSecret()`
+ * is the one writer: it mints a random value when no trusted one is stored and
+ * hands none back, so calling it tells the caller nothing.
+ *
+ * A stored value is trusted only when its stored schema carries the writer
+ * claim `writeAuthorizedBy: [RUNTIME_SECRET_WRITER]`, or when the transaction
+ * reading it minted it. The runtime committing a write refuses a claim whose
+ * writer is not the builtin it names, and no runtime lets executed code act as
+ * a builtin, so a value that code planted in the namespace, before the
+ * chokepoint existed or through a runtime without it, carries no such claim.
+ * `ensureRuntimeSecret()` replaces an untrusted value.
  *
  * A secret is labeled with {@link RUNTIME_SECRET_LABEL}, an atom no reader
  * holds and no ceiling admits, so code that reads one cannot write, display
@@ -21,11 +28,19 @@
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
+import { ContextualFlowControl } from "./cfc.ts";
+import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./cfc/observation.ts";
+import type { JSONSchema } from "./builder/types.ts";
 import type { NormalizedFullLink } from "./link-utils.ts";
 import type { URI } from "./sigil-types.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
-import { internalVerifierRead } from "./storage/reactivity-log.ts";
+import {
+  ignoreReadForScheduling,
+  internalVerifierRead,
+} from "./storage/reactivity-log.ts";
 
 /** The reserved id namespace of runtime secrets. */
 export const RUNTIME_SECRET_ID_PREFIX = "of:runtime-secret:";
@@ -39,10 +54,13 @@ export const RUNTIME_SECRET_LABEL = {
   confidentiality: [CFC_LABEL_READ_FAILED_ATOM],
 } as const;
 
+/** The builtin identity a runtime secret is minted under. */
+export const RUNTIME_SECRET_WRITER = "runtime-secret";
+
 /** The schema a runtime secret is written under. */
 export const RUNTIME_SECRET_SCHEMA = {
   type: "string",
-  ifc: RUNTIME_SECRET_LABEL,
+  ifc: { ...RUNTIME_SECRET_LABEL, writeAuthorizedBy: [RUNTIME_SECRET_WRITER] },
 } as const;
 
 /** Returns the id of the runtime secret called `name`. */
@@ -65,19 +83,56 @@ export const isRuntimeSecretId = (id: string): boolean =>
   id.startsWith(RUNTIME_SECRET_ID_PREFIX);
 
 /**
- * Returns the runtime secret called `name` in `space`, or `undefined` when
- * none is stored. The read is verifier-internal: it stays in the
- * transaction's conflict set, so a secret minted concurrently elsewhere fails
- * this transaction's commit rather than going unseen, and it joins nothing to
- * the flow label.
+ * Returns the runtime secret called `name` in `space`, or `undefined` when no
+ * trusted one is stored: none at all, or a value whose stored schema does not
+ * carry the runtime's writer claim and which this transaction did not mint.
+ * The reads are verifier-internal: they stay in the transaction's conflict
+ * set, so a secret minted concurrently elsewhere fails this transaction's
+ * commit rather than going unseen, and they join nothing to the flow label.
  */
 export const readRuntimeSecret = (
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
   name: string,
 ): string | undefined => {
-  const value = tx.readValueOrThrow(runtimeSecretLink(space, name), {
-    meta: internalVerifierRead,
-  });
-  return typeof value === "string" ? value : undefined;
+  const link = runtimeSecretLink(space, name);
+  const value = tx.readValueOrThrow(link, { meta: internalVerifierRead });
+  if (typeof value !== "string") return undefined;
+  return mintedIn(tx, link) || carriesWriterClaim(tx, link) ? value : undefined;
+};
+
+/** Returns whether `tx` wrote the document `link` names. */
+const mintedIn = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean =>
+  [...(tx.getWriteDetails?.(link.space) ?? [])].some((detail) =>
+    detail.address.id === link.id
+  );
+
+/**
+ * Returns whether the schema stored with the document `link` names claims it
+ * for {@link RUNTIME_SECRET_WRITER} at its root.
+ */
+const carriesWriterClaim = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean => {
+  const metadata = readStoredCfcMetadata(tx, link);
+  if (metadata === undefined) return false;
+  const stored = tx.readOrThrow({
+    space: link.space,
+    id: `cid:${metadata.schemaHash}` as URI,
+    type: "application/json",
+    path: [],
+  }, { meta: { ...ignoreReadForScheduling, ...internalVerifierRead } });
+  if (!isObjectOrArray(stored) || stored.value === undefined) return false;
+  const schema = ContextualFlowControl.getSchemaAtPath(
+    stored.value as JSONSchema,
+    [],
+  );
+  const claim = isObjectOrArray(schema) && isObjectOrArray(schema.ifc)
+    ? schema.ifc.writeAuthorizedBy
+    : undefined;
+  return Array.isArray(claim) && claim.includes(RUNTIME_SECRET_WRITER);
 };

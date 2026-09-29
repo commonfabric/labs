@@ -44,6 +44,7 @@ import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimeSecretLink } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
 import { toURI } from "../src/uri-utils.ts";
@@ -730,6 +731,34 @@ describe("sqlite-query-row-set-members", () => {
         runtime.getCellFromLink(saltLink, undefined, tx).get();
       });
       expect(join).toContainEqual(CFC_LABEL_READ_FAILED_ATOM);
+    });
+
+    it("replaces a salt stored without the runtime's writer claim", async () => {
+      // A value written into the namespace before the write chokepoint
+      // existed, or by a runtime without it. The fixture's privileged write
+      // stands in for that writer: it lands the value and records no claim.
+      const plant = runtime.edit() as ExtendedStorageTransaction;
+      plant.accessForTestingOnly.privilegedSystemWrite(
+        { ...saltLink, type: "application/json", path: ["value"] },
+        "planted",
+      );
+      expect((await plant.commit()).error).toBeUndefined();
+      expect(storedSalt()).toBe("planted");
+
+      const rows = await saltedRows("salt-planted");
+      const salt = storedSalt();
+      expect(typeof salt).toBe("string");
+      expect(salt).not.toBe("planted");
+      const [first] = rowLinks(rows);
+      const store = rows.resolveAsCell().getAsNormalizedFullLink();
+      const underPlanted = toURI(
+        createRef({ salt: "planted", row: { note: "n3" } }, {
+          parent: { id: store.id, space: store.space },
+          path: [...store.path, "result"],
+          context: "sqlite-result-row",
+        }),
+      );
+      expect(first.id).not.toBe(underPlanted);
     });
 
     it("refuses a write to the salt from outside the runtime", async () => {

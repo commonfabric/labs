@@ -120,6 +120,7 @@ import {
   isRuntimeSecretId,
   readRuntimeSecret,
   RUNTIME_SECRET_SCHEMA,
+  RUNTIME_SECRET_WRITER,
   runtimeSecretLink,
 } from "../runtime-secret.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
@@ -2784,11 +2785,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // The label arrives the way a schema-declared one does on any write, so
     // the secret carries it from the commit that creates it.
     this.markCfcRelevant(`runtime-secret:${link.id}`);
-    this.recordCfcWritePolicyInput({
-      kind: "schema",
-      target: { space, id: link.id, scope: link.scope, path: [] },
-      schema: RUNTIME_SECRET_SCHEMA,
+    // Recorded under the writer's builtin identity, which the schema's
+    // writer claim names, so the claim stored with the secret is what later
+    // readers trust it by.
+    const identity = this.#cfcState.implementationIdentity;
+    assignCfcImplementationIdentity(this, {
+      kind: "builtin",
+      builtinId: RUNTIME_SECRET_WRITER,
     });
+    try {
+      this.recordCfcWritePolicyInput({
+        kind: "schema",
+        target: { space, id: link.id, scope: link.scope, path: [] },
+        schema: RUNTIME_SECRET_SCHEMA,
+      });
+    } finally {
+      assignCfcImplementationIdentity(this, identity);
+    }
   }
 
   /**

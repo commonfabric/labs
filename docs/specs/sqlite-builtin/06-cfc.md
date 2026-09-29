@@ -846,8 +846,12 @@ key and the result cell's coordinates. The salt is a runtime secret
 (`packages/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
-so no code can plant a salt it knows, and the one writer,
-`ensureRuntimeSecret()`, returns nothing. The salt is labeled with the
+and the one writer, `ensureRuntimeSecret()`, returns nothing. A stored salt is
+trusted only when its stored schema carries the writer claim
+`writeAuthorizedBy: ["runtime-secret"]`, which the runtime records under that
+builtin identity when it mints one and which no executed code can satisfy. A
+value planted in the namespace before the chokepoint existed, or through a
+runtime without it, carries no such claim, and the next settle replaces it. The salt is labeled with the
 read-failed atom, which no ceiling admits, so code that reads it cannot
 write, display or send anything derived from it; the builtin reads it as a
 verifier-internal read, which joins nothing to the settle's label. Without
