@@ -15,17 +15,14 @@ interface ChatMessage {
   /** The current text, or the marker of a deleted message. */
   body: string | { deleted: true };
 
-  /**
-   * When the room recorded the message's first version, in milliseconds since
-   * the epoch. Unique in the room.
-   */
-  sentAt: number;
+  /** When the room recorded the message's first version. Unique in the room. */
+  sentAt: FabricEpochNsec;
 
   /**
    * When the room recorded the current version, if it isn't the first: the
    * latest edit or deletion. Unique in the room.
    */
-  editedAt?: number;
+  editedAt?: FabricEpochNsec;
 
   /** The versions before the current one, oldest first. */
   earlierVersions: ChatMessageVersion[];
@@ -105,19 +102,22 @@ every thread, and every message's history. One record keeps one time, so a
 message's `sentAt` and its first earlier version's `sentAt` are the same
 recording, not two.
 
-When a new record's time is one the room has already used, the room records it
-at the smallest later time, in milliseconds, that it hasn't used. That time
-stays within the end of the current clock tick (see
-[`ChatRoomOutput`](ChatRoomOutput.md#recorded-times)). If every millisecond
-through the end of the tick is taken, the room refuses the record, and a retry
-in a later tick records it. Making
-a record and choosing its time happen in one transaction, so two records made at
-once can't both take the same time.
+Every recorded time is a [`FabricEpochNsec`](../space-model-formal-spec/1-fabric-values.md): an exact count of nanoseconds since the
+POSIX epoch, held as a `bigint`. When a new record's time is one the room has
+already used, the room records it at the smallest later time, in nanoseconds,
+that it hasn't used.
+
+A bumped time stays within the end of the current clock tick (see
+[`ChatRoomOutput`](ChatRoomOutput.md#recorded-times)). A one-second tick holds a
+billion nanoseconds, so running out is not a concern at human timescales; if it
+ever happened, the room would refuse the record, and a retry in a later tick
+would record it. Making a record and choosing its time happen in one
+transaction, so two records made at once can't both take the same time.
 
 So within a room, a recorded time identifies its record: every message's
 `sentAt` identifies the message, and every reaction's identifies the reaction.
-The bumped milliseconds are only for uniqueness: a client MUST NOT read them as
-a finer clock.
+The nanoseconds a bump adds are only for uniqueness: a client MUST NOT read a
+recorded time as finer than the system's clock resolution.
 
 ## Identity
 

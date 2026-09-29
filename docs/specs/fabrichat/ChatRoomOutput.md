@@ -208,7 +208,11 @@ messages with the same text are two sends with two proposed times, so sending
 
 A room decides the time it records for a send (`sentAt`) or an edit (`editedAt`)
 from the sender's proposed time and its own handler clock, by a policy it
-documents:
+documents. Every time here is a `FabricEpochNsec`. The handler clock reads
+milliseconds, which a room converts by multiplying by 10⁶, as conversion from a
+`Date` does.
+
+The policy:
 
 - A proposal the room finds plausible, close enough to its handler clock, MAY be
   recorded as the time. The room MAY adjust it first, for example to coarsen it
@@ -224,12 +228,12 @@ accept a send or edit whose proposal is in the future, if the proposal is
 plausibly close, but it then records a time no later than the current time.
 
 The only thing that can carry a recorded time past the current time is the
-milliseconds added to make it unique (see
+steps added to make it unique (see
 [unique times](ChatMessage.md#unique-times)), and those never carry it past the
 end of the current clock tick. A handler clock reading stands for a whole tick
 of the system's clock resolution, so a reading of `t` with a resolution of `r`
-milliseconds covers `t` through `t + r - 1`, and a bumped time stays within that
-range.
+covers times from `t` up to, but not including, `t + r`, and a bumped time stays
+within that range.
 
 Accepting a sender's time lets a sender place a message earlier than it arrived,
 within the room's window of plausibility, but never later than it arrived. That

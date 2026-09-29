@@ -15,8 +15,8 @@ interface ChatAbout {
   /** A group room's title. A direct room has none. */
   title?: string;
 
-  /** When the room was created, in milliseconds since the epoch. */
-  createdAt: number;
+  /** When the room was created. */
+  createdAt: FabricEpochNsec;
 }
 ```
 

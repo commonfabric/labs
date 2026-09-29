@@ -18,7 +18,7 @@ interface ChatMessageVersion {
   body: string | { deleted: true };
 
   /** When the room recorded this version. Unique in the room. */
-  sentAt: number;
+  sentAt: FabricEpochNsec;
 }
 ```
 

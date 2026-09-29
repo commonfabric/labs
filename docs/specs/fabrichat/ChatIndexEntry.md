@@ -16,8 +16,8 @@ interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it, in milliseconds since the epoch. */
-  since: number;
+  /** When this user created or accepted it. */
+  since: FabricEpochNsec;
 }
 ```
 

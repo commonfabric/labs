@@ -63,8 +63,9 @@ and move the current version into `earlierVersions` before recording the new
 one. They have the same kind of write policy as `commitSend`.
 
 `commitSend`, `commitEdit`, `commitDelete`, and `commitSendReaction` choose a
-recorded time in the same transaction that records it: the handler clock, or the
-smallest later time in milliseconds that the room hasn't used yet. A room keeps
+recorded time in the same transaction that records it: the chosen time, or the
+smallest later time, in nanoseconds, that the room hasn't
+used yet (see [unique times](ChatMessage.md#unique-times)). A room keeps
 the times it has used in a keyed collection, so the check doesn't scan every
 message, and two records made at once conflict and retry rather than share a
 time.

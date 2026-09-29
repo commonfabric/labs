@@ -16,7 +16,7 @@ interface ChatReaction {
   emoji: string;
 
   /** When the room recorded the reaction. Unique in the room. */
-  sentAt: number;
+  sentAt: FabricEpochNsec;
 }
 ```
 
