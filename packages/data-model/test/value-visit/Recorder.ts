@@ -88,14 +88,18 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   onMappedFabricArrayElement?: (
     index: number,
     value: unknown,
+    resultValue: unknown,
   ) => MappedResult<unknown>;
   onMappedFabricInstanceState?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
+    resultState: unknown,
   ) => MappedResult<unknown>;
   onMappedFabricPlainObjectEntry?: (
-    key: unknown,
+    key: string,
     value: unknown,
+    resultKey: string,
+    resultValue: unknown,
   ) => MappedResult<unknown>;
   onVisitingFabricArrayElement?: (
     index: number,
@@ -205,31 +209,53 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
+    resultValue: unknown,
   ): MappedResult<unknown> {
-    this.events.push(["mappedFabricArrayElement", array, index, value]);
+    this.events.push([
+      "mappedFabricArrayElement",
+      array,
+      index,
+      value,
+      resultValue,
+    ]);
     return this.onMappedFabricArrayElement
-      ? this.onMappedFabricArrayElement(index, value)
+      ? this.onMappedFabricArrayElement(index, value, resultValue)
       : undefined;
   }
 
   override mappedFabricInstanceState(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
+    resultState: unknown,
   ): MappedResult<unknown> {
-    this.events.push(["mappedFabricInstanceState", instance, state]);
+    this.events.push([
+      "mappedFabricInstanceState",
+      instance,
+      state,
+      resultState,
+    ]);
     return this.onMappedFabricInstanceState
-      ? this.onMappedFabricInstanceState(instance, state)
+      ? this.onMappedFabricInstanceState(instance, state, resultState)
       : undefined;
   }
 
   override mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<unknown>,
-    key: unknown,
+    key: string,
     value: unknown,
+    resultKey: string,
+    resultValue: unknown,
   ): MappedResult<unknown> {
-    this.events.push(["mappedFabricPlainObjectEntry", container, key, value]);
+    this.events.push([
+      "mappedFabricPlainObjectEntry",
+      container,
+      key,
+      value,
+      resultKey,
+      resultValue,
+    ]);
     return this.onMappedFabricPlainObjectEntry
-      ? this.onMappedFabricPlainObjectEntry(key, value)
+      ? this.onMappedFabricPlainObjectEntry(key, value, resultKey, resultValue)
       : undefined;
   }
 

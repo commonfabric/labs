@@ -32,20 +32,24 @@ export abstract class BaseValueVisitor<
   abstract mappedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */
   abstract mappedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
-    state: FabricValuePlus<ResultType>,
+    state: FabricValuePlus<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */
   abstract mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultKey: string,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */

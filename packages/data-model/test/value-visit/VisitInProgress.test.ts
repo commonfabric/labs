@@ -1095,7 +1095,7 @@ describe("VisitInProgress", () => {
             expect(result[1]).toBe("one");
           });
 
-          it("reports each element's mapped value to `mappedFabricArrayElement()`, after visiting the element", () => {
+          it("reports each element and its mapped value to `mappedFabricArrayElement()`, after visiting the element", () => {
             const rec = new Recorder();
             rec.onPrimitive = () => mapTo("one");
             const array = [1];
@@ -1107,7 +1107,7 @@ describe("VisitInProgress", () => {
               ["visitingFabricArrayElement", array, 0, 1],
               ["value", 1, "number"],
               ["primitive", 1, "number"],
-              ["mappedFabricArrayElement", array, 0, "one"],
+              ["mappedFabricArrayElement", array, 0, 1, "one"],
             ]);
           });
 
@@ -1166,7 +1166,7 @@ describe("VisitInProgress", () => {
             expect(map({ a: 1, b: 2 }, rec)).toEqual({ z: 1, b: 2 });
           });
 
-          it("reports each entry's final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
+          it("reports each entry and its final key and mapped value to `mappedFabricPlainObjectEntry()`, after visiting the entry", () => {
             const rec = new Recorder();
             rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
             rec.onPrimitive = (v) => mapTo((v === "a") ? "z" : "one");
@@ -1181,7 +1181,7 @@ describe("VisitInProgress", () => {
               ["primitive", "a", "string"],
               ["value", 1, "number"],
               ["primitive", 1, "number"],
-              ["mappedFabricPlainObjectEntry", object, "z", "one"],
+              ["mappedFabricPlainObjectEntry", object, "a", 1, "z", "one"],
             ]);
           });
 
@@ -1268,7 +1268,7 @@ describe("VisitInProgress", () => {
             expect(original.message).toBe("boom");
           });
 
-          it("reports the mapped state to `mappedFabricInstanceState()`, after visiting the state", () => {
+          it("reports the state and its mapped form to `mappedFabricInstanceState()`, after visiting the state", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => (v === "boom") ? mapTo("bang") : undefined;
             const original = error("boom");
@@ -1277,6 +1277,10 @@ describe("VisitInProgress", () => {
             expect(rec.names.slice(-1)).toEqual(["mappedFabricInstanceState"]);
             expect(rec.events.slice(-1)).toEqual([
               ["mappedFabricInstanceState", original, {
+                type: "Error",
+                name: null,
+                message: "boom",
+              }, {
                 type: "Error",
                 name: null,
                 message: "bang",
@@ -1402,7 +1406,7 @@ describe("VisitInProgress", () => {
             expect((map({ a: 1 }, rec) as { a: unknown }).a).toBe(two);
           });
 
-          it("reports the mapped replacement, not the original, to `mappedFabricArrayElement()`", () => {
+          it("reports the original element alongside its mapped replacement to `mappedFabricArrayElement()`", () => {
             const rec = new Recorder();
             rec.onValue = (v) => (v === "x") ? replace(42) : DO_DISPATCH;
             const array = ["x"];
@@ -1411,7 +1415,7 @@ describe("VisitInProgress", () => {
             expect(
               rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
             ).toEqual([
-              ["mappedFabricArrayElement", array, 0, 42],
+              ["mappedFabricArrayElement", array, 0, "x", 42],
             ]);
           });
         });

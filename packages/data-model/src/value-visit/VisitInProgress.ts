@@ -385,6 +385,7 @@ export class VisitInProgress<
             const result = vis.mappedFabricArrayElement(
               array,
               idxNumber,
+              element,
               mappedTo,
             );
 
@@ -484,7 +485,7 @@ export class VisitInProgress<
       }
 
       const mappedTo = stateResult.value;
-      const result = vis.mappedFabricInstanceState(instance, mappedTo);
+      const result = vis.mappedFabricInstanceState(instance, state, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
@@ -612,6 +613,8 @@ export class VisitInProgress<
           const finalKey: string = keyMappedTo!;
           const result = vis.mappedFabricPlainObjectEntry(
             plainObj,
+            key,
+            value,
             finalKey,
             valueMappedTo,
           );

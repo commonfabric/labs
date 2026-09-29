@@ -212,11 +212,15 @@ export interface ValueVisitor<
    * result of the visitor returning a `recurse` result for a visited array
    * while doing a structural-map operation, and it is called _after_ the
    * element itself was directly visited.
+   *
+   * `value` is the element as it stands in `array`, even where its visit
+   * returned a `replace`, and `resultValue` is what it mapped to.
    */
   mappedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /**
@@ -225,10 +229,14 @@ export interface ValueVisitor<
    * result for a visited `FabricInstance` while doing a structural-map
    * operation, and it is called _after_ the instance's state was directly
    * visited.
+   *
+   * `state` is the state as the instance's codec encoded it, and `resultState`
+   * is what it mapped to.
    */
   mappedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
-    state: FabricValuePlus<ResultType>,
+    state: FabricValuePlus<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /**
@@ -236,11 +244,17 @@ export interface ValueVisitor<
    * called as a result of the visitor returning a `recurse` result for a
    * visited `FabricPlainObject` while doing a structural-map operation, and it
    * is called _after_ the entry's key and/or value were directly visited.
+   *
+   * `key` and `value` are the entry as it stands in `container`, and
+   * `resultKey` and `resultValue` are what they mapped to. Where keys are not
+   * visited, `resultKey` is `key`.
    */
   mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultKey: string,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /**
