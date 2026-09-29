@@ -84,11 +84,17 @@ describe("runsc", () => {
         stderr: "piped",
       }).output();
       const decoder = new TextDecoder();
+      // A child whose module cache is cold says what it fetches on standard
+      // error, which says nothing about the check. Anything else there would:
+      // a permission that was asked for, or an error.
+      const said = decoder.decode(result.stderr).split("\n").filter((line) =>
+        line !== "" && !line.startsWith("Download ")
+      );
       expect({
         code: result.code,
         stdout: decoder.decode(result.stdout),
-        stderr: decoder.decode(result.stderr),
-      }).toEqual({ code: 0, stdout: "verified\n", stderr: "" });
+        stderr: said,
+      }).toEqual({ code: 0, stdout: "verified\n", stderr: [] });
       expect(await entriesOf(parent)).toEqual([]);
     });
 
