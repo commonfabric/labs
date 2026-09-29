@@ -59,6 +59,13 @@ result is declined does not advance it. Controls use it to expire temporary
 display snapshots; it is not a storage version or a commit acknowledgment, and
 versions from different handles cannot be compared.
 
+`onCacheChange(callback)` observes those revisions after value subscribers have
+run. It also fires for unchanged worker confirmations and successful cache
+reads, so a control can repaint when a temporary display override expires. The
+listener is local to the handle, has no initial callback, and opens no worker
+subscription; its returned cancel function removes it. Ordinary `subscribe()`
+callbacks keep their value-change contract.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every

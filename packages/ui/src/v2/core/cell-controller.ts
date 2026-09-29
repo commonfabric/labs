@@ -97,6 +97,7 @@ export class CellController<T> implements ReactiveController {
   private options: Required<CellControllerOptions<T>>;
   private _currentValue: CellHandle<T> | T | undefined;
   private _cellUnsubscribe: (() => void) | null = null;
+  #cacheUnsubscribe: (() => void) | undefined;
   private _inputTiming?: InputTimingController;
 
   /**
@@ -442,12 +443,12 @@ export class CellController<T> implements ReactiveController {
     ) return;
     const reconciliation = this.#reconciliation = {};
     const cacheVersion = cell.getCacheVersion();
-    const oldValue = this.getValue();
     const finish = (snapshot: Readonly<T> | undefined) => {
       if (
         this.#reconciliation !== reconciliation || this._localEdit !== edit ||
         this._currentValue !== cell
       ) return;
+      const oldValue = this.getValue();
       this._localEdit = undefined;
       this.#reconciliation = undefined;
       const cached = this.defaultGetValue(cell);
@@ -475,8 +476,28 @@ export class CellController<T> implements ReactiveController {
   }
 
   private _setupCellSubscription(): void {
+    this._cleanupCellSubscription();
     if (isCellHandle(this._currentValue)) {
+      const cell = this._currentValue;
       let previousValue: T | undefined;
+      this.#cacheUnsubscribe = cell.onCacheChange(() => {
+        const mask = this.#maskedCache;
+        if (
+          !mask || mask.cell !== cell ||
+          mask.version === cell.getCacheVersion()
+        ) return;
+        this.#maskedCache = undefined;
+        // Only an override expires here. A pending edit still owns its display.
+        if (this._localEdit || this._lastKnownValue === undefined) return;
+        const oldValue = this.options.getValue(this._lastKnownValue.value as T);
+        previousValue = this.defaultGetValue(cell);
+        this._lastKnownValue = { value: previousValue };
+        const restored = this.getValue();
+        if (!deepValueEqual(restored, oldValue)) {
+          this.options.onChange(restored as T, oldValue as T);
+        }
+        if (this.options.triggerUpdate) this.host.requestUpdate();
+      });
       this._subscribeEcho = true;
       try {
         this._cellUnsubscribe = this._currentValue.subscribe((newValue) => {
@@ -536,6 +557,8 @@ export class CellController<T> implements ReactiveController {
   }
 
   private _cleanupCellSubscription(): void {
+    this.#cacheUnsubscribe?.();
+    this.#cacheUnsubscribe = undefined;
     if (this._cellUnsubscribe) {
       this._cellUnsubscribe();
       this._cellUnsubscribe = null;

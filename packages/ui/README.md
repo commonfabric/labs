@@ -44,8 +44,11 @@ that is still current. A same-cell rebind also reads the new view when the
 control is idle. Until that read or a worker confirmation, the replacement
 handle's initial cache cannot overwrite the last displayed value. Protection is
 tied to that particular handle cache revision, so a later `sync()`, publication,
-or equal-value worker delivery expires it. First bindings and ordinary
-reconnects read the handle's current cache directly.
+or equal-value worker delivery expires it. A local cache-change listener
+announces the restored display and requests a repaint even when value
+subscribers receive no change. The listener follows the binding and is removed
+on disconnect. First bindings and ordinary reconnects read the handle's current
+cache directly.
 
 Write refusal is logged and releases the affected edit, notifying the component
 to render the bound value. Completion of an older write does not release a newer

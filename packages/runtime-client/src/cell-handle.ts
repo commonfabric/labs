@@ -104,6 +104,7 @@ export class CellHandle<T = unknown> {
   #schemaWarned = false;
   #updateGeneration = 0;
   #cacheVersion = 0;
+  #cacheCallbacks = new Set<() => void>();
 
   /**
    * Monotonic invocation order for local value mutations on this handle. Async
@@ -180,6 +181,18 @@ export class CellHandle<T = unknown> {
    */
   getCacheVersion(): number {
     return this.#cacheVersion;
+  }
+
+  /**
+   * Observe cache revisions after value subscribers run, including unchanged
+   * worker confirmations and reads that install a value. This local listener
+   * has no initial callback and opens no worker subscription. Cancel removes it.
+   */
+  onCacheChange(callback: () => void): Cancel {
+    this.#cacheCallbacks.add(callback);
+    return () => {
+      this.#cacheCallbacks.delete(callback);
+    };
   }
 
   /**
@@ -426,6 +439,7 @@ export class CellHandle<T = unknown> {
         console.error("[CellHandle] Callback error:", error);
       }
     }
+    this.#notifyCacheChange();
   }
 
   async send(event: T): Promise<void> {
@@ -684,6 +698,7 @@ export class CellHandle<T = unknown> {
     ) {
       this.#value = value;
       this.#cacheVersion++;
+      this.#notifyCacheChange();
     }
     return value;
   }
@@ -717,6 +732,7 @@ export class CellHandle<T = unknown> {
     ) {
       this.#value = value;
       this.#cacheVersion++;
+      this.#notifyCacheChange();
     }
     return value;
   }
@@ -911,6 +927,7 @@ export class CellHandle<T = unknown> {
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
       !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
     if (!valueChanged && !labelChanged) {
+      this.#notifyCacheChange();
       return;
     }
 
@@ -918,6 +935,17 @@ export class CellHandle<T = unknown> {
     if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
     for (const callback of this.#callbacks.values()) {
       callback(this.#value as Readonly<T>, this.#cfcLabel);
+    }
+    this.#notifyCacheChange();
+  }
+
+  #notifyCacheChange(): void {
+    for (const callback of this.#cacheCallbacks) {
+      try {
+        callback();
+      } catch (error) {
+        console.error("[CellHandle] Cache callback error:", error);
+      }
     }
   }
 

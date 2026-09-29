@@ -55,6 +55,7 @@ function setup({ holdReads = false } = {}) {
       result: Promise.withResolvers<CommitResult>(),
     };
   let updates = 0;
+  let cacheListeners = 0;
   const processor = buildProcessor({
     runtime: {
       getCellFromLink: () => ({}),
@@ -111,6 +112,15 @@ function setup({ holdReads = false } = {}) {
       reads.push(read);
       return read;
     };
+    const onCacheChange = cell.onCacheChange.bind(cell);
+    cell.onCacheChange = (callback) => {
+      cacheListeners++;
+      const cancel = onCacheChange(callback);
+      return () => {
+        cacheListeners--;
+        cancel();
+      };
+    };
     // Capture the actual completion promise, including for the negative
     // control that uses ordinary `set()` instead of commit-aware UI writes.
     for (const method of ["set", "setStrict", "setForUI"] as const) {
@@ -141,6 +151,9 @@ function setup({ holdReads = false } = {}) {
     disposeRuntime: () => lifetime.abort(),
     get updates() {
       return updates;
+    },
+    get cacheListeners() {
+      return cacheListeners;
     },
     started: (index: number) => commit(index).started.promise,
     finish: async (
@@ -232,10 +245,11 @@ describe("CellController commit acknowledgment", () => {
       f.controller.bind(rebound);
       expect(f.controller.getValue()).toBe("spaces");
       await f.readStarted(0);
+      f.changes.length = 0;
       f.answerRead(0, "remote");
       await f.read();
       expect(f.controller.getValue()).toBe("remote");
-      expect(f.changes.at(-1)).toBe("remote");
+      expect(f.changes).toEqual(["remote"]);
     } finally {
       f.answerRead(0, "remote");
       await f.read();
@@ -255,9 +269,11 @@ describe("CellController commit acknowledgment", () => {
       await f.readStarted(0);
       f.controller.updateTimingOptions({ strategy: "blur" });
       f.controller.setValue("new input");
+      f.changes.length = 0;
       f.answerRead(0, "remote");
       await f.read();
       expect(f.controller.getValue()).toBe("new input");
+      expect(f.changes).toEqual([]);
     } finally {
       f.answerRead(0, "remote");
       await f.read();
@@ -279,8 +295,12 @@ describe("CellController commit acknowledgment", () => {
       expect(f.cell.get()).toBe("spaces");
       expect(f.controller.getValue()).toBe("profile");
       // Equal-value notifications refresh the cache without a callback.
+      const updates = f.updates;
+      f.changes.length = 0;
       f.cell[$onCellUpdate]("spaces");
       expect(f.controller.getValue()).toBe("spaces");
+      expect(f.updates).toBeGreaterThan(updates);
+      expect(f.changes).toEqual(["spaces"]);
     } finally {
       f.answerRead(0, "profile");
       await f.finish(0);
@@ -299,16 +319,39 @@ describe("CellController commit acknowledgment", () => {
       f.answerRead(0, "profile");
       await finishing;
       expect(f.controller.getValue()).toBe("profile");
+      const updates = f.updates;
+      f.changes.length = 0;
       const refresh = f.cell.sync();
       await f.readStarted(1);
       f.answerRead(1, "spaces");
       await refresh;
       expect(f.cell.get()).toBe("spaces");
       expect(f.controller.getValue()).toBe("spaces");
+      expect(f.updates).toBeGreaterThan(updates);
+      expect(f.changes).toEqual(["spaces"]);
     } finally {
       f.answerRead(0, "profile");
       f.answerRead(1, "spaces");
       await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("keeps one cache observer through connection and binding changes", () => {
+    const f = setup();
+    try {
+      expect(f.cacheListeners).toBe(1);
+      f.controller.hostConnected();
+      expect(f.cacheListeners).toBe(1);
+      f.controller.hostDisconnected();
+      expect(f.cacheListeners).toBe(0);
+      f.controller.hostConnected();
+      expect(f.cacheListeners).toBe(1);
+      f.controller.bind(f.handle("other", { id: "of:other" as CellRef["id"] }));
+      expect(f.cacheListeners).toBe(1);
+      f.controller.hostDisconnected();
+      expect(f.cacheListeners).toBe(0);
+    } finally {
       f.controller.hostDisconnected();
     }
   });
