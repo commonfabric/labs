@@ -4292,57 +4292,63 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             };
           },
         };
-        const collector = createOpsCollector();
-        const reconciler = new WorkerReconciler({
-          onOps: collector.onOps,
-          renderConfidentialityCeiling: {
-            atoms: [
-              cfcAtom.user(signer.did()),
-              cfcAtom.personalSpace(signer.did()),
-            ],
-            caveatKinds: [],
-          },
-          resolveRenderConfidentiality: createRenderConfidentialityResolver({
-            actingPrincipal: signer.did(),
-            memberSpaces: [signer.did()],
-            modulePolicyResolver: () => manifest,
-            grantSource,
-          }),
-          grantSource,
-        });
-        const cancel = reconciler.mount({
-          type: "vnode",
-          name: "div",
-          props: {},
-          children: [sealed as never],
-        });
-        const text = () =>
-          collector.getOpsOfType("create-text").map((op) => op.text);
-        try {
-          await t.settle();
-          assertEquals(text().includes("Granted answer"), false);
-          assertEquals(text().includes("Content hidden by policy"), true);
-          // Watched: the candidate the evaluation reported, and only it.
-          assertEquals(listeners.map((entry) => entry.candidate), [candidate]);
-
-          granted = true;
-          collector.clear();
-          for (const listener of [...listeners]) listener.onChange();
-          await t.settle();
-          assertEquals(text().includes("Granted answer"), true);
-
-          // Revocation: the source stops resolving, the feed fires, and the
-          // rendered content is replaced by the blocked placeholder.
+        // Both egress paths watch: the cell as a descendant, and as the root.
+        for (const asRoot of [false, true]) {
           granted = false;
-          collector.clear();
-          for (const listener of [...listeners]) listener.onChange();
-          await t.settle();
-          assertEquals(text().includes("Granted answer"), false);
-          assertEquals(text().includes("Content hidden by policy"), true);
-        } finally {
-          cancel();
+          const collector = createOpsCollector();
+          const reconciler = new WorkerReconciler({
+            onOps: collector.onOps,
+            renderConfidentialityCeiling: {
+              atoms: [
+                cfcAtom.user(signer.did()),
+                cfcAtom.personalSpace(signer.did()),
+              ],
+              caveatKinds: [],
+            },
+            resolveRenderConfidentiality: createRenderConfidentialityResolver({
+              actingPrincipal: signer.did(),
+              memberSpaces: [signer.did()],
+              modulePolicyResolver: () => manifest,
+              grantSource,
+            }),
+            grantSource,
+          });
+          const cancel = asRoot ? reconciler.mount(sealed) : reconciler.mount({
+            type: "vnode",
+            name: "div",
+            props: {},
+            children: [sealed as never],
+          });
+          const text = () =>
+            collector.getOpsOfType("create-text").map((op) => op.text);
+          try {
+            await t.settle();
+            assertEquals(text().includes("Granted answer"), false);
+            assertEquals(text().includes("Content hidden by policy"), true);
+            // Watched: the candidate the evaluation reported, and only it.
+            assertEquals(listeners.map((entry) => entry.candidate), [
+              candidate,
+            ]);
+
+            granted = true;
+            collector.clear();
+            for (const listener of [...listeners]) listener.onChange();
+            await t.settle();
+            assertEquals(text().includes("Granted answer"), true);
+
+            // Revocation: the source stops resolving, the feed fires, and
+            // the rendered content is replaced by the blocked placeholder.
+            granted = false;
+            collector.clear();
+            for (const listener of [...listeners]) listener.onChange();
+            await t.settle();
+            assertEquals(text().includes("Granted answer"), false);
+            assertEquals(text().includes("Content hidden by policy"), true);
+          } finally {
+            cancel();
+          }
+          assertEquals(listeners, []);
         }
-        assertEquals(listeners, []);
 
         // A source whose subscribe throws leaves the cell unwatched and still
         // gated; the throw does not escape into the render.
