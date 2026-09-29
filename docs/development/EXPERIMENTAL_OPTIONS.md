@@ -1439,12 +1439,14 @@ the per-epic implementation notes).
   module policies, the deployment's policy records and grant records, so a
   deployment-authored owner-self release renders the acting user's own
   `Resource`-labeled values to them and leaves another subject's blocked, and
-  a module rule guarded on the owner's grant renders the owner's value to the
-  reader the grant names, from the moment the grant is written until it is
-  revoked. A single-use grant releases nothing at display, which is an
-  observing site. The grant is read from the viewer's own replica, so what a
-  viewer's runtime can read of another owner's identity space is what decides
-  whether a grant written there reaches them.
+  a module rule guarded on the owner's grant record is evaluated at display,
+  releasing from the moment the grant is written until it is revoked. The
+  grant is read from the viewer's own replica, and a grant lives in its
+  owner's identity space, so that release reaches a viewer only where their
+  replica holds that space — today, a delegate rendering in the owner's own
+  space; where a grant a viewer must read is hosted is open
+  (`docs/specs/cfc-spec-changes.md` SC-50). A single-use grant releases
+  nothing at display, which is an observing site.
   Where reader membership is required, missing or unsynced
   ACL evidence keeps the content blocked; a reader grant admits it and a
   revocation blocks it again. A module policy whose manifest is missing, has
