@@ -11148,8 +11148,13 @@ export function* prepareBoundaryCommitSteps(
     // A wildcard position is marked at its longest concrete prefix — the
     // container whose items carry the claim — which routes a write of the
     // container and of any item; the claim itself is then verified through
-    // the stored schema, as for any routed write. A payload whose policy did
-    // not verify keeps no declared entry either.
+    // the stored schema, as for any routed write. A claim inside an `anyOf`
+    // or `oneOf` branch is not marked: which branch a position takes is
+    // decided by the value written there, so a position holding nothing is
+    // on no branch, and an envelope persisted for it ahead of a value would
+    // meet every later writer of another branch with the merge's refusal of
+    // divergent branch ifc. A payload whose policy did not verify keeps no
+    // declared entry either.
     if (!ingestVerificationFailed) {
       const declaredPaths = persistedLabelEntries
         .filter((entry) =>
@@ -11160,6 +11165,7 @@ export function* prepareBoundaryCommitSteps(
         declaredPaths.some((declared) => isPrefix(declared, path));
       for (const entry of mergedSchemaEntries) {
         if (
+          entry.conditional === true ||
           !isObjectOrArray(entry.schema) ||
           !isObjectOrArray(entry.schema.ifc) ||
           entry.schema.ifc.writeAuthorizedBy === undefined
