@@ -443,9 +443,13 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Asks the worker to publish a custody instance's answer once, from the
-   * room's projected answer, into the instance's answer slot. Refused while
-   * the answer is not released to the room's readers or not every seat has
-   * sealed, and once it is published.
+   * room's projected answer, into the instance's answer slot. The seal
+   * publishes only when every exchange rule of the room's policy requires the
+   * seal's witness and releases only to the seal, a rule of that policy
+   * releases the projected answer to the seal, the answer is a string of at
+   * most 1,024 characters, a number or a boolean, and every seat has sealed.
+   * It refuses the request otherwise, when the room changes while it
+   * publishes, and once the instance's answer is published.
    */
   async publishCustodyAnswer(cells: {
     terms: CellRef;

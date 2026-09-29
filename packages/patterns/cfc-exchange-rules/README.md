@@ -30,12 +30,14 @@ input witness). It shows the pattern side of the
 cells, the policy read from a declaring cell's label, the box link the seal
 writes into the room, and the answer the seal publishes once per instance
 through `cf-custody-answer`, which the room renders instead of its reactive
-projection. No member reads the projection itself: the seal declassifies it once
-per instance into the answer slot, so the answer published for an instance never
-changes. The component finds that slot through the room's `terms` and `policy`,
-which a member's own code can repoint at another instance; the claims naming
-`propose` on the room's arguments are defense in depth, and the spec says what
-they leave open.
+projection. The seal publishes only once every seat has sealed, when every rule
+of the room's policy requires the seal's witness and releases only to the seal,
+and a rule of that policy releases the answer to the seal. No member reads the
+projection itself: the seal declassifies it once per instance into the answer
+slot, so the answer published for an instance never changes. The component finds
+that slot through the room's `terms` and `policy`, which a member's own code can
+repoint at another instance; the claims naming `propose` on the room's arguments
+are defense in depth, and the spec says what they leave open.
 
 `custody-projector.tsx` is the same room, demo-grade: its rule names the
 projector alone rather than requiring the seal's input witness, and it renders

@@ -966,7 +966,10 @@ instance, and shows it. The host publishes it only when every rule of the room's
 policy requires the seal's witness and releases only to the seal, a rule
 releases the answer to the seal, and every seat has sealed, and refuses every
 later request. What the component shows is read by the host from the instance's
-answer slot and verified to be the seal's write: the slot of the instance the
+answer slot and verified to be the seal's write: a string, a number or a
+boolean, shown as text, since the seal publishes nothing else; any other value
+the slot holds is refused as an alert ("Custody answer refuses an answer that is
+not a scalar"), not shown as the answer. That is the slot of the instance the
 bound terms digest to, under the policy the bound policy cell names. The
 published answer for an instance never changes, but which instance the component
 shows is only as fixed as its bindings, which a room member's own code can
