@@ -1186,6 +1186,23 @@ describe("CFC render resolver — deployment policy at the display boundary", ()
 
 const grantSigner = await Identity.fromPassphrase("runner-cfc-render-grants");
 
+/** Runs `body` against a runtime whose storage the grant signer owns. */
+const withGrantRuntime = async (
+  body: (runtime: Runtime) => void | Promise<void>,
+): Promise<void> => {
+  const storageManager = StorageManager.emulate({ as: grantSigner });
+  const runtime = new Runtime({
+    apiUrl: new URL("https://example.com"),
+    storageManager,
+  });
+  try {
+    await body(runtime);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
 describe("CFC render resolver — grants at the display boundary", () => {
   // A module rule guarded on a grant record (spec §4.3.5) fires at display
   // when the grant it names is written through the trusted writer, and at no
@@ -1250,22 +1267,6 @@ describe("CFC render resolver — grants at the display boundary", () => {
     fields: { owner: OWNER, resource: ANSWER },
   })!;
 
-  const withRuntime = async (
-    body: (runtime: Runtime) => void | Promise<void>,
-  ): Promise<void> => {
-    const storageManager = StorageManager.emulate({ as: grantSigner });
-    const runtime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-    });
-    try {
-      await body(runtime);
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
-  };
-
   /** Writes the owner's grant through the trusted policy-writer path. */
   const writeGrant = async (
     runtime: Runtime,
@@ -1304,7 +1305,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
 
   describe("releasing", () => {
     it("adds `User(viewer)` to the owner's clause when the owner's grant names the viewer, which then fits the ceiling", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         await writeGrant(runtime);
         const resolved = resolveAsViewer(runtime);
         expect(resolved).toEqual([released]);
@@ -1313,7 +1314,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
     });
 
     it("reports the candidate it consulted, whether or not the grant is there", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         const consulted: CfcGrantCandidate[] = [];
         resolveAsViewer(runtime, {
           consulted: (candidate) => consulted.push(candidate),
@@ -1331,7 +1332,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
 
   describe("not releasing", () => {
     it("keeps the clause sealed without a grant", async () => {
-      await withRuntime((runtime) => {
+      await withGrantRuntime((runtime) => {
         const resolved = resolveAsViewer(runtime);
         expect(resolved).toEqual([shareRef]);
         expect(atomsOutsideCeiling(resolved, viewerCeiling)).toEqual([
@@ -1341,14 +1342,14 @@ describe("CFC render resolver — grants at the display boundary", () => {
     });
 
     it("keeps the clause sealed once the grant is revoked", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         await writeGrant(runtime, { revoked: { at: 2000, by: OWNER } });
         expect(resolveAsViewer(runtime)).toEqual([shareRef]);
       });
     });
 
     it("keeps the clause sealed under a grant for another resource", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         await writeGrant(runtime, { resource: OTHER_ANSWER });
         expect(resolveAsViewer(runtime)).toEqual([shareRef]);
       });
@@ -1357,7 +1358,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
     it("keeps a policy whose subject is another owner sealed by this owner's grant", async () => {
       // The rule binds its owner from the policy's subject; the grant at that
       // owner's address is what it reads, and this owner wrote none there.
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         await writeGrant(runtime);
         const other = shareRefFor("did:key:z6MkAnotherOwnerOfAnAnswer");
         expect(resolveAsViewer(runtime, { label: [other] })).toEqual([other]);
@@ -1385,7 +1386,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
           { ...grant, grantedAt: "1000" },
         ]
       ) {
-        await withRuntime(async (runtime) => {
+        await withGrantRuntime(async (runtime) => {
           const tx = runtime.storageManager.edit();
           tx.write({
             space: answerCandidate.space as never,
@@ -1401,7 +1402,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
     });
 
     it("keeps the clause sealed under a single-use grant, since a render is an observing site", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         await writeGrant(runtime, { singleUse: true });
         expect(resolveAsViewer(runtime)).toEqual([shareRef]);
       });
@@ -1410,7 +1411,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
     it("releases to the grant's audience and to nobody else", async () => {
       // A grant to a third party fires the rule for that party; what it adds
       // sits outside the viewer's ceiling.
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         const third = "did:key:z6MkThirdPartyTheGrantNames";
         await writeGrant(runtime, { audience: [cfcAtom.user(third)] });
         const resolved = resolveAsViewer(runtime);
@@ -1427,7 +1428,7 @@ describe("CFC render resolver — grants at the display boundary", () => {
 
   describe("the change feed", () => {
     it("signals a grant written after the first evaluation, and its revocation after that", async () => {
-      await withRuntime(async (runtime) => {
+      await withGrantRuntime(async (runtime) => {
         const source = createRuntimeCfcGrantSource(runtime);
         const resolve = createRenderConfidentialityResolver({
           actingPrincipal: VIEWER,
@@ -1539,22 +1540,6 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
     });
   };
 
-  const withRuntime = async (
-    body: (runtime: Runtime) => void | Promise<void>,
-  ): Promise<void> => {
-    const storageManager = StorageManager.emulate({ as: grantSigner });
-    const runtime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-    });
-    try {
-      await body(runtime);
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
-  };
-
   /**
    * Writes `owner`'s grant over `resource` to `audience` through the trusted
    * writer, acting as `owner` for that transaction.
@@ -1607,7 +1592,7 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
           })(label);
 
         it("adds `User(reader)` when the owner's grant names the reader and the reader's names the owner", async () => {
-          await withRuntime(async (runtime) => {
+          await withGrantRuntime(async (runtime) => {
             await writeGrant(runtime, OWNER, Q7, READER);
             await writeGrant(runtime, READER, Q7, OWNER);
             const resolved = resolveAsReader(runtime);
@@ -1619,21 +1604,21 @@ describe("CFC render resolver — the reciprocal two-grant rule", () => {
         });
 
         it("keeps the clause sealed under the owner's grant alone", async () => {
-          await withRuntime(async (runtime) => {
+          await withGrantRuntime(async (runtime) => {
             await writeGrant(runtime, OWNER, Q7, READER);
             expect(resolveAsReader(runtime)).toEqual([ref]);
           });
         });
 
         it("keeps the clause sealed under the reader's grant alone", async () => {
-          await withRuntime(async (runtime) => {
+          await withGrantRuntime(async (runtime) => {
             await writeGrant(runtime, READER, Q7, OWNER);
             expect(resolveAsReader(runtime)).toEqual([ref]);
           });
         });
 
         it("keeps the clause sealed when the two grants name different questions", async () => {
-          await withRuntime(async (runtime) => {
+          await withGrantRuntime(async (runtime) => {
             await writeGrant(runtime, OWNER, Q7, READER);
             await writeGrant(runtime, READER, Q8, OWNER);
             expect(resolveAsReader(runtime)).toEqual([ref]);

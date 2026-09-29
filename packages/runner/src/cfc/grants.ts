@@ -744,11 +744,10 @@ export type CfcGrantCandidate = {
  * and the boundary's bindings, never enumerated. `owner`, a bound DID, fixes
  * the governing space — the owner's identity space (module doc) — and
  * `resource` completes the release scope. A query that leaves either unbound,
- * or binds a `space` other than the owner's, names nothing. Rules that leave
- * `resource` free (the §13.4.4 shape at a site that binds it from the
- * evaluation context) arrive with the share-UI build-order item. Throws when
- * a bound field cannot be digested; each caller decides what that means for
- * its site.
+ * or binds a `space` other than the owner's, names nothing: the address needs
+ * the resource, so a rule of the §13.4.4 shape, whose `resource` is free to
+ * bind from the grant, is not one this addressing serves. Throws when a bound
+ * field cannot be digested; each caller decides what that means for its site.
  */
 export const cfcGrantCandidateOf = (
   query: CfcGrantResolverQuery,
