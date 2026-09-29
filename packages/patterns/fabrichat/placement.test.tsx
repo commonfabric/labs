@@ -14,12 +14,16 @@ import {
 } from "commonfabric";
 import { findElement } from "../test/vnode-helpers.ts";
 import FabriChatAdapter from "./adapter.tsx";
-import FabriChatPlacement, { type PlacedRoom } from "./placement.tsx";
+import FabriChatPlacement, {
+  type PlacedRoom,
+  type PlacedTallies,
+} from "./placement.tsx";
 import {
   type ActivityCounters,
   type ComposerState,
   FabriChatMessageRow,
   FabriChatRoomCore,
+  type MessageRecord,
   type MessagesValue,
   type ReactionList,
   type RequestMemo,
@@ -53,6 +57,14 @@ const messageGesture = {
   action: CHAT_MESSAGE_ACTION,
 };
 const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
+
+const reactionCount = (messages: Writable<MessagesValue>): number =>
+  ((messages.get() as MessageRecord[])[0]?.reactions?.get() ?? []).length;
+
+const talliesText = (all: readonly PlacedTallies[]): string =>
+  all.map((each) =>
+    each.tallies.map((tally) => `${tally.emoji}${tally.count}`).join(",")
+  ).join(";");
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
@@ -114,11 +126,23 @@ export default pattern(() => {
         trustedUi: reactGesture,
       },
       {
+        assertion: assert(() => placement[VIEWS].chat.messages?.count === 1),
+      },
+      { assertion: assert(() => reactionCount(messages) === 1) },
+      {
         assertion: assert(() =>
-          placement[VIEWS].chat.messages?.count === 1 &&
-          placement[VIEWS].chat.recentActivity.length === 2 &&
+          placement[VIEWS].chat.reactionTallies !== undefined
+        ),
+      },
+      {
+        assertion: assert(() =>
+          placement[VIEWS].chat.recentActivity.length === 2
+        ),
+      },
+      {
+        assertion: assert(() =>
           placement[VIEWS].chat.reactionTallies.length === 1 &&
-          placement[VIEWS].chat.reactionTallies[0].tallies[0]?.emoji === "🎉" &&
+          talliesText(placement[VIEWS].chat.reactionTallies) === "🎉1" &&
           placement[VIEWS].chat.reactionTallies[0].tallies[0]?.count === 1
         ),
       },

@@ -1,6 +1,7 @@
 # ChatMessageWindow
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: implemented, with the departures listed in
+[`README.md`](README.md#implementation-status).
 
 A run of consecutive messages from one view of a conversation, opened by a
 client. A room's [`ChatMessageList`](ChatMessageList.md) keeps each of a

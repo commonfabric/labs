@@ -1,9 +1,9 @@
 # FabriChat
 
-Status: proposed design. Nothing here is implemented yet. Today's FabriChat is
-the single pattern in `packages/patterns/fabrichat/`, one conversation per
-piece. This directory describes what it splits into, and what that split
-requires of the runtime and of the programs that use it.
+Status: implemented in `packages/patterns/fabrichat/`, with the departures
+[implementation status](#implementation-status) lists. This directory describes
+the four patterns FabriChat is made of, and what they require of the runtime and
+of the programs that use them.
 
 ## Quick links
 
@@ -160,7 +160,7 @@ provide, the document says so, under the heading "Prerequisites".
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
-   and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
+   and `TrustedActionWrite`. A message's sender can
    edit or delete it, each change recorded as a new version, and a message can
    be obliterated, by an OWNER curating a group room or by either person in a
    direct room for their own messages, leaving only an attested tombstone. A
@@ -272,6 +272,41 @@ names the ones it needs, and they are gathered here:
   "sanctioned headless issuance path" in the [host embedding policy
   record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
   (see [`clients.md`](clients.md)).
+
+## Implementation status
+
+The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+`manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
+in `schemas.tsx`. The home pattern holds a manager, and `#chatManager` resolves
+to it (see [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)).
+Where the runtime lacks a prerequisite, the patterns depart from this design,
+and [`FabriChatRoom`](FabriChatRoom.md#as-built) and
+[`FabriChatManager`](FabriChatManager.md#as-built) say how. In summary:
+
+- **Rooms are open to any authenticated principal.** A room of its own is
+  created with `inSpace()`, whose space grants WRITE to `"*"`. Nothing grants,
+  revokes, or gives up access: `add`, `remove`, and `leave` record what a
+  pattern can, and change no access list. A room knows one OWNER, its creator.
+- **Principals are profiles.** A pattern can't learn a principal, so the room
+  keys its request memory, and the members who left, by profile. The manager
+  takes the principals the contract names, and can't refuse a direct room with
+  the user themself.
+- **One writer, and one message surface.** The runtime admits one writer, one
+  action, and one surface for a stored record. So one handler, `commitRoom`,
+  writes the room's record, and sending, editing, deleting, and obliterating
+  are all admitted from one reviewed surface, `ChatMessageSurface`, with the
+  action `ChatMessageWrite`. Reactions keep `ChatReactSurface`, with the action
+  `ChatReact`. `ChatMembersSurface` and `ChatStartSurface` mark their controls,
+  but no write policy names them.
+- **Only messages and reactions are labeled `authored-by`.** The runtime labels
+  a value with its writer only when a trusted gesture on one named surface made
+  the write, so neither `about` nor a `recentActivity` entry carries the label.
+- **Creation takes one transaction.** With no access list to change, a room is
+  created, noticed, and recorded in one commit, so no request is ever left
+  pending.
+- **Placements don't know who is a member.** A placement can't read access, so
+  a viewer who can't read the room sees it as `"unavailable"`, never as
+  `"not-member"`. No container creates placements yet: a client does.
 
 ## Identity and presentation
 

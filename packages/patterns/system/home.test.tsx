@@ -34,6 +34,13 @@ export default pattern(() => {
     ) &&
     hasText(findNodeByProp(home[UI], "value", "self"), "Self")
   );
+  // The chat manager is held in a field of its own, starts with no rooms, and
+  // is shown in a tab of its own.
+  const assert_chat_manager_starts_empty = assert(() =>
+    home.chatManager.rooms.length === 0 &&
+    home.chatManager.outgoingNotices.length === 0 &&
+    hasText(findNodeByProp(home[UI], "value", "chats"), "Chats")
+  );
   const action_register_runner = action(() => {
     home.agentQueue.setAgentRunner.send({
       runner: {
@@ -110,6 +117,7 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_initial_profile_missing },
       { assertion: assert_agent_queue_starts_empty },
+      { assertion: assert_chat_manager_starts_empty },
       { assertion: assert_agent_runs_tab },
       { action: action_register_runner },
       { assertion: assert_runner_registered },

@@ -62,6 +62,7 @@ import {
   CHAT_REACT_SURFACE,
   type ChatDeletedBody,
   type ChatMessageVersion,
+  type ChatProfile,
   type ChatReaction,
   type ChatRoomAbout,
   type ChatRoomActivity,
@@ -251,7 +252,10 @@ export interface ActivityCounters {
 }
 
 /** The empty activity numbering. */
-const NO_ACTIVITY: ActivityCounters = { nextSeq: 1, expiredThrough: 0 };
+const NO_ACTIVITY = {
+  nextSeq: 1,
+  expiredThrough: 0,
+} satisfies ActivityCounters;
 
 /** The cell holding the room's activity numbering. */
 export type ActivityCountersCell = Writable<
@@ -317,7 +321,7 @@ export interface AboutRecord {
 }
 
 /** A space's own chat: a group room with no title. */
-const SPACE_CHAT_ABOUT: AboutRecord = { kind: "group" };
+const SPACE_CHAT_ABOUT = { kind: "group" } as const satisfies AboutRecord;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -593,12 +597,9 @@ export interface ComposerState {
   thread?: MessageCell;
 }
 
-/** The composer's state when it composes nothing in particular. */
-const EMPTY_COMPOSER: ComposerState = {};
-
 /** The cell holding a session's composer state. */
 export type ComposerCell = Writable<
-  ComposerState | Default<typeof EMPTY_COMPOSER>
+  ComposerState | Default<Record<PropertyKey, never>>
 >;
 
 /** Every act `commitRoom` performs, each bound to one of the room's streams. */
@@ -718,11 +719,13 @@ const performMessageAct = (
   if (op === "send") {
     if (version === undefined || !isValidBody(version.body)) return;
     const composing = composer.get();
-    const fromComposer = state.replyFrom === "thread"
+    const composed = state.replyFrom === "thread"
       ? composing?.thread
       : state.replyFrom === "replyTo"
       ? composing?.replyTo
       : undefined;
+    // A cleared link still reads back as a cell, holding nothing.
+    const fromComposer = composed?.get() === undefined ? undefined : composed;
     const { cell: replyCell } = resolvedCell(
       event?.replyTo?.message ?? state.message ?? fromComposer,
     );
@@ -742,12 +745,12 @@ const performMessageAct = (
       target?.sentAt,
     );
     if (sentAt === undefined) return;
+    // The message and its reactions are addressed by the request that sent
+    // it, which names one message in every session.
     const record = messages.elementById(requestKey);
-    const messageKey = entityKeyOf(record);
-    if (messageKey === undefined) return;
     // A message may link only a list that exists, so the list is written
     // before the message links it.
-    const reactions = reactionLists.elementById(messageKey);
+    const reactions = reactionLists.elementById(requestKey);
     reactions.set([]);
     record.set({
       authorProfile: profile,
@@ -1201,7 +1204,7 @@ export interface FabriChatMessageRowInput {
   creatorProfile?: ProfileCell;
 
   /** The session's composer state. */
-  composer: ComposerCell;
+  composer: PerSession<ComposerCell>;
 
   /** The room's stored records. */
   messages: MessagesCell;
@@ -1335,6 +1338,21 @@ export const FabriChatMessageRow = pattern<
   const threadLabel = computed(() =>
     threadReplies === 1 ? "1 reply" : `${threadReplies} replies`
   );
+  // What differs by viewer or by session is shown or hidden through a prop,
+  // never by building a different tree: a branch chosen per viewer is stored
+  // once for everyone, and runtimes that chose differently overwrite each
+  // other without end.
+  const ownDisplay = computed(() =>
+    isMine && !isDeletedNow ? "inline-flex" : "none"
+  );
+  const obliterateDisplay = computed(() =>
+    canObliterate ? "inline-flex" : "none"
+  );
+  const editorDisplay = computed(() => (isEditing ? "block" : "none"));
+  const pickerDisplay = computed(() =>
+    pickerOpen.get() === true ? "flex" : "none"
+  );
+  const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));
   const startReply = action(() => composer.key("replyTo").set(message));
   const openThread = action(() => composer.key("thread").set(message));
   const startEdit = action(() => composer.key("editing").set(message));
@@ -1441,27 +1459,24 @@ export const FabriChatMessageRow = pattern<
                 </cf-cfc-authorship>
               )}
             {isEdited ? <cf-text variant="caption">(edited)</cf-text> : null}
-            {isEditing
-              ? (
-                <div
-                  data-ui-pattern={CHAT_MESSAGE_SURFACE}
-                  data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
-                >
-                  <cf-hstack gap="1" align="center">
-                    <cf-submit-input
-                      data-ui-action={CHAT_MESSAGE_ACTION}
-                      placeholder="Edit message"
-                      buttonText="Save"
-                      disabled={cannotWrite}
-                      onClick={editMessage}
-                    />
-                    <cf-button size="sm" variant="ghost" onClick={stopEdit}>
-                      Cancel
-                    </cf-button>
-                  </cf-hstack>
-                </div>
-              )
-              : null}
+            <div
+              data-ui-pattern={CHAT_MESSAGE_SURFACE}
+              data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
+              style={{ display: editorDisplay }}
+            >
+              <cf-hstack gap="1" align="center">
+                <cf-submit-input
+                  data-ui-action={CHAT_MESSAGE_ACTION}
+                  placeholder="Edit message"
+                  buttonText="Save"
+                  disabled={cannotWrite}
+                  onClick={editMessage}
+                />
+                <cf-button size="sm" variant="ghost" onClick={stopEdit}>
+                  Cancel
+                </cf-button>
+              </cf-hstack>
+            </div>
             <div
               data-ui-pattern={CHAT_REACT_SURFACE}
               data-ui-event-integrity={CHAT_REACT_SURFACE}
@@ -1476,26 +1491,60 @@ export const FabriChatMessageRow = pattern<
                     color="primary"
                     variant={tally.mine ? "outline" : "ghost"}
                     disabled={cannotWrite}
-                    onClick={tally.mine
-                      ? commitRoom({
-                        act: "unreact",
-                        myProfile,
-                        ...records,
-                        message,
-                        emoji: tally.emoji,
-                      })
-                      : commitRoom({
-                        act: "react",
-                        myProfile,
-                        ...records,
-                        message,
-                        emoji: tally.emoji,
-                      })}
+                    onClick={commitRoom({
+                      act: "react",
+                      myProfile,
+                      kind,
+                      ownSpace,
+                      creatorProfile,
+                      composer,
+                      messages,
+                      reactionLists,
+                      requests,
+                      usedTimes,
+                      activity,
+                      counters,
+                      roster,
+                      left,
+                      notices,
+                      message,
+                      emoji: tally.emoji,
+                    })}
                   >
                     <span>
                       <span style={EMOJI_STYLE}>{tally.emoji}</span>{" "}
                       {tally.count}
                     </span>
+                  </cf-button>
+                  <cf-button
+                    data-ui-action={CHAT_REACT_ACTION}
+                    size="sm"
+                    variant="ghost"
+                    aria-label="Remove my reaction"
+                    title="Remove my reaction"
+                    disabled={cannotWrite}
+                    style={{ display: tally.mine ? "inline-flex" : "none" }}
+                    onClick={commitRoom({
+                      act: "unreact",
+                      myProfile,
+                      kind,
+                      ownSpace,
+                      creatorProfile,
+                      composer,
+                      messages,
+                      reactionLists,
+                      requests,
+                      usedTimes,
+                      activity,
+                      counters,
+                      roster,
+                      left,
+                      notices,
+                      message,
+                      emoji: tally.emoji,
+                    })}
+                  >
+                    ✕
                   </cf-button>
                   <cf-vstack id={tally.cardId} slot="card" gap="1">
                     {tally.reactors.map((reactor) => (
@@ -1519,46 +1568,54 @@ export const FabriChatMessageRow = pattern<
           </cf-vstack>
         </div>
         <cf-hstack slot="actions" gap="1" align="center">
-          {pickerOpen
-            ? (
-              <div
-                data-ui-pattern={CHAT_REACT_SURFACE}
-                data-ui-event-integrity={CHAT_REACT_SURFACE}
-                style={{
-                  display: "flex",
-                  gap: "0.25rem",
-                  alignItems: "center",
-                }}
+          <div
+            data-ui-pattern={CHAT_REACT_SURFACE}
+            data-ui-event-integrity={CHAT_REACT_SURFACE}
+            style={{
+              display: pickerDisplay,
+              gap: "0.25rem",
+              alignItems: "center",
+            }}
+          >
+            {FABRICHAT_QUICK_REACTIONS.map((emoji) => (
+              <cf-button
+                data-ui-action={CHAT_REACT_ACTION}
+                size="sm"
+                variant="ghost"
+                disabled={cannotWrite}
+                onClick={commitRoom({
+                  act: "react",
+                  myProfile,
+                  kind,
+                  ownSpace,
+                  creatorProfile,
+                  composer,
+                  messages,
+                  reactionLists,
+                  requests,
+                  usedTimes,
+                  activity,
+                  counters,
+                  roster,
+                  left,
+                  notices,
+                  message,
+                  emoji,
+                  pickerOpen,
+                  closesPicker: true,
+                })}
               >
-                {FABRICHAT_QUICK_REACTIONS.map((emoji) => (
-                  <cf-button
-                    data-ui-action={CHAT_REACT_ACTION}
-                    size="sm"
-                    variant="ghost"
-                    disabled={cannotWrite}
-                    onClick={commitRoom({
-                      act: "react",
-                      myProfile,
-                      ...records,
-                      message,
-                      emoji,
-                      pickerOpen,
-                      closesPicker: true,
-                    })}
-                  >
-                    <span style={EMOJI_STYLE}>{emoji}</span>
-                  </cf-button>
-                ))}
-                <cf-submit-input
-                  data-ui-action={CHAT_REACT_ACTION}
-                  placeholder="Any emoji"
-                  buttonText="React"
-                  disabled={cannotWrite}
-                  onClick={sendReaction}
-                />
-              </div>
-            )
-            : null}
+                <span style={EMOJI_STYLE}>{emoji}</span>
+              </cf-button>
+            ))}
+            <cf-submit-input
+              data-ui-action={CHAT_REACT_ACTION}
+              placeholder="Any emoji"
+              buttonText="React"
+              disabled={cannotWrite}
+              onClick={sendReaction}
+            />
+          </div>
           {isDeletedNow ? null : (
             <cf-button
               size="sm"
@@ -1568,7 +1625,7 @@ export const FabriChatMessageRow = pattern<
               disabled={cannotWrite}
               onClick={togglePicker}
             >
-              <span style={EMOJI_STYLE}>{pickerOpen ? "✕" : "☺+"}</span>
+              <span style={EMOJI_STYLE}>{pickerLabel}</span>
             </cf-button>
           )}
           {isDeletedNow || inThread
@@ -1585,42 +1642,37 @@ export const FabriChatMessageRow = pattern<
                 Thread
               </cf-button>
             )}
-          {isMine && !isDeletedNow
-            ? (
-              <cf-button size="sm" variant="ghost" onClick={startEdit}>
-                Edit
-              </cf-button>
-            )
-            : null}
+          <cf-button
+            size="sm"
+            variant="ghost"
+            style={{ display: ownDisplay }}
+            onClick={startEdit}
+          >
+            Edit
+          </cf-button>
           <div
             data-ui-pattern={CHAT_MESSAGE_SURFACE}
             data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
             style={{ display: "flex", gap: "0.25rem" }}
           >
-            {isMine && !isDeletedNow
-              ? (
-                <cf-button
-                  data-ui-action={CHAT_MESSAGE_ACTION}
-                  size="sm"
-                  variant="ghost"
-                  onClick={deleteMessage}
-                >
-                  Delete
-                </cf-button>
-              )
-              : null}
-            {canObliterate
-              ? (
-                <cf-button
-                  data-ui-action={CHAT_MESSAGE_ACTION}
-                  size="sm"
-                  variant="ghost"
-                  onClick={obliterateMessage}
-                >
-                  Remove entirely
-                </cf-button>
-              )
-              : null}
+            <cf-button
+              data-ui-action={CHAT_MESSAGE_ACTION}
+              size="sm"
+              variant="ghost"
+              style={{ display: ownDisplay }}
+              onClick={deleteMessage}
+            >
+              Delete
+            </cf-button>
+            <cf-button
+              data-ui-action={CHAT_MESSAGE_ACTION}
+              size="sm"
+              variant="ghost"
+              style={{ display: obliterateDisplay }}
+              onClick={obliterateMessage}
+            >
+              Remove entirely
+            </cf-button>
           </div>
         </cf-hstack>
       </cf-hover-reveal>
@@ -1778,12 +1830,25 @@ interface ShownMessage {
 }
 
 /**
+ * What the room's core offers: `ChatRoomOutput`, and the streams its own
+ * composers send to, which take the reply they compose from the session's
+ * composer state.
+ */
+export interface FabriChatRoomCoreOutput extends ChatRoomOutput {
+  /** The main composer's send, replying to the reply being composed. */
+  composerSend: Stream<RoomStreamEvent>;
+
+  /** The thread composer's send, replying in the open thread. */
+  threadComposerSend: Stream<RoomStreamEvent>;
+}
+
+/**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
  */
 export const FabriChatRoomCore = pattern<
   FabriChatRoomCoreInput,
-  ChatRoomOutput
+  FabriChatRoomCoreOutput
 >((input) => {
   const {
     myProfile,
@@ -1883,6 +1948,11 @@ export const FabriChatRoomCore = pattern<
   });
   const hasThread = computed(() => threadEntries.length > 0);
   const replyingTo = computed(() => bodyText(composer.get()?.replyTo?.get()));
+  // Per-session and per-viewer parts are hidden by a prop, never built as a
+  // different tree (see `FabriChatMessageRow`).
+  const replyDisplay = computed(() => (replyingTo ? "flex" : "none"));
+  const threadDisplay = computed(() => (hasThread ? "flex" : "none"));
+  const ownerDisplay = computed(() => (viewerIsOwner ? "block" : "none"));
   const isEmpty = computed(() => mainEntries.length === 0);
   const threadShownIn = computed((): ShownIn =>
     alsoToMain.get() ? "both" : "thread"
@@ -1980,7 +2050,6 @@ export const FabriChatRoomCore = pattern<
   };
   const closeThread = action(() => composer.key("thread").set(undefined));
   const cancelReply = action(() => composer.key("replyTo").set(undefined));
-  const rowInputs = { myProfile, ...records };
 
   return {
     [NAME]: title,
@@ -2026,7 +2095,20 @@ export const FabriChatRoomCore = pattern<
               message={each.cell}
               threadReplies={each.threadReplies}
               inThread={false}
-              {...rowInputs}
+              myProfile={myProfile}
+              kind={kind}
+              ownSpace={ownSpace}
+              creatorProfile={creatorProfile}
+              composer={composer}
+              messages={messages}
+              reactionLists={reactionLists}
+              requests={requests}
+              usedTimes={usedTimes}
+              activity={activity}
+              counters={counters}
+              roster={roster}
+              left={left}
+              notices={notices}
             />
           ))}
           {isEmpty
@@ -2034,16 +2116,12 @@ export const FabriChatRoomCore = pattern<
             : null}
         </cf-vstack>
 
-        {replyingTo
-          ? (
-            <cf-hstack gap="2" align="center">
-              <cf-text variant="caption">Replying to: {replyingTo}</cf-text>
-              <cf-button size="sm" variant="ghost" onClick={cancelReply}>
-                Cancel
-              </cf-button>
-            </cf-hstack>
-          )
-          : null}
+        <cf-hstack gap="2" align="center" style={{ display: replyDisplay }}>
+          <cf-text variant="caption">Replying to: {replyingTo}</cf-text>
+          <cf-button size="sm" variant="ghost" onClick={cancelReply}>
+            Cancel
+          </cf-button>
+        </cf-hstack>
         <div
           data-ui-pattern={CHAT_MESSAGE_SURFACE}
           data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
@@ -2058,49 +2136,59 @@ export const FabriChatRoomCore = pattern<
           />
         </div>
 
-        {hasThread
-          ? (
-            <cf-vstack
-              id="fabrichat-thread"
-              gap="2"
-              style={{
-                borderTop: "1px solid var(--cf-theme-color-border)",
-                paddingTop: "0.75rem",
-              }}
-            >
-              <cf-hstack justify="between" align="center">
-                <cf-heading level={4}>Thread</cf-heading>
-                <cf-button size="sm" variant="ghost" onClick={closeThread}>
-                  Close
-                </cf-button>
-              </cf-hstack>
-              {threadEntries.map((each) => (
-                <FabriChatMessageRow
-                  message={each.cell}
-                  threadReplies={0}
-                  inThread
-                  {...rowInputs}
-                />
-              ))}
-              <cf-checkbox $checked={alsoToMain}>
-                Also send to the conversation
-              </cf-checkbox>
-              <div
-                data-ui-pattern={CHAT_MESSAGE_SURFACE}
-                data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
-              >
-                <cf-submit-input
-                  data-ui-action={CHAT_MESSAGE_ACTION}
-                  inputId="fabrichat-thread-message"
-                  placeholder="Reply in thread"
-                  buttonText="Reply"
-                  disabled={cannotSend}
-                  onClick={sendThreadReply}
-                />
-              </div>
-            </cf-vstack>
-          )
-          : null}
+        <cf-vstack
+          id="fabrichat-thread"
+          gap="2"
+          style={{
+            display: threadDisplay,
+            borderTop: "1px solid var(--cf-theme-color-border)",
+            paddingTop: "0.75rem",
+          }}
+        >
+          <cf-hstack justify="between" align="center">
+            <cf-heading level={4}>Thread</cf-heading>
+            <cf-button size="sm" variant="ghost" onClick={closeThread}>
+              Close
+            </cf-button>
+          </cf-hstack>
+          {threadEntries.map((each) => (
+            <FabriChatMessageRow
+              message={each.cell}
+              threadReplies={0}
+              inThread
+              myProfile={myProfile}
+              kind={kind}
+              ownSpace={ownSpace}
+              creatorProfile={creatorProfile}
+              composer={composer}
+              messages={messages}
+              reactionLists={reactionLists}
+              requests={requests}
+              usedTimes={usedTimes}
+              activity={activity}
+              counters={counters}
+              roster={roster}
+              left={left}
+              notices={notices}
+            />
+          ))}
+          <cf-checkbox $checked={alsoToMain}>
+            Also send to the conversation
+          </cf-checkbox>
+          <div
+            data-ui-pattern={CHAT_MESSAGE_SURFACE}
+            data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
+          >
+            <cf-submit-input
+              data-ui-action={CHAT_MESSAGE_ACTION}
+              inputId="fabrichat-thread-message"
+              placeholder="Reply in thread"
+              buttonText="Reply"
+              disabled={cannotSend}
+              onClick={sendThreadReply}
+            />
+          </div>
+        </cf-vstack>
 
         {groupOfItsOwn
           ? (
@@ -2113,27 +2201,24 @@ export const FabriChatRoomCore = pattern<
               }}
             >
               <cf-heading level={4}>Members</cf-heading>
-              {viewerIsOwner
-                ? (
-                  <div
-                    data-ui-pattern={CHAT_MEMBERS_SURFACE}
-                    data-ui-event-integrity={CHAT_MEMBERS_SURFACE}
-                  >
-                    <cf-vstack gap="2">
-                      <cf-submit-input
-                        placeholder="did:key:… to add"
-                        buttonText="Add"
-                        onClick={streams.add}
-                      />
-                      <cf-submit-input
-                        placeholder="did:key:… to remove"
-                        buttonText="Remove"
-                        onClick={streams.remove}
-                      />
-                    </cf-vstack>
-                  </div>
-                )
-                : null}
+              <div
+                data-ui-pattern={CHAT_MEMBERS_SURFACE}
+                data-ui-event-integrity={CHAT_MEMBERS_SURFACE}
+                style={{ display: ownerDisplay }}
+              >
+                <cf-vstack gap="2">
+                  <cf-submit-input
+                    placeholder="did:key:… to add"
+                    buttonText="Add"
+                    onClick={streams.add}
+                  />
+                  <cf-submit-input
+                    placeholder="did:key:… to remove"
+                    buttonText="Remove"
+                    onClick={streams.remove}
+                  />
+                </cf-vstack>
+              </div>
               {noticeList.map((notice) => (
                 <cf-hstack gap="2" align="center">
                   <cf-text variant="caption">
@@ -2145,7 +2230,19 @@ export const FabriChatRoomCore = pattern<
                     onClick={commitRoom({
                       act: "delivered",
                       myProfile,
-                      ...records,
+                      kind,
+                      ownSpace,
+                      creatorProfile,
+                      composer,
+                      messages,
+                      reactionLists,
+                      requests,
+                      usedTimes,
+                      activity,
+                      counters,
+                      roster,
+                      left,
+                      notices,
                       id: notice.id,
                     })}
                   >
@@ -2168,6 +2265,8 @@ export const FabriChatRoomCore = pattern<
     ),
     [VIEWS]: { room: view },
     ...view,
+    composerSend: composeSend,
+    threadComposerSend: sendThreadReply,
   };
 });
 
@@ -2203,7 +2302,7 @@ export interface FabriChatRoomInput {
  */
 const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
   (input) => {
-    const profileWish = wish<ProfileCell>({ query: "#profile" });
+    const profileWish = wish<ChatProfile>({ query: "#profile" });
     const hasProfile = computed(() => profileWish.result !== undefined);
     const room = FabriChatRoomCore(
       {

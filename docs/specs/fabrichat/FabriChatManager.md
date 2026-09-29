@@ -1,6 +1,7 @@
 # FabriChatManager
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: implemented, with the departures listed in
+[`README.md`](README.md#implementation-status).
 
 `FabriChatManager` is an implementation of
 [`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
@@ -83,3 +84,26 @@ Nothing in this repository lets a pattern deliver one today:
 That is why step 3 hands notices to a client through `outgoingNotices` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). Once one of
 these is usable from a pattern, the manager can deliver notices itself.
+
+## As built
+
+`packages/patterns/fabrichat/manager.tsx` departs from the design above where
+the runtime lacks a prerequisite:
+
+- **Rooms are open.** It creates a room with `FabriChatRoom.inSpace()`, whose
+  space grants OWNER to the creator and WRITE to `"*"`, so a room is open to
+  any authenticated principal holding a link to it. It grants no one access.
+- **One transaction.** With no grants to commit apart, creating a room, its
+  notices, and its entry happen in one commit, and a request's outcome is
+  `done` or `refused` from the start. A request already decided changes
+  nothing when it arrives again.
+- **No principals.** A pattern can't learn its user's principal, so
+  `openDirect` can't refuse the user as their own counterpart, and `accept`
+  records the `counterpart` its client checked.
+- **One writer.** One handler, `commitManager`, writes the manager's records,
+  and each stream is a binding of it. `openDirect` and `createGroup` are sent
+  from controls marked as `ChatStartSurface`, and no write policy requires it.
+- **Notices.** A notice's id is `[recipient, requestId]` as JSON.
+
+Home's **Chats** tab renders the manager: the user's rooms, the room chosen
+among them, and the controls that start a direct or a group chat.

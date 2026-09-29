@@ -1,6 +1,7 @@
 # ChatReply
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: implemented, with the departures listed in
+[`README.md`](README.md#implementation-status).
 
 What a reply says about the message it replies to: which message, and where the
 reply is shown. A [`ChatMessage`](ChatMessage.md) that is a reply carries one as

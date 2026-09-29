@@ -1,6 +1,7 @@
 # ChatWindowAnchor
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: implemented, with the departures listed in
+[`README.md`](README.md#implementation-status).
 
 Where a window of messages sits in its view of the conversation. A client passes
 one to a message list's `openWindow` (see

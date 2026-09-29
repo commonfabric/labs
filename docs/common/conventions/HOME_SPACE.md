@@ -161,7 +161,7 @@ The piece holds two things:
   before the request is staged.
 
 Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
-and Self. Each row shows its task, state, age, and available token usage.
+Self, and Chats. Each row shows its task, state, age, and available token usage.
 Reported cost and estimated cost have separate labels; an unavailable estimate
 shows the harness's withheld reason when supplied. Missing counters and costs
 remain unavailable rather than displaying zero. Relative ages share a one-minute
@@ -172,6 +172,26 @@ clock from `#now/60`.
 not change the run's state or outcome. A terminal run has no Cancel action. When
 no runner is registered, the tab explains that requests remain queued until one
 starts. A queue with no entries shows "No agent runs yet."
+
+## Chat Manager
+
+The home default pattern holds the user's FabriChat manager in
+`defaultPattern.chatManager`, a piece of
+`packages/patterns/fabrichat/manager.tsx`. It is discovered with
+`wish({ query: "#chatManager" })`, a well-known home-space target, and
+satisfies the `ChatManagerOutput` contract
+([FabriChat](../../specs/fabrichat/ChatManagerOutput.md)). Like the agent
+queue, it is not a favorite, so a hashtag search does not find it.
+
+It holds the user's index of chat rooms: `rooms`, every room they belong to and
+haven't forgotten; `direct`, the direct room shared with each counterpart, by
+principal; `requests`, each request's outcome; and `outgoingNotices`, the
+notices its requests produced for a client to deliver. It creates each room in
+a space of its own. Everything it holds is private to the user, as the home
+space is.
+
+Home's **Chats** tab renders it: the user's rooms, the room chosen among them,
+and the controls that start a direct or a group chat.
 
 A request made in a home space that holds no queue — its home pattern does not
 exist, or is a version without the field — ends `refused`.

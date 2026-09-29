@@ -31,6 +31,7 @@ import {
   CHAT_START_SURFACE,
   type ChatIndexEntry,
   type ChatManagerNotice,
+  type ChatProfile,
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
@@ -104,7 +105,7 @@ export interface GroupDraft {
 }
 
 /** An empty group draft. */
-const EMPTY_DRAFT: GroupDraft = { title: "", members: "" };
+const EMPTY_DRAFT = { title: "", members: "" } satisfies GroupDraft;
 
 /** The manager's records, and a rendered control's bindings. */
 export interface ManagerActState {
@@ -425,7 +426,7 @@ const FabriChatManager = pattern<
   FabriChatManagerOutput
 >(
   ({ rooms, direct, requests, outgoingNotices }) => {
-    const profileWish = wish<ProfileCell>({ query: "#profile" });
+    const profileWish = wish<ChatProfile>({ query: "#profile" });
     const myProfile = profileWish.result;
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
@@ -497,7 +498,12 @@ const FabriChatManager = pattern<
                   variant="ghost"
                   onClick={commitManager({
                     act: "forget",
-                    ...records,
+                    myProfile,
+                    rooms: rooms!,
+                    direct: direct!,
+                    requests: requests!,
+                    outgoingNotices: outgoingNotices!,
+                    draft,
                     room: entry.room,
                   })}
                 >
@@ -553,7 +559,12 @@ const FabriChatManager = pattern<
                 variant="ghost"
                 onClick={commitManager({
                   act: "delivered",
-                  ...records,
+                  myProfile,
+                  rooms: rooms!,
+                  direct: direct!,
+                  requests: requests!,
+                  outgoingNotices: outgoingNotices!,
+                  draft,
                   id: notice.id,
                 })}
               >

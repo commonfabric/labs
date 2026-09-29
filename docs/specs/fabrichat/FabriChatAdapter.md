@@ -1,6 +1,7 @@
 # FabriChatAdapter
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: implemented, with the departures listed in
+[`README.md`](README.md#implementation-status).
 
 `FabriChatAdapter` renders one placement
 ([`FabriChatPlacement.md`](FabriChatPlacement.md)) for hosts that render VDOM,
