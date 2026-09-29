@@ -80,9 +80,11 @@ deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,lastActivity
 ```
 
 `shortName` is left out of that projection because it is not a derived scalar
-and stepping does not settle it: a topic publishes the number its durable input
-holds, so it reads the same before and after a step. Select it when the number
-is what you want.
+and stepping does not settle it: a topic running this checkout's pattern
+publishes the number its durable input holds, so it reads the same before and
+after a step. Select it when the number is what you want — but the deployed
+board does not yet carry the publication, so read a number there from
+`namesTable`, or one Topic's from its own input (`references/naming.md`).
 
 `piece step` runs one scheduling step — start, idle, synced, stop. It authors no
 new content, so it is safe to repeat and safe to run over a topic somebody else
