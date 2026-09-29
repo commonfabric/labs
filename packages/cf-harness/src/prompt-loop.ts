@@ -5672,9 +5672,10 @@ export class CfHarnessPromptLoop {
     const childEngine = new CfHarnessEngine({
       runId: childRunId,
       lineage: childLineage,
-      // A child that mounts an acquired skill gets a sandbox of its own, built
-      // from this run's configuration plus that one mount; every other child
-      // shares this run's runtime.
+      // What sandbox a child gets depends on how this run's was made: see
+      // `childSandboxOptions`. Under the direct runsc driver every child builds
+      // a runtime of its own; under Docker a child shares this run's unless it
+      // mounts an acquired skill.
       ...childSandboxOptions({
         sandbox: this.engine.sandbox,
         ownedSandboxConfig: this.engine.ownedSandboxConfig,

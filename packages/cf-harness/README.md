@@ -921,7 +921,12 @@ The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any
 mount.
 
-<!-- TODO(merge): default user and scratch rule -->
+The direct driver runs a command as the container user it is configured with,
+and as root when it is configured with none, on every host. The Docker driver's
+default on Linux is the host user. The direct driver's default scratch directory
+is made for the run with no access for group or others, under a parent it
+verifies is this user's alone; a scratch directory named by the caller is not
+verified.
 
 [Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
 reference is the full contract: the defaults of each setting, the runtime

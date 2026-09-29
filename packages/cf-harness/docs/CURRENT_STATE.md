@@ -206,16 +206,18 @@ empty standard output, no command has run, and the working directory is
 unchanged. The first two refusals below are the tool's own and leave nothing in
 the run's record. The other four are raised by the runtime, after the call's
 invocation context was recorded. The refusal states its reason and the next step
-open to the model:
+open to the model. Its text is the tool's own, chosen by the reason the runtime
+gives: the runtime's message, which can name host paths and carry the text of an
+underlying error, goes to the operator's log and is not shown to the model.
 
-| Reason                          | What the model is told                                                                                                                              |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The runtime has no sessions     | To rerun the command without `session`.                                                                                                             |
-| The name is not a session name  | The rule for a name, and to rerun with a name that satisfies it or with none. The rejected name is not repeated.                                    |
-| The run is in an enforcing mode | That sessions are unavailable in that mode, and to run the command without one.                                                                     |
-| The session was lost            | That the session ended and its state is gone. This is reported once, on the next call that names the session; naming it again starts an empty one.  |
-| The session cap is reached      | That the run holds as many sessions as it may, and to reuse one of them or run without a session.                                                   |
-| The session failed to start     | That it could not start, and to run without a session or try again. A failed start is not retained, so the next call that names it starts it again. |
+| Reason                          | What the model is told                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The runtime has no sessions     | To rerun the command without `session`.                                                                                                                                               |
+| The name is not a session name  | The rule for a name, and to rerun with a name that satisfies it or with none. The rejected name is not repeated.                                                                      |
+| The run is in an enforcing mode | That sessions are unavailable in that mode, and to run the command without one.                                                                                                       |
+| The session was lost            | That the session ended and its state is gone. This is reported once, on the next call that names the session; naming it again starts an empty one.                                    |
+| The session cap is reached      | That the run holds as many sessions as it may, and to reuse one of them or run without a session.                                                                                     |
+| The session failed to start     | That it could not start, to run the command without a session, and not to retry the session in a loop. A failed start is not retained, so a later call that names it starts it again. |
 
 ### Process lifecycle
 
@@ -270,7 +272,19 @@ host. The first is checked for every scratch directory: one that lies inside any
 mount of the run, read-only or writable, is refused, by the same real-path
 comparison.
 
-<!-- TODO(merge): default user and scratch rule -->
+The second is checked for the default scratch directory only. That directory is
+made for the run with mode 0700, under a parent named `cf-harness-runsc` in the
+temporary directory. The parent is created 0700 when it is absent, and when it
+is there it has to be a real directory, owned by this user, with no access for
+group or others, or the run is refused. This user's id is read from `Deno.uid`,
+and from `/usr/bin/id -u` where the `sys` permission is missing; an id that
+cannot be had refuses the run. A scratch directory named by the caller is not
+verified, and the Docker driver does not verify the directories it reads results
+from.
+
+With no container user configured the direct driver runs every command as uid 0
+and gid 0, on Linux and on macOS. The Docker driver defaults to the host user on
+Linux and sets no user on macOS.
 
 ## Supported surfaces
 
