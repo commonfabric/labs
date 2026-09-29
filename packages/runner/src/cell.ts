@@ -362,16 +362,33 @@ export const recordRelevantSchemaWritePolicyInput = (
   );
 };
 
+/** Whether `schema` declares an array: by type, or by describing items. */
+const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
+  isObjectOrArray(schema) &&
+  (schema.type === "array" ||
+    (Array.isArray(schema.type) && schema.type.includes("array")) ||
+    schema.items !== undefined || schema.prefixItems !== undefined);
+
 /**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
  * envelope spells each segment of an input's path as a named property, and
  * the stored envelope spells the array as an array, so an input recorded at
- * the index alone could never merge with it. `undefined` where the slot is
- * not an item of an array — a numeric key of an object stays a property, and
- * a parent this transaction cannot read decides nothing — or where the
- * writer holds no schema for it. The item's own definitions move to the
- * array's root, where the envelope's references to them point.
+ * the index alone could never merge with it — and a claim on the items is
+ * declared at `*`, which an input at the array reaches and one at the index
+ * would answer for by a type clash instead.
+ *
+ * The item's schema is the writer's where it holds one, else the stored
+ * envelope's at the item — a writer through a bare link answers to the
+ * stored claim as any routed write does. The slot is an item of an array
+ * where the parent holds one, or holds nothing yet and the stored envelope
+ * declares one there: an absent container's first item write is still an
+ * item write. A numeric key of an object stays a property. `undefined`
+ * where none of that holds, or where no schema for the item is known; the
+ * parent read propagates what `readValueOrThrow` throws, since an absent or
+ * mismatched parent reads as `undefined` and anything else is a failure a
+ * policy decision must not be built on. The item's own definitions move to
+ * the array's root, where the envelope's references to them point.
  */
 const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
@@ -379,10 +396,7 @@ const arrayItemPolicyInput = (
   schema: JSONSchema | undefined,
 ): { link: NormalizedFullLink; schema: JSONSchema } | undefined => {
   const index = link.path[link.path.length - 1];
-  if (
-    !isObjectOrArray(schema) || index === undefined ||
-    !/^(0|[1-9][0-9]*)$/.test(index)
-  ) {
+  if (index === undefined || !/^(0|[1-9][0-9]*)$/.test(index)) {
     return undefined;
   }
   const parent: NormalizedFullLink = {
@@ -390,16 +404,20 @@ const arrayItemPolicyInput = (
     path: link.path.slice(0, -1),
     schema: undefined,
   };
-  let held: unknown;
-  try {
-    held = tx.readValueOrThrow(parent, {
-      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
-    });
-  } catch {
+  const held = tx.readValueOrThrow(parent, {
+    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+  });
+  if (
+    !Array.isArray(held) &&
+    (held !== undefined ||
+      !schemaDeclaresArray(storedSchemaForWritePolicyInput(tx, parent)))
+  ) {
     return undefined;
   }
-  if (!Array.isArray(held)) return undefined;
-  const { $defs, ...items } = schema;
+  const itemSchema = resolveSchema(schema) ??
+    storedSchemaForWritePolicyInput(tx, link);
+  if (!isObjectOrArray(itemSchema)) return undefined;
+  const { $defs, ...items } = itemSchema;
   return {
     link: parent,
     schema: {

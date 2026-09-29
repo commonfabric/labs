@@ -11112,11 +11112,11 @@ export function* prepareBoundaryCommitSteps(
       }
     }
 
-    // A claim binding every later writer of a position is store policy from
-    // the moment the envelope declaring it persists, whether or not the
-    // position holds a value yet: write authority is a property of the
-    // schema, not the value (normative CFC §8.15.3). The schema walk above
-    // mints an entry only where the attempted write reaches a value
+    // A writer claim binds every later writer of its position from the
+    // moment the envelope declaring it persists, whether or not the position
+    // holds a value yet: write authority is a property of the schema, not
+    // the value (normative CFC §8.15.3). The schema walk above mints an
+    // entry only where the attempted write reaches a value
     // (`ifcEntryAppliesToAttemptedWrite`), so a claimed position still
     // absent — a pattern input declared `WriteAuthorizedBy` with no default,
     // or one a sibling's default was written beside — got none. A writer
@@ -11124,29 +11124,54 @@ export function* prepareBoundaryCommitSteps(
     // (`storedCfcMetadataAppliesToPath` reads the label map, not the schema)
     // and never reached the claim; and a document whose only policy is such
     // a claim persisted no envelope at all, since nothing below writes an
-    // empty label map. Every claimed concrete position of the schema this
-    // commit persists therefore carries an entry in the final payload set.
-    // The entry says only that policy applies there — its label values stay
-    // the position's writer's to mint — and it is added after the carry
-    // above, so it replaces nothing a stored entry at the path already says.
-    // A wildcard position names no single path an entry could mark, and
-    // matches concrete writes through the schema at verification as before.
-    // A payload whose policy did not verify keeps no declared entry either.
+    // empty label map. Every writer-claimed position of the schema this
+    // commit persists is therefore marked in the final payload set, by a
+    // declared entry with an empty label, wherever no declared entry at the
+    // position or above it already routes a write there.
+    //
+    // Only `writeAuthorizedBy` is marked. A copy claim (`exactCopyOf`,
+    // `projection`) is verified when its target is written, and an unwritten
+    // target keeps no entry (cfc-projection.test.ts); an input floor and a
+    // UI contract gate what a write brings, which §8.15 does not make a
+    // property of an absent position.
+    //
+    // The marker is what routes a writer's later write, so what already
+    // routes one decides where it goes: a declared entry (or a legacy one,
+    // origin-less) at the position or at an ancestor, since
+    // `storedCfcMetadataAppliesToPath` reads prefixes both ways. A derived,
+    // structure or link entry does not count: a link write discounts the
+    // link-origin entries at its slot, and flow stamps are cleared by later
+    // writes. Under an ancestor's declared entry no marker is minted, so the
+    // declared component's longest-prefix resolution keeps resolving a read
+    // of the position to that ancestor's label rather than to an empty one.
+    //
+    // A wildcard position is marked at its longest concrete prefix — the
+    // container whose items carry the claim — which routes a write of the
+    // container and of any item; the claim itself is then verified through
+    // the stored schema, as for any routed write. A payload whose policy did
+    // not verify keeps no declared entry either.
     if (!ingestVerificationFailed) {
-      const markedPaths = new Set(
-        persistedLabelEntries.map((entry) =>
-          pathKey(canonicalizeLogicalPath(entry.path))
-        ),
-      );
+      const declaredPaths = persistedLabelEntries
+        .filter((entry) =>
+          entry.origin === "declared" || entry.origin === undefined
+        )
+        .map((entry) => canonicalizeLogicalPath(entry.path));
+      const declaredAtOrAbove = (path: readonly string[]): boolean =>
+        declaredPaths.some((declared) => isPrefix(declared, path));
       for (const entry of mergedSchemaEntries) {
         if (
-          entry.path.includes("*") || !hasPersistedPolicyClaim(entry.schema)
+          !isObjectOrArray(entry.schema) ||
+          !isObjectOrArray(entry.schema.ifc) ||
+          entry.schema.ifc.writeAuthorizedBy === undefined
         ) continue;
-        const key = pathKey(canonicalizeLogicalPath(entry.path));
-        if (markedPaths.has(key)) continue;
-        markedPaths.add(key);
+        const wildcard = entry.path.indexOf("*");
+        const path = canonicalizeLogicalPath(
+          wildcard === -1 ? entry.path : entry.path.slice(0, wildcard),
+        );
+        if (declaredAtOrAbove(path)) continue;
+        declaredPaths.push(path);
         persistedLabelEntries.push({
-          path: entry.path,
+          path,
           label: {},
           origin: "declared",
         });
