@@ -53,33 +53,46 @@ the model to make policy decisions.
 
 ## Sandbox runtimes
 
-Sandboxed tools execute through one of two drivers. Both read the trusted CFC
-result of a command through one shared parser, which marks the command's output
+Sandboxed tools execute through one of two drivers. A command has a trusted CFC
+result only where the driver's CFC transport is configured: a result directory
+under the Docker driver, a CFC policy under the direct driver. Both drivers read
+that result through one shared parser, which marks the command's output
 `observed`, `opaque`, or `denied`. The parser reads one shape differently for
-the two: a result whose structured label is empty beside a label string that is
-not `runsc`'s spelling of the empty label. The Docker driver reads that output
-as `observed`, and the direct driver withholds it.
+the two: a result whose structured label is empty beside a non-blank label
+string that is not `runsc`'s spelling of the empty label. The Docker driver
+reads that output as `observed`, and the direct driver withholds it. A blank
+label string beside an empty structured label is withheld under both.
 
 - The **Docker driver** is the default. It shells out to Docker and names a
-  Docker-registered runtime, normally `runsc-cfc`. The CFC invocation context
-  and the result travel through two host sidecar directories that the runtime's
-  registration names.
+  Docker-registered runtime, normally `runsc-cfc`. Where they are configured,
+  the CFC invocation context and the result travel through two host sidecar
+  directories that the runtime's registration names.
 - The **direct driver** writes an OCI bundle and invokes a `runsc` binary
-  itself. On Linux that binary is gVisor's `runsc`. On macOS it is the darwin
-  build from the sibling `gvisor` repository, which takes the same command line
-  and forwards it into one VM that every run on the machine shares. The
-  invocation context goes in, and the result comes out, on descriptors the
-  driver opens for each call, so no directory is registered anywhere.
+  itself, with the same command line on Linux and on macOS. On Linux that binary
+  is expected to be gVisor's `runsc`. On macOS it is expected to be the darwin
+  build from the sibling `gvisor` repository, which is expected to forward the
+  command line into one VM that every run on the machine shares; the forwarding
+  and the VM are that build's behavior and not the harness's. Where a CFC policy
+  is configured, the invocation context goes in, and the result comes out, on
+  descriptors the driver opens for each call, so no directory is registered
+  anywhere. With no policy, `runsc` is run without `--cfc`, it is passed no
+  invocation context, and the call has no result.
 
 ### Selection
 
-`--sandbox-runtime <docker|runsc>` selects the driver and
-`CF_HARNESS_SANDBOX_RUNTIME` supplies its default. The flag wins over the
-environment, any other value is refused, and a run that names neither uses
-Docker. The batch CLI, the interactive stdio entrypoint, and both lanes of the
-Loom local host derive the selection through one function, so runs started from
-one environment execute on the same driver. The console does not read the
-selection, and its sessions run on the Docker driver.
+`CF_HARNESS_SANDBOX_RUNTIME` selects the driver, `docker` or `runsc`. On the
+batch CLI `--sandbox-runtime <docker|runsc>` selects it too, and the flag wins
+over the environment. Any other value is refused, and a run that names neither
+uses Docker.
+
+`--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
+the batch CLI, which the batch lane of the Loom local host also hands its
+arguments to. The interactive stdio entrypoint and the interactive lane of the
+Loom local host take the selection from the environment alone, and refuse each
+of the three flags as an unsupported argument. All four derive the selection
+through one function, so runs started from one environment execute on the same
+driver. The console does not read the selection, and its sessions run on the
+Docker driver.
 
 The selection belongs to a run. The direct driver registers nothing with Docker
 and keeps its `runsc` state under the run's own scratch directory, so runs on
@@ -88,21 +101,22 @@ either driver coexist on one machine.
 The settings below describe the direct driver and are read only when it is
 selected:
 
-| Setting        | Flag                   | Environment                      | When neither names one                                                                  |
+| Setting        | Batch CLI flag         | Environment                      | When neither names one                                                                  |
 | -------------- | ---------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
 | Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the VM's image store. On Linux, the run is refused. |
 | CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.  |
 | `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc` on `PATH`.                                                                      |
 | Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                              |
 
-The rootfs is a directory on Linux and, on macOS, the marker path the darwin
-`runsc` maps to a block image. `runsc` is passed `--cfc` exactly when a CFC
-policy is configured. An empty `--sandbox-cfc-policy` means none; an empty
-`CF_HARNESS_RUNSC_CFC_POLICY` names nothing, so the default applies. An
-enforcing run with no policy is refused as it starts, before any command
-executes in the sandbox and before the first model turn. A runtime built outside
-an engine has no such check in front of it, and refuses each enforcing call
-instead.
+The harness writes the rootfs path into the bundle as the container's root. On
+Linux `runsc` is expected to find a directory there. On macOS the path is a
+marker, and mapping it to a block image is the darwin `runsc`'s part. `runsc` is
+passed `--cfc` exactly when a CFC policy is configured. An empty
+`--sandbox-cfc-policy` means none; an empty `CF_HARNESS_RUNSC_CFC_POLICY` names
+nothing, so the default applies. An enforcing run with no policy is refused as
+it starts, before any command executes in the sandbox and before the first model
+turn. A runtime built outside an engine has no such check in front of it, and
+refuses each enforcing call instead.
 
 `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
 `--cfc-invocation-context-dir` configure the Docker driver. The direct driver
@@ -142,7 +156,10 @@ written in Docker's vocabulary, which maps onto the direct driver's as follows:
 | `bridge`                         | `bridge`      | `sandbox`     |
 | `host`                           | `host`        | `host`        |
 
-A value outside that vocabulary is refused on either driver.
+A value outside that vocabulary is refused on either driver. The two differ over
+white space around a value. The direct driver's selection trims it, so `bridge`
+written with a space on either side selects `sandbox`. The Docker driver
+compares the value as written, and refuses that one.
 
 `--describe-capabilities` lists `--sandbox-runtime`, `--sandbox-rootfs`, and
 `--sandbox-cfc-policy` among its CLI flags, which is how an adapter learns that
@@ -180,12 +197,16 @@ container of its own, as every call does under Docker.
   result, exit code 124, and takes the whole session down with it, because the
   driver holds no handle on the one process.
 - A runtime holds at most eight sessions at a time.
-- Every container's `/tmp` is a memory-backed file system capped at 512 MiB, and
-  its rootfs overlay is held in memory.
+- The harness asks for every container's `/tmp` as a `tmpfs` of at most 512 MiB,
+  which is `size=512m` in the bundle, and for a rootfs overlay held in memory,
+  which is `--overlay2=root:memory` on the command line. Holding a container to
+  both is `runsc`'s part.
 
 Sessions are refused in the enforcing CFC modes, `enforce-explicit` and
 `enforce-strict`, because a flow-control result taken for one `exec` is not a
-sound basis for enforcement:
+sound basis for enforcement. The three reasons below describe how `runsc` is
+expected to compute that result and to track taint inside one container. They
+are `runsc`'s behavior, and the harness refuses without observing any of them:
 
 - the result is a snapshot taken when the executed process exits, while the
   call's output keeps draining and the session's background processes keep
@@ -198,14 +219,17 @@ sound basis for enforcement:
   that session carries the taint.
 
 In an enforcing mode a call without a session still runs, in a container of its
-own with a result of its own. In `observe` a session's result is reported as the
-observation it is.
+own with a result of its own. In `observe` a call in a session has a result only
+where a CFC policy is configured, and that result is reported as the observation
+it is.
 
 A refusal over `session` is recoverable. The tool returns exit code 125 with
 empty standard output, no command has run, and the working directory is
-unchanged. The first two refusals below are the tool's own and leave nothing in
-the run's record. The other four are raised by the runtime, after the call's
-invocation context was recorded. The refusal states its reason and the next step
+unchanged. The first two refusals below are the tool's own. They are made before
+the call's CFC invocation context is created, so the run holds no invocation
+context for them. The other four are raised by the runtime, after the call's
+invocation context was recorded. Each of the six is recorded as the call's tool
+output, as every tool output is. The refusal states its reason and the next step
 open to the model. Its text is the tool's own, chosen by the reason the runtime
 gives: the runtime's message, which can name host paths and carry the text of an
 underlying error, goes to the operator's log and is not shown to the model.
@@ -229,10 +253,14 @@ optional on a process runner, and a runner without it cannot keep a session
 alive: the session fails to start and the call is refused as above.
 
 A session's process is spawned with its standard input held. The harness keeps
-the write end of that pipe open and never writes to it, and the container's
-first process does nothing but read it. The pipe closes when the harness process
-exits, however it exits, so a session ends with the harness even when the
-harness is killed outright. `kill()` closes the pipe as well.
+the write end of that pipe open and never writes to it, and the first process it
+asks for in the container is a shell loop that does nothing but read standard
+input. The pipe closes when the harness process exits, however it exits, even
+when the harness is killed outright, and the session's process then reads the
+end of its input. Ending the session from there is `runsc`'s part: it is
+expected to pass the end of input on to the container's first process, and to
+take the container down when that process exits. `kill()` closes the pipe as
+well.
 
 The engine closes a runtime it built on every terminal transition — completed,
 failed, canceled, and interrupted — before it writes the run's outcome. Closing
@@ -276,15 +304,33 @@ The second is checked for the default scratch directory only. That directory is
 made for the run with mode 0700, under a parent named `cf-harness-runsc` in the
 temporary directory. The parent is created 0700 when it is absent, and when it
 is there it has to be a real directory, owned by this user, with no access for
-group or others, or the run is refused. This user's id is read from `Deno.uid`,
+group or others, or no command can run. This user's id is read from `Deno.uid`,
 and from `/usr/bin/id -u` where the `sys` permission is missing; an id that
 cannot be had refuses the run. A scratch directory named by the caller is not
 verified, and the Docker driver does not verify the directories it reads results
 from.
 
+A parent that fails the check does not refuse the run as it starts. The runtime
+makes the check once, the first time it is about to write under the scratch
+directory, and keeps the outcome. Where the check failed, the runtime writes
+nothing under the scratch directory and starts no container, and every command
+it is given fails on the check's error. In a run the first such command is the
+capability probe. Its failure is recorded as a `capability_snapshot` failure
+record and does not stop the run, which goes on to its first model turn. A
+`bash` call that names a session is then refused as a session that failed to
+start, and a `bash` call that names none throws, which ends the run. An
+enforcing run with no CFC policy differs: it is refused before the capability
+probe.
+
 With no container user configured the direct driver runs every command as uid 0
 and gid 0, on Linux and on macOS. The Docker driver defaults to the host user on
 Linux and sets no user on macOS.
+
+A scratch directory named by the caller and a container user are options of
+`resolveRunscSandboxConfig` alone, the user written as a numeric uid or uid:gid.
+No flag, environment variable, or engine option carries either. A run whose
+engine built the direct driver's runtime therefore uses the default scratch
+directory and runs every command as uid 0.
 
 ## Supported surfaces
 
