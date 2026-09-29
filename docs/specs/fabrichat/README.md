@@ -256,6 +256,10 @@ names the ones it needs, and they are gathered here:
 - **Delivering a notice.** Nothing in this repository lets a pattern deliver a
   message to a principal who shares no space with the sender (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
+- **Scoped sub-patterns and split write policies**, both still to check: a room
+  giving each memory session its own session object, and one message document
+  written by two sets of writers (see
+  [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **Host-issued trusted gestures.** A client that draws natively needs a
   sanctioned way to issue a reviewed gesture without a DOM. That is the
   "sanctioned headless issuance path" in the [host embedding policy

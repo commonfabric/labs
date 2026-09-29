@@ -174,3 +174,15 @@ the room is created from the same settings the handlers read.
   their behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
+- **A session per memory session.** `session` assumes the room can give each
+  memory session its own `ChatRoomSession`, instantiating the session's
+  sub-pattern as a `PerSession` value (see [scoped cell
+  instances](../scoped-cell-instances.md)). That fits the scoped-cell design,
+  but whether the runtime supports a sub-pattern per session today is still to
+  check.
+- **A write policy split within one document.** A message's reactions are
+  written only by the reaction handlers (and obliteration), and the rest of the
+  message only by the message handlers (see
+  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
+  policies can be split between writers this way is still to check. If not,
+  reactions move to a record of their own, keyed by message.
