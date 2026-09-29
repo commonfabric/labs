@@ -38,8 +38,10 @@ import { setCfcImplementationIdentity } from "../src/storage/extended-storage-tr
 // A custody room releases one answer per instance. Its projector is
 // reactive: pointed at other input, or run again, it computes again, and a
 // room rendering it would show each result its rule releases. The seal
-// publishes the answer once into a create-only slot the room renders, so what
-// the room's readers see cannot move after the first publication.
+// publishes the answer once into a create-only slot the room renders, so the
+// answer published for an instance never changes after the first publication.
+// Which instance a room renders is its bindings' to say, which the room's
+// members can write; the custody seal spec says what that leaves open.
 
 const alice = await Identity.fromPassphrase("custody-answer-alice");
 const bob = await Identity.fromPassphrase("custody-answer-bob");
@@ -655,25 +657,19 @@ describe("custody answers", () => {
           (local) => local.set({ instance, answer: "tacos" } as never),
         ],
       ];
+      // The slot's claim is stored with it, so every write is refused, the
+      // primitive over its root included, and the slot still shows what the
+      // seal wrote.
       for (const [what, write] of writes) {
         const refused = await attemptAsMember(fixture, slot, write);
-        // Refused, or else a read refuses the slot or shows what the seal
-        // wrote; never the member's value.
-        if (refused === undefined) {
-          const shown = await fixture.shown(mallory).then(
-            (answer) => answer,
-            (error: Error) => error.message,
-          );
-          expect({ what, shown }).toEqual({
-            what,
-            shown: expect.stringMatching(/^sushi$|did not write/),
-          });
-        } else {
-          expect({ what, refused }).toEqual({
-            what,
-            refused: expect.stringContaining("writeAuthorizedBy"),
-          });
-        }
+        expect({ what, refused }).toEqual({
+          what,
+          refused: expect.stringContaining("writeAuthorizedBy"),
+        });
+        expect({ what, shown: await fixture.shown(mallory) }).toEqual({
+          what,
+          shown: "sushi",
+        });
       }
       // And through a write redirect a member's own cell holds.
       const redirect = fixture.runtimes.get(mallory)!.getCell(S, "to-answer");
