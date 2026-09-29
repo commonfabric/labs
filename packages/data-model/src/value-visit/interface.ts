@@ -170,8 +170,9 @@ export type VisitResult<PlusType, ResultType> =
  * visit the position is simply not visited. A `replace` visits its `value` in
  * place of the sub-value, exactly as if `visitValue()` had returned that
  * `replace`. Either way, in a structural-map operation the position is then
- * reported to the matching `mapped*()` method, as any other is. `undefined`
- * visits the sub-value itself.
+ * reported to the matching `mapped*()` method, as any other is, unless the
+ * visit of a replacement ended the walk with a `mainResult`. `undefined` visits
+ * the sub-value itself.
  */
 export type VisitingResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
