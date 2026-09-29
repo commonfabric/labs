@@ -65,7 +65,10 @@ import {
   clauseAlternatives,
   clausesEqual,
 } from "./clause.ts";
-import { evaluateExchangeRules } from "./exchange-eval.ts";
+import {
+  evaluateExchangeRules,
+  modulePolicyRecordId,
+} from "./exchange-eval.ts";
 import { cfcLabelViewForResolvedCellWithStatus } from "./label-view.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
@@ -2197,8 +2200,7 @@ const releasedToSeal = (
   const roomReaders = cfcAtom.space(room);
   // A rule of the room's own policy fired, and released every clause naming
   // the policy to the seal; every other clause admits the room's readers.
-  const roomRecord =
-    `${policy.moduleIdentity}#${policy.symbol}@${policy.policyDigest}`;
+  const roomRecord = modulePolicyRecordId(policy);
   const admits = (clause: unknown, reader: unknown) =>
     clauseAlternatives(clause as CfcConfClause).some((atom) =>
       deepEqual(atom, reader)

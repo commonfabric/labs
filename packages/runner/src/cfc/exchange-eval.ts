@@ -83,6 +83,20 @@ import type { TrustResolver } from "./trust.ts";
 /** Default rule-firing budget per evaluated label. */
 export const DEFAULT_EXCHANGE_FUEL = 64;
 
+/**
+ * The record id a module policy's rule firings carry: its module, symbol and
+ * compiled digest. Code that asks whether a given policy's rule fired (the
+ * custody seal's publication check) compares against this, so the encoding
+ * lives in one place.
+ */
+export const modulePolicyRecordId = (
+  reference: Pick<
+    CfcModulePolicyRefAtom,
+    "moduleIdentity" | "symbol" | "policyDigest"
+  >,
+): string =>
+  `${reference.moduleIdentity}#${reference.symbol}@${reference.policyDigest}`;
+
 /** One state-changing rule application, for observe-mode diagnostics (B5). */
 export type RuleFiring = {
   readonly recordId: string;
@@ -458,8 +472,7 @@ const resolveSelectedModulePolicies = (
     policies.push({
       reference,
       artifact,
-      recordId:
-        `${reference.moduleIdentity}#${reference.symbol}@${reference.policyDigest}`,
+      recordId: modulePolicyRecordId(reference),
     });
   }
   return { policies, failures };
