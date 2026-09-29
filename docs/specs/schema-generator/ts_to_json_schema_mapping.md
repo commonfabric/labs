@@ -1082,12 +1082,14 @@ Mechanics:
   identified, as a recursive definition's name and in cycle detection, by its
   type together with that instantiation and the arguments as written, or with
   its bindings where no instantiation is carried. Each argument also retains
-  the ordered `typeof` references reached through its outer bindings and fixed
+  the ordered `typeof` references reached through its outer bindings and
   alias bodies: two writers with the same function type still name distinct
   write policies in recursive definitions. Repeated union and intersection
   members contribute their query origins once, so adding the same policy again
-  does not change the recursion key. Two instantiations of one declaration keep
-  apart, and a recursion whose instantiation the checker
+  does not change the recursion key. An alias's arguments, including defaults
+  read under earlier arguments, contribute at their uses in its body, under
+  that position's union or intersection operator. Two instantiations of one
+  declaration keep apart, and a recursion whose instantiation the checker
   settles to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to
   its definition although the written arguments nest without end.
 - A chain is also tracked from the written reference it is entered from

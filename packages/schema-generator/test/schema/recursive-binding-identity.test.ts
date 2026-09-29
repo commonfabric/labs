@@ -114,6 +114,32 @@ describe("recursive binding identity", () => {
     });
   }
 
+  for (const operator of ["|", "&"]) {
+    for (const useDefault of [false, true]) {
+      it(`emits recursive references when an alias repeats a writer with \`${operator}\`${useDefault ? " through a default argument" : ""}`, async () => {
+        const { schema, diagnostics } = await generate(`
+          type Repeat<W> = W ${operator} typeof f;
+          type WithDefault<W, V = W> = Repeat<V>;
+          type Sec<W> = Confidential<{
+            value: WriteAuthorizedBy<string, typeof f>;
+            next?: Sec<${useDefault ? "WithDefault<W>" : "Repeat<W>"}>;
+          }, readonly ["a"]>;
+          interface Holder { f: Sec<typeof f> }
+        `);
+        expect(diagnostics).toEqual([]);
+        expect(Object.keys(schema.$defs ?? {}).length).toBeGreaterThan(0);
+        for (const definition of Object.values(schema.$defs!)) {
+          const properties = asObjectSchema(definition).properties!;
+          expect(asObjectSchema(properties.value!).ifc?.writeAuthorizedBy)
+            .toEqual({
+              __ctWriterIdentityOf: { file: "test.ts", path: ["f"] },
+            });
+          expect(asObjectSchema(properties.next!).$ref).toMatch(/^#\/\$defs\//);
+        }
+      });
+    }
+  }
+
   it("keeps writer positions distinct when two recursive payloads use the same bindings in opposite order", async () => {
     const { schema, diagnostics } = await generate(`
       type Pair<A, B> = Confidential<{

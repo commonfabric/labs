@@ -60,4 +60,29 @@ export default pattern<{
       expect(visited.size).toBeGreaterThan(0);
     }
   });
+  for (const operator of ["|", "&"]) {
+    it(`emits a recursive reference when an alias repeats a writer with \`${operator}\``, async () => {
+      const transformed = await transformSource(
+        `import { Confidential, WriteAuthorizedBy, pattern } from "commonfabric";
+declare const f: () => void;
+type Repeat<W> = W ${operator} typeof f;
+type Sec<W> = Confidential<{
+  value: WriteAuthorizedBy<string, typeof f>;
+  next?: Sec<Repeat<W>>;
+}, readonly ["a"]>;
+export default pattern<{ root: Sec<typeof f> }>(() => ({}));`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const { input } = patternSchemas(parseModule(transformed)) as {
+        input: Schema;
+      };
+      expect(Object.keys(input.$defs ?? {}).length).toBeGreaterThan(0);
+      for (const definition of Object.values(input.$defs!)) {
+        expect(definition.properties!.value!.ifc?.writeAuthorizedBy).toEqual({
+          __ctWriterIdentityOf: { file: "/test.tsx", path: ["f"] },
+        });
+        expect(definition.properties!.next!.$ref).toMatch(/^#\/\$defs\//);
+      }
+    });
+  }
 });

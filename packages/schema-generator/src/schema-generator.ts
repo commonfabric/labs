@@ -1914,7 +1914,7 @@ export class SchemaGenerator {
 
   /**
    * Helper for `#bindingKey()`, which retains the ordered `typeof` bindings
-   * each argument reaches through its outer bindings and fixed alias bodies.
+   * each argument reaches through its outer bindings and alias bodies.
    * The checker can give distinct writers the same type, so their authored
    * queries remain part of a recursive definition's identity. Repeated union
    * and intersection members contribute once so their recursion can settle.
@@ -1937,10 +1937,7 @@ export class SchemaGenerator {
       const parts = children.flatMap((child) =>
         typeof child !== "number" && child.kind === kind ? child.parts : [child]
       );
-      const distinct = kind === "sequence" ? parts : [
-        ...new Map(parts.map((part) => [JSON.stringify(part), part]))
-          .values(),
-      ];
+      const distinct = kind === "sequence" ? parts : dedupeByValueEqual(parts);
       return distinct.length === 0
         ? undefined
         : distinct.length === 1
@@ -1965,27 +1962,51 @@ export class SchemaGenerator {
       const visit = (
         node: ts.Node,
         under?: BoundTypeParameters,
+        parameters?: ReadonlyMap<
+          ts.TypeParameterDeclaration,
+          Queries | undefined
+        >,
       ): Queries | undefined => {
         if (ts.isTypeReferenceNode(node)) {
           const parameter = typeParameterOfReference(node, checker);
+          if (parameter && parameters?.has(parameter)) {
+            return parameters.get(parameter);
+          }
           const value = parameter && under?.arguments.get(parameter);
           if (value) return readArgument(value);
+
+          const declaration = getTypeAliasDeclaration(node, checker);
+          if (declaration && !aliases.has(declaration)) {
+            // Arguments contribute where the body uses them, under that
+            // position's operator. Reading them alongside the body would
+            // turn `W | typeof writer` into an ever-growing sequence.
+            const boundHere = new Map(parameters);
+            for (
+              const [index, param] of (declaration.typeParameters ?? [])
+                .entries()
+            ) {
+              const argument = node.typeArguments?.[index];
+              boundHere.set(
+                param,
+                argument
+                  ? visit(argument, under, parameters)
+                  : param.default
+                  ? visit(param.default, under, boundHere)
+                  : undefined,
+              );
+            }
+            aliases.add(declaration);
+            const queries = visit(declaration.type, under, boundHere);
+            aliases.delete(declaration);
+            return queries;
+          }
         }
         const children: Queries[] = [];
         if (ts.isTypeQueryNode(node)) children.push(this.#bindingId(node));
         ts.forEachChild(node, (child) => {
-          const queries = visit(child, under);
+          const queries = visit(child, under, parameters);
           if (queries !== undefined) children.push(queries);
         });
-        if (ts.isTypeReferenceNode(node)) {
-          const declaration = getTypeAliasDeclaration(node, checker);
-          if (declaration && !aliases.has(declaration)) {
-            aliases.add(declaration);
-            const queries = visit(declaration.type);
-            if (queries !== undefined) children.push(queries);
-            aliases.delete(declaration);
-          }
-        }
         return combine(
           ts.isUnionTypeNode(node)
             ? "union"
