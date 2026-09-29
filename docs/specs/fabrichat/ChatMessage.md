@@ -63,8 +63,9 @@ interface ChatMessage {
 - **`earlierVersions`** holds each version the message had before its current
   one, as a [`ChatMessageVersion`](ChatMessageVersion.md): its body and when it
   was recorded. It is empty for a message that has never changed. What the room
-  keeps here is left to the implementation (see [open
-  questions](#open-questions)).
+  keeps here is the room's policy (`editKeepsHistory`, see
+  [`ChatRoomPolicy`](ChatRoomPolicy.md)). It never holds `{ deleted: true }`
+  (see [deleted messages](#deleted-messages)).
 - **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
   to, in the same room, and whether the reply is shown in the main conversation,
   in a thread, or both. Threads, and which messages the main conversation shows,
@@ -158,33 +159,23 @@ A message's identity is its entity: links to a message, such as a reply's, name
 the entity. Its `sentAt` identifies it too, within its room (see [unique
 times](#unique-times)). Clients MUST NOT make up ids from content or position.
 
-## Open questions
+## Deleted messages
 
-Editing and deleting leave choices that this contract leaves to the
-implementation (see
-[`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior)). How
-`FabriChatRoom` makes them configurable is in
-[`FabriChatRoom`](FabriChatRoom.md#configuration).
+A deleted message, whether deleted by its sender or obliterated, accepts nothing
+further except obliteration. The room refuses, silently, an `editMessage`, a
+`deleteMessage`, a `sendReaction`, or a `deleteReaction` on it, and a
+`sendMessage` that replies to it. Replies it already had, and a thread rooted at
+it, keep their links.
 
-- **Who may edit or delete.** `editMessage` and `deleteMessage` admit only the
-  message's sender. A room's OWNERs curate others' messages only by obliterating
-  them (see [obliterated messages](#obliterated-messages)). Whether a sender's
-  deletion obliterates their message, and whether OWNERs may obliterate at all,
-  are left to the implementation, since retention requirements can forbid
-  removing anything.
-- **What an edit keeps.** Whether every edit adds its previous version to
-  `earlierVersions`, or only some do, and whether history is kept at all.
-- **What a deletion keeps.** Settled: a deletion either keeps the message's
-  author and history, or, where the implementation makes deletion obliteration,
-  removes both. Either way, it removes the reactions.
-- **Deleting a single earlier version.** Whether a sender can redact one version
-  in `earlierVersions` without deleting the message.
-- **Reactions and replies.** A deleted message loses its reactions. Whether it
-  can take new reactions or replies is open. A reply to it, and a thread rooted
-  at it, still link to it either way.
-- **Labels on moved text.** Recording an edit writes the previous body into
-  `earlierVersions` from the editor's handler, which labels it with the editor.
-  That is the original author only as long as only senders edit.
+There is no undeletion, and no redacting a single earlier version. Obliteration
+is the one way to remove a message's history, and it removes all of it.
+
+So `{ deleted: true }` is only ever a message's current `body`, and never
+appears in `earlierVersions`: a deleted message is never edited again, so its
+deletion never becomes an earlier version.
+
+Whether an edit keeps the version it replaces is the room's policy
+(`editKeepsHistory`, see [`ChatRoomPolicy`](ChatRoomPolicy.md)).
 
 ## Future directions
 

@@ -211,6 +211,11 @@ With a member set:
 
 ## Known quirks, accepted for now
 
+- **Refusals are invisible.** A room refuses a bad event silently, so a sender
+  learns of a refusal only by the absence of its effect. Streams are one-way,
+  and the system has no reply channel; a room can't have one of its own without
+  being inconsistent with everything else (see
+  [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
 - **Crossing creations.** Two managers each keep their own index. If two people
   each start a direct room with the other at the same moment, there are two
   rooms. Each manager records the one it saw first. A tie-break rule is future

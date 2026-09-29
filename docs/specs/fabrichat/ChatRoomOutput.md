@@ -129,9 +129,10 @@ put (see [`leave`](#leaverequestid-string)).
 - **`messages`** are [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`,
   which is unique in the room. An obliterated message stays as a tombstone. Each
   version of a message is labeled `authored-by` the principal who recorded it. A
-  message changes only through `editMessage` and `deleteMessage`, which keep its
-  earlier versions (see [`ChatMessage`](ChatMessage.md#open-questions) for what
-  they keep), and is never removed from `messages`.
+  message changes only through `editMessage`, `deleteMessage`, and
+  `obliterateMessage`, and is never removed from `messages`. A deleted message
+  accepts nothing further except obliteration (see [deleted
+  messages](ChatMessage.md#deleted-messages)).
 - **Reactions** live on their messages, as each message's `reactions`
   ([`ChatReaction`](ChatReaction.md)), each labeled `authored-by` its reactor. A
   reaction is removed only by its own reactor, or with its message when it is
@@ -204,8 +205,10 @@ These rules hold for every stream:
 - An event that arrives before the sender's profile resolves is refused, except
   `leave`, which never depends on a profile.
 - A refusal is silent: the room records no outcome, so a sender can't tell a
-  refused event from one that hasn't taken effect yet. A client MUST check an
-  event against the stream's rules before sending it (see
+  refused event from one that hasn't taken effect yet. That follows from streams
+  being one-way: the system has no reply channel, and passing one explicitly
+  here alone would be inconsistent with how everything else works. A client MUST
+  check an event against the stream's rules before sending it (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 - A refused event is spent: it is not retried, and the sender sends again.
 
@@ -253,8 +256,8 @@ Sends a message from the sender.
 - **Refused:** a `version.body` that isn't a non-empty string, a
   `version.sentAt` outside the room's window (see [recorded
   times](#recorded-times)), a `replyTo` whose `message` is in another room, a
-  `shownIn` other than `"main"`, `"thread"`, or `"both"`, or a `"main"` reply to
-  a message shown only in a thread.
+  `shownIn` other than `"main"`, `"thread"`, or `"both"`, a `"main"` reply to a
+  message shown only in a thread, or a reply to a deleted message.
 
 Two messages with the same text are two sends with two request ids, so sending
 "YES!" three times makes three messages, whatever times they propose.
@@ -318,7 +321,7 @@ cost of the window's older side, and why each room states it.
 Records a new version of one of the sender's messages.
 
 - **Admitted:** as a trusted gesture on `ChatEditSurface`, and only from the
-  message's sender (see [`ChatMessage`](ChatMessage.md#open-questions)).
+  message's sender.
 - **Effect:** makes `version.body` the message's current version. Its `editedAt`
   is chosen as [recorded times](#recorded-times) describes, then made unique as
   [unique times](ChatMessage.md#unique-times) states. The version it replaces
@@ -342,7 +345,7 @@ two versions.
 Records one of the sender's messages as deleted.
 
 - **Admitted:** as a trusted gesture on `ChatDeleteSurface`, and only from the
-  message's sender (see [`ChatMessage`](ChatMessage.md#open-questions)).
+  message's sender.
 - **Effect:** depends on whether the implementation makes deletion obliteration
   (see [implementation-defined behavior](#implementation-defined-behavior)):
   - If it does, the message is obliterated, exactly as `obliterateMessage` would
@@ -418,8 +421,8 @@ Adds the sender's reaction to a message.
   times](ChatMessage.md#unique-times) states. If they already have one, nothing
   changes, and it keeps its `sentAt`. No one else's reaction changes, and
   neither does the message itself.
-- **Refused:** a `message` in another room, or an `emoji` that isn't a single
-  emoji.
+- **Refused:** a `message` in another room or deleted, or an `emoji` that isn't
+  a single emoji.
 
 Adding a reaction that's already there changes nothing, even under a new
 `requestId`, and so does removing one that isn't.
@@ -443,8 +446,8 @@ Removes the sender's reaction to a message.
 - **Effect:** if the sender has a reaction with `emoji` on `message`, removes
   it. If they don't, nothing changes. No one else's reaction changes, and
   neither does the message itself.
-- **Refused:** a `message` in another room, or an `emoji` that isn't a single
-  emoji.
+- **Refused:** a `message` in another room or deleted, or an `emoji` that isn't
+  a single emoji.
 
 A client never toggles: it sends whichever of the two the person asked for, so a
 repeated or delayed event can't undo what the person meant.
@@ -577,8 +580,7 @@ these, and an implementation MUST state its choice for each in its rooms'
   obliterates it, which is how a member of a group room, or of a space's own
   chat, takes back what they said completely.
 - **Obliteration at all.** Whether an OWNER may obliterate messages.
-- **What an edit keeps** in a message's history (see
-  [`ChatMessage`](ChatMessage.md#open-questions)).
+- **What an edit keeps** in a message's history.
 - **The window of accepted proposed times**, on each side of the clock (see
   [recorded times](#recorded-times)).
 - **How long recent activity lasts** in `recentActivity`, at least as long as

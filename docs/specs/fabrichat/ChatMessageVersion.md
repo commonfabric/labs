@@ -14,8 +14,8 @@ and
 ```ts
 // Shown for illustration only.
 interface ChatMessageVersion {
-  /** The version's text, or the marker of a deleted version. */
-  body: string | { deleted: true };
+  /** The version's text. */
+  body: string;
 
   /** When the room recorded this version. Unique in the room. */
   sentAt: FabricEpochNsec;
@@ -24,16 +24,15 @@ interface ChatMessageVersion {
 
 ## Fields
 
-- **`body`** is the text the message had in this version, or exactly the plain
-  object `{ deleted: true }`: the message was deleted in this version, or this
-  version's text was deleted afterward. Which of those a room records is an open
-  question (see [`ChatMessage`](ChatMessage.md#open-questions)).
+- **`body`** is the text the message had in this version. It is always a string:
+  a deleted message is never edited again, so a deletion is never an earlier
+  version (see [deleted messages](ChatMessage.md#deleted-messages)).
 - **`sentAt`** is when the room recorded this version: the message's own
   `sentAt` for its first version, and the `editedAt` it had then for each later
   one. Like every recorded time in a room, it is unique there (see [unique
   times](ChatMessage.md#unique-times)).
 
-In a send or an edit, `body` must be a string, and `sentAt` is the sender's
+In a send or an edit, `body` must not be empty, and `sentAt` is the sender's
 proposal: a hint to the room, which records its own time. It doesn't identify
 the send; the stream's `requestId` does.
 
