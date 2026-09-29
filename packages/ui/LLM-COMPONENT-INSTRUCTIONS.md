@@ -966,10 +966,14 @@ instance, and shows it. The host publishes it only when every rule of the room's
 policy requires the seal's witness and releases only to the seal, a rule
 releases the answer to the seal, and every seat has sealed, and refuses every
 later request. What the component shows is read by the host from the instance's
-answer slot and verified to be the seal's write, so it cannot move once
-published. A failure other than those refusals (a lost worker connection, a slot
-the seal did not write) is shown as an alert; before the room has terms it asks
-nothing. **Tag**: `<cf-custody-answer>`
+answer slot and verified to be the seal's write: the slot of the instance the
+bound terms digest to, under the policy the bound policy cell names. Bind both
+to write-once cells, each `WriteAuthorizedBy` the one handler that writes it,
+which writes only while the cell is unwritten; otherwise a member's own code can
+repoint the component at another instance's slot or an empty one. A failure
+other than those refusals (a lost worker connection, a slot the seal did not
+write) is shown as an alert; before the room has terms it asks nothing. **Tag**:
+`<cf-custody-answer>`
 
 **Bindings**:
 

@@ -44,8 +44,12 @@ const messageOf = (error: unknown): string =>
  * next change asks again. The component shows what the seal
  * published, read by the worker from the slot the seal derives from the
  * room's terms and policy and verified to be the seal's own write, never a
- * value the room holds, so what it shows cannot move once the answer is
- * published.
+ * value the room holds. That is the slot of the instance the bound `terms`
+ * digest to, under the policy the bound `policy` cell names, so what it shows
+ * cannot move once the answer is published only if the room makes both
+ * write-once from their first write (a writer claim whose writer refuses to
+ * overwrite); otherwise a member's own code can repoint the component at
+ * another instance's slot or an empty one.
  *
  * @element cf-custody-answer
  * @fires cf-published - The answer is published or found published;

@@ -2246,7 +2246,11 @@ const sealedAnswer = (
  * Reads a custody instance's published answer: the value its answer slot
  * holds, verified to be the seal's own write, or `undefined` while nothing is
  * published. A host renders this, never a link a room holds, which the room's
- * members can write.
+ * members can write. The slot is that of the instance `room.terms` digest to,
+ * under the policy `room.policy` names, so a room must make both write-once
+ * from their first write (a writer claim whose writer refuses to overwrite),
+ * or a member's own code can repoint the host at another instance's slot or
+ * an empty one.
  *
  * @throws If the slot holds something the seal did not write.
  */
@@ -2278,7 +2282,8 @@ export async function readCustodyAnswer(
  * The projection itself is read by no member. A host renders the slot through
  * {@link readCustodyAnswer}, so what the room's readers are shown cannot move
  * once the answer is published, whatever later points the projector at other
- * input.
+ * input, provided the room keeps `room.terms` and `room.policy` write-once
+ * from their first write, as {@link readCustodyAnswer} requires.
  *
  * @throws If the room's policy releases anything without the seal's witness
  *   or to anyone but the seal, a seat has not sealed, the policy does not

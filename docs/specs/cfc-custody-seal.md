@@ -347,10 +347,21 @@ a link a room holds, which the room's members could point anywhere. A later
 publication is refused, so what the room shows cannot move once the answer is
 published, whatever later points the projector at other input. That holds
 per instance: new terms are a new instance, with new consents, a slot of its
-own and an answer of its own, and a room whose terms its members can rewrite
-shows the new instance's answer once it is published. `cf-custody-answer`
-follows the room's terms, so it shows the answer of the instance the terms
-name.
+own and an answer of its own. `cf-custody-answer` follows the room's terms, so
+it shows the answer of the instance the terms name.
+
+The shown answer is the slot of the instance the bound `terms` digest to, under
+the policy the bound `policy` cell names; a room must make both write-once from
+their first write (a writer claim whose writer refuses to overwrite), or a
+member's own code can repoint the component at another instance's slot or an
+empty one. The slot need not be empty: a member who seals a one-seat room of
+the same pattern alone and publishes its answer can write that room's terms
+into the room, and the room then shows the member's answer as its own.
+`custody-answer-room.tsx` declares both cells `WriteAuthorizedBy` its
+`propose`, which writes each only while it is unwritten and reads nothing but
+the cell it writes, so running the handler again writes nothing. A writer claim
+on `T | null` sits on the `T` branch alone and does not refuse a write of
+`null`, so the room's terms are absent until proposed rather than `null`.
 
 The seal writes a room's box link only into a document that exists: an absent
 document could be the address of a custody document the seal has yet to
