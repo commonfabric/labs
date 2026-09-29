@@ -2679,23 +2679,42 @@ export class CommonFabricFormatter implements TypeFormatter {
    * second argument, lowered as the writer policy it names. A member that is
    * not a writer policy, or whose writer does not resolve, would leave that
    * alternative with no writer, and an empty tuple would leave no way to
-   * write at all, so each is an error here.
+   * write at all, so each is an error here. So is an optional or rest member:
+   * the list is a fixed set of writers, which a member that may be absent, or
+   * may repeat, is not.
    */
   #buildWritePolicyAnyOfMetadata(
     context: GenerationContext,
     aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
   ): Record<string, unknown> {
-    const argument = aliasArgNodes?.[1];
-    const tuple = argument && ts.isTypeOperatorNode(argument)
-      ? argument.type
-      : argument;
+    let tuple = aliasArgNodes?.[1];
+    while (
+      tuple &&
+      (ts.isParenthesizedTypeNode(tuple) ||
+        (ts.isTypeOperatorNode(tuple) &&
+          tuple.operator === ts.SyntaxKind.ReadonlyKeyword))
+    ) {
+      tuple = tuple.type;
+    }
     if (!tuple || !ts.isTupleTypeNode(tuple) || tuple.elements.length === 0) {
       throw new Error(
         "`WritePolicyAnyOf` requires a nonempty tuple of writer policies, " +
           "written in place.",
       );
     }
-    const policies = tuple.elements.map((node) => {
+    const policies = tuple.elements.map((element) => {
+      const node = ts.isNamedTupleMember(element) ? element.type : element;
+      if (
+        ts.isOptionalTypeNode(node) || ts.isRestTypeNode(node) ||
+        (ts.isNamedTupleMember(element) &&
+          (element.questionToken !== undefined ||
+            element.dotDotDotToken !== undefined))
+      ) {
+        throw new Error(
+          "A `WritePolicyAnyOf` member cannot be optional or rest: the list " +
+            "is a fixed set of writers.",
+        );
+      }
       const policyContext = { ...context, typeNode: node };
       const policy = this.#resolveAliasChainInstantiation(
         context.typeChecker.getTypeFromTypeNode(node) as TypeWithInternals,

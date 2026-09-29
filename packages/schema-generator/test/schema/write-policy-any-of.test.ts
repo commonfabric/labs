@@ -164,6 +164,39 @@ describe("write-policy-any-of", () => {
     expect((schema.properties?.note as { ifc?: unknown }).ifc).toBeUndefined();
   });
 
+  it("lowers labeled members, and a tuple written in parentheses", async () => {
+    const schema = await schemaOf(`
+      type SchemaRoot = WritePolicyAnyOf<string, ([
+        sender: WriteAuthorizedBy<unknown, typeof send>,
+        editor: WriteAuthorizedBy<unknown, typeof edit>,
+      ])>;
+    `);
+    expect(schema.ifc?.writePolicyAnyOf).toEqual([
+      { writeAuthorizedBy: writer("send") },
+      { writeAuthorizedBy: writer("edit") },
+    ]);
+  });
+
+  for (
+    const [name, members] of [
+      ["an optional member", "WriteAuthorizedBy<unknown, typeof edit>?"],
+      [
+        "a labeled optional member",
+        "editor?: WriteAuthorizedBy<unknown, typeof edit>",
+      ],
+      ["a rest member", "...WriteAuthorizedBy<unknown, typeof edit>[]"],
+    ] as const
+  ) {
+    it(`throws given ${name}`, async () => {
+      await expect(schemaOf(`
+        type SchemaRoot = WritePolicyAnyOf<string, [
+          WriteAuthorizedBy<unknown, typeof send>,
+          ${members},
+        ]>;
+      `)).rejects.toThrow("cannot be optional or rest");
+    });
+  }
+
   it("throws given an empty tuple", async () => {
     await expect(schemaOf(`
       type SchemaRoot = WritePolicyAnyOf<string, []>;

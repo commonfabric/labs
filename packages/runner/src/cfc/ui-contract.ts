@@ -487,7 +487,10 @@ export const uiContractsFromSchema = (
  * Like {@link uiContractsFromSchema}, except that it also returns the contract
  * of each `writePolicyAnyOf` alternative. A trusted event matching any of them
  * is evidence for the write: which alternative, if any, admits the write is
- * decided at commit.
+ * decided at commit. The one place an alternative's contract is not returned
+ * is the fallback that reads an unknown-typed schema's `$defs`, which returns
+ * a contract only when it finds exactly one; a definition with two gestured
+ * alternatives yields none, and a write relying on it is refused.
  */
 const uiContractCandidatesFromSchema = (
   schema: JSONSchema | undefined,

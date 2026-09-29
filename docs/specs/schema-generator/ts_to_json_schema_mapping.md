@@ -910,7 +910,7 @@ inside those payloads.
 | `WriteAuthorizedBy<T, typeof b>` | `{ writeAuthorizedBy: { __ctWriterIdentityOf: { file, path: [binding], moduleIdentity? } } }` |
 | `TrustedActionWriteWithIntegrity<…>` | writeAuthorizedBy metadata + `uiContract { helper: "UiAction", action, trustedPattern, requiredEventIntegrity }` |
 | `TrustedActionWrite<…>` | same, with `requiredEventIntegrity` defaulting to `[trustedPattern]` |
-| `WritePolicyAnyOf<T, [P, …]>` | `{ writePolicyAnyOf: [p, …] }`, each `p` the lowering of one member `P` — a `WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` over `unknown`, directly or through a user alias. The tuple must be written in place and nonempty, and each member must lower to a writer; otherwise generation throws |
+| `WritePolicyAnyOf<T, [P, …]>` | `{ writePolicyAnyOf: [p, …] }`, each `p` the lowering of one member `P` — a `WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` over `unknown`, directly or through a user alias. The tuple must be written in place and nonempty, with no optional or rest member, and each member must lower to a writer; otherwise generation throws |
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |

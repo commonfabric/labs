@@ -256,9 +256,10 @@ Normative behavior:
    its own. Each member's binding follows every rule above for
    `WriteAuthorizedBy`, and `WriteAuthorizedByValidationTransformer` reports a
    member's binding exactly as it reports a lone one's.
-2. The tuple must be written in place, nonempty. A tuple named through an
-   alias, an empty one, a member that is not a writer policy, and a member
-   whose writer does not lower each fail compilation.
+2. The tuple must be written in place, nonempty; parentheses around it, a
+   `readonly`, and member labels are allowed. A tuple named through an alias,
+   an empty one, an optional or rest member, a member that is not a writer
+   policy, and a member whose writer does not lower each fail compilation.
 3. The runtime admits a write when one member admits it whole: its writer
    wrote, and a trusted event matching its contract, if it names one, was
    recorded for the write. Writer and gesture are of the same member, so one
