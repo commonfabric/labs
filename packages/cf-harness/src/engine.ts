@@ -1276,8 +1276,8 @@ export class CfHarnessEngine {
   /**
    * The runsc counterpart of {@link ownedSandboxConfig}: the configuration
    * the engine built its direct runsc runtime from, or `undefined` when the
-   * runtime is docker or was handed in. A child that needs a mount its parent
-   * lacks builds its own runtime from this.
+   * runtime is docker or was handed in. Every child of a run that has one
+   * builds its own runtime from it; see `childSandboxOptions()`.
    */
   get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
     return this.#ownedNativeConfig;
