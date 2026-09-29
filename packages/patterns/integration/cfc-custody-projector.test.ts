@@ -127,6 +127,17 @@ const trustedClick = () => {
  * would carry the room's own schema, claim included, and be refused whether
  * or not the runtime stored the claim; only the claim the runtime stored for
  * the document refuses a write through a link that carries none.
+ *
+ * `copy` is a known residual, and the room does not refuse it. The member
+ * starts an instance of the room's own pattern, its `terms` bound at the
+ * room's `terms.seats`, and runs that instance's `propose` with the member's
+ * seat alone; then it runs the room's own `propose` the same way. Write
+ * authority is keyed by code, not by piece (normative CFC §8.15.8), so the
+ * instance's `propose` is the claim's writer, and its guard reads its own
+ * binding, an array, as unwritten terms. Its write leaves the room's terms
+ * unreadable as terms, so the room's own guard reads them as unwritten too,
+ * and the room shows the one-seat room's answer. The case asserts that, so it
+ * fails, visibly, when the runtime closes the gap.
  */
 type Repoint =
   | "propose"
@@ -135,7 +146,8 @@ type Repoint =
   | "extra"
   | "clear"
   | "policy"
-  | "early";
+  | "early"
+  | "copy";
 
 /**
  * Two members seal their stances into a room of `file`, and a reader of the
@@ -192,7 +204,7 @@ const sealAndRelease = async (
     const compiled = await host.patternManager.compilePattern(program, {
       space: S,
     });
-    const startRoom = async (cause: string) => {
+    const startRoom = async (cause: string, inputs: unknown = {}) => {
       const start = host.edit();
       const piece = host.getCell<Record<string, unknown>>(
         S,
@@ -200,7 +212,7 @@ const sealAndRelease = async (
         undefined,
         start,
       );
-      host.run(start, compiled, {}, piece);
+      host.run(start, compiled, inputs as never, piece);
       host.prepareTxForCommit(start);
       expect((await start.commit()).error).toBeUndefined();
       await host.idle();
@@ -569,9 +581,38 @@ const sealAndRelease = async (
             )).error,
           );
           break;
+        case "copy": {
+          // The member's own instance of the room's pattern, its `terms`
+          // bound beneath the room's, and then the room's own `propose`.
+          const { schema: _schema, ...link } = argument
+            .getAsNormalizedFullLink();
+          const copy = await startRoom(`${file}-copy`, {
+            terms: host.getCellFromLink({
+              ...link,
+              path: [...link.path, "terms", "seats"],
+            }),
+            policy: room.key("policy"),
+          });
+          copy.key("propose").send({
+            seats: [host.getCellFromLink(seats[1])],
+          } as never);
+          await host.idle();
+          await host.storageManager.synced();
+          proposeAlone();
+          break;
+        }
       }
       await host.idle();
       await host.storageManager.synced();
+      if (repoint === "copy") {
+        // Known residual: the room shows the one-seat room's answer, under
+        // terms that seat the member alone.
+        expect(await readCustodyAnswer(hostRoom)).toBe("sushi");
+        expect(
+          (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
+        ).toHaveLength(1);
+        return;
+      }
       // What the room shows is still the answer its members sealed: not the
       // one-seat room's, and not a slot that is empty or refused.
       expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
@@ -708,6 +749,10 @@ describe("sealed custody through a pattern", () => {
 
   it("shows the published answer still when a member's code writes another policy's reference over the room's policy", async () => {
     await sealAndRelease(ANSWER_ROOM, "policy");
+  });
+
+  it("known residual: shows the one-seat room's answer once a member's own instance of the room, bound beneath its terms, runs `propose`", async () => {
+    await sealAndRelease(ANSWER_ROOM, "copy");
   });
 
   it("stores the room's writer claims from its creation, and refuses a member's terms and policy written before `propose`", async () => {
