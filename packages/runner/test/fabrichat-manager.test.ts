@@ -25,11 +25,27 @@ const fabrichatDir = fromFileUrl(
 );
 const read = (name: string) => Deno.readTextFileSync(fabrichatDir + name);
 
+// The manager's core, given a profile of its own: `#profile` resolves nothing
+// here, and a manager starts no chat without one.
+const WRAPPER_SRC = [
+  "import { FabriChatManagerCore } from './manager.tsx';",
+  "import { pattern, Writable } from 'commonfabric';",
+  "",
+  "export default pattern(() => {",
+  "  const profile = new Writable({ name: 'Tester' }).for('profile');",
+  "  return FabriChatManagerCore({ myProfile: profile });",
+  "});",
+].join("\n");
+
 const PROGRAM: RuntimeProgram = {
-  main: "/manager.tsx",
-  files: ["manager.tsx", "room.tsx", "schemas.tsx", "logic.ts"].map((
-    name,
-  ) => ({ name: `/${name}`, contents: read(name) })),
+  main: "/main.tsx",
+  files: [
+    { name: "/main.tsx", contents: WRAPPER_SRC },
+    ...["manager.tsx", "room.tsx", "schemas.tsx", "logic.ts"].map((name) => ({
+      name: `/${name}`,
+      contents: read(name),
+    })),
+  ],
 };
 
 const RESULT_CAUSE = "fabrichat manager";

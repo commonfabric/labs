@@ -202,7 +202,7 @@ export interface ChatRoomAbout {
   createdAt?: FabricEpochNsec;
 
   /** The room's policy, stated correctly, in a document of its own. */
-  policy: ChatRoomPolicy;
+  policy: Cell<ChatRoomPolicy>;
 }
 
 /** One entry in a room's log of recent activity. */
@@ -220,7 +220,7 @@ export interface ChatRoomActivity {
    * The thing the event changed or added: a message, or the room's
    * membership, as the room offers it (its `roster`).
    */
-  what: Cell<unknown>;
+  what: Cell<ChatMessage> | Cell<ProfileCell[]>;
 }
 
 /** Where a window of messages sits in its view. */

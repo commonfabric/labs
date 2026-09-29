@@ -125,6 +125,9 @@
           },
           "policy": {
             "$ref": "#/$defs/ChatRoomPolicy",
+            "asCell": [
+              "cell"
+            ],
             "description": "The room's policy, stated correctly, in a document of its own."
           },
           "title": {

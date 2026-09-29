@@ -6,6 +6,7 @@
 import {
   type AddIntegrity,
   assert,
+  NAME,
   pattern,
   TESTS,
   UI,
@@ -150,6 +151,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           adapter[VIEWS].chat.state === "member" &&
+          adapter[NAME] === "Team" &&
           findElement(adapter[UI], "cf-render") !== undefined
         ),
       },
@@ -160,6 +162,7 @@ export default pattern(() => {
           unreadable[VIEWS].chat.about === undefined &&
           unreadable[VIEWS].chat.recentActivity.length === 0 &&
           unreadable[VIEWS].chat.canSend === false &&
+          unreadableAdapter[NAME] === "Chat (unavailable)" &&
           findElement(unreadableAdapter[UI], "cf-render") === undefined
         ),
       },

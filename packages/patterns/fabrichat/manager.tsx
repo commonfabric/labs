@@ -241,6 +241,19 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     if (earlier !== undefined && earlier.status !== "pending") return;
     const typed = event?.target?.value?.trim();
 
+    // A room remembers its creator by profile, so it can't be started
+    // without one.
+    if (
+      (act === "openDirect" || act === "createGroup") &&
+      state.myProfile?.get() === undefined
+    ) {
+      recordOutcome(requests, requestId, {
+        status: "refused",
+        reason: "Starting a chat needs a profile.",
+      });
+      return;
+    }
+
     if (act === "delivered") {
       const id = event?.id ?? state.id;
       if (typeof id !== "string") return;
@@ -420,14 +433,21 @@ interface ShownEntry {
   label: string;
 }
 
-/** A person's rooms: those they belong to, and the way to start new ones. */
-const FabriChatManager = pattern<
-  FabriChatManagerInput,
+/** What a manager's core needs: what it stores, and whose it is. */
+export interface FabriChatManagerCoreInput extends FabriChatManagerInput {
+  /** The user's profile, which holds no value until it resolves. */
+  myProfile: ProfileCell | undefined;
+}
+
+/**
+ * A person's rooms, those they belong to, and the way to start new ones,
+ * given the person's profile.
+ */
+export const FabriChatManagerCore = pattern<
+  FabriChatManagerCoreInput,
   FabriChatManagerOutput
 >(
-  ({ rooms, direct, requests, outgoingNotices }) => {
-    const profileWish = wish<ChatProfile>({ query: "#profile" });
-    const myProfile = profileWish.result;
+  ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
       {},
@@ -579,5 +599,39 @@ const FabriChatManager = pattern<
     };
   },
 );
+
+/**
+ * A person's chat manager, whose person is the one looking at it: what
+ * `#chatManager` resolves to.
+ */
+const FabriChatManager = pattern<
+  FabriChatManagerInput,
+  FabriChatManagerOutput
+>((input) => {
+  const profileWish = wish<ChatProfile>({ query: "#profile" });
+  const core = FabriChatManagerCore(
+    {
+      myProfile: profileWish.result,
+      rooms: input.rooms,
+      direct: input.direct,
+      requests: input.requests,
+      outgoingNotices: input.outgoingNotices,
+    } as Parameters<typeof FabriChatManagerCore>[0],
+  );
+  return {
+    [NAME]: core[NAME],
+    [UI]: core[UI],
+    [VIEWS]: core[VIEWS],
+    rooms: core.rooms,
+    direct: core.direct,
+    requests: core.requests,
+    outgoingNotices: core.outgoingNotices,
+    openDirect: core.openDirect,
+    createGroup: core.createGroup,
+    accept: core.accept,
+    forget: core.forget,
+    delivered: core.delivered,
+  };
+});
 
 export default FabriChatManager;

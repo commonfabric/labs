@@ -576,7 +576,10 @@ export interface RoomStreamEvent {
   /** The DID of the person to add or remove. */
   principal?: string;
 
-  /** The access to grant. */
+  /**
+   * The access requested for the person added. A pattern can't grant it: the
+   * host that serves the room's space has to.
+   */
   access?: "WRITE" | "OWNER";
 
   /** The id of a notice delivered. */
@@ -952,7 +955,14 @@ const performMembershipAct = (
 
   if (op === "showProfile") {
     roster.key("items").addUnique(profile);
-    appendActivity(activity, counters, usedTimes, clock, requestId, roster);
+    appendActivity(
+      activity,
+      counters,
+      usedTimes,
+      clock,
+      requestId,
+      roster.key("items"),
+    );
     rememberRequest(requests, requestKey, clock);
     return;
   }
@@ -962,7 +972,14 @@ const performMembershipAct = (
   if (op === "leave") {
     roster.key("items").removeByValue(profile);
     left.addUnique(profile);
-    appendActivity(activity, counters, usedTimes, clock, requestId, roster);
+    appendActivity(
+      activity,
+      counters,
+      usedTimes,
+      clock,
+      requestId,
+      roster.key("items"),
+    );
     rememberRequest(requests, requestKey, clock);
     return;
   }
@@ -981,19 +998,27 @@ const performMembershipAct = (
     return;
   }
 
+  // A pattern can't revoke access, and a removal that changed nothing would
+  // be recorded falsely, so `remove` is refused until a host can apply it.
+  if (op === "remove") return;
   const principal = event?.principal ?? event?.target?.value?.trim();
   if (!isPrincipal(principal)) return;
   const access = event?.access ?? "WRITE";
-  if (op === "add") {
-    if (access !== "WRITE" && access !== "OWNER") return;
-    // The adding client knows the id without reading it back: the person
-    // added, and its own request.
-    const id = JSON.stringify([principal, requestId]);
-    const notice = notices.elementById(id);
-    notice.set({ id, recipient: principal });
-    notices.addUnique(notice);
-  }
-  appendActivity(activity, counters, usedTimes, clock, requestId, roster);
+  if (access !== "WRITE" && access !== "OWNER") return;
+  // The adding client knows the id without reading it back: the person
+  // added, and its own request.
+  const id = JSON.stringify([principal, requestId]);
+  const notice = notices.elementById(id);
+  notice.set({ id, recipient: principal });
+  notices.addUnique(notice);
+  appendActivity(
+    activity,
+    counters,
+    usedTimes,
+    clock,
+    requestId,
+    roster.key("items"),
+  );
   rememberRequest(requests, requestKey, clock);
 };
 
@@ -1933,17 +1958,14 @@ export const FabriChatRoomCore = pattern<
   const participants = computed(() => participantsOf(rosterItems, entries));
   const canSend = computed(() => myProfile?.get() !== undefined);
   const cannotSend = computed(() => myProfile?.get() === undefined);
-  const aboutView = computed((): ChatRoomAbout => {
-    const record = about;
-    return {
-      kind: record?.kind ?? "group",
-      ...(record?.title === undefined ? {} : { title: record.title }),
-      ...(record?.createdAt === undefined
-        ? {}
-        : { createdAt: record.createdAt }),
-      policy: FABRICHAT_POLICY,
-    };
-  });
+  // The policy is a document of its own, which `about` links.
+  const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
+  const aboutView = {
+    kind,
+    title: computed(() => about?.title),
+    createdAt: computed(() => about?.createdAt),
+    policy,
+  };
   const expiredThrough = computed(() =>
     (counters.get() ?? NO_ACTIVITY).expiredThrough
   );
@@ -1953,7 +1975,7 @@ export const FabriChatRoomCore = pattern<
     isKnownOwner(creatorProfile, myProfile.resolveAsCell())
   );
   const title = computed(() =>
-    aboutView.title ?? (aboutView.kind === "direct" ? "Direct chat" : "Chat")
+    about?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
   );
   const hasThread = computed(() => {
     const root = composer.get()?.thread;
@@ -2313,7 +2335,10 @@ export interface FabriChatRoomInput {
 const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
   (input) => {
     const profileWish = wish<ChatProfile>({ query: "#profile" });
-    const hasProfile = computed(() => profileWish.result !== undefined);
+    // Hidden by a prop rather than a branch, as `FabriChatMessageRow` says.
+    const setupDisplay = computed(() =>
+      profileWish.result === undefined ? "block" : "none"
+    );
     const room = FabriChatRoomCore(
       {
         myProfile: profileWish.result,
@@ -2357,14 +2382,16 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [UI]: (
         <cf-screen>
           {room[UI]}
-          {hasProfile ? null : (
-            <div
-              id="fabrichat-profile-setup"
-              style={{ padding: "0 1rem 1rem", maxWidth: "720px" }}
-            >
-              {profileWish[UI]}
-            </div>
-          )}
+          <div
+            id="fabrichat-profile-setup"
+            style={{
+              display: setupDisplay,
+              padding: "0 1rem 1rem",
+              maxWidth: "720px",
+            }}
+          >
+            {profileWish[UI]}
+          </div>
         </cf-screen>
       ),
     };

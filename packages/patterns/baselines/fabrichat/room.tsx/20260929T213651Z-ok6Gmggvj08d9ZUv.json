@@ -53,6 +53,61 @@
         ],
         "type": "object"
       },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
       "ChatMessageVersion": {
         "properties": {
           "body": {
@@ -108,6 +163,33 @@
         ],
         "type": "object"
       },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
       "ChatRoomActivity": {
         "properties": {
           "at": {
@@ -123,11 +205,27 @@
             "type": "number"
           },
           "what": {
-            "asCell": [
-              "cell"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ChatMessage",
+                "asCell": [
+                  "cell"
+                ]
+              },
+              {
+                "asCell": [
+                  "cell"
+                ],
+                "items": {
+                  "$ref": "#/$defs/ChatProfile",
+                  "asCell": [
+                    "cell"
+                  ]
+                },
+                "type": "array"
+              }
             ],
-            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`).",
-            "type": "unknown"
+            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`)."
           }
         },
         "required": [
@@ -254,7 +352,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "lZiCerh4a-zBmX9VZyIcXS__MqwALQuFSKPoxrY5iiU",
+                  "moduleIdentity": "MSlfjtiVXLupa7tuzWtaaPDJTL8zq7Ak1n68IYOIp1Q",
                   "path": [
                     "commitRoom"
                   ]
@@ -278,7 +376,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "lZiCerh4a-zBmX9VZyIcXS__MqwALQuFSKPoxrY5iiU",
+              "moduleIdentity": "MSlfjtiVXLupa7tuzWtaaPDJTL8zq7Ak1n68IYOIp1Q",
               "path": [
                 "commitRoom"
               ]
@@ -308,7 +406,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "lZiCerh4a-zBmX9VZyIcXS__MqwALQuFSKPoxrY5iiU",
+              "moduleIdentity": "MSlfjtiVXLupa7tuzWtaaPDJTL8zq7Ak1n68IYOIp1Q",
               "path": [
                 "commitRoom"
               ]
@@ -338,7 +436,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "lZiCerh4a-zBmX9VZyIcXS__MqwALQuFSKPoxrY5iiU",
+              "moduleIdentity": "MSlfjtiVXLupa7tuzWtaaPDJTL8zq7Ak1n68IYOIp1Q",
               "path": [
                 "commitRoom"
               ]
@@ -514,6 +612,58 @@
         ],
         "type": "object"
       },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "description": "The profile the sender sent under; absent once obliterated."
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ChatDeletedBody"
+              }
+            ],
+            "description": "The current text, or the marker of a deleted message."
+          },
+          "earlierVersions": {
+            "description": "The versions before the current one, oldest first.",
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "description": "When the room recorded the current version, if it isn't the first: the\nlatest edit or deletion. Unique in the room.",
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "description": "Everyone's reactions to this message, in no particular order.",
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply",
+            "description": "What this message replies to, and where it is shown; absent for none."
+          },
+          "sentAt": {
+            "description": "When the room recorded the message's first version. Unique in the room.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
       "ChatMessageList": {
         "properties": {
           "closeWindow": {
@@ -671,6 +821,30 @@
         ],
         "type": "object"
       },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "description": "The message replied to, in the same room."
+          },
+          "shownIn": {
+            "$ref": "#/$defs/ChatReplyShownIn",
+            "description": "Where the reply is shown."
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatReplyShownIn": {
+        "enum": [
+          "main",
+          "thread",
+          "both"
+        ]
+      },
       "ChatRoomAbout": {
         "properties": {
           "createdAt": {
@@ -711,8 +885,18 @@
             "type": "number"
           },
           "what": {
-            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`).",
-            "type": "unknown"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/ChatProfile"
+                },
+                "type": "array"
+              }
+            ],
+            "description": "The thing the event changed or added: a message, or the room's\nmembership, as the room offers it (its `roster`)."
           }
         },
         "required": [
@@ -998,7 +1182,7 @@
       "RoomStreamEvent": {
         "properties": {
           "access": {
-            "description": "The access to grant.",
+            "description": "The access requested for the person added. A pattern can't grant it: the\nhost that serves the room's space has to.",
             "enum": [
               "WRITE",
               "OWNER"
@@ -1152,7 +1336,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "lZiCerh4a-zBmX9VZyIcXS__MqwALQuFSKPoxrY5iiU",
+              "moduleIdentity": "MSlfjtiVXLupa7tuzWtaaPDJTL8zq7Ak1n68IYOIp1Q",
               "path": [
                 "commitRoom"
               ]

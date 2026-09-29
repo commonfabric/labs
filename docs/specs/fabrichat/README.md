@@ -285,8 +285,9 @@ and [`FabriChatRoom`](FabriChatRoom.md#as-built) and
 
 - **Rooms are open to any authenticated principal.** A room of its own is
   created with `inSpace()`, whose space grants WRITE to `"*"`. Nothing grants,
-  revokes, or gives up access: `add`, `remove`, and `leave` record what a
-  pattern can, and change no access list. A room knows one OWNER, its creator.
+  revokes, or gives up access: `add` and `leave` record what a pattern can,
+  `remove` is refused, and none changes an access list. A room knows one
+  OWNER, its creator.
 - **Principals are profiles.** A pattern can't learn a principal, so the room
   keys its request memory, and the members who left, by profile. The manager
   takes the principals the contract names, and can't refuse a direct room with

@@ -1,6 +1,7 @@
 /**
  * A FabriChat manager's refusals: the requests it turns down, each with its
- * outcome recorded, and changing nothing else.
+ * outcome recorded, and changing nothing else. With no profile, as in this
+ * lane, it starts no chat at all.
  *
  * DELIBERATELY NOT COVERED HERE: creating a room. A room is created in a space
  * of its own with `inSpace()`, a cross-space commit whose closure replication
@@ -32,10 +33,16 @@ export default pattern(() => {
         action: manager.createGroup,
         event: { requestId: "g-0", title: "  ", members: [] },
       },
+      // `#profile` resolves nothing here, and no chat starts without one.
+      {
+        action: manager.openDirect,
+        event: { requestId: "d-1", counterpart: "did:key:z6MkBob" },
+      },
       {
         assertion: assert(() =>
           statusOf(manager.requests, "d-0") === "refused" &&
           statusOf(manager.requests, "g-0") === "refused" &&
+          statusOf(manager.requests, "d-1") === "refused" &&
           manager.rooms.length === 0 &&
           manager.outgoingNotices.length === 0
         ),
@@ -44,6 +51,11 @@ export default pattern(() => {
       {
         action: manager.createGroup,
         event: { requestId: "g-0", title: "  ", members: [] },
+      },
+      // `#profile` resolves nothing here, and no chat starts without one.
+      {
+        action: manager.openDirect,
+        event: { requestId: "d-1", counterpart: "did:key:z6MkBob" },
       },
       {
         assertion: assert(() =>

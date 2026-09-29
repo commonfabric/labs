@@ -272,18 +272,20 @@ runtime lacks a prerequisite:
   requires a trusted gesture on one named surface for that label, so `about`,
   which the creator's manager writes, and `recentActivity` entries, which acts
   from every surface write, carry none. `about` is a plain argument of the
-  room, written when the room is created, and states its `policy` as a value.
+  room, written when the room is created. Its `policy` links a document the
+  room writes when it starts.
 - **Senders are profiles.** A handler can't learn the principal that sent an
   event, so the request memory is keyed by the sender's profile, and the
   members who left are kept by profile. `add` therefore can't refuse a
   principal who left. A rendered control sends no `requestId`, and the room
   mints one for it.
-- **No access list changes.** `leave`, `add`, and `remove` change no access
-  list: `leave` removes the sender's roster entry and records them as having
-  left, `add` adds its notice, and each records its activity entry. The room
-  knows one OWNER, its creator, whose profile the manager passes when it
-  creates the room, and takes the OWNER-only rules to mean the creator. A space's
-  own chat knows no OWNER. `canSend` is whether the reader's profile resolves.
+- **No access list changes.** `leave` and `add` change no access list: `leave`
+  removes the sender's roster entry and records them as having left, `add` adds
+  its notice, and each records its activity entry. `remove` is refused, since a
+  removal that changed nothing would be recorded falsely. The room knows one
+  OWNER, its creator, whose profile the manager passes when it creates the room,
+  and takes the OWNER-only rules to mean the creator. A space's own chat knows
+  no OWNER. `canSend` is whether the reader's profile resolves.
 - **Windows.** A window holds links to its messages, which stay live;
   `hasOlder` and `hasNewer` are as of when the window was set.
 - **Notices.** A notice's id is `[principal, requestId]` as JSON, so the client

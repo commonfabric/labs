@@ -119,19 +119,71 @@ export const isInMain = (item: ViewItem): boolean =>
 /**
  * The key of the thread a message is in, by its root, or `undefined` for a
  * message in no thread. Threads are flat: a reply to a message already in a
- * thread joins that thread.
+ * thread joins that thread. It walks a reply chain iteratively, so a long
+ * chain costs its length and no stack, and stops at a message it has already
+ * visited.
  */
 export const threadRootOf = (
   item: ViewItem,
   byKey: ReadonlyMap<string, ViewItem>,
 ): string | undefined => {
-  const reply = item.replyTo;
-  if (reply === undefined || reply.shownIn === "main") return undefined;
-  const target = byKey.get(reply.key);
-  const targetRoot = target === undefined
-    ? undefined
-    : threadRootOf(target, byKey);
-  return targetRoot ?? reply.key;
+  const visited = new Set<string>();
+  let current: ViewItem | undefined = item;
+  let root: string | undefined;
+  while (current !== undefined) {
+    const reply: ViewItem["replyTo"] = current.replyTo;
+    if (reply === undefined || reply.shownIn === "main") return root;
+    if (visited.has(reply.key)) return reply.key;
+    visited.add(reply.key);
+    root = reply.key;
+    current = byKey.get(reply.key);
+  }
+  return root;
+};
+
+/**
+ * Each message's thread root, by the message's key, for every message in a
+ * thread. Each reply chain is walked once: a message whose target's root is
+ * known takes it, and one whose target is in no thread takes the target.
+ */
+export const threadRoots = (
+  items: readonly ViewItem[],
+): Map<string, string> => {
+  const byKey = new Map<string, ViewItem>(
+    items.map((item) => [item.key, item]),
+  );
+  const roots = new Map<string, string>();
+  for (const item of items) {
+    const chain: string[] = [];
+    const inChain = new Set<string>();
+    let current: ViewItem | undefined = item;
+    let root: string | undefined;
+    while (current !== undefined) {
+      const known = roots.get(current.key);
+      if (known !== undefined) {
+        root = known;
+        break;
+      }
+      const reply: ViewItem["replyTo"] = current.replyTo;
+      if (reply === undefined || reply.shownIn === "main") {
+        // In no thread: it roots the chain that led here, if any did.
+        root = chain.length === 0 ? undefined : current.key;
+        break;
+      }
+      if (inChain.has(current.key)) {
+        root = reply.key;
+        break;
+      }
+      inChain.add(current.key);
+      chain.push(current.key);
+      current = byKey.get(reply.key);
+      if (current === undefined) root = reply.key;
+    }
+    if (root !== undefined) {
+      for (const key of chain) roots.set(key, root);
+    }
+  }
+  return roots;
 };
 
 /** `items`, oldest first. */
@@ -153,17 +205,14 @@ export const threadView = <T extends ViewItem>(
   items: readonly T[],
   rootKey: string,
 ): T[] | undefined => {
-  const byKey = new Map<string, ViewItem>(
-    items.map((item) => [item.key, item]),
-  );
-  const root = byKey.get(rootKey);
-  if (root === undefined || threadRootOf(root, byKey) !== undefined) {
+  const roots = threadRoots(items);
+  const root = items.find((item) => item.key === rootKey);
+  if (root === undefined || roots.has(rootKey) || !isInMain(root)) {
     return undefined;
   }
-  if (!isInMain(root)) return undefined;
   return bySentAt(
     items.filter((item) =>
-      item.key === rootKey || threadRootOf(item, byKey) === rootKey
+      item.key === rootKey || roots.get(item.key) === rootKey
     ),
   );
 };
@@ -171,16 +220,11 @@ export const threadView = <T extends ViewItem>(
 /** How many messages each thread holds besides its root, by root key. */
 export const threadReplyCounts = (
   items: readonly ViewItem[],
-): Map<string, number> => {
-  const byKey = new Map<string, ViewItem>(
-    items.map((item) => [item.key, item]),
-  );
-  return items.reduce((counts, item) => {
-    const root = threadRootOf(item, byKey);
-    if (root !== undefined) counts.set(root, (counts.get(root) ?? 0) + 1);
+): Map<string, number> =>
+  [...threadRoots(items).values()].reduce((counts, root) => {
+    counts.set(root, (counts.get(root) ?? 0) + 1);
     return counts;
   }, new Map<string, number>());
-};
 
 /** Where a window sits in its view. */
 export type WindowAnchor =

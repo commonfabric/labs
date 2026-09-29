@@ -6,6 +6,7 @@ import {
   isSingleEmoji,
   mainView,
   threadReplyCounts,
+  threadRootOf,
   threadView,
   type TimeBounds,
   type ViewItem,
@@ -180,6 +181,33 @@ describe("logic", () => {
 
     it("counts each thread's replies", () => {
       expect([...threadReplyCounts(items)]).toEqual([["a", 3]]);
+    });
+
+    it("finds the root of a very long reply chain", () => {
+      const chain: ViewItem[] = [
+        { key: "0", sentAt: 0n },
+        ...Array.from(
+          { length: 20_000 },
+          (_, index): ViewItem => ({
+            key: String(index + 1),
+            sentAt: BigInt(index + 1),
+            replyTo: { key: String(index), shownIn: "thread" },
+          }),
+        ),
+      ];
+      const byKey = new Map(chain.map((item) => [item.key, item]));
+      expect(threadRootOf(chain[20_000], byKey)).toBe("0");
+      expect(threadReplyCounts(chain).get("0")).toBe(20_000);
+    });
+
+    it("stops at a reply chain that loops", () => {
+      const loop: ViewItem[] = [
+        { key: "x", sentAt: 1n, replyTo: { key: "y", shownIn: "thread" } },
+        { key: "y", sentAt: 2n, replyTo: { key: "x", shownIn: "thread" } },
+      ];
+      const byKey = new Map(loop.map((item) => [item.key, item]));
+      expect(threadRootOf(loop[0], byKey)).toBeDefined();
+      expect(threadReplyCounts(loop).size).toBeGreaterThan(0);
     });
   });
 

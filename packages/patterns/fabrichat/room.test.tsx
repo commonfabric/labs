@@ -169,7 +169,8 @@ export default pattern(() => {
         assertion: assert(() =>
           alice.about.kind === "group" && alice.about.title === "Team" &&
           alice.about.createdAt === undefined &&
-          alice.about.policy.maxWindowCount === 100
+          alice.about.policy.get().maxWindowCount === 100 &&
+          alice.about.policy.get().proposedTimeMaxAgeNsec === 600_000_000_000n
         ),
       },
       { assertion: assert(() => composerDisabled(pending[UI]) === true) },
