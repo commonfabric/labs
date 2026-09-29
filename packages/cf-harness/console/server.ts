@@ -69,11 +69,12 @@ import {
 } from "../src/auth/provider-settings.ts";
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
 import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
-import type {
-  HarnessFabricCfcEnforcementMode,
-  HarnessFabricCfcFlowLabelsMode,
-  HarnessFabricSessionConfig,
-  HarnessModelProviderId,
+import {
+  type HarnessFabricCfcEnforcementMode,
+  type HarnessFabricCfcFlowLabelsMode,
+  type HarnessFabricSessionConfig,
+  type HarnessModelProviderId,
+  resolveCfcEnforcementMode,
 } from "../src/config.ts";
 import type { CfcPosture } from "@commonfabric/runner";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -1223,8 +1224,9 @@ const resolveConsoleRunscConfig = (
 /**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
- * driver never asks Docker anything. `readDockerRuntimes` replaces the
- * Docker driver's `docker info` reading.
+ * driver never asks Docker anything, and is judged at the enforcement mode
+ * its turns resolve from the options each is built with. `readDockerRuntimes`
+ * replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
@@ -1236,7 +1238,10 @@ export const createConsoleHealth = (
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
     config.sandboxRuntimeKind === "runsc"
-      ? consoleRunscHealthProbe(() => resolveConsoleRunscConfig(config))
+      ? consoleRunscHealthProbe(
+        () => resolveConsoleRunscConfig(config),
+        resolveCfcEnforcementMode(harnessSessionEngineOptions(config)),
+      )
       : consoleSandboxHealthProbe(readDockerRuntimes),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(

@@ -10,7 +10,11 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { DEFAULT_DOCKER_BINARY } from "../src/sandbox/docker-runsc.ts";
 import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
-import type { RunscSandboxConfig } from "../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  assertRunscCfcPolicyForMode,
+  type RunscSandboxConfig,
+} from "../src/sandbox/runsc.ts";
 import {
   type ConsoleHealthFact,
   type ConsoleHealthProbe,
@@ -118,11 +122,18 @@ export const readConsolePath = (
  * CFC policy is configured and present. An executable binary does not prove a
  * sandbox can execute a task.
  *
+ * `mode` is the CFC enforcement mode the console's turns run at. With no
+ * policy configured, the engine refuses every turn in an enforcing mode before
+ * any tool runs (`assertRunscCfcPolicyForMode`), which this reports as
+ * failed; in a mode that only observes, commands run without `--cfc`, which
+ * it reports as degraded.
+ *
  * `resolve` throws where a turn would be refused. `examine` looks at one
  * path; both run synchronously, so an observation holds no operation open.
  */
 export const consoleRunscHealthProbe = (
   resolve: () => RunscSandboxConfig,
+  mode: CfcEnforcementMode,
   examine: (path: string) => ConsolePathReading = readConsolePath,
 ): ConsoleHealthProbe => {
   const source = "runsc configuration";
@@ -209,17 +220,7 @@ export const consoleRunscHealthProbe = (
         };
       const policyReading = policy === undefined ? undefined : examine(policy);
       const runtimeRow: ConsoleHealthRow = policyReading === undefined
-        ? {
-          ...initial[1],
-          detail,
-          state: "degraded",
-          checkedAt,
-          value: "direct runsc driver, no CFC policy",
-          reason:
-            "runsc runs without --cfc, so a command's output carries no CFC result.",
-          remedy:
-            "Install a CFC policy, or set CF_HARNESS_RUNSC_CFC_POLICY to one, then restart the console.",
-        }
+        ? noPolicyRow(initial[1], detail, checkedAt, config, mode)
         : policyReading.found === "file"
         ? {
           ...initial[1],
@@ -249,6 +250,48 @@ export const consoleRunscHealthProbe = (
         };
       return Promise.resolve([binaryRow, runtimeRow]);
     },
+  };
+};
+
+/** The remedy for a direct runsc driver with no CFC policy. */
+const NO_POLICY_REMEDY =
+  "Install a CFC policy at $HOME/.local/share/runsc-cfc/cfc-policy.json, or set CF_HARNESS_RUNSC_CFC_POLICY to one, then restart the console.";
+
+/**
+ * The runtime row for a direct runsc driver with no CFC policy, decided by the
+ * engine's own floor: failed where it refuses every turn, degraded where the
+ * turns run untracked.
+ */
+const noPolicyRow = (
+  fact: ConsoleHealthFact,
+  detail: string,
+  checkedAt: string,
+  config: RunscSandboxConfig,
+  mode: CfcEnforcementMode,
+): ConsoleHealthRow => {
+  try {
+    assertRunscCfcPolicyForMode(mode, config);
+  } catch {
+    return {
+      ...fact,
+      detail,
+      state: "failed",
+      checkedAt,
+      value: "no CFC policy, so every turn is refused",
+      reason:
+        `The console's turns enforce CFC at ${mode}, and the direct runsc driver refuses every turn in an enforcing mode that has no CFC policy, before any tool runs.`,
+      remedy: NO_POLICY_REMEDY,
+    };
+  }
+  return {
+    ...fact,
+    detail,
+    state: "degraded",
+    checkedAt,
+    value: "direct runsc driver, no CFC policy",
+    reason:
+      `The console's turns run at ${mode}, so runsc runs without --cfc and commands run untracked: their output carries no CFC result.`,
+    remedy: NO_POLICY_REMEDY,
   };
 };
 

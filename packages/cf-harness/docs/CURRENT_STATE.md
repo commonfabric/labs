@@ -93,10 +93,14 @@ refuse each of the three flags. All five derive the selection through one
 function, so runs started from one environment execute on the same driver.
 
 The console's launcher, `console:launch`, derives the selection from the same
-environment the console serves under. Under the direct driver it reads no Docker
-runtime table, sites no CFC sidecar directory, and refuses the two sidecar
-directory flags; the console's operator snapshot reports the direct driver's
-configuration, `runsc` binary, and CFC policy in place of Docker's registration.
+environment the console serves under. It takes the two sidecar directory flags,
+`--cfc-result-dir` and `--cfc-invocation-context-dir`, on the Docker driver
+only. Under the direct driver it reads no Docker runtime table, sites no CFC
+sidecar directory, and refuses those two flags; the console's operator snapshot
+reports the direct driver's configuration, `runsc` binary, and CFC policy in
+place of Docker's registration. With no CFC policy, the snapshot reports the
+runtime failed where the console's turns enforce, since the engine refuses each
+of them before any tool runs, and degraded where they only observe.
 
 The selection belongs to a run. The direct driver registers nothing with Docker
 and keeps its `runsc` state under the run's own scratch directory, so runs on

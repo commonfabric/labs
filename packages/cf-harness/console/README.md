@@ -234,11 +234,11 @@ are not configurable on the console.
 Under `runsc` the console builds the direct driver: no Docker, `bash` takes a
 `session`, and the runtime description reads `runsc-cfc`. `console:launch` reads
 no Docker runtime table, sites no sidecar directory, and refuses
-`--cfc-result-dir` and `--cfc-invocation-context-dir`, which only the Docker
-driver reads; it prints the `runsc` binary, rootfs and CFC policy in their
-place, and so does the server when it binds. A console that names no runtime, or
-names `docker`, builds the Docker driver exactly as it would with no variable
-set.
+`--cfc-result-dir` and `--cfc-invocation-context-dir`, which it takes on the
+Docker driver only, because only that driver reads them; it prints the `runsc`
+binary, rootfs and CFC policy in their place, and so does the server when it
+binds. A console that names no runtime, or names `docker`, builds the Docker
+driver exactly as it would with no variable set.
 
 Every turn scans the skills root and records the registry on its run before the
 first model call, so `read_skill_resource` can answer and a delegated
@@ -324,7 +324,10 @@ health and enrollment for the console identity. On the Docker driver the sandbox
 rows read the running daemon's `runsc-cfc` registration. On the direct `runsc`
 driver they ask Docker nothing: they resolve the driver's configuration the way
 a turn resolves it, and report whether the `runsc` binary is an executable file
-and whether a CFC policy is configured and present. Each probe caches
+and whether a CFC policy is configured and present. With no policy, the runtime
+row is failed where the console's turns enforce CFC, which is the default,
+because the engine refuses every such turn before any tool runs; where they only
+observe it is degraded, because commands run untracked. Each probe caches
 independently for 30 seconds. Reading the route returns the current snapshot
 immediately and schedules stale checks in the background, sharing any in-flight
 check. No probe is awaited by the route. The timestamp remains visible while an

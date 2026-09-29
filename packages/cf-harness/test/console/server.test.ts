@@ -775,6 +775,66 @@ describe("console/server", () => {
       ]);
     });
 
+    /** The runsc selection with no CFC policy named, and none under `HOME`. */
+    const RUNSC_NO_POLICY_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+    };
+
+    /** The sandbox runtime row a console's health settles on. */
+    const runtimeRow = async (
+      config: Awaited<ReturnType<typeof resolveConsoleConfig>>,
+    ) => {
+      const health = createConsoleHealth(
+        config,
+        undefined,
+        undefined,
+        {},
+        undefined,
+        () => Promise.reject(new Error("Docker is not asked")),
+      );
+      await health.refresh();
+      return health.snapshot().rows.find((row) => row.id === "sandbox.runtime");
+    };
+
+    it("reports a runsc console with no CFC policy as failed, since its enforcing turns are refused", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      const row = await runtimeRow(config);
+
+      expect(config.sandboxCfcPolicy).toBeUndefined();
+      expect(row).toMatchObject({
+        state: "failed",
+        value: "no CFC policy, so every turn is refused",
+      });
+      expect(row?.reason).toContain("enforce-strict");
+      expect(row?.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+    });
+
+    it("reports a runsc console with no CFC policy as degraded when its turns only observe", async () => {
+      const config = await resolveConsoleConfig(
+        ARGS,
+        RUNSC_NO_POLICY_ENV,
+        "/console",
+      );
+
+      const row = await runtimeRow({
+        ...config,
+        cfcEnforcementModeOverride: "observe",
+      });
+
+      expect(row).toMatchObject({
+        state: "degraded",
+        value: "direct runsc driver, no CFC policy",
+      });
+      expect(row?.reason).toContain("untracked");
+    });
+
     it("observes the Docker runtime table for a console on Docker", async () => {
       let dockerReads = 0;
       const health = createConsoleHealth(

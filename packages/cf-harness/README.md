@@ -891,11 +891,16 @@ deno task run -- \
 
 `--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
 as its default. A run that names neither uses Docker. The flags in this section
-are the batch CLI's; the interactive stdio entrypoint, the interactive lane of
-the Loom local host, and the console refuse them and read the environment
-variables alone. The two coexist on one machine: the direct driver registers
-nothing with Docker and keeps its `runsc` state under the run's own scratch
-directory.
+are the batch CLI's; the interactive stdio entrypoint and the interactive lane
+of the Loom local host refuse them and read the environment variables alone. The
+console refuses the three selection flags, `--sandbox-runtime`,
+`--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads their variables alone.
+The two sidecar directory flags are the Docker driver's: the console's launcher,
+`console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
+the Docker driver and refuses them under `runsc`. The console takes no Docker
+image or Docker runtime name. The two drivers coexist on one machine: the direct
+driver registers nothing with Docker and keeps its `runsc` state under the run's
+own scratch directory.
 
 - `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
   `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and

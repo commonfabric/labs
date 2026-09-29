@@ -9,6 +9,7 @@ import {
   readConsolePath,
 } from "../../console/health-probes.ts";
 import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { join } from "@std/path";
 import { ConsoleHealth } from "../../console/health.ts";
 import { PatternIndexClient } from "../../src/pattern-index/client.ts";
@@ -105,14 +106,15 @@ describe("health-probes", () => {
     const observe = async (
       resolve: () => RunscSandboxConfig,
       readings: Record<string, ConsolePathReading> = {},
+      mode: CfcEnforcementMode = "enforce-strict",
     ) =>
-      (await consoleRunscHealthProbe(resolve, examine(readings)).read()).map((
-        { id, state, value },
-      ) => ({ id, state, value }));
+      (await consoleRunscHealthProbe(resolve, mode, examine(readings)).read())
+        .map(({ id, state, value }) => ({ id, state, value }));
 
     it("returns both rows ok for an executable binary and a present policy", async () => {
       const rows = await consoleRunscHealthProbe(
         () => config("/store/policy.json"),
+        "enforce-strict",
         examine({}),
       ).read();
 
@@ -176,12 +178,38 @@ describe("health-probes", () => {
       });
     });
 
-    it("returns the runtime row degraded when no CFC policy is configured", async () => {
-      expect((await observe(() => config()))[1]).toEqual({
+    for (const mode of ["enforce-strict", "enforce-explicit"] as const) {
+      it(`returns the runtime row failed when no CFC policy is configured and turns enforce at \`${mode}\``, async () => {
+        // The engine refuses every such turn before any tool runs.
+        const [, row] = await consoleRunscHealthProbe(
+          () => config(),
+          mode,
+          examine({}),
+        ).read();
+
+        expect(row).toMatchObject({
+          id: "sandbox.runtime",
+          state: "failed",
+          value: "no CFC policy, so every turn is refused",
+        });
+        expect(row.reason).toContain(mode);
+        expect(row.remedy).toContain("CF_HARNESS_RUNSC_CFC_POLICY");
+      });
+    }
+
+    it("returns the runtime row degraded when no CFC policy is configured and turns only observe", async () => {
+      const [, row] = await consoleRunscHealthProbe(
+        () => config(),
+        "observe",
+        examine({}),
+      ).read();
+
+      expect(row).toMatchObject({
         id: "sandbox.runtime",
         state: "degraded",
         value: "direct runsc driver, no CFC policy",
       });
+      expect(row.reason).toContain("untracked");
     });
 
     it("returns the runtime row failed when the configured CFC policy is absent", async () => {
@@ -199,6 +227,7 @@ describe("health-probes", () => {
     it("returns the runtime row unknown, not failed, when the configured CFC policy could not be looked at", async () => {
       const rows = await consoleRunscHealthProbe(
         () => config("/store/policy.json"),
+        "enforce-strict",
         examine({
           "/store/policy.json": { found: "unreadable", reason: "EACCES" },
         }),
@@ -218,9 +247,13 @@ describe("health-probes", () => {
       // probe's own unavailable rows: a failure to look is not a failure of
       // the runtime.
       const health = new ConsoleHealth([], [
-        consoleRunscHealthProbe(() => config("/store/policy.json"), () => {
-          throw new Error("examining failed");
-        }),
+        consoleRunscHealthProbe(
+          () => config("/store/policy.json"),
+          "enforce-strict",
+          () => {
+            throw new Error("examining failed");
+          },
+        ),
       ]);
 
       await health.refresh();
@@ -249,9 +282,13 @@ describe("health-probes", () => {
     });
 
     it("returns the runtime row failed with the driver's reason when the configuration is refused", async () => {
-      const rows = await consoleRunscHealthProbe(() => {
-        throw new Error("runsc sandbox needs a rootfs");
-      }, examine({})).read();
+      const rows = await consoleRunscHealthProbe(
+        () => {
+          throw new Error("runsc sandbox needs a rootfs");
+        },
+        "enforce-strict",
+        examine({}),
+      ).read();
 
       expect(rows.map(({ id, state, value }) => ({ id, state, value })))
         .toEqual([
