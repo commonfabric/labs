@@ -879,6 +879,16 @@ describe("RuntimeInternals", () => {
     expect(options.spaceDid).toBe(session.space);
     expect(options.spaceName).toBe(session.spaceName);
     expect(options.experimental).toBe(experimental);
+    // A page that names no outer frame has none, and one that names one has
+    // that one.
+    expect(options.iframeOuterFrameUrl).toBeUndefined();
+    expect(
+      createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://shell.test/"),
+        iframeOuterFrameUrl: "/outer-frame",
+      }).iframeOuterFrameUrl,
+    ).toBe("/outer-frame");
     // With the render ceiling off, neither ceiling field reaches the worker:
     // rendering is unbounded and author declassification is honored. The case
     // below reads the same two fields with the ceiling on.
@@ -1542,6 +1552,28 @@ describe("RuntimeInternals", () => {
         // pair; an attach carries a DID and nothing else of the identity.
         expect(transport.sent[0].data?.spaceIdentity).toBeUndefined();
         expect(typeof transport.sent[0].data?.identity).toBe("string");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("keeps the page's outer-frame setting on the client it attaches, and sends none of it", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const transport = new StubTransport();
+      const runtime = await withNoWorkerConstructible(() =>
+        RuntimeInternals.create({
+          identity,
+          apiUrl: new URL("http://shell.test/"),
+          transport: transport as unknown as RuntimeTransport,
+          attach: true,
+          iframeOuterFrameUrl: "/outer-frame",
+        })
+      );
+      try {
+        expect(runtime.runtime().iframeOuterFrameUrl()).toBe("/outer-frame");
+        expect(transport.sent).toHaveLength(1);
+        expect(transport.sent[0].type).toBe("attach");
+        expect(JSON.stringify(transport.sent[0])).not.toContain("outer-frame");
       } finally {
         await runtime.dispose();
       }

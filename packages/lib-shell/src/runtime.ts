@@ -191,6 +191,15 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
   concurrentWatchRefresh?: boolean;
 
   /**
+   * Where this page serves the outer frame of `cf-iframe`'s sandbox, for a
+   * page whose own Content Security Policy refuses the frame the sandbox
+   * otherwise inlines. It says something of the page, not of the runtime: the
+   * client keeps it, the worker is sent none of it, and an attach asserts
+   * nothing by it. Unset, the outer frame is inlined.
+   */
+  iframeOuterFrameUrl?: string;
+
+  /**
    * When true, the worker holds its initialization reply until the backend's
    * health check has answered, and `create` rejects when a host fails it.
    * Off by default: the worker answers as soon as its runtime stands, and a
@@ -344,6 +353,7 @@ export function createRuntimeClientOptions({
   patternCoverage,
   concurrentWatchRefresh,
   awaitHealth,
+  iframeOuterFrameUrl,
 }: {
   session: Session;
   apiUrl: URL;
@@ -357,6 +367,7 @@ export function createRuntimeClientOptions({
   patternCoverage?: boolean;
   concurrentWatchRefresh?: boolean;
   awaitHealth?: boolean;
+  iframeOuterFrameUrl?: string;
 }) {
   // The identity the runtime renders as. A delegated host names it in its own
   // trust snapshot; a snapshot that names nobody leaves the session identity
@@ -391,6 +402,7 @@ export function createRuntimeClientOptions({
     patternCoverage,
     concurrentWatchRefresh,
     awaitHealth,
+    iframeOuterFrameUrl,
   };
 }
 
@@ -953,6 +965,7 @@ export class RuntimeInternals extends EventTarget {
     patternCoverage,
     concurrentWatchRefresh,
     awaitHealth,
+    iframeOuterFrameUrl,
     getBuildHash = fetchBuildHash,
     workerUrl,
     transport,
@@ -996,6 +1009,7 @@ export class RuntimeInternals extends EventTarget {
       patternCoverage,
       concurrentWatchRefresh,
       awaitHealth,
+      iframeOuterFrameUrl,
     });
 
     const connection = transport ??

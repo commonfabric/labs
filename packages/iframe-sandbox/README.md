@@ -294,8 +294,12 @@ a URL instead, where it takes its policy from its own response, and sets
 `outerFrameUrl` on the element; `cf-iframe` takes it from the
 `iframeOuterFrameUrl` the host gave its `RuntimeClient`. The document served is
 `outer-frame-script.js` as its script, under the policy the guest is to inherit
-and a `sandbox` directive that withholds `allow-same-origin`, since the
-element's `sandbox` attribute does not reach a document opened by its URL.
+and a `sandbox` directive that withholds `allow-same-origin`. Framed by the
+element, the document is sandboxed by the element's `sandbox` attribute as the
+inlined one is. The directive is for the same URL opened on its own, in a tab or
+a window, where no element and so no attribute stands in front of it, and a
+document that runs a guest's inline script would otherwise run it as the host's
+origin.
 
 [CSP processing model]: https://www.w3.org/TR/CSP2/#processing-model-iframe-srcdoc
 [browser support for the `csp` attribute]: https://caniuse.com/mdn-html_elements_iframe_csp

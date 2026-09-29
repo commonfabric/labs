@@ -125,9 +125,15 @@ export interface RuntimeClientOptions
  * key in it to hand. `RuntimeClientOptions` keeps the `Identity`, and is what
  * initialization takes.
  *
- * The rest is the security posture this client asserts. Nothing here is
- * declared to the runtime: the runtime is running under a posture of its own,
- * and an assertion that differs anywhere is refused.
+ * The rest, apart from the page's settings, is the security posture this
+ * client asserts. None of it is declared to the runtime: the runtime is
+ * running under a posture of its own, and an assertion that differs anywhere
+ * is refused.
+ *
+ * The page's settings ({@link RuntimeClientPageSettings}) are no part of that.
+ * They say something of the document that attaches, the client keeps them,
+ * and the runtime is neither sent them nor asked to agree: two documents that
+ * join one runtime may differ in them.
  */
 export interface RuntimeAttachOptions extends
   Omit<
@@ -169,6 +175,10 @@ export type RuntimeClientEvents = {
  * Everything else is named, which the `satisfies` clause holds: a posture
  * field this one drops is one the client asserts nothing about, and the
  * runtime's own value for it then goes unchecked.
+ *
+ * The page's settings come across as they are. They are not posture and an
+ * attach asserts nothing by them; they are here because the client an attach
+ * makes keeps them as the one initialization makes does.
  */
 export function attachOptionsFrom(
   options: RuntimeClientOptions,

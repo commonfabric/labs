@@ -116,6 +116,36 @@ Deno.test("a URL that arrives after the frame was inlined replaces the frame and
   }
 });
 
+Deno.test("a change from one URL to another replaces the frame rather than navigating it", async () => {
+  cleanupFixtures();
+  try {
+    // The same document under a second URL. A frame navigated from one to
+    // the other would keep its element and its window.
+    const second = `${OUTER_FRAME_URL}?second`;
+    const context = new ContextShim({ a: 1 });
+    const element = place(guest("a"), context, OUTER_FRAME_URL);
+    await waitForContextValue(context, element, "a", (value) => value === 2);
+    const first = frameOf(element);
+    const firstWindow = first.contentWindow;
+
+    element.outerFrameUrl = second;
+    await element.updateComplete;
+    const replaced = frameOf(element);
+    assert(replaced !== first);
+    assert(!first.isConnected);
+    assertEquals(element.loadState, "");
+    assertEquals(element.accessForTestingOnly.readyWindow, undefined);
+
+    await waitForContextValue(context, element, "a", (value) => value === 3);
+    assertEquals(replaced.getAttribute("src"), second);
+    assert(element.accessForTestingOnly.readyWindow === replaced.contentWindow);
+    assert(element.accessForTestingOnly.readyWindow !== firstWindow);
+    assertEquals(element.loadState, "loaded");
+  } finally {
+    cleanupFixtures();
+  }
+});
+
 Deno.test("the outer frame's URL cannot be set from markup", async () => {
   cleanupFixtures();
   try {

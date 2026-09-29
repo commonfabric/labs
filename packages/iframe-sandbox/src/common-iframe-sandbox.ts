@@ -1,5 +1,6 @@
 import { css, html, LitElement, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import { createRef, Ref, ref } from "lit/directives/ref.js";
 import { type FabricBridge, FabricBridgeHost } from "./bridge.ts";
 import { GuestSessions } from "./guest-sessions.ts";
@@ -65,8 +66,9 @@ export class CommonIframeSandboxElement extends LitElement {
    * they assign. `cf-iframe` holds this one inside its shadow tree and
    * assigns what the runtime the host provided says, and nothing else.
    *
-   * A change replaces the frame, and the guest with it: the document is
-   * loaded again into the frame that results.
+   * A change replaces the frame, and the guest with it, whether it is from
+   * inlined to served, the other way, or from one URL to another: the
+   * document is loaded again into the frame that results.
    */
   @property({ attribute: false })
   accessor outerFrameUrl: string | undefined = undefined;
@@ -345,36 +347,43 @@ export class CommonIframeSandboxElement extends LitElement {
   }
 
   /**
-   * Renders the outer frame, from `outerFrameUrl` or inlined. The two are
-   * templates of their own so that a change from one to the other replaces
-   * the frame rather than navigating it: a frame given a `src` while it
-   * holds a `srcdoc` keeps the `srcdoc`.
+   * Renders the outer frame, from `outerFrameUrl` or inlined.
+   *
+   * The frame is keyed by where it loads from, so a change of that replaces
+   * the element rather than navigating it, and `updated()` can take the
+   * window it had as gone. A frame that was navigated instead would keep its
+   * window: a `ready` its old document had already posted would be taken for
+   * the new one's, and the new one's own would then be refused as a second
+   * from a window already in hand.
    */
   override render() {
-    if (this.outerFrameUrl !== undefined) {
-      return html`
-        <iframe
-          ${ref(this.#iframeRef)}
-          allow="clipboard-write"
-          sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
-          src="${this.outerFrameUrl}"
-          height="100%"
-          width="100%"
-          style="border: none;"
-        ></iframe>
-      `;
-    }
-    return html`
-      <iframe
-        ${ref(this.#iframeRef)}
-        allow="clipboard-write"
-        sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
-        .srcdoc="${OuterFrame}"
-        height="100%"
-        width="100%"
-        style="border: none;"
-      ></iframe>
-    `;
+    const url = this.outerFrameUrl;
+    return keyed(
+      url,
+      url === undefined
+        ? html`
+          <iframe
+            ${ref(this.#iframeRef)}
+            allow="clipboard-write"
+            sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
+            .srcdoc="${OuterFrame}"
+            height="100%"
+            width="100%"
+            style="border: none;"
+          ></iframe>
+        `
+        : html`
+          <iframe
+            ${ref(this.#iframeRef)}
+            allow="clipboard-write"
+            sandbox="allow-scripts allow-pointer-lock allow-popups allow-popups-to-escape-sandbox"
+            src="${url}"
+            height="100%"
+            width="100%"
+            style="border: none;"
+          ></iframe>
+        `,
+    );
   }
 }
 
