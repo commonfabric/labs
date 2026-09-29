@@ -42,7 +42,7 @@ const settle = async () => {
 
 const setup = (
   publishes: Array<() => ReturnType<Publish>>,
-  slot: { answer?: string; refuse?: string } = {},
+  slot: { answer?: unknown; refuse?: string } = {},
   termsValue: unknown = {},
 ) => {
   const element = new HeadlessAnswer();
@@ -222,6 +222,94 @@ describe("cf-custody-answer", () => {
     state.output.set("pizza");
     await settle();
     expect(state.requests).toHaveLength(asked);
+  });
+
+  it("starts over for a new policy, as for new terms", async () => {
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () => {
+        slot.answer = "sushi";
+        return Promise.resolve({ instance: "first", answer: "sushi" });
+      },
+      () => {
+        slot.answer = "tacos";
+        return Promise.resolve({ instance: "second", answer: "tacos" });
+      },
+    ], slot);
+    state.element.willUpdate(new Map([["policy", undefined]]));
+    await settle();
+    expect(state.element.accessForTestingOnly.answer).toBe("sushi");
+    // The policy cell now names another policy: the slot shown is another
+    // instance's, so what was shown is dropped and that slot is asked for.
+    slot.answer = undefined;
+    state.policy.set({ policyDigest: "another" });
+    await settle();
+    expect(state.element.accessForTestingOnly.answer).toBe("tacos");
+    expect(state.published.map((event) => event.detail)).toEqual([
+      { instance: "first" },
+      { instance: "second" },
+    ]);
+  });
+
+  it("drops what an in-flight request returns once detached", async () => {
+    let release: (() => void) | undefined;
+    const slot: { answer?: string } = {};
+    const state = setup([
+      () =>
+        new Promise((resolve) => {
+          release = () => {
+            slot.answer = "sushi";
+            resolve({ instance: "instance", answer: "sushi" });
+          };
+        }),
+    ], slot);
+    const pending = state.element.accessForTestingOnly.publish();
+    await settle();
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    release!();
+    await pending;
+    expect(state.element.accessForTestingOnly.published).toBe(false);
+    expect(state.element.accessForTestingOnly.answer).toBeUndefined();
+    expect(state.published).toHaveLength(0);
+    expect(state.reads).toHaveLength(0);
+  });
+
+  it("does not run a queued request once detached", async () => {
+    let release: (() => void) | undefined;
+    const state = setup([
+      () =>
+        new Promise((_, reject) => {
+          release = () =>
+            reject(
+              new Error("Custody answer requires every seat to have sealed"),
+            );
+        }),
+      () => Promise.resolve({ instance: "instance", answer: "sushi" }),
+    ]);
+    const first = state.element.accessForTestingOnly.publish();
+    const second = state.element.accessForTestingOnly.publish();
+    await settle();
+    state.element.connected = false;
+    state.element.disconnectedCallback();
+    release!();
+    await first;
+    await second;
+    expect(state.requests).toHaveLength(1);
+  });
+
+  it("shows only a scalar answer, as the seal publishes only scalars", async () => {
+    const slot: { answer?: unknown } = {};
+    const state = setup([() => {
+      slot.answer = { choice: "tacos" };
+      return Promise.resolve({ instance: "instance", answer: slot.answer });
+    }], slot);
+    await state.element.accessForTestingOnly.publish();
+    const shown = renderedText(state.element);
+    expect(shown).not.toContain("[object Object]");
+    expect(shown).not.toContain('part="answer"');
+    expect(shown).toContain('role="alert"');
+    expect(state.element.accessForTestingOnly.published).toBe(false);
   });
 
   it("runs a request made during another once it ends, across a rebinding", async () => {
