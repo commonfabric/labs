@@ -48,14 +48,16 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
   let runtime: Runtime;
 
   const newRuntime = (options: Record<string, unknown> = {}) =>
-    new Runtime({
-      ...runtimePresets.patternTest({
-        apiUrl: new URL(import.meta.url),
-        storageManager,
-        experimental: {},
-      }),
-      ...options,
-    } as ConstructorParameters<typeof Runtime>[0]);
+    new Runtime(
+      {
+        ...runtimePresets.patternTest({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+          experimental: {},
+        }),
+        ...options,
+      } as ConstructorParameters<typeof Runtime>[0],
+    );
 
   beforeEach(() => {
     storageManager = StorageManager.emulate({ as: signer });
@@ -153,9 +155,11 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
     ).toBeUndefined();
     await runtime.storageManager.synced();
     const before = entriesOf(room);
-    expect(before.some((entry) =>
-      entry.origin === "link" && entry.path[0] === "box"
-    )).toBe(true);
+    expect(
+      before.some((entry) =>
+        entry.origin === "link" && entry.path[0] === "box"
+      ),
+    ).toBe(true);
     expect(declaredAt(before, ["box"])).toBeUndefined();
 
     // The room's next version claims `box` for the writer, and a write
@@ -258,7 +262,10 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
       cfcAtom.space(space),
     ]);
     // No marker at `terms`: the root's entry already routes a write there,
-    // and a marker would resolve a read of `terms` to an empty label.
+    // so a marker would be a redundant, more specific entry in the declared
+    // component. The two assertions after this one record what holds either
+    // way — the position's label view carries the root's atom, and the
+    // member is refused — and do not turn on the marker's absence.
     expect(declaredAt(entries, ["terms"])).toBeUndefined();
     const view = cfcLabelViewForResolvedCell(doc.key("terms"))?.entries
       .filter((entry) => entry.path.length === 0)
@@ -317,6 +324,149 @@ describe("the marker for a writer-claimed position that holds nothing", () => {
       })).error,
       "the written slot through a bare schema",
     );
+  });
+
+  it("is minted at a union every branch of which carries the claim, the group chat's admin flag", async () => {
+    // `ChatEveryoneAdminFlag` (cfc-group-chat-demo/trusted.tsx): a union of
+    // a `true` and a `false` branch, both the toggle handler's, on an input
+    // with no default. No value written there escapes the claim, so the
+    // position is marked; a member's bare-link `set(true)` after the writer
+    // set the admins would otherwise make every member an admin.
+    const schema = {
+      type: "object",
+      properties: {
+        admins: {
+          type: "array",
+          items: { type: "string" },
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+        everyoneIsAdmin: {
+          anyOf: [{ $ref: "#/$defs/On" }, { $ref: "#/$defs/Off" }],
+        },
+      },
+      $defs: {
+        On: {
+          type: "boolean",
+          const: true,
+          ifc: {
+            writeAuthorizedBy: [WRITER],
+            addIntegrity: ["cfc-writer-claim-marker-admin"],
+          },
+        },
+        Off: {
+          type: "boolean",
+          const: false,
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+      },
+    } as JSONSchema;
+    const registry = await create("admin-registry", schema, {});
+    expect(declaredAt(entriesOf(registry), ["everyoneIsAdmin"])).toMatchObject(
+      { label: {} },
+    );
+    expect(
+      (await asWriter((tx) => {
+        registry.withTx(tx).key("admins").set(["alice"] as never);
+      })).error,
+    ).toBeUndefined();
+
+    refusedByClaim(
+      (await asMember((tx) => {
+        runtime.getCellFromLink(
+          bare(registry, ["everyoneIsAdmin"]),
+          undefined,
+          tx,
+        )
+          .set(true as never);
+      })).error,
+      "the flag through a bare link",
+    );
+    expect(registry.get().everyoneIsAdmin).toBeUndefined();
+
+    expect(
+      (await asWriter((tx) => {
+        registry.withTx(tx).key("everyoneIsAdmin").set(false as never);
+      })).error,
+    ).toBeUndefined();
+    expect(registry.get().everyoneIsAdmin).toBe(false);
+    refusedByClaim(
+      (await asMember((tx) => {
+        runtime.getCellFromLink(
+          bare(registry, ["everyoneIsAdmin"]),
+          undefined,
+          tx,
+        )
+          .set(true as never);
+      })).error,
+      "the written flag through a bare link",
+    );
+    expect(registry.get().everyoneIsAdmin).toBe(false);
+  });
+
+  it("is not minted at a union with an unclaimed branch", async () => {
+    // Which branch a position takes is the value's to decide; a position
+    // holding nothing is on no branch (cfc-ui-contract's mixed arrays).
+    const schema = {
+      type: "object",
+      properties: {
+        admins: {
+          type: "array",
+          items: { type: "string" },
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+        flag: {
+          anyOf: [
+            {
+              type: "boolean",
+              const: true,
+              ifc: { writeAuthorizedBy: [WRITER] },
+            },
+            { type: "boolean", const: false },
+          ],
+        },
+      },
+    } as JSONSchema;
+    const doc = await create("one-branch-claimed", schema, {});
+    const entries = entriesOf(doc);
+    expect(declaredAt(entries, ["admins"])).toMatchObject({ label: {} });
+    expect(declaredAt(entries, ["flag"])).toBeUndefined();
+  });
+
+  it("records a write at an item of an item as the outermost array", async () => {
+    const schema = {
+      type: "object",
+      properties: {
+        grid: {
+          type: "array",
+          items: { type: "array", items: { type: "number" } },
+          ifc: { writeAuthorizedBy: [WRITER] },
+        },
+      },
+    } as JSONSchema;
+    const doc = await create("grid", schema, {});
+    expect(
+      (await asWriter((tx) => {
+        doc.withTx(tx).key("grid").set([[1]] as never);
+      })).error,
+    ).toBeUndefined();
+    // The writer's own write two indexes down commits.
+    expect(
+      (await asWriter((tx) => {
+        (doc.withTx(tx).key("grid") as Cell<number[][]>).key(0).key(0).set(2);
+      })).error,
+    ).toBeUndefined();
+    expect(doc.get().grid).toEqual([[2]]);
+    refusedByClaim(
+      (await asMember((tx) => {
+        runtime.getCellFromLink(
+          bare(doc, ["grid", "0", "0"]),
+          { type: "number" } as JSONSchema,
+          tx,
+        ).set(3 as never);
+      })).error,
+      "an item of an item through a bare schema",
+    );
+    expect(doc.get().grid).toEqual([[2]]);
   });
 
   it("refuses an item write on an absent claimed container, and a bare-link item write, by the claim", async () => {

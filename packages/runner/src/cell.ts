@@ -388,7 +388,8 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * parent read propagates what `readValueOrThrow` throws, since an absent or
  * mismatched parent reads as `undefined` and anything else is a failure a
  * policy decision must not be built on. The item's own definitions move to
- * the array's root, where the envelope's references to them point.
+ * the array's root, where the envelope's references to them point. An item
+ * of an item lifts through every index to the outermost array.
  */
 const arrayItemPolicyInput = (
   tx: IExtendedStorageTransaction,
@@ -418,7 +419,7 @@ const arrayItemPolicyInput = (
     storedSchemaForWritePolicyInput(tx, link);
   if (!isObjectOrArray(itemSchema)) return undefined;
   const { $defs, ...items } = itemSchema;
-  return {
+  const lifted = {
     link: parent,
     schema: {
       type: "array",
@@ -426,6 +427,10 @@ const arrayItemPolicyInput = (
       ...($defs !== undefined ? { $defs } : {}),
     } as JSONSchema,
   };
+  // An item of an item lifts again, to the outermost array a run of indexes
+  // reaches: each level is spelled as the one below, so a write at
+  // `grid/0/0` is recorded at `grid`.
+  return arrayItemPolicyInput(tx, lifted.link, lifted.schema) ?? lifted;
 };
 
 /**

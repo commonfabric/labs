@@ -144,6 +144,7 @@ import {
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
+import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { verdictReason } from "./verdict-reason.ts";
 import {
   type CfcRefusalDetail,
@@ -1035,6 +1036,90 @@ const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
     schema.ifc.uiContract !== undefined ||
     schema.ifc.exactCopyOf !== undefined ||
     schema.ifc.projection !== undefined;
+};
+
+/**
+ * The logical positions of `root` at which a writer claim holds whatever
+ * value the position takes: a position whose schema declares
+ * `writeAuthorizedBy`, or an `anyOf`/`oneOf` every branch of which does, so
+ * no value written there escapes a claim (the group chat's admin flag is a
+ * union of a `true` and a `false` branch, both the toggle handler's). A
+ * union with an unclaimed branch is not such a position — which branch a
+ * value takes is the value's to decide — and the positions inside a union's
+ * branches are not visited: a claim there holds for that branch's values
+ * only. `allOf` holds where any of its parts does.
+ *
+ * Paths spell array items and record entries as `*` and tuple slots by
+ * index, as `cfcSchemaEntries` does; references resolve against `root`, and
+ * a schema already on the walk's stack ends it, as there.
+ */
+const writerClaimedPositions = (
+  root: JSONSchema,
+): (readonly string[])[] => {
+  const positions: (readonly string[])[] = [];
+  const resolve = (schema: JSONSchema): JSONSchema =>
+    isObjectOrArray(schema) && typeof schema.$ref === "string"
+      ? ContextualFlowControl.resolveSchemaRefs(schema, root) ?? schema
+      : schema;
+  const claimed = (
+    schema: JSONSchema,
+    active: readonly JSONSchema[],
+  ): boolean => {
+    const resolved = resolve(schema);
+    if (!isObjectOrArray(resolved) || active.includes(resolved)) return false;
+    if (
+      isObjectOrArray(resolved.ifc) &&
+      resolved.ifc.writeAuthorizedBy !== undefined
+    ) return true;
+    const next = [...active, resolved];
+    const unions = [resolved.anyOf, resolved.oneOf].filter(Array.isArray);
+    if (
+      unions.length > 0 &&
+      unions.every((branches) =>
+        branches.length > 0 &&
+        branches.every((branch) => claimed(branch as JSONSchema, next))
+      )
+    ) return true;
+    return Array.isArray(resolved.allOf) &&
+      resolved.allOf.some((part) => claimed(part as JSONSchema, next));
+  };
+  const visit = (
+    schema: JSONSchema,
+    path: readonly string[],
+    active: readonly JSONSchema[],
+  ): void => {
+    const resolved = resolve(schema);
+    if (!isObjectOrArray(resolved) || active.includes(resolved)) return;
+    if (claimed(resolved, active)) positions.push(path);
+    const next = [...active, resolved];
+    const recordOnly = resolved.properties === undefined ||
+      (isObjectOrArray(resolved.properties) &&
+        Object.keys(resolved.properties).length === 0);
+    forEachSubschema(resolved, (child, keyword, key, index) => {
+      switch (keyword) {
+        case "properties":
+          visit(child, [...path, key!], next);
+          break;
+        case "allOf":
+          visit(child, path, next);
+          break;
+        case "items":
+          visit(child, [...path, "*"], next);
+          break;
+        case "prefixItems":
+          visit(child, [...path, String(index!)], next);
+          break;
+        case "additionalProperties":
+          if (recordOnly) visit(child, [...path, "*"], next);
+          break;
+        default:
+          // A union's branches hold for their own values only.
+          break;
+      }
+    });
+  };
+  visit(root, [], []);
+  return positions;
 };
 
 const claimPathToLogicalPath = (
@@ -11124,37 +11209,42 @@ export function* prepareBoundaryCommitSteps(
     // (`storedCfcMetadataAppliesToPath` reads the label map, not the schema)
     // and never reached the claim; and a document whose only policy is such
     // a claim persisted no envelope at all, since nothing below writes an
-    // empty label map. Every writer-claimed position of the schema this
-    // commit persists is therefore marked in the final payload set, by a
-    // declared entry with an empty label, wherever no declared entry at the
-    // position or above it already routes a write there.
+    // empty label map. Every position of the schema this commit persists at
+    // which a writer claim holds whatever value is written there
+    // (`writerClaimedPositions`) is therefore marked in the final payload
+    // set, by a declared entry with an empty label, wherever no declared
+    // entry at the position or above it already routes a write there.
     //
     // Only `writeAuthorizedBy` is marked. A copy claim (`exactCopyOf`,
     // `projection`) is verified when its target is written, and an unwritten
     // target keeps no entry (cfc-projection.test.ts); an input floor and a
     // UI contract gate what a write brings, which §8.15 does not make a
-    // property of an absent position.
+    // property of an absent position. A claim on one branch of a union is
+    // not marked either: which branch a position takes is decided by the
+    // value written there, so a position holding nothing is on no branch —
+    // and an envelope persisted for it ahead of a value would meet every
+    // later writer of another branch with the merge's refusal of divergent
+    // branch ifc. A union every branch of which carries the claim is marked:
+    // no value written there escapes it.
     //
     // The marker is what routes a writer's later write, so what already
     // routes one decides where it goes: a declared entry (or a legacy one,
     // origin-less) at the position or at an ancestor, since
-    // `storedCfcMetadataAppliesToPath` reads prefixes both ways. A derived,
-    // structure or link entry does not count: a link write discounts the
-    // link-origin entries at its slot, and flow stamps are cleared by later
-    // writes. Under an ancestor's declared entry no marker is minted, so the
-    // declared component's longest-prefix resolution keeps resolving a read
-    // of the position to that ancestor's label rather than to an empty one.
+    // `storedCfcMetadataAppliesToPath` reads prefixes both ways. That test
+    // is literal, so this one is too (`concretePathHasPrefix`): a declared
+    // `*` entry routes no concrete write, and does not stand in for a marker
+    // at a tuple slot beneath it. A derived, structure or link entry does
+    // not count: a link write discounts the link-origin entries at its slot,
+    // and flow stamps are cleared by later writes. Under an ancestor's
+    // declared entry no marker is minted: the ancestor routes the write, and
+    // the marker would only add a more specific entry to the declared
+    // component's longest-prefix resolution.
     //
     // A wildcard position is marked at its longest concrete prefix — the
     // container whose items carry the claim — which routes a write of the
     // container and of any item; the claim itself is then verified through
-    // the stored schema, as for any routed write. A claim inside an `anyOf`
-    // or `oneOf` branch is not marked: which branch a position takes is
-    // decided by the value written there, so a position holding nothing is
-    // on no branch, and an envelope persisted for it ahead of a value would
-    // meet every later writer of another branch with the merge's refusal of
-    // divergent branch ifc. A payload whose policy did not verify keeps no
-    // declared entry either.
+    // the stored schema, as for any routed write. A payload whose policy did
+    // not verify keeps no declared entry either.
     if (!ingestVerificationFailed) {
       const declaredPaths = persistedLabelEntries
         .filter((entry) =>
@@ -11162,17 +11252,11 @@ export function* prepareBoundaryCommitSteps(
         )
         .map((entry) => canonicalizeLogicalPath(entry.path));
       const declaredAtOrAbove = (path: readonly string[]): boolean =>
-        declaredPaths.some((declared) => isPrefix(declared, path));
-      for (const entry of mergedSchemaEntries) {
-        if (
-          entry.conditional === true ||
-          !isObjectOrArray(entry.schema) ||
-          !isObjectOrArray(entry.schema.ifc) ||
-          entry.schema.ifc.writeAuthorizedBy === undefined
-        ) continue;
-        const wildcard = entry.path.indexOf("*");
+        declaredPaths.some((declared) => concretePathHasPrefix(path, declared));
+      for (const claimedPath of writerClaimedPositions(schemaAndHash.schema)) {
+        const wildcard = claimedPath.indexOf("*");
         const path = canonicalizeLogicalPath(
-          wildcard === -1 ? entry.path : entry.path.slice(0, wildcard),
+          wildcard === -1 ? claimedPath : claimedPath.slice(0, wildcard),
         );
         if (declaredAtOrAbove(path)) continue;
         declaredPaths.push(path);
