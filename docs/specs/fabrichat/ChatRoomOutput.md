@@ -23,6 +23,15 @@ interface ChatRoomOutput {
   /** `roster`, plus any author with no roster entry. */
   participants: Cell<ChatProfile>[];
 
+  /** The highest `seq` dropped from `recentActivity` for age; 0 for none. */
+  recentActivityExpiredThrough: number;
+
+  /** Facts about the room's messages, and the newest of them. */
+  messages: ChatMessageList;
+
+  /** Whether this reader can send, edit, delete, react, and show a profile. */
+  canSend: boolean;
+
   /** This session's view of the room (`PerSession`). */
   session: Cell<ChatRoomSession>;
 
@@ -100,8 +109,7 @@ included, appends an event in the room's space, which needs WRITE. So:
   READ. Every member can then act on the room, `leave` included.
 - **A space's own chat** takes the space's access list as it is, and some of its
   members may have only READ. A READ member can read the newest messages,
-  through their session's `latest` window (see
-  [`ChatRoomSession`](ChatRoomSession.md)), which needs no event, but can't open
+  through the room's `messages.latest`, which needs no event, but can't open
   other windows, send, react, or show a profile.
 
 Adding and removing members needs OWNER. The space's member set is how a room
@@ -133,8 +141,9 @@ gesture, or the room's last OWNER staying put (see
 - **`about`** is a [`ChatRoomAbout`](ChatRoomAbout.md), set once when the room
   is created.
 - **Messages.** The room holds its [`ChatMessage`](ChatMessage.md)s, ordered by
-  `sentAt`, which is unique in the room. A client reads them through its
-  session's [`ChatMessageList`](ChatMessageList.md), a window at a time. An
+  `sentAt`, which is unique in the room. A client reads the newest of them from
+  `messages`, and the rest through its session's windows (see
+  [`ChatRoomSession`](ChatRoomSession.md#windows)), a window at a time. An
   obliterated message stays as a tombstone. Each version of a message is labeled
   `authored-by` the principal who recorded it. A message changes only through
   `editMessage`, `deleteMessage`, and `obliterateMessage`, and is never removed.
@@ -150,10 +159,18 @@ gesture, or the room's last OWNER staying put (see
 - **`roster`** and **`participants`** are links to profiles, compared with
   `equals()`. `participants` is `roster` plus any author without a roster entry.
   Neither is proof of access.
+- **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
+  the room holds, the span of their times, and `latest`, the newest messages of
+  the main conversation. It needs no request, so every member can read it, a
+  READ member included.
+- **`canSend`** says whether the reader can send, edit, delete, react, and show
+  a profile right now: their access is WRITE or OWNER, and their profile
+  resolves. It lets a client tell a READ member why their gestures would be
+  refused before they make one. Knowing the reader's access level needs the
+  space's member set (see [shared spaces](README.md#shared-spaces)).
 - **`session`** is the reading session's
-  [`ChatRoomSession`](ChatRoomSession.md): its view of the room, holding
-  `canSend`, its windows onto the messages, and its composer's state. Each
-  session reading the room gets its own.
+  [`ChatRoomSession`](ChatRoomSession.md): its windows onto the messages, and
+  its composer's state. Each session reading the room gets its own.
 - **`recentActivity`** is a log of what the room recorded recently: each message
   sent, edited, deleted, or obliterated, each reaction added or removed, and
   each change to the roster or membership, as a
@@ -161,6 +178,10 @@ gesture, or the room's last OWNER staying put (see
   room by reading it, rather than by comparing messages with what it had, and
   finds the message a send of its own produced there. It holds entries within
   the room's `recentActivityWindowNsec`.
+- **`recentActivityExpiredThrough`** is the highest `seq` the room has dropped
+  from `recentActivity` for age, or 0 if it has dropped none. A client compares
+  it with the highest `seq` it has seen to tell whether it has missed anything
+  (see [`ChatRoomActivity`](ChatRoomActivity.md#catching-up)).
 - **`outgoingNotices`**, on group rooms of their own, holds a notice for each
   person `add` admitted, until a client reports it delivered.
 - The lists here are projections. An implementation may keep the roster, and
@@ -173,16 +194,23 @@ A room's fields fall into two [scopes](../scoped-cell-instances.md#summary), and
 the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
-  room's space admits. That is `about`, the messages, `recentActivity`,
-  `roster`, `participants`, and `outgoingNotices`, and the streams. These are
-  the room: a link to the room names them, and passing the link around, to
-  another component or another person, passes the room.
+  room's space admits. That is `about`, the messages, offered as `messages`,
+  `recentActivity` and `recentActivityExpiredThrough`, `roster`, `participants`,
+  and `outgoingNotices`, and the streams. These are the room: a link to the room
+  names them, and passing the link around, to another component or another
+  person, passes the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
   `session` and everything under it (see
-  [`ChatRoomSession`](ChatRoomSession.md)): `canSend`, the windows onto the
-  messages, and the composer's state. Reading `session` gives the reader's own
-  session. Passing the room's link to someone else never passes a session: they
-  read their own.
+  [`ChatRoomSession`](ChatRoomSession.md)): the windows onto the messages, with
+  `openWindow` and `closeWindow`, and the composer's state. Reading `session`
+  gives the reader's own session. Passing the room's link to someone else never
+  passes a session: they read their own.
+
+`messages` is derived from the stored messages when it's read, and stored
+nowhere, so reading it needs no instance of anything. `canSend` is derived the
+same way, but for the particular reader. Neither needs a session. A session's
+stored parts come into being with its first write, such as opening a window, so
+a READ member, who can't write, never has one, and can still read `messages`.
 
 Nothing in a room is `PerUser`.
 
@@ -215,20 +243,21 @@ These rules hold for every stream:
 - Every event carries a `requestId`, which the sender chooses, unique among its
   requests, such as a random 128-bit value. The room acts on a given sender's
   `requestId` at most once: an event whose sender and `requestId` it has already
-  acted on changes nothing. That protects against a runtime delivering the same
-  event twice, such as when it appends an event again because it couldn't tell
-  whether its first append committed. A client doesn't send an event again
-  itself: a trusted gesture can't be re-issued from a client's code (see
+  acted on changes nothing. That protects against the same event taking effect
+  twice, as when a served handler runs an event again because its first run's
+  completion wasn't recorded. (A client runtime's own re-submission of an event
+  is ignored when it arrives, by its event id.) A client doesn't send an event
+  again itself: a trusted gesture can't be re-issued from a client's code (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and a
   person who tries again makes a new request.
 - The room remembers a `requestId` for at least `proposedTimeMaxAgeNsec` plus
   `proposedTimeMaxLeadNsec`, and at least `recentActivityWindowNsec`, measured
   from when it recorded the request. By then a repeated `sendMessage` or
-  `editMessage` is refused anyway, since its proposal is outside the window. A
-  runtime MUST NOT deliver an event again after that, since for other streams a
-  late repeat could undo a later request: a reaction removed and then restored,
-  or a member removed and then re-added (see
-  [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
+  `editMessage` is refused anyway, since its proposal is outside the window. For
+  other streams, a repeat later than that could undo a later request: a reaction
+  removed and then restored, or a member removed and then re-added. So a room
+  relies on its runtime finishing or dropping every event well within that time
+  (see [`FabriChatRoom`](FabriChatRoom.md#prerequisites)).
 
 - A stream that names a reviewed surface admits an event only as a trusted
   gesture on that surface (see
@@ -335,12 +364,16 @@ time, meaning its handler clock's reading when it makes the record. A proposal
 after the clock, within `proposedTimeMaxLeadNsec`, is accepted, but recorded at
 a time no later than the current time.
 
-The only thing that can carry a recorded time past the current time is the steps
-added to make it unique (see [unique times](ChatMessage.md#unique-times)), and
-those never carry it past the end of the current clock tick. A handler clock
-reading stands for a whole tick of the system's clock resolution, so a reading
-of `t` with a resolution of `r` covers times from `t` up to, but not including,
-`t + r`, and a bumped time stays within that range.
+Two things can carry a recorded time past the current time. One is the floor
+that keeps a reply later than its target (see
+[`sendMessage`](#sendmessagerequestid-string-version-chatmessageversion-replyto-chatreply)),
+since the target may have been recorded by a clock ahead of this one. The other
+is the steps added to make a time unique (see [unique
+times](ChatMessage.md#unique-times)), which never carry it past the end of the
+current clock tick. A handler clock reading stands for a whole tick of the
+system's clock resolution, so a reading of `t` with a resolution of `r` covers
+times from `t` up to, but not including, `t + r`, and a bumped time stays within
+that range.
 
 Accepting a sender's time lets a sender place a message earlier than it arrived,
 by up to `proposedTimeMaxAgeNsec`, but never later than it arrived. That is the
@@ -530,10 +563,11 @@ Gives up the sender's own access to a group room of its own.
   sender is the room's last OWNER and other members remain, the room first
   grants OWNER to one of them, since a space's access list must keep a concrete
   OWNER: the one who has been a member longest, by the order the room admitted
-  them. That promotes one person, by a rule every member can see coming, rather
-  than everyone. If no one else remains, leaving is really abandoning: the
-  sender's entry stays in the access list only because the list can't be empty,
-  and no one else can read the room or be added to it.
+  them, with members admitted together, as at the room's creation, ordered by
+  principal. That promotes one person, by a rule every member can see coming,
+  rather than everyone. If no one else remains, leaving is really abandoning:
+  the sender's entry stays in the access list only because the list can't be
+  empty, and no one else can read the room or be added to it.
 - **Afterward:** the room refuses to `add` the sender again (see
   [`add`](#addrequestid-string-principal-string-access-write--owner)), and the
   sender's client sends `forget` to their manager.
@@ -603,10 +637,10 @@ group rooms of their own.
   composer's state is the reading session's (`session.composer`). An adapter's
   rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. It includes `session`, through whose link a client reaches
-  its own session: `canSend`, and the message list with its windows and window
-  streams. A client uses it to show a room outside any container. Inside a
-  container, it reads the placement's `chat` group instead
+  that draw natively. It includes `messages`, `canSend`, and `session`, through
+  whose link a client reaches its own session: its windows and their streams. A
+  client uses it to show a room outside any container. Inside a container, it
+  reads the placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
 
 ## Implementation-defined behavior
@@ -634,10 +668,10 @@ An implementation may make these configurable, per room or otherwise, and how it
 does so is its own business (see
 [`FabriChatRoom`](FabriChatRoom.md#configuration)).
 
-`about.policy` is a [`ChatRoomPolicy`](ChatRoomPolicy.md), and an implementation
-MUST state it correctly: a client reads a room's choices there, and can rely on
-them. One thing is not a choice: a direct room MUST let either person obliterate
-their own messages.
+`about.policy` links a [`ChatRoomPolicy`](ChatRoomPolicy.md), and an
+implementation MUST state it correctly: a client reads a room's choices there,
+and can rely on them. One thing is not a choice: a direct room MUST let either
+person obliterate their own messages.
 
 ## Open questions
 

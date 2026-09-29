@@ -16,19 +16,39 @@ example, today's `FabriChatMessage` and `FabriChatSendSurface` become
 
 ## State
 
-The room keeps five `PerSpace` values, shared by everyone the space admits:
-`about`, its messages, `recentActivity`, `roster`, and `outgoingNotices`.
+The room keeps these `PerSpace` values, shared by everyone the space admits:
+
+- The contract's own records: `about`, its messages, `recentActivity` with its
+  next `seq` and `recentActivityExpiredThrough`, `roster`, and
+  `outgoingNotices`. The messages are a list ordered by `sentAt`. Each message's
+  reactions, and `roster`, are keyed collections, projected as lists in the
+  contract.
+- The request memory: the requests the room has acted on, by sender and
+  `requestId` (see [writers](#writers)).
+- The times the room has used, so it can make each new one unique.
+- The principals who have left, which `commitAdd` checks.
+- The admission order: when each member was admitted, from the room's creation
+  or their `add`, which `commitLeave` reads to choose whom to promote. Members
+  admitted at the room's creation are ordered by principal, so the order is
+  total. This is bookkeeping, not membership: the access list still decides who
+  is a member. Once the runtime provides member sets, the order can come from
+  them instead.
+- The membership changes in progress, each under its `requestId` (see
+  [membership changes take more than one
+  commit](#membership-changes-take-more-than-one-commit)).
+
 `participants` is computed from `roster` and the messages' authors, keyed by
-profile cell. The messages are a list ordered by `sentAt`. Each message's
-reactions, and `roster`, are keyed collections, projected as lists in the
-contract.
+profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
+computed from the messages, and `canSend` from the reader's access and profile,
+when they're read. Neither is stored.
 
 `session` is a sub-pattern the room instantiates per session, as a `PerSession`
-value, over the same record: it computes `canSend` for its viewer, holds the
-composer's state, and holds the message list with the session's windows. The
-composer is the room's own reviewed surface, reading its state from the session,
-so two placements of the same room open in one session show the same composer
-state, as one conversation shown twice should.
+value, over the same record: it holds the composer's state, and the session's
+windows. Its state comes into being with the session's first write to it, so a
+session that only reads, as a READ member's does, has none. The composer is the
+room's own reviewed surface, reading its state from the session, so two
+placements of the same room open in one session show the same composer state, as
+one conversation shown twice should.
 
 ## Writers
 
@@ -110,10 +130,9 @@ listed twice.
 
 `commitLeave` asks the host to remove the sender's own entry from the room
 space's access list. When the sender is the last OWNER, it first asks the host
-to grant OWNER to the remaining member admitted earliest. The room keeps each
-member's admission time, from the room's creation or their `add`, for that. It
-also records the sender in a keyed collection of principals who have left, which
-`commitAdd` checks.
+to grant OWNER to the remaining member admitted earliest. The room keeps the
+admission order (see [state](#state)) for that. It also records the sender in a
+keyed collection of principals who have left, which `commitAdd` checks.
 
 ### Membership changes take more than one commit
 
@@ -153,11 +172,10 @@ its last step (see above). Entries older than the window are dropped as new ones
 are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
 remove the message's earlier entries.
 
-The session's `messages` is a sub-pattern over the room's record: it computes
-`count`, `oldestAt`, and `newestAt`, keeps `windows` as a `PerSession` keyed
-collection, and fulfills `openWindow` and `closeWindow` by setting and removing
-entries in it. A window is a computed selection over the record, so it stays
-live as the messages in it change.
+The session keeps `windows` as a `PerSession` keyed collection, and fulfills
+`openWindow` and `closeWindow` by setting and removing entries in it. A window
+is a computed selection over the record, so it stays live as the messages in it
+change.
 
 ## Configuration
 
@@ -197,9 +215,9 @@ the room is created from the same settings the handlers read.
   for a pattern to ask its host to change an access list. Today only hosts can
   do that (`ACLManager`, the runtime client's `space:setAclEntry`).
 - **Leaving without OWNER.** `commitLeave` removes the sender's own access list
-  entry even when the sender is only a READ or WRITE member. Whether the memory
-  layer lets a non-OWNER remove their own entry, or the host has to do it on
-  their behalf, is part of pattern-facing access control.
+  entry even when the sender is only a WRITE member. Whether the memory layer
+  lets a non-OWNER remove their own entry, or the host has to do it on their
+  behalf, is part of pattern-facing access control.
 - **Member sets.** Until the runtime provides them, the room keeps `roster` (see
   [shared spaces](README.md#shared-spaces)).
 - **A session per memory session.** `session` assumes the room can give each
@@ -214,13 +232,16 @@ the room is created from the same settings the handlers read.
   [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
   policies can be split between writers this way is still to check. If not,
   reactions move to a record of their own, keyed by message.
-- **Redelivery ends.** A runtime delivers an event again when it can't tell
-  whether the first delivery took effect. The room's request memory covers that
-  only as long as it lasts (see [writers](#writers)). So a runtime MUST NOT
-  deliver an event again once the event is older than the request memory, such
-  as a send queued while offline and replayed much later. Whether the runtime's
-  append queue guarantees this is still to check.
+- **Redelivery ends.** Two things can make an event arrive, or run, more than
+  once. A client runtime re-submits an event when it can't tell whether its
+  append committed, and the memory ignores a re-submission by its event id, but
+  only while the client's append queue remembers the event, which lasts as long
+  as the client's process. And a served handler runs an event again until its
+  run is recorded as complete. The room's request memory covers both only as
+  long as it lasts (see [writers](#writers)). So the room relies on every event
+  being run to completion, or dropped, within the memory, including one queued
+  while its client was offline and appended much later. Whether the runtime
+  guarantees this is still to check.
 - **Admitting an access-list change atomically.** The steps above are the
   pattern-level answer to INV-12. A host facility that changes an access list
   and the room's records together would remove the gap between steps 2 and 3.
-

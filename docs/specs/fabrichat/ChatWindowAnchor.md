@@ -3,7 +3,8 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 Where a window of messages sits in its view of the conversation. A client passes
-one to [`ChatMessageList`](ChatMessageList.md)'s `openWindow`, as `from`.
+one to a session's `openWindow` (see
+[`ChatRoomSession`](ChatRoomSession.md#windows)), as `from`.
 
 ```ts
 // Shown for illustration only.

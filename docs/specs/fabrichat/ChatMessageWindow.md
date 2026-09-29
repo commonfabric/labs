@@ -3,8 +3,8 @@
 Status: proposed design (see [`README.md`](README.md)).
 
 A run of consecutive messages from one view of a conversation, opened by a
-client. A [`ChatMessageList`](ChatMessageList.md) keeps each of a session's open
-windows in `windows`, under the `windowId` the client chose.
+client. A session ([`ChatRoomSession`](ChatRoomSession.md)) keeps each of its
+open windows in `windows`, under the `windowId` the client chose.
 
 ```ts
 // Shown for illustration only.
@@ -41,4 +41,5 @@ interface ChatMessageWindow {
   that, so a client reads `hasNewer` rather than assuming.
 
 A window stays live as the messages in it change, and doesn't grow with new
-messages on its own (see [`ChatMessageList`](ChatMessageList.md#windows)).
+messages on its own (see
+[`ChatRoomSession`](ChatRoomSession.md#paging-and-following)).

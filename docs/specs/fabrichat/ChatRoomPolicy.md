@@ -49,8 +49,8 @@ A client has no way to check `policy` against the room's behavior, so it rests
 on the implementation. An implementation whose `policy` misstates what its room
 does doesn't conform to this contract.
 
-Like the rest of `about`, `policy` is labeled `authored-by` the principal who
-wrote it (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)).
+The policy document is labeled `authored-by` the principal who wrote it (see
+[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)).
 
 ## Keys
 
@@ -82,7 +82,7 @@ A proposal outside both bounds is refused.
   entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
   It MUST be at least `proposedTimeMaxAgeNsec`.
 - **`maxWindowCount`**: the most messages a message window holds (see
-  [`ChatMessageList`](ChatMessageList.md#limits)). A request for more gets this
+  [`ChatRoomSession`](ChatRoomSession.md#limits)). A request for more gets this
   many.
 - **`maxOpenWindows`**: the most message windows a session can have open at
   once. Opening one more is refused.

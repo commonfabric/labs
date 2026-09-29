@@ -49,12 +49,14 @@ client that can't learn it MUST treat the container as admitting others.
     `"not-member"`, or `"unavailable"` (the room can't be read right now). A
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
+  - `messages` and `canSend`, from the room (see
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
   - `session`: the reader's own [`ChatRoomSession`](ChatRoomSession.md), through
-    the room: its `canSend`, and its message list, read a window at a time.
+    the room: its windows onto the messages.
   - `about`, `recentActivity`, `participants`, and `reactionTallies` (per
-    message in the session's windows: emoji, count, whether the viewer is among
-    them, and the reactors' profiles), each read through the link. They're empty
-    unless `state` is `"member"`.
+    message in `messages.latest` and in the session's windows: emoji, count,
+    whether the viewer is among them, and the reactors' profiles), each read
+    through the link. They're empty unless `state` is `"member"`.
 
 A placement offers no stream that sends or reacts. A client sends to the room's
 own `sendMessage` and `sendReaction` streams, reached through `room`. If a

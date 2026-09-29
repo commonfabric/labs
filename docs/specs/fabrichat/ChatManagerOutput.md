@@ -276,8 +276,8 @@ knowledge that a room exists.
 A notice is also unauthenticated: it travels by whatever channel a client has,
 so its claim of who sent it can be false. A recipient MUST NOT rely on that
 claim. Who created a room is what the room's `about` is labeled with (see
-[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), and `accept` checks a
-direct room's `counterpart` against that label.
+[`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)), and a client checks a
+direct room's `counterpart` against that label before it sends `accept`.
 
 ## Crossing creations
 

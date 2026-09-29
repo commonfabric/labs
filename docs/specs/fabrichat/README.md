@@ -18,13 +18,13 @@ requires of the runtime and of the programs that use it.
   - [`ChatManagerOutput`](ChatManagerOutput.md): what `#chatManager` resolves
     to.
 - Records a session holds:
-  - [`ChatMessageList`](ChatMessageList.md): a room's messages, read a window at
-    a time.
   - [`ChatMessageWindow`](ChatMessageWindow.md): one window of them.
   - [`ChatWindowAnchor`](ChatWindowAnchor.md): where a window sits: at either
     end, or around one message.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
+  - [`ChatMessageList`](ChatMessageList.md): facts about a room's messages, and
+    the newest of them.
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
     message.
@@ -174,7 +174,9 @@ provide, the document says so, under the heading "Prerequisites".
    A person can have several profiles, and one conversation with a person must
    not split along them.
 6. **Creating rooms and granting access are outward acts.** They are admitted
-   from reviewed surfaces, like sends.
+   from reviewed surfaces, like sends. Leaving is deliberately not reviewed: it
+   acts on no one but the person leaving, and has to work from any client acting
+   as them.
 7. **A shared space's own chat lives in that space.** The chat of everyone in a
    shared space is a room in that space itself, so its membership is the space's
    membership by construction, with nothing to keep in step. Direct rooms and
