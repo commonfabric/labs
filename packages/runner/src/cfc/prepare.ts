@@ -12,7 +12,10 @@ import {
   internSchemaAsTaggedHashString,
 } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
-import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  anySchema,
+  forEachSubschema,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   containsExternalSchemaRef,
@@ -144,7 +147,6 @@ import {
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
-import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { verdictReason } from "./verdict-reason.ts";
 import {
   type CfcRefusalDetail,
