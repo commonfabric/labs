@@ -17,58 +17,54 @@ const entry = (seats: number, ratings: Rating[]): BoxEntry => ({
 });
 
 export default pattern(() => {
+  // The room's terms are absent until `propose` writes them, so a room over a
+  // box given directly omits them.
   type Input = Parameters<typeof CustodyAnswerRoom>[0];
   // Pizza draws a `no`; tacos draws more `yes` than sushi, though sushi is
   // listed first.
   const agreed = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: entry(2, ["yes", "maybe", "yes"]),
       b: entry(2, ["no", "yes", "yes"]),
     },
-  });
+  } as Partial<Input> as Input);
   // Three seats and two entries: the room is incomplete.
   const incomplete = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: entry(3, ["yes", "yes", "yes"]),
       b: entry(3, ["yes", "yes", "yes"]),
     },
-  });
+  } as Partial<Input> as Input);
   // Two entries sealed under different terms.
   const mixed = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: entry(2, ["yes", "yes", "yes"]),
       b: { ...entry(2, ["yes", "yes", "yes"]), terms: "{}" },
     },
-  });
+  } as Partial<Input> as Input);
   // Terms that are not JSON, and terms that name no seats.
   const unreadable = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "not json" },
     },
-  });
+  } as Partial<Input> as Input);
   const seatless = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "{}" },
     },
-  });
+  } as Partial<Input> as Input);
   // Terms that parse to JSON `null` rather than an object.
   const nullTerms = CustodyAnswerRoom({
-    terms: null,
     policy: true,
     box: {
       a: { ...entry(1, ["yes", "yes", "yes"]), terms: "null" },
     },
-  });
+  } as Partial<Input> as Input);
   const empty = CustodyAnswerRoom({} as Input);
 
   const assert_most_yes_without_a_no = assert(() => agreed.choice === "tacos");
@@ -86,11 +82,18 @@ export default pattern(() => {
     nullTerms.choice === NO_AGREEMENT
   );
   const assert_first_rating_read = assert(() => agreed.rating === "yes");
-  const assert_no_terms_before_proposal = assert(() => empty.terms === null);
+  const assert_no_terms_before_proposal = assert(() =>
+    empty.terms === undefined
+  );
   const assert_proposal_writes_terms = assert(() =>
     empty.terms?.question === "Where should we eat?" &&
     empty.terms?.seats.length === 0 &&
     empty.terms?.answers.includes(NO_AGREEMENT) === true
+  );
+  // The terms are written once: proposing again, with a seat this time,
+  // leaves them as the first proposal wrote them.
+  const assert_second_proposal_writes_nothing = assert(() =>
+    empty.terms?.seats.length === 0
   );
 
   return {
@@ -104,6 +107,8 @@ export default pattern(() => {
       { assertion: assert_no_terms_before_proposal },
       { action: empty.propose, event: { seats: [] } },
       { assertion: assert_proposal_writes_terms },
+      { action: empty.propose, event: { seats: ["another"] } },
+      { assertion: assert_second_proposal_writes_nothing },
     ],
     agreed,
     incomplete,

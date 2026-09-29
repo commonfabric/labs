@@ -125,6 +125,46 @@
         ],
         "type": "object"
       },
+      "DeclaredPolicy": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "HXgP4vTju3Jg0Of0gwDTfDZSozqQ5ria9bzbFBLAqtA",
+              "policyDigest": "046_FExysMW8wDHsNtZ_LpjTyAoTEUBijzgF_4dUtTM",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "custodyRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-exchange-rules/custody-answer-room.tsx",
+              "moduleIdentity": "HXgP4vTju3Jg0Of0gwDTfDZSozqQ5ria9bzbFBLAqtA",
+              "path": [
+                "propose"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      },
+      "ProposedTerms": {
+        "$ref": "#/$defs/CustodyTerms",
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-exchange-rules/custody-answer-room.tsx",
+              "moduleIdentity": "HXgP4vTju3Jg0Of0gwDTfDZSozqQ5ria9bzbFBLAqtA",
+              "path": [
+                "propose"
+              ]
+            }
+          }
+        }
+      },
       "Rating": {
         "enum": [
           "no",
@@ -157,39 +197,18 @@
         "description": "Receives a link to the instance's box, which the seal writes in the\ntransaction that writes a member's entry. It declares no label of its\nown: every entry of the box already carries the room's policy, and a\nread through the link carries it.\n\nTODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here\nis refused. Repro: give `box` that type and seal into the room, as\n`integration/cfc-custody-projector.test.ts` does; the seal's commit\npreparation crashes with `type changed incompatibly at /box: [\"object\"]\n-> [\"array\"]`, as the schema merge sets the input's record schema\nagainst an array schema."
       },
       "policy": {
+        "$ref": "#/$defs/DeclaredPolicy",
         "asCell": [
           "cell"
         ],
-        "description": "Declared with the room's policy, so that once written its label carries\nthe policy's reference, with this room as its subject, for the host to\nread. It has no default: `propose` writes it.",
-        "ifc": {
-          "confidentiality": [
-            {
-              "moduleIdentity": "9yXuaWSqng01U6IsS1jV9AgwrAQ9iAS38r55i_0i0Go",
-              "policyDigest": "A34eJIiReShihZT5Mf17GGdnDthjF0sFvwUNd6WbBHk",
-              "policyRefKind": "module",
-              "subject": {
-                "__ctOwningSpace": true
-              },
-              "symbol": "custodyRules",
-              "type": "https://commonfabric.org/cfc/atom/Policy"
-            }
-          ]
-        },
-        "type": "boolean"
+        "description": "Declared with the room's policy, so that once written its label carries\nthe policy's reference, with this room as its subject, for the host to\nread. It has no default: `propose` writes it."
       },
       "terms": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/CustodyTerms"
-          },
-          {
-            "type": "null"
-          }
-        ],
+        "$ref": "#/$defs/ProposedTerms",
         "asCell": [
           "cell"
         ],
-        "default": null
+        "description": "Absent until `propose` writes it. It has no default: on\n`CustodyTerms | null`, the writer claim would sit on the object branch\nalone and not refuse a write of `null`, which would let other code clear\nthe terms for `propose` to write again."
       }
     },
     "required": [
@@ -366,8 +385,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "9yXuaWSqng01U6IsS1jV9AgwrAQ9iAS38r55i_0i0Go",
-              "policyDigest": "A34eJIiReShihZT5Mf17GGdnDthjF0sFvwUNd6WbBHk",
+              "moduleIdentity": "HXgP4vTju3Jg0Of0gwDTfDZSozqQ5ria9bzbFBLAqtA",
+              "policyDigest": "046_FExysMW8wDHsNtZ_LpjTyAoTEUBijzgF_4dUtTM",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -401,18 +420,10 @@
         "type": "string"
       },
       "terms": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/CustodyTerms"
-          },
-          {
-            "type": "null"
-          }
-        ]
+        "$ref": "#/$defs/CustodyTerms"
       }
     },
     "required": [
-      "terms",
       "policy",
       "box",
       "choice",

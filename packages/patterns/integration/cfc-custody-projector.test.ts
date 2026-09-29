@@ -393,11 +393,13 @@ const sealAndRelease = async (
           break;
         case "clear":
           // The room's terms cleared, so that `propose` writes them again.
-          refusals.push(
-            (await asMember((tx) =>
-              room.key("terms").withTx(tx).set(null as never)
-            )).error,
-          );
+          for (const cleared of [null, undefined]) {
+            refusals.push(
+              (await asMember((tx) =>
+                room.key("terms").withTx(tx).set(cleared as never)
+              )).error,
+            );
+          }
           await host.idle();
           proposeAlone();
           break;
@@ -420,7 +422,12 @@ const sealAndRelease = async (
       // one-seat room's, and not a slot that is empty or refused.
       expect(await readCustodyAnswer(hostRoom)).toBe("pizza");
       // The member's write was refused, and `propose` wrote nothing again.
-      for (const refusal of refusals) expect(refusal).toBeDefined();
+      for (const refusal of refusals) {
+        expect(refusal).toMatchObject({
+          name: "CfcCommitRefusalError",
+          reasons: [expect.stringMatching(/^writeAuthorizedBy failed at /)],
+        });
+      }
       expect(
         (room.key("terms").get() as { seats?: unknown[] } | null)?.seats,
       ).toHaveLength(2);

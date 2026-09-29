@@ -50,6 +50,12 @@
  * readers can read, and the component shows what the slot holds, verified to
  * be the seal's write. What the room's readers are shown then cannot move,
  * whatever later points the projector at other input.
+ *
+ * The slot shown is the one of the instance `terms` digest to, under the
+ * policy `policy` names, so both are write-once: only `propose` may write
+ * them, and it writes each only while it is unwritten. Otherwise a member's
+ * own code could repoint the component at another instance's slot, such as
+ * that of a one-seat room the member sealed alone, or at an empty one.
  * `docs/specs/cfc-custody-seal.md` says what this does not cover.
  */
 
@@ -64,6 +70,7 @@ import {
   UI,
   type VNode,
   Writable,
+  type WriteAuthorizedBy,
 } from "commonfabric";
 import {
   exchangeRule,
@@ -199,14 +206,35 @@ export interface CustodyTerms {
   stanceSchema: typeof STANCE_SCHEMA;
 }
 
+/**
+ * The room's terms, which only `propose` writes, and only while they are
+ * unwritten. The host shows the slot of the instance the terms digest to, so
+ * terms rewritten after the answer is published would have the room show
+ * another instance's slot, or an empty one.
+ */
+export type ProposedTerms = WriteAuthorizedBy<CustodyTerms, typeof propose>;
+
+/**
+ * The room's policy cell, which only `propose` writes, and only while it is
+ * unwritten, for the same reason: the host reads the slot under the policy
+ * this cell names.
+ */
+export type DeclaredPolicy = WriteAuthorizedBy<Sealed<boolean>, typeof propose>;
+
 interface CustodyAnswerRoomInput {
-  terms: Writable<Default<CustodyTerms | null, null>>;
+  /**
+   * Absent until `propose` writes it. It has no default: on
+   * `CustodyTerms | null`, the writer claim would sit on the object branch
+   * alone and not refuse a write of `null`, which would let other code clear
+   * the terms for `propose` to write again.
+   */
+  terms: Writable<ProposedTerms>;
   /**
    * Declared with the room's policy, so that once written its label carries
    * the policy's reference, with this room as its subject, for the host to
    * read. It has no default: `propose` writes it.
    */
-  policy: Writable<Sealed<boolean>>;
+  policy: Writable<DeclaredPolicy>;
   /**
    * Receives a link to the instance's box, which the seal writes in the
    * transaction that writes a member's entry. It declares no label of its
@@ -226,7 +254,7 @@ interface CustodyAnswerRoomInput {
 export interface CustodyAnswerRoomOutput {
   [NAME]: string;
   [UI]: VNode;
-  terms: CustodyTerms | null;
+  terms?: CustodyTerms;
   policy: Sealed<boolean>;
   box: Box;
   /**
@@ -242,19 +270,24 @@ export interface CustodyAnswerRoomOutput {
 
 /**
  * Writes the room's terms, naming each seat by the cell the event carries,
- * and declares the room's policy on `policy`.
+ * and declares the room's policy on `policy`, each only while it is
+ * unwritten. Each guard reads the cell it writes and nothing else, so code
+ * that runs this handler again, the room's own stream or a member's copy of
+ * it, finds what the first proposal wrote and writes nothing.
  */
 const propose = handler<
   { seats: unknown[] },
-  { terms: Writable<CustodyTerms | null>; policy: Writable<Sealed<boolean>> }
+  { terms: Writable<CustodyTerms>; policy: Writable<Sealed<boolean>> }
 >(({ seats }, { terms, policy }) => {
-  terms.set({
-    question: "Where should we eat?",
-    answers: [...OPTIONS, NO_AGREEMENT],
-    seats,
-    stanceSchema: STANCE_SCHEMA,
-  });
-  policy.set(true as Sealed<boolean>);
+  if (terms.get() === undefined) {
+    terms.set({
+      question: "Where should we eat?",
+      answers: [...OPTIONS, NO_AGREEMENT],
+      seats,
+      stanceSchema: STANCE_SCHEMA,
+    });
+  }
+  if (policy.get() === undefined) policy.set(true as Sealed<boolean>);
 });
 
 const CustodyAnswerRoom = pattern<
