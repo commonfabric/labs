@@ -40,7 +40,9 @@ import {
 } from "../src/builtins/sqlite-builtins.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
@@ -274,6 +276,61 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   };
 
   /**
+   * The confidentiality a reader of `path` in the query's state carries: the
+   * join of that one read, off a transaction then abandoned.
+   */
+  const readerCarries = (
+    // deno-lint-ignore no-explicit-any -- the builtin's state
+    state: Cell<any>,
+    path: readonly string[],
+  ): unknown[] => {
+    const tx: IExtendedStorageTransaction = runtime.edit();
+    try {
+      let cell = state.resolveAsCell().withTx(tx);
+      for (const segment of path) cell = cell.key(segment);
+      cell.get();
+      return deriveFlowJoin(tx).confidentiality;
+    } finally {
+      tx.abort("observation only");
+    }
+  };
+
+  /**
+   * The result's top: its length, which a reader takes without opening a
+   * row, and which carries what the membership does.
+   */
+  const RESULT_TOP = ["result", "length"];
+
+  /** The atoms of `atoms` that are not among `others`. */
+  const atomsBeyond = (
+    atoms: readonly unknown[],
+    others: readonly unknown[],
+  ): unknown[] =>
+    atoms.filter((atom) =>
+      !others.some((held) => canonical(held) === canonical(atom))
+    );
+
+  /**
+   * Runs `before` ahead of every query the provider is handed, and sends
+   * the query once it resolves. The builtin hands a request over from the
+   * flush of the transaction that claimed it, so a request arriving here
+   * is a claim that has committed.
+   */
+  const beforeEachQuery = (
+    before: (
+      sql: string,
+      params: SqliteParamsWire | undefined,
+    ) => Promise<void> | void,
+  ) => {
+    const provider = runtime.storageManager.open(space);
+    const send = provider.sqliteQuery!.bind(provider);
+    provider.sqliteQuery = async (db, sql, params, reader) => {
+      await before(sql, params);
+      return await send(db, sql, params, reader);
+    };
+  };
+
+  /**
    * Runs a first query over the labeled key column and a second query whose
    * parameter is read OUT of the first query's rows — the shape a pattern has
    * when it narrows a view to something the user picked out of labeled data.
@@ -314,6 +371,121 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect((await tx.commit()).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     return { bodies: result.key("bodies") as Cell<any> };
+  };
+
+  /**
+   * One query node whose parameter is read out of one of three differently
+   * labeled columns of the same row, the one `pick` names. The row count
+   * says which parameter the query ran with: two rows under `first` and
+   * under `third`, one under `second`.
+   */
+  const runPickedParameterPattern = async (cause: string) => {
+    const first = clauseFor(space, "first-class");
+    const second = clauseFor(space, "second-class");
+    const third = clauseFor(space, "third-class");
+    const column = (clause: unknown[]) => ({
+      type: "string",
+      sqlType: "text",
+      ifc: { confidentiality: clause },
+    });
+    const db = labeledDb({
+      k1: column(first),
+      k2: column(second),
+      k3: column(third),
+    });
+    // Row 0's three key columns name the two-row container, the one-row
+    // container, and the two-row container again, so each step's row count
+    // says which parameter the query actually ran with.
+    await seed(
+      db,
+      "INSERT INTO messages (container_id, body, k1, k2, k3) VALUES " +
+        "(?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+      [
+        "c-alpha",
+        "first",
+        "c-alpha",
+        "c-beta",
+        "c-alpha",
+        "c-alpha",
+        "second",
+        "x",
+        "y",
+        "z",
+        "c-beta",
+        "only",
+        "p",
+        "q",
+        "r",
+      ],
+    );
+
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    // Reads ONE query's rows, chosen by `pick`. A branch the lift does not
+    // take is a result it does not read, which is what keeps each issue's
+    // join down to the one clause this step is about.
+    const parameterOf = parameterLift((input) => {
+      const { keys, pick } = input as {
+        keys?: QueryState<Record<string, string>>[];
+        pick?: number;
+      };
+      const index = pick === 0 ? 0 : pick === 1 ? 1 : 2;
+      const row = keys?.[index]?.result?.[0];
+      return String(row?.[`k${index + 1}`] ?? "");
+    });
+    const testPattern = cf.pattern<{ pick: number }>(({ pick }) => {
+      const keys = ["k1", "k2", "k3"].map((name) =>
+        cf.sqliteQuery.asScope("session")(
+          {
+            db,
+            reactOn: db,
+            sql: `SELECT ${name} FROM messages ORDER BY id`,
+            // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+          } as any,
+        )
+      );
+      const bodies = cf.sqliteQuery.asScope("session")(
+        {
+          db,
+          reactOn: db,
+          sql: BODIES_SQL,
+          params: parameterOf({ keys, pick }),
+          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+        } as any,
+      );
+      return { keys, bodies };
+    });
+
+    const tx = runtime.edit();
+    const pick = runtime.getCell<number>(space, `${cause}-pick`, {
+      type: "number",
+    }, tx);
+    pick.set(0);
+    const resultCell = runtime.getCell(
+      space,
+      cause,
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      // deno-lint-ignore no-explicit-any -- a cell stands in for the argument
+      { pick: pick as any },
+      resultCell,
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
+    const bodies = result.key("bodies") as Cell<any>;
+
+    const rowsFor = (expected: number) =>
+      waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        bodies,
+        (value) => (value?.result ?? []).length === expected,
+      );
+
+    return { pick, bodies, rowsFor, first, second, third };
   };
 
   it("settles the query whose parameter came out of a labeled row", async () => {
@@ -556,110 +728,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     // result carries the labels of every column the result projects, so one
     // query over all three would put all three clauses on the first issue.
 
-    const first = clauseFor(space, "first-class");
-    const second = clauseFor(space, "second-class");
-    const third = clauseFor(space, "third-class");
-    const column = (clause: unknown[]) => ({
-      type: "string",
-      sqlType: "text",
-      ifc: { confidentiality: clause },
-    });
-    const db = labeledDb({
-      k1: column(first),
-      k2: column(second),
-      k3: column(third),
-    });
-    // Row 0's three key columns name the two-row container, the one-row
-    // container, and the two-row container again, so each step's row count
-    // says which parameter the query actually ran with.
-    await seed(
-      db,
-      "INSERT INTO messages (container_id, body, k1, k2, k3) VALUES " +
-        "(?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
-      [
-        "c-alpha",
-        "first",
-        "c-alpha",
-        "c-beta",
-        "c-alpha",
-        "c-alpha",
-        "second",
-        "x",
-        "y",
-        "z",
-        "c-beta",
-        "only",
-        "p",
-        "q",
-        "r",
-      ],
-    );
-
-    const { commonfabric: cf } = createTrustedBuilder(runtime);
-    // Reads ONE query's rows, chosen by `pick`. A branch the lift does not
-    // take is a result it does not read, which is what keeps each issue's
-    // join down to the one clause this step is about.
-    const parameterOf = parameterLift((input) => {
-      const { keys, pick } = input as {
-        keys?: QueryState<Record<string, string>>[];
-        pick?: number;
-      };
-      const index = pick === 0 ? 0 : pick === 1 ? 1 : 2;
-      const row = keys?.[index]?.result?.[0];
-      return String(row?.[`k${index + 1}`] ?? "");
-    });
-    const testPattern = cf.pattern<{ pick: number }>(({ pick }) => {
-      const keys = ["k1", "k2", "k3"].map((name) =>
-        cf.sqliteQuery.asScope("session")(
-          {
-            db,
-            reactOn: db,
-            sql: `SELECT ${name} FROM messages ORDER BY id`,
-            // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
-          } as any,
-        )
-      );
-      const bodies = cf.sqliteQuery.asScope("session")(
-        {
-          db,
-          reactOn: db,
-          sql: BODIES_SQL,
-          params: parameterOf({ keys, pick }),
-          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
-        } as any,
-      );
-      return { keys, bodies };
-    });
-
-    const tx = runtime.edit();
-    const pick = runtime.getCell<number>(space, "ratchet-pick", {
-      type: "number",
-    }, tx);
-    pick.set(0);
-    const resultCell = runtime.getCell(
-      space,
-      "ratchet",
-      testPattern.resultSchema,
-      tx,
-    );
-    const result = runtime.run(
-      tx,
-      testPattern,
-      // deno-lint-ignore no-explicit-any -- a cell stands in for the argument
-      { pick: pick as any },
-      resultCell,
-    );
-    runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).error).toBeUndefined();
-    // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
-    const bodies = result.key("bodies") as Cell<any>;
-
-    const rowsFor = (expected: number) =>
-      waitForCellValue<QueryState<BodyRow>>(
-        runtime,
-        bodies,
-        (value) => (value?.result ?? []).length === expected,
-      );
+    const { pick, bodies, rowsFor, first, second, third } =
+      await runPickedParameterPattern("ratchet");
 
     await rowsFor(2);
     expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
@@ -713,23 +783,33 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     };
 
     /**
-     * Runs `before` ahead of every query the provider is handed, and sends
-     * the query once it resolves. The builtin hands a request over from the
-     * flush of the transaction that claimed it, so a request arriving here
-     * is a claim that has committed.
+     * Settles the derived-parameter query with its labeled claim having
+     * raised the flag. The first query is held at the provider until the
+     * issue with the empty parameter has settled, so the labeled claim finds
+     * the flag down, writes it, and the route declares the parameter's
+     * clause there.
      */
-    const beforeEachQuery = (
-      before: (
-        sql: string,
-        params: SqliteParamsWire | undefined,
-      ) => Promise<void> | void,
-    ) => {
-      const provider = runtime.storageManager.open(space);
-      const send = provider.sqliteQuery!.bind(provider);
-      provider.sqliteQuery = async (db, sql, params, reader) => {
-        await before(sql, params);
-        return await send(db, sql, params, reader);
-      };
+    const settledOverARaisedFlag = async (cause: string) => {
+      const db = labeledDb();
+      await seedMessages(db);
+      const unlabeledIssueSettled = defer();
+      beforeEachQuery(async (sql) => {
+        if (sql === KEYS_SQL) await unlabeledIssueSettled.promise;
+      });
+      const { bodies } = await runDerivedParameterPattern(db, cause);
+      // On the sink rather than through `waitForCellValue()`: the held
+      // request is work the runtime is waiting on, so a wait that idles the
+      // runtime first would wait on the request this releases.
+      const cancel = bodies.sink((value: QueryState<BodyRow> | undefined) => {
+        if (value?.pending === false) unlabeledIssueSettled.resolve();
+      });
+      await waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        bodies,
+        (value) => (value?.result ?? []).length === 2,
+      );
+      cancel();
+      return bodies;
     };
 
     it("commits a write from a reader of a pending flag no labeled issue raised", async () => {
@@ -771,36 +851,12 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     });
 
     it("refuses the same write once a labeled issue has raised the flag", async () => {
-      // The first query is held at the provider until the issue with the
-      // empty parameter has settled, so the labeled claim finds the flag
-      // down and raises it, and the route declares the parameter's clause
-      // there. The settle lowers the flag from a transaction that carries
-      // nothing, and the declaration stands: a declared component grows by
-      // clause and gives none back (CFC spec §8.12.1), whatever the
+      // The settle lowers the flag from a transaction that carries nothing,
+      // and the declaration the claim made stands: a declared component
+      // grows by clause and gives none back (CFC spec §8.12.1), whatever the
       // transaction rewriting the path carried.
 
-      const db = labeledDb();
-      await seedMessages(db);
-      const unlabeledIssueSettled = defer();
-      beforeEachQuery(async (sql) => {
-        if (sql === KEYS_SQL) await unlabeledIssueSettled.promise;
-      });
-      const { bodies } = await runDerivedParameterPattern(
-        db,
-        "reader-pending-raised",
-      );
-      // On the sink rather than through `waitForCellValue()`: the held
-      // request is work the runtime is waiting on, so a wait that idles the
-      // runtime first would wait on the request this releases.
-      const cancel = bodies.sink((value: QueryState<BodyRow> | undefined) => {
-        if (value?.pending === false) unlabeledIssueSettled.resolve();
-      });
-      await waitForCellValue<QueryState<BodyRow>>(
-        runtime,
-        bodies,
-        (value) => (value?.result ?? []).length === 2,
-      );
-      cancel();
+      const bodies = await settledOverARaisedFlag("reader-pending-raised");
 
       expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE))
         .toBe(true);
@@ -832,6 +888,125 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         "reader-hash-probe",
       );
       expect(wrote.error).toBeDefined();
+    });
+
+    describe("the pending flag against the result's top", () => {
+      // The flag takes its label from the claims that raised it, and a
+      // claim carries the request's selection label and nothing of the
+      // rows: the builtin reads its own settled result as a read of its
+      // write destination, which stays out of the join. The result's top
+      // takes the same selection label from each settle, joined with the
+      // rows' labels. So a reader of the flag of a settled query carries no
+      // more than a reader of the result's length, and none of a projected
+      // column's label. Each case asserts the flag's reader carries
+      // something first, since an empty join is within every bound.
+
+      it("carries no clause on a raised flag that the result's length lacks", async () => {
+        const bodies = await settledOverARaisedFlag("bound-raised");
+
+        const flag = readerCarries(bodies, ["pending"]);
+        const top = readerCarries(bodies, RESULT_TOP);
+        expect(hasClause(flag, KEY_CLAUSE)).toBe(true);
+        expect(atomsBeyond(flag, top)).toEqual([]);
+        // The projected column's clause is on the top and not on the flag.
+        expect(atomsBeyond(BODY_CLAUSE, top)).toEqual([]);
+        expect(atomsBeyond(BODY_CLAUSE, flag)).toEqual([BODY_CLAUSE[1]]);
+      });
+
+      it("carries no clause that the result's length lacks after three labeled issues", async () => {
+        // The second and third issues each follow a settle, so each finds
+        // the flag down and raises it.
+
+        const { pick, bodies, rowsFor, second, third } =
+          await runPickedParameterPattern("bound-accumulated");
+        await rowsFor(2);
+        for (const [picked, rows] of [[1, 1], [2, 2]] as const) {
+          const tx = runtime.edit();
+          pick.withTx(tx).set(picked);
+          expect((await tx.commit()).error).toBeUndefined();
+          await rowsFor(rows);
+        }
+
+        const flag = readerCarries(bodies, ["pending"]);
+        const top = readerCarries(bodies, RESULT_TOP);
+        expect(hasClause(flag, second)).toBe(true);
+        expect(hasClause(flag, third)).toBe(true);
+        expect(atomsBeyond(flag, top)).toEqual([]);
+        expect(atomsBeyond(BODY_CLAUSE, top)).toEqual([]);
+        expect(atomsBeyond(BODY_CLAUSE, flag)).toEqual([BODY_CLAUSE[1]]);
+      });
+
+      it("carries a superseded issue's clause on the flag and on the result's length", async () => {
+        // The second issue raises the flag and is held at the provider
+        // until the third has claimed, so its rows never land. Its clause
+        // reaches the top all the same, through the third: both issues read
+        // the one parameter cell, and what a reader of that cell carries
+        // has grown by the second's clause and gives none back.
+
+        const { pick, bodies, rowsFor, second } =
+          await runPickedParameterPattern("bound-superseded");
+        await rowsFor(2);
+        const secondClaimed = defer();
+        const thirdClaimed = defer();
+        beforeEachQuery(async (sql, params) => {
+          if (sql !== BODIES_SQL) return;
+          if ((params as unknown[])[0] === "c-beta") {
+            secondClaimed.resolve();
+            await thirdClaimed.promise;
+          } else {
+            thirdClaimed.resolve();
+          }
+        });
+        // Nothing else reads the query between the two picks, and a query
+        // nothing reads issues nothing.
+        const cancel = bodies.sink(() => {});
+        const pickSecond = runtime.edit();
+        pick.withTx(pickSecond).set(1);
+        expect((await pickSecond.commit()).error).toBeUndefined();
+        await secondClaimed.promise;
+        const pickThird = runtime.edit();
+        pick.withTx(pickThird).set(2);
+        expect((await pickThird.commit()).error).toBeUndefined();
+        await rowsFor(2);
+        cancel();
+
+        const flag = readerCarries(bodies, ["pending"]);
+        const top = readerCarries(bodies, RESULT_TOP);
+        expect(hasClause(flag, second)).toBe(true);
+        expect(atomsBeyond(flag, top)).toEqual([]);
+      });
+
+      it("carries a failed issue's clause on the flag and not on the result's length", async () => {
+        // Where the bound stops. The claim of an issue that fails has
+        // raised the flag and declared there, and the settle of a failure
+        // writes the error and no rows, so it declares nothing on the
+        // result. The top keeps what the issues that settled rows brought.
+
+        const { pick, bodies, rowsFor, first, second } =
+          await runPickedParameterPattern("bound-failed");
+        await rowsFor(2);
+        beforeEachQuery((sql, params) => {
+          if (sql === BODIES_SQL && (params as unknown[])[0] === "c-beta") {
+            throw new Error("provider refused");
+          }
+        });
+        const tx = runtime.edit();
+        pick.withTx(tx).set(1);
+        expect((await tx.commit()).error).toBeUndefined();
+        const failed = await waitForCellValue<QueryState<BodyRow>>(
+          runtime,
+          bodies,
+          (value) => value?.error !== undefined,
+        );
+        expect(failed.error).toBe("provider refused");
+        expect(failed.pending).toBe(false);
+
+        const flag = readerCarries(bodies, ["pending"]);
+        const top = readerCarries(bodies, RESULT_TOP);
+        expect(hasClause(flag, second)).toBe(true);
+        expect(hasClause(top, first)).toBe(true);
+        expect(atomsBeyond(second, top)).toEqual([second[1]]);
+      });
     });
   });
 
