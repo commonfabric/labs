@@ -289,9 +289,10 @@ normative from C1 on:
   would empty the weakest-link meet on virtually every transaction,
   silently ending TransformedBy / PolicyCertified propagation. Pointer
   integrity evidence stays on the link entry (the LinkReference chain).
-  The probe of a followed slot also stays out of the input-witness meet,
-  because a followed reference is counted there by the value stamps at its
-  slot (`cfc-transformed-by-input-witnesses.md`).
+  The probe of a followed slot leaves its input witnesses to the followed
+  reference's own location, which resolves them over the value stamps at the
+  slot, and which counts whenever the slot's label is confidential
+  (`cfc-transformed-by-input-witnesses.md`).
 
 ### 6.2 The runtime's own wiring is the second non-standalone probe (2026-09-16)
 

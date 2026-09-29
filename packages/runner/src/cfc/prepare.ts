@@ -3868,6 +3868,9 @@ const deriveFlowJoinImpl = (
     path: readonly string[];
     recursive: boolean;
   }>();
+  // The followed slots whose own label is confidential, by document and
+  // path: references that count as followed whatever their target carries.
+  const confidentialFollowedSlots = new Set<string>();
   forEachFlowObservation(
     tx,
     (space, id, scope, type, logicalPath, observation) => {
@@ -4086,10 +4089,15 @@ const deriveFlowJoinImpl = (
       // The probe of a followed slot is the exception, because the reference
       // is counted where it is followed: what a followed reference witnesses
       // is read off the value stamps at its slot, below
-      // (`followedReferenceWitnesses`).
+      // (`followedReferenceWitnesses`). A followed slot whose own label is
+      // confidential is counted there even when its target is public.
       if (!observation.followedSlot) {
         noteInputWitnesses(document.witnesses.get(labelKey));
         noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
+      } else if (label?.confidentiality?.length) {
+        confidentialFollowedSlots.add(
+          stringTupleKey([key, pathKey(probedSlotPath(logicalPath))]),
+        );
       }
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
@@ -4282,12 +4290,22 @@ const deriveFlowJoinImpl = (
     }
     const followed = new Set<Reference>();
     const pending: Reference[] = [];
+    const unaccounted = new Set(confidentialFollowedSlots);
     for (const reference of references) {
-      if (readsConfidentially(reference.target)) {
+      const slotKey = stringTupleKey([
+        docKey(reference.slot),
+        pathKey(reference.slot.path),
+      ]);
+      const confidentialSlot = confidentialFollowedSlots.has(slotKey);
+      unaccounted.delete(slotKey);
+      if (confidentialSlot || readsConfidentially(reference.target)) {
         followed.add(reference);
         pending.push(reference);
       }
     }
+    // A confidential followed slot no content read observed has no value
+    // stamp to be read off, so it witnesses nothing.
+    if (unaccounted.size > 0) noteInputWitnesses([]);
     while (pending.length > 0) {
       const next = pending.pop()!;
       for (const reference of byTargetDoc.get(docKey(next.slot)) ?? []) {

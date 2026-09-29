@@ -7,7 +7,9 @@ Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `applied`.
+Status legend: `open` (not yet applied to the spec), `adopted` (the spec has
+ruled on the entry and carries the requirement, in the section named),
+`applied`.
 
 ## From the S16 default-transition design
 
@@ -1254,7 +1256,10 @@ not others.
 ## From the write-path self-read exclusion (2026-09-15)
 
 **SC-41 [normative] A write path's read of its own destination is a
-runtime-internal read — §18.6.2.** §18.6.2 derives two things from the
+runtime-internal read — §18.6.2.** `adopted`: §18.6.2, "Conditional
+exclusions", carries the class as the write-destination read, with its
+unobservability invariant, the runtime-private condition on a guard's control
+state, and the comment it requires at every marking site. §18.6.2 derives two things from the
 attempt's journal minus runtime-internal reads: the consumed set, and the
 conservative flow-path confidentiality. This entry proposes a fifth kind of
 runtime-internal read, and the runner subtracts it from the second alone —
@@ -1320,12 +1325,15 @@ implementation are in
 [`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md); the
 runtime marks the class with `writeDestinationRead` rather than by address, so
 §18.6.4's "excluded address patterns" obligation is discharged for this class
-by naming the marker. `open`.
+by naming the marker.
 
 ## From the wiring-probe classification (2026-09-16)
 
 **SC-42 [normative] A runtime wiring read is not an observation — §4.6.3 +
-§18.6.2.** `open`. §4.6.3's read-API mapping puts the link-carried label on a
+§18.6.2.** `adopted`: §18.6.2, "Conditional exclusions", carries the class as
+the wiring read, with the condition that the reference found is only written
+unchanged to another slot, and the comment it requires at every marking site.
+§4.6.3's read-API mapping puts the link-carried label on a
 "standalone reference-identity read", and the refinement beneath it defines
 standalone by the dereference trace: a probe covered at or above by a trace
 the same transaction recorded is resolution machinery, and every other probe
