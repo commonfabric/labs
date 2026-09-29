@@ -33,7 +33,6 @@ import {
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
-  type VisitingEntryResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
