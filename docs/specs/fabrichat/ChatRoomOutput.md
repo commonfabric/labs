@@ -32,6 +32,7 @@ interface ChatRoomOutput {
     version: ChatMessageVersion;
   }>;
   deleteMessage: Stream<{ message: Cell<ChatMessage> }>;
+  obliterateMessage: Stream<{ message: Cell<ChatMessage> }>;
   sendReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   deleteReaction: Stream<{ message: Cell<ChatMessage>; emoji: string }>;
   showProfile: Stream<void>;
@@ -103,14 +104,15 @@ put (see [`leave`](#leave)).
 - **`about`** is a [`ChatAbout`](ChatAbout.md), set once when the room is
   created.
 - **`messages`** are [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`,
-  which is unique in the room. Each version of a message is labeled
-  `authored-by` the principal who recorded it. A message changes only through
-  `editMessage` and `deleteMessage`, which keep its earlier versions (see
-  [`ChatMessage`](ChatMessage.md#open-questions) for what they keep), and is
-  never removed from `messages`.
+  which is unique in the room. An obliterated message stays as a tombstone. Each
+  version of a message is labeled `authored-by` the principal who recorded it. A
+  message changes only through `editMessage` and `deleteMessage`, which keep its
+  earlier versions (see [`ChatMessage`](ChatMessage.md#open-questions) for what
+  they keep), and is never removed from `messages`.
 - **Reactions** live on their messages, as each message's `reactions`
   ([`ChatReaction`](ChatReaction.md)), each labeled `authored-by` its reactor. A
-  reaction is removed only by its own reactor.
+  reaction is removed only by its own reactor, or with its message when it is
+  obliterated.
 - The room stores no names or avatars. Messages, reactions, and the roster link
   people's profiles ([`ChatProfile`](ChatProfile.md)) and copy nothing from
   them.
@@ -136,8 +138,8 @@ the room's space, so sending needs write access there, and the room acts on it
 later, possibly in another runtime.
 
 Each stream below is written as a call, with its event's keys as the parameters:
-`sendReaction(message: Cell<ChatMessage>, emoji: string)` sends `{ message,
-emoji }`.
+`sendReaction(message: Cell<ChatMessage>, emoji: string)` sends
+`{ message, emoji }`.
 
 No event names its sender. The room learns who sent it from the event's actor:
 the principal the memory server stamps on the appended event from its
@@ -170,6 +172,7 @@ These rules hold for every stream:
 | [`sendMessage`](#sendmessageversion-chatmessageversion-replyto-chatreply) | `ChatSendSurface` | appends a message from the sender, once |
 | [`editMessage`](#editmessagemessage-cellchatmessage-version-chatmessageversion) | `ChatEditSurface` | records a new version of the sender's message, once |
 | [`deleteMessage`](#deletemessagemessage-cellchatmessage) | `ChatDeleteSurface` | records the sender's message as deleted |
+| [`obliterateMessage`](#obliteratemessagemessage-cellchatmessage) | `ChatObliterateSurface` | removes a message and its history, leaving a tombstone |
 | [`sendReaction`](#sendreactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, if it isn't there |
 | [`deleteReaction`](#deletereactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | removes the sender's reaction, if it's there |
 | [`showProfile`](#showprofile) | none | adds the sender's profile to `roster` |
@@ -270,8 +273,8 @@ Records a new version of one of the sender's messages.
   Otherwise, makes `version.body` the message's current version. Its `editedAt`
   is chosen as [recorded times](#recorded-times) describes, then made unique as
   [unique times](ChatMessage.md#unique-times) states. The version it replaces
-  goes to `earlierVersions`, as far as the room's policy on history keeps it.
-  `authorProfile`, `sentAt`, `replyTo`, and the reactions don't change.
+  goes to `earlierVersions`, as far as the implementation's history rules keep
+  it. `authorProfile`, `sentAt`, `replyTo`, and the reactions don't change.
 - **Refused:** a `message` in another room, sent by someone else, or deleted, a
   `version.body` that isn't a non-empty string, or a `version.sentAt` the room
   finds implausible.
@@ -292,10 +295,43 @@ Records one of the sender's messages as deleted.
 - **Effect:** makes the message's `body` exactly `{ deleted: true }`, recorded
   at the handler clock as `editedAt`, made unique as [unique
   times](ChatMessage.md#unique-times) states. What becomes of its earlier
-  versions, reactions, and replies is the room's policy. The message stays in
-  `messages`, so replies to it and threads rooted at it keep their links.
+  versions, reactions, and replies is the implementation's choice. The message
+  stays in `messages`, so replies to it and threads rooted at it keep their
+  links.
 - **Refused:** a `message` in another room, sent by someone else, or already
   deleted.
+
+### `obliterateMessage(message: Cell<ChatMessage>)`
+
+- `message: Cell<ChatMessage>` — The message to obliterate. Must be a message in
+  this room that the sender may obliterate: in a direct room, one the sender
+  sent; elsewhere, anyone's if the sender is an OWNER, and their own if the
+  implementation lets members obliterate their own messages.
+
+Removes a message entirely, with its history. In a group room or a space's own
+chat, it is how an OWNER curates the conversation, and an outward act, since it
+removes someone else's words. In a direct room, it is how either person removes
+their own words completely.
+
+- **Admitted:** as a trusted gesture on `ChatObliterateSurface`. In a direct
+  room, from either member, for their own messages only: being the room's
+  creator, and so its OWNER, doesn't extend to the other person's messages.
+  Elsewhere, from a member the room space's access list makes OWNER, and from a
+  message's own sender if the implementation allows it (see
+  [implementation-defined behavior](#implementation-defined-behavior)).
+- **Effect:** reduces the message to a tombstone (see [obliterated
+  messages](ChatMessage.md#obliterated-messages)): its `body` becomes
+  `{ deleted: true }`, its `editedAt` the handler clock, made unique as [unique
+  times](ChatMessage.md#unique-times) states, and its `authorProfile`,
+  `earlierVersions`, and `reactions` are removed. `sentAt` and `replyTo` stay.
+  The tombstone is labeled `authored-by` the sender, whoever obliterated it.
+- **Afterward:** the times the removed versions and reactions were recorded at
+  stay used, and a retry of the original send finds the tombstone rather than
+  sending the message again: the room keeps the original sender's proposal as it
+  would for any send.
+- **Refused:** a `message` in another room, a direct room's message sent by the
+  other person, or, elsewhere, a sender the implementation doesn't admit.
+  Obliterating a message that is already obliterated changes nothing.
 
 ### `sendReaction(message: Cell<ChatMessage>, emoji: string)`
 
@@ -443,6 +479,27 @@ group rooms of their own.
   Inside a container, it reads the placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
 
+## Implementation-defined behavior
+
+This contract leaves some of what a room allows to its implementation, because
+rooms legitimately differ. A room where people share personal details may let
+anyone take back what they said, while a room under a strict retention
+requirement may be legally required to keep everything. The contract is agnostic
+on each of these, so a client MUST NOT assume either way:
+
+- **Self-obliteration in group rooms.** Whether a member of a group room, or of
+  a space's own chat, may obliterate their own messages, as either person in a
+  direct room may.
+- **Obliteration at all.** Whether an OWNER may obliterate messages.
+- **What an edit or a deletion keeps** in a message's history (see
+  [`ChatMessage`](ChatMessage.md#open-questions)).
+- **The window of plausible proposed times** (see [recorded
+  times](#recorded-times)).
+
+An implementation may make these configurable, per room or otherwise, and how it
+does so is its own business (see
+[`FabriChatRoom`](FabriChatRoom.md#configuration)).
+
 ## Open questions
 
 - **Returning after leaving.** A room refuses to `add` someone who left it, so
@@ -452,3 +509,8 @@ group rooms of their own.
   can be made a member of a room they never agreed to, and appear in its member
   set, before any notice reaches them. `leave` lets them get out, but not stop
   it happening.
+- **Discovering what a room allows.** A client can't see an implementation's
+  choices (see [implementation-defined
+  behavior](#implementation-defined-behavior)) before an event is refused,
+  silently. Whether the contract should offer facts saying what a room allows,
+  so a client can show a person before they write in it, is open.

@@ -20,10 +20,11 @@ interface ChatReaction {
 }
 ```
 
-A reaction is stored as `AuthoredByCurrentUser<TrustedActionWrite<ChatReaction,
-…>>`, admitted only through the room's `sendReaction` stream, as a trusted
-gesture on `ChatReactSurface`, and removed only through its `deleteReaction`
-stream, on the same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
+A reaction is stored as
+`AuthoredByCurrentUser<TrustedActionWrite<ChatReaction, …>>`, admitted only
+through the room's `sendReaction` stream, as a trusted gesture on
+`ChatReactSurface`, and removed only through its `deleteReaction` stream, on the
+same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
 
 ## Fields
 
@@ -48,5 +49,6 @@ A message holds at most one reaction per reactor and emoji. Adding or removing
 one never changes anyone else's, and two people reacting at once both land.
 Adding a reaction that's already there, or removing one that isn't, changes
 nothing, so either can be sent again safely. A reaction is part of its message,
-but a separately authorized part: only its reactor writes it (see
+but a separately authorized part: only its reactor writes it, and it goes only
+by its reactor or with its message when it is obliterated (see
 [`ChatMessage`](ChatMessage.md#who-wrote-what)).

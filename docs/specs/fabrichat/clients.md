@@ -69,6 +69,9 @@ A client that draws natively MUST:
 - **Show edits and deletions.** A client shows a deleted message as deleted,
   never with text from its history, and marks a message with `editedAt` as
   edited. Whether it shows `earlierVersions` is its choice.
+- **Show obliterated messages as removed**, by whoever the tombstone is labeled
+  with, and drop anything the client had kept of the message: its text, its
+  sender, its history, and its reactions.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads.
@@ -92,6 +95,7 @@ gesture on the reviewed surface its policy names:
 | send a message | room | `sendMessage` | `ChatSendSurface` |
 | edit a message | room | `editMessage` | `ChatEditSurface` |
 | delete a message | room | `deleteMessage` | `ChatDeleteSurface` |
+| obliterate a message | room | `obliterateMessage` | `ChatObliterateSurface` |
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | add or remove a member | room | `add`, `remove` | `ChatMembersSurface` |

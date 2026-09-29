@@ -100,8 +100,8 @@ value. So every event carries a `requestId` its sender chooses (except
 `pending`, then `done` or `refused`. A sender watches for it there.
 
 Each stream below is written as a call, with its event's keys as the parameters:
-`openDirect(requestId: string, counterpart: string)` sends `{ requestId,
-counterpart }`.
+`openDirect(requestId: string, counterpart: string)` sends
+`{ requestId, counterpart }`.
 
 These rules hold for every stream:
 

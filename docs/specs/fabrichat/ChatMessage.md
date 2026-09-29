@@ -9,8 +9,8 @@ reactions and its edit history. A room offers its messages, oldest first, as
 ```ts
 // Shown for illustration only.
 interface ChatMessage {
-  /** The profile the sender sent under. */
-  authorProfile: Cell<ChatProfile>;
+  /** The profile the sender sent under; absent once obliterated. */
+  authorProfile?: Cell<ChatProfile>;
 
   /** The current text, or the marker of a deleted message. */
   body: string | { deleted: true };
@@ -43,7 +43,8 @@ interface ChatMessage {
   profile when it draws, so a person's history shows their current name. The
   link is a claim, since a sender could link any profile. The message is
   verified when the principal in its `authored-by` label is the one the profile
-  represents.
+  represents. It is absent only from an obliterated message (see [obliterated
+  messages](#obliterated-messages)).
 - **`body`** is the current version's text, as the person saw it when they sent
   or edited it. Text is never empty. A deleted message's body is exactly the
   plain object `{ deleted: true }`, with no other keys.
@@ -64,7 +65,8 @@ interface ChatMessage {
 - **`earlierVersions`** holds each version the message had before its current
   one, as a [`ChatMessageVersion`](ChatMessageVersion.md): its body and when it
   was recorded. It is empty for a message that has never changed. What the room
-  keeps here is a policy question (see [open questions](#open-questions)).
+  keeps here is left to the implementation (see [open
+  questions](#open-questions)).
 - **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
   to, in the same room, and whether the reply is shown in the main conversation,
   in a thread, or both. Threads, and which messages the main conversation shows,
@@ -80,10 +82,11 @@ A message is written by more than one person, so its parts carry their own
 labels and are admitted by their own writers:
 
 - **The message**, meaning everything but `reactions`, is written by the room's
-  `sendMessage`, `editMessage`, and `deleteMessage` streams, each admitted only
-  as a trusted gesture on its own surface (see
+  `sendMessage`, `editMessage`, `deleteMessage`, and `obliterateMessage`
+  streams, each admitted only as a trusted gesture on its own surface (see
   [`ChatRoomOutput`](ChatRoomOutput.md#streams)). Each version is labeled
-  `authored-by` the principal who recorded it.
+  `authored-by` the principal who recorded it, so an obliterated message's
+  tombstone is labeled with the OWNER who obliterated it.
 - **Each reaction** is written only by the room's `sendReaction` and
   `deleteReaction` streams, as a trusted gesture on `ChatReactSurface`, and is
   labeled `authored-by` its reactor.
@@ -92,6 +95,34 @@ So a reaction never changes the message's own label, and a message's sender
 can't write anyone's reactions. An implementation MUST keep the two apart:
 reactions are a separately authorized part of the message, not fields the
 message's writer can set.
+
+## Obliterated messages
+
+A message can be removed entirely, with its history, using the room's
+`obliterateMessage` (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)): by an
+OWNER curating a group room or a space's own chat, or by either person in a
+direct room, for their own messages. Whether a group room's members may also
+obliterate their own messages, and whether a room allows obliteration at all,
+are left to the implementation
+([`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior)). What is
+left is a tombstone, kept so that replies to the message and a thread rooted at
+it aren't orphaned:
+
+- `body` is `{ deleted: true }`, and `editedAt` is when the room obliterated the
+  message.
+- `sentAt` and `replyTo` stay, so the message keeps its place in the
+  conversation and in its thread, and its identity.
+- `authorProfile`, `earlierVersions`, and `reactions` are gone. Nothing of what
+  was said, or by whom, remains in the message.
+- The tombstone is labeled `authored-by` whoever obliterated it. That label is
+  the attestation of who removed the message.
+
+A client tells an obliterated message from one its sender deleted by the absence
+of `authorProfile`, and shows who removed it from the tombstone's label.
+
+Obliterating a message removes it from the room's current state. Copies a client
+kept, and whatever the space's storage keeps of earlier states, are beyond the
+room's reach.
 
 ## Unique times
 
@@ -128,11 +159,18 @@ times](#unique-times)). Clients MUST NOT make up ids from content or position.
 
 ## Open questions
 
-Editing and deleting leave policy choices that this design hasn't made:
+Editing and deleting leave choices that this contract leaves to the
+implementation (see
+[`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior)). How
+`FabriChatRoom` makes them configurable is in
+[`FabriChatRoom`](FabriChatRoom.md#configuration).
 
-- **Who may edit or delete.** The streams admit only the message's sender. A
-  room's OWNERs removing others' messages, for moderation, is a separate
-  decision.
+- **Who may edit or delete.** `editMessage` and `deleteMessage` admit only the
+  message's sender. A room's OWNERs curate others' messages only by obliterating
+  them (see [obliterated messages](#obliterated-messages)). Whether group-room
+  members may obliterate their own messages, and whether obliteration is allowed
+  at all, are left to the implementation, since retention requirements can
+  forbid it.
 - **What an edit keeps.** Whether every edit adds its previous version to
   `earlierVersions`, or only some do, and whether history is kept at all.
 - **What a deletion keeps.** Whether deleting a message also clears its

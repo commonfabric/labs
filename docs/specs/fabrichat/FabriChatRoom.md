@@ -37,6 +37,7 @@ Every write goes through one handler per stream:
 | `commitSend` | `sendMessage` | `ChatSendSurface` |
 | `commitEdit` | `editMessage` | `ChatEditSurface` |
 | `commitDelete` | `deleteMessage` | `ChatDeleteSurface` |
+| `commitObliterate` | `obliterateMessage` | `ChatObliterateSurface` |
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 | `commitShowProfile` | `showProfile` | none |
@@ -62,6 +63,12 @@ the pattern, documented beside it.
 `commitEdit` and `commitDelete` are admitted only for the message's own sender,
 and move the current version into `earlierVersions` before recording the new
 one. They have the same kind of write policy as `commitSend`.
+
+`commitObliterate` is admitted for an OWNER in a group room or a space's own
+chat, and for a message's own sender in a direct room. It rewrites the message
+to its tombstone, and clears its reactions, so the message's write policy admits
+it alongside `commitSend`, `commitEdit`, and `commitDelete`, and the reactions'
+write policy admits it alongside the reaction handlers.
 
 `commitSend`, `commitEdit`, `commitDelete`, and `commitSendReaction` choose a
 recorded time in the same transaction that records it: the chosen time, or the
@@ -104,6 +111,25 @@ removes one.
 handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves,
 as today's room computes `cannotSend`.
+
+## Configuration
+
+[`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior) leaves
+some behavior to the implementation. `FabriChatRoom` has an affordance for
+configuring each of them: a room's settings, read by the handlers the setting
+governs, and kept apart from the room's record. The configuration itself isn't
+built at first. The first build fixes each setting at an initial value:
+
+| Setting | Initial value |
+| --- | --- |
+| Members may obliterate their own messages in group rooms | no |
+| OWNERs may obliterate messages | yes |
+| An edit keeps the version it replaces in `earlierVersions` | yes, every version |
+| A deletion clears the message's earlier versions | no |
+| Window of plausible proposed times, around the handler clock | a pattern constant |
+
+These are the first build's values. Once the configuration exists, rooms can
+differ from them.
 
 ## Prerequisites
 

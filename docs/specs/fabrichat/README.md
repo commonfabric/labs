@@ -147,9 +147,11 @@ provide, the document says so, under the heading "Prerequisites".
    access list, not a list kept beside it, decides who can read and write.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
    and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
-   edit or delete it, each change recorded as a new version, and a reaction is
-   removed only by its own reactor. Every recorded version has a time unique in
-   its room.
+   edit or delete it, each change recorded as a new version, and a message can
+   be obliterated, by an OWNER curating a group room or by either person in a
+   direct room for their own messages, leaving only an attested tombstone. A
+   reaction is removed only by its own reactor, or with its message. Every
+   recorded version has a time unique in its room.
 4. **Each user has one manager, in their home space**, found with a well-known
    `wish` target. A user's index of conversations is private to that user.
 5. **A direct room is keyed by the other member's principal**, not by a profile.
