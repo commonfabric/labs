@@ -48,11 +48,9 @@ session's first `openWindow`, so a session that only reads, as a READ member's
 does, has none.
 
 The room's `[UI]` keeps its composer's state, the draft and the reply being
-composed, as a `PerSession` value of its own, apart from the windows and from
-the room's record. It is state of this rendering, not of the contract, so a
-client that draws natively never sees it. Keeping it per session, rather than
-per rendering, means two placements of the same room open in one session show
-the same composer state, as one conversation shown twice should.
+composed, as a `PerSession` value of its own, so two placements of the same room
+open in one session show the same composer state, as one conversation shown
+twice should.
 
 ## Writers
 

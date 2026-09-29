@@ -71,11 +71,6 @@ line between them runs through its fields:
   being with its first `openWindow`, and read as empty until then, so a session
   that only reads, as a READ member's does, has none.
 
-The list holds no presentation state. It is UI-free, like the rest of the
-contract: what a client shows, and what a person is in the middle of typing,
-belong to whatever draws the room (see
-[`ChatRoomOutput`](ChatRoomOutput.md#renderings)).
-
 ## Windows
 
 A client reads the conversation through windows, each a run of consecutive

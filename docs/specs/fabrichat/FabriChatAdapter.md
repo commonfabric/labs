@@ -20,7 +20,7 @@ An adapter is a piece in the container's space, beside its placement. It holds:
 That is all it holds. Like a placement, it MUST NOT hold anything read from the
 room. It holds no composer state either: the composer is the room's own reviewed
 surface, so the room's own `[UI]` keeps the draft and the reply target (see
-[`ChatRoomOutput`](ChatRoomOutput.md#renderings)).
+[`FabriChatRoom`](FabriChatRoom.md#state)).
 
 ## How a container holds it
 

@@ -628,10 +628,6 @@ group rooms of their own.
 
 - **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
   adapter's rendering embeds it, so a composer is always the room's own surface.
-  What the composer holds while a person writes, such as the draft and the reply
-  being composed, is the rendering's own state, and not part of this contract.
-  It MUST NOT be stored in the room's record, or anywhere another reader could
-  see it.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
   that draw natively. It includes `messages`, through whose link a client
   reaches its own windows and their streams, and `canSend`. A client uses it to

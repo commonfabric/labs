@@ -182,6 +182,9 @@ provide, the document says so, under the heading "Prerequisites".
 8. **Clients send to the room directly.** Neither a placement nor an adapter
    relays a send. A reviewed gesture reaches the room's own writer, so the
    room's write policy names only the room's own surfaces.
+9. **The protocol surface is UI-free.** The contracts, and the records they
+   offer, hold data and take requests. None of them carries presentation state:
+   what to show, and state such as a draft, belong to whatever draws the chat.
 
 ## Shared spaces
 
@@ -282,10 +285,8 @@ patterns](../../common/patterns/multi-user-patterns.md#what-a-spec-should-captur
    [`ChatProfile.md`](ChatProfile.md)).
 3. **Shared and per-user state.** A room's history is `PerSpace` in the room's
    space, and its members are that space's member set. The manager's index is in
-   the user's home space. Drafts belong to whatever draws the composer: the
-   room's own `[UI]` keeps them `PerSession`, since they belong to one
-   connection and not to the room, and a client that draws natively keeps its
-   own.
+   the user's home space. Drafts are `PerSession`, kept by the room's own
+   `[UI]`, since they belong to one connection and not to the room.
 4. **A person is identified** by cell reference with `equals()` for display, and
    by principal for direct-room lookup. Never by display name.
 5. **Authorship is attested.** Every message and reaction carries an
