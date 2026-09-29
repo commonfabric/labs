@@ -86,6 +86,21 @@ function canRequest(requestId: string, state: ManagerState): boolean {
   return outcome === undefined || outcome.status === "pending";
 }
 
+/** Resumes the original choices before considering any redelivered payload. */
+function resumePending(requestId: string, state: StartState): boolean {
+  if (state.requests.key(requestId).get()?.status !== "pending") return false;
+  const creationId = state.intents.key(requestId).get()
+    ? requestId
+    : Object.entries(state.waiters.get()).find(([, ids]) =>
+      ids.includes(requestId)
+    )?.[0];
+  if (creationId) {
+    advance(creationId, state);
+    state.resume.send({ requestId: creationId });
+  }
+  return true;
+}
+
 /** Records a terminal refusal without exposing it to the shared room. */
 function refuse(requestId: string, reason: string, state: ManagerState): void {
   state.requests.key(requestId).set({ status: "refused", reason });
@@ -97,7 +112,9 @@ function refuse(requestId: string, reason: string, state: ManagerState): void {
 /** Prepends an entry once, retaining its room's entity identity. */
 function remember(entry: ChatIndexEntry, state: ManagerState): void {
   if (!state.rooms.get().some((known) => equals(known.room, entry.room))) {
-    state.rooms.set([entry, ...state.rooms.get()]);
+    const stored = new Writable<Managed<ChatIndexEntry>>();
+    stored.set(entry);
+    state.rooms.set([stored, ...state.rooms.get()]);
   }
 }
 
@@ -152,9 +169,17 @@ function advance(requestId: string, state: ManagerState): void {
   if (intent.counterpart) state.direct.key(intent.counterpart).set(entry);
   for (const recipient of intent.members) {
     const id = JSON.stringify([requestId, recipient]);
-    const notice = state.outgoingNotices.elementById(id);
-    if (!notice.get()) notice.set({ id, room, recipient });
-    state.outgoingNotices.addUnique(notice);
+    if (!state.outgoingNotices.get().some((notice) => notice.id === id)) {
+      const notice = new Writable<
+        Managed<{
+          id: string;
+          room: Cell<ChatRoomOutput>;
+          recipient: string;
+        }>
+      >();
+      notice.set({ id, room, recipient });
+      state.outgoingNotices.addUnique(notice);
+    }
   }
   state.requests.key(requestId).set({ status: "done", entry });
   for (const waiting of state.waiters.key(requestId).get() ?? []) {
@@ -168,6 +193,7 @@ function writeOpenDirect(
   state: StartState,
 ): void {
   if (!canRequest(event.requestId, state)) return;
+  if (resumePending(event.requestId, state)) return;
   const actor = currentPrincipal();
   if (
     !actor || !event.counterpart?.startsWith("did:") ||
@@ -233,6 +259,7 @@ function writeCreateGroup(
   state: StartState,
 ): void {
   if (!canRequest(event.requestId, state)) return;
+  if (resumePending(event.requestId, state)) return;
   const actor = currentPrincipal();
   if (
     !actor || typeof event.title !== "string" || !event.title.trim() ||
@@ -345,7 +372,6 @@ export const delivered = handler<
   state.outgoingNotices.set(
     state.outgoingNotices.get().filter((notice) => notice.id !== event.id),
   );
-  state.requests.key(event.requestId).set({ status: "done" });
 });
 
 /** Creation data can be written only by the manager's reviewed start handlers. */
@@ -528,7 +554,7 @@ export default pattern<
                 variant="ghost"
                 onClick={action(() => selected.set({ room: entry.room }))}
               >
-                {entry.room.get().about.title || (entry.kind === "direct"
+                {entry.room.get()?.about?.title || (entry.kind === "direct"
                   ? "Direct conversation"
                   : "Group conversation")}
               </cf-button>

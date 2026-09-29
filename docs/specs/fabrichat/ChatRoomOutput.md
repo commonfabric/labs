@@ -1,6 +1,6 @@
 # ChatRoomOutput
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 The result of a chat room: what a room piece offers everyone the room's space
 admits. It is the contract that placements, adapters, and clients read, and it

@@ -85,6 +85,8 @@ Canonical alias set:
 - `AnyOf`
 - `PolicyOf`
 - `WriteAuthorizedBy`
+- `WritePolicyAnyOf`
+- `AuthenticatedActionWrite`
 - `TrustedActionWriteWithIntegrity`
 - `TrustedActionWrite`
 - `TrustedActionUiContract`
@@ -176,6 +178,21 @@ Path tuple encoding rules:
 - `/` escapes to `~1`
 - `[]` encodes to `/`
 - otherwise encode as `/${segments.join("/")}`
+
+### `WritePolicyAnyOf<T, Policies>`
+
+The base value schema is `T`. Each tuple member in `Policies` supplies one
+complete writer policy: `writeAuthorizedBy`, and its optional `uiContract` or
+`authenticatedAction`. Lower these policies to `ifc.writePolicyAnyOf` without
+flattening writer and UI alternatives into independent unions. An accepted
+write must satisfy one complete branch. Empty or malformed alternatives are
+rejected.
+
+### `AuthenticatedActionWrite<T, typeof binding>`
+
+Lower the value as `T`, resolve the writer as for `WriteAuthorizedBy`, and add
+`ifc.authenticatedAction: true`. The runtime requires an authenticated event
+actor and the named verified writer. A UI contract is not required.
 
 ### `WriteAuthorizedBy<T, typeof binding>`
 

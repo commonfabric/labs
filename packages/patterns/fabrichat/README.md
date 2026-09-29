@@ -50,6 +50,14 @@ contains a room link and recipient, never conversation contents. The client
 acknowledges a delivered notice through `delivered`. Receiving a notice grants
 no access; `accept` checks actual admission before indexing a room.
 
+## Runtime limitation
+
+READ members cannot currently submit a group departure. The memory service
+requires WRITE to append the leave event and its atomic roster/activity changes.
+Supporting READ self-departure requires a narrowly authorized server operation;
+allowing arbitrary accompanying writes would defeat read-only access. An OWNER
+can remove a READ member. OWNER and WRITE self-departures are supported.
+
 ## Validation
 
 Run `deno task cf test packages/patterns/fabrichat` for protocol assertions and

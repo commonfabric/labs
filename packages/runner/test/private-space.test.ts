@@ -264,6 +264,112 @@ describe("private-space", () => {
       await observer.close();
       await send("done");
       expect(result.key("rooms").get()).toHaveLength(1);
+      const directEvent = (requestId: string) => {
+        const event = {
+          requestId,
+          counterpart: member,
+          provenance: {
+            origin: "dom",
+            trusted: true,
+            ui: {
+              pattern: "ChatStartSurface",
+              eventIntegrity: ["ChatStartSurface"],
+              uiContractDataset: { uiAction: "ChatStart" },
+            },
+          },
+        };
+        markRendererTrustedEvent(event);
+        return event;
+      };
+      await Promise.all([
+        result.key("openDirect").send(directEvent("direct-1")),
+        result.key("openDirect").send(directEvent("direct-2")),
+      ]);
+      for (const id of ["direct-1", "direct-2"]) {
+        await waitForCellValue(
+          runtime,
+          result.key("requests").key(id).key("status"),
+          (value) => value === "done",
+        );
+      }
+      await manager.synced();
+      await result.pull();
+      expect(result.key("rooms").get()).toHaveLength(2);
+      expect(result.key("outgoingNotices").get()).toHaveLength(2);
+      const direct = result.key("direct").key(member).key("room")
+        .resolveAsCell();
+      const directLink = direct.getAsNormalizedFullLink();
+      for (const id of ["direct-1", "direct-2"]) {
+        expect(
+          result.key("requests").key(id).key("entry").key("room")
+            .resolveAsCell().getAsNormalizedFullLink(),
+        ).toEqual(directLink);
+      }
+      await result.key("forget").send({ requestId: "forget-1", room: direct });
+      await runtime.idle();
+      expect(result.key("rooms").get()).toHaveLength(1);
+      await result.key("openDirect").send(directEvent("direct-3"));
+      await runtime.idle();
+      expect(result.key("rooms").get()).toHaveLength(2);
+      expect(
+        result.key("direct").key(member).key("room").resolveAsCell()
+          .getAsNormalizedFullLink(),
+      ).toEqual(directLink);
+      const noticeId = result.key("outgoingNotices").key(0).key("id").get();
+      await result.key("delivered").send({
+        requestId: "delivered-1",
+        id: noticeId,
+      });
+      await runtime.idle();
+      expect(result.key("outgoingNotices").get()).toHaveLength(1);
+      expect(result.key("requests").key("delivered-1").get()).toBeUndefined();
+      await result.key("delivered").send({
+        requestId: "delivered-1",
+        id: noticeId,
+      });
+      await runtime.idle();
+      expect(result.key("outgoingNotices").get()).toHaveLength(1);
+      await runtime.patternManager.flushCompileCacheWrites();
+      await manager.synced();
+      const reopenedStorage = new PrivateStorageManager(server);
+      const reopenedRuntime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager: reopenedStorage,
+      });
+      try {
+        const reopened = reopenedRuntime.getCellFromLink(
+          result.getAsNormalizedFullLink(),
+        );
+        await reopened.sync();
+        expect(await reopenedRuntime.start(reopened)).toBe(true);
+        await reopened.pull();
+        await reopened.key("openDirect").send(
+          directEvent("direct-after-restart"),
+        );
+        await waitForCellValue(
+          reopenedRuntime,
+          reopened.key("requests").key("direct-after-restart").key("status"),
+          (value) => value === "done",
+        );
+        expect(
+          reopened.key("direct").key(member).key("room").resolveAsCell()
+            .getAsNormalizedFullLink(),
+        ).toEqual(directLink);
+        const reopenedRooms = reopened.key("rooms").asSchema({
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              room: { type: "unknown", asCell: ["cell"] },
+            },
+          },
+        });
+        await reopenedRooms.pull();
+        expect(reopenedRooms.get()).toHaveLength(2);
+      } finally {
+        await reopenedRuntime.dispose();
+        await reopenedStorage.close();
+      }
       const extra = (await Identity.fromPassphrase("chat-extra-member")).did();
       const membership = async (
         stream: string,
@@ -290,6 +396,15 @@ describe("private-space", () => {
           (value) => value?.length === count,
         );
         await manager.synced();
+        const publicActivity = room.key("recentActivity").key(count - 1)
+          .resolveAsCell();
+        const claims = cfcLabelViewForCell(publicActivity)?.entries.flatMap((
+          entry,
+        ) => entry.label.integrity ?? []);
+        expect(claims).toContainEqual({
+          kind: "authored-by",
+          subject: creator.did(),
+        });
       };
       await membership("add", {
         requestId: "add-extra",

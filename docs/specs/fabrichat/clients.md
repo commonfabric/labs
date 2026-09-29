@@ -1,6 +1,6 @@
 # FabriChat: requirements on clients
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 A client is a program that reads and writes FabriChat on a person's behalf. The
 shell is one. This document is about the others: a separate application that

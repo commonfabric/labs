@@ -176,7 +176,7 @@ interface RoomMemory {
   expiredThrough: number;
   left: Record<string, boolean>;
   admissions: Record<string, number>;
-  profiles: Record<string, Cell<ChatProfile>>;
+  profiles: Record<string, Cell<ChatProfile>[]>;
   abandoned: boolean;
   notices: { id: string; recipient: string }[];
 }
@@ -332,7 +332,7 @@ interface RoomWriterState {
   uiEmoji?: string;
   uiPrincipal?: string;
   uiAccess?: Writable<"WRITE" | "OWNER">;
-  uiReply?: Writable<ChatReply | undefined>;
+  uiReply?: Writable<ChatReply | null>;
   uiDraft?: Writable<string>;
   uiThread?: Writable<{ root?: Cell<ChatMessage>; before?: bigint }>;
 }
@@ -506,7 +506,7 @@ function writeSend(
   state.memory.key("requests").key(key).set(true);
   recordActivity(state, event.requestId, message, at, now);
   if (state.uiDraft?.get() === event.version.body) state.uiDraft.set("");
-  state.uiReply?.set(undefined);
+  state.uiReply?.set(null);
 }
 
 /** Binds the protocol event directly to its verified writer. */
@@ -790,7 +790,8 @@ export const commitShowProfile = handler<
   const at = reserveTime(state.memory.key("usedTimes"), now, now);
   if (!at) return;
   state.roster.addUnique(profile);
-  state.memory.key("profiles").key(currentPrincipal()!).set(profile);
+  const contributions = state.memory.key("profiles").key(currentPrincipal()!);
+  contributions.set([...(contributions.get() ?? []), profile]);
   recordActivity(state, event.requestId, state.roster.resolveAsCell(), at, now);
 });
 
@@ -801,9 +802,9 @@ function hasMembership(state: RoomWriterState): boolean {
 
 /** Removes a departed actor's roster contribution while retaining message history. */
 function removeProfile(principal: string, state: RoomWriterState): void {
-  const profile = state.memory.key("profiles").key(principal).get();
-  if (profile) state.roster.removeByValue(profile);
-  const removed: Writable<Cell<ChatProfile> | undefined> = state.memory.key(
+  const profiles = state.memory.key("profiles").key(principal).get() ?? [];
+  for (const profile of profiles) state.roster.removeByValue(profile);
+  const removed: Writable<Cell<ChatProfile>[] | undefined> = state.memory.key(
     "profiles",
   ).key(principal);
   removed.set(undefined);
@@ -1045,6 +1046,12 @@ const WindowViews = pattern<
   Record<string, ChatMessageWindow>
 >(({ value }) => value);
 
+/** Exposes activity values through aliases to their original authored documents. */
+const ActivityView = pattern<
+  { value: Cell<ChatRoomActivity>[] },
+  ChatRoomActivity[]
+>(({ value }) => value);
+
 /** Retains the scoped boundary around a derived session window map. */
 const windowCell = lift(
   (value: Cell<PerSession<Record<string, ChatMessageWindow>>>) => {
@@ -1064,7 +1071,7 @@ interface ReactionTally {
 const MessageCard = pattern<{
   message: Cell<ChatMessage>;
   state: RoomWriterState;
-  reply: Writable<ChatReply | undefined>;
+  reply: Writable<ChatReply | null>;
   thread: Writable<{ root?: Cell<ChatMessage>; before?: bigint }>;
 }, { [UI]: VNode }>(({ message, state, reply, thread }) => {
   const editing = new Writable.perSession(false);
@@ -1096,6 +1103,10 @@ const MessageCard = pattern<{
       ? mine
       : spaceMembers()?.[currentPrincipal() ?? ""] === "OWNER"
   );
+  const quotedBody = computed(() => {
+    const body = message.get()?.replyTo?.message.get()?.body;
+    return typeof body === "string" ? body : "Deleted message";
+  });
   const tallies = computed(() =>
     (message.key("reactions").get() ?? []).reduce<ReactionTally[]>(
       (groups, reaction) => {
@@ -1133,6 +1144,22 @@ const MessageCard = pattern<{
               size="sm"
             />
           )}
+        {message.get()?.replyTo
+          ? (
+            <blockquote
+              style={{
+                margin: "0",
+                padding: "0.5rem",
+                borderLeft: "2px solid var(--cf-color-border)",
+              }}
+            >
+              <cf-text variant="caption">Replying to</cf-text>
+              <cf-text>
+                {quotedBody}
+              </cf-text>
+            </blockquote>
+          )
+          : null}
         <cf-cfc-authorship
           $value={message}
           $author={message.get()?.authorProfile}
@@ -1266,22 +1293,49 @@ const MessageCard = pattern<{
               <cf-hstack gap="2" wrap>
                 {tallies.map((tally) => (
                   <cf-hover-card>
-                    <cf-button
-                      size="sm"
-                      variant={tally.mine ? "outline" : "ghost"}
-                      data-ui-action="ChatReact"
-                      onClick={tally.mine
-                        ? deleteReactionFromUi({
-                          ...bound,
-                          uiEmoji: tally.emoji,
-                        })
-                        : sendReactionFromUi({
-                          ...bound,
-                          uiEmoji: tally.emoji,
-                        })}
-                    >
-                      {tally.emoji} {tally.profiles.length}
-                    </cf-button>
+                    {tally.mine
+                      ? (
+                        <cf-button
+                          size="sm"
+                          variant="outline"
+                          data-ui-action="ChatReact"
+                          onClick={deleteReactionFromUi({
+                            dedicated: state.dedicated,
+                            initialMembers: state.initialMembers,
+                            myProfile: state.myProfile,
+                            records: state.records,
+                            memory: state.memory,
+                            activity: state.activity,
+                            roster: state.roster,
+                            about: state.about,
+                            uiMessage: message,
+                            uiEmoji: tally.emoji,
+                          })}
+                        >
+                          {tally.emoji} {tally.profiles.length}
+                        </cf-button>
+                      )
+                      : (
+                        <cf-button
+                          size="sm"
+                          variant="ghost"
+                          data-ui-action="ChatReact"
+                          onClick={sendReactionFromUi({
+                            dedicated: state.dedicated,
+                            initialMembers: state.initialMembers,
+                            myProfile: state.myProfile,
+                            records: state.records,
+                            memory: state.memory,
+                            activity: state.activity,
+                            roster: state.roster,
+                            about: state.about,
+                            uiMessage: message,
+                            uiEmoji: tally.emoji,
+                          })}
+                        >
+                          {tally.emoji} {tally.profiles.length}
+                        </cf-button>
+                      )}
                     <cf-vstack slot="card">
                       {tally.profiles.map((profile) => (
                         <cf-profile-badge $profile={profile} size="sm" />
@@ -1294,7 +1348,18 @@ const MessageCard = pattern<{
                 size="sm"
                 variant="ghost"
                 data-ui-action="ChatReact"
-                onClick={sendReactionFromUi({ ...bound, uiEmoji: "😺" })}
+                onClick={sendReactionFromUi({
+                  dedicated: state.dedicated,
+                  initialMembers: state.initialMembers,
+                  myProfile: state.myProfile,
+                  records: state.records,
+                  memory: state.memory,
+                  activity: state.activity,
+                  roster: state.roster,
+                  about: state.about,
+                  uiMessage: message,
+                  uiEmoji: "😺",
+                })}
               >
                 😺
               </cf-button>
@@ -1336,7 +1401,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       activity,
       roster,
     } as RoomWriterState;
-    const reply = new Writable.perSession<ChatReply | undefined>();
+    const reply = new Writable.perSession<ChatReply | null>(null);
     const draft = new Writable.perSession("");
     const thread = new Writable.perSession<
       { root?: Cell<ChatMessage>; before?: bigint }
@@ -1378,9 +1443,14 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       BigInt(Math.floor(clock.result ?? 0)) * 1_000_000n -
       CHAT_POLICY.recentActivityWindowNsec
     );
-    const recentActivity = computed((): ChatRoomActivity[] =>
-      activity!.get().filter((entry) => entry.at.value >= activityCutoff)
+    const activityRefs = computed((): Cell<ChatRoomActivity>[] =>
+      activity!.get().flatMap((entry, index) =>
+        entry.at.value >= activityCutoff
+          ? [activity!.key(index).resolveAsCell()]
+          : []
+      )
     );
+    const recentActivity = ActivityView({ value: activityRefs });
     const memberAccess = new Writable.perSession<"WRITE" | "OWNER">("WRITE");
     const members = computed(() =>
       Object.entries(spaceMembers() ?? {}).filter(([principal]) =>
@@ -1566,6 +1636,15 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                 {about.get()?.title || "Conversation"}
               </cf-heading>
               <cf-profile-badge $profile={myProfile} size="sm" />
+              <cf-button
+                variant="ghost"
+                disabled={!canSend}
+                onClick={action(() =>
+                  facts.showProfile.send({ requestId: uiRequestId() })
+                )}
+              >
+                Show my profile
+              </cf-button>
               {dedicated && about.get()?.kind === "group"
                 ? (
                   <cf-button
@@ -1640,7 +1719,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                       variant="ghost"
                       onClick={action(() => {
                         thread.set({});
-                        reply.set(undefined);
+                        reply.set(null);
                         thread.key("before").set(undefined);
                       })}
                     >
@@ -1680,41 +1759,65 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
               {visibleMessages.length === 0
                 ? <cf-text>Start the conversation.</cf-text>
                 : null}
-              {visibleMessageRefs.map((message) => (
-                <MessageCard
-                  message={message}
-                  state={state}
-                  reply={reply}
-                  thread={thread}
-                />
-              ))}
+              {visibleMessageRefs.map((message) => {
+                const card: PerSession<{ [UI]: VNode }> = MessageCard({
+                  message,
+                  state,
+                  reply,
+                  thread,
+                });
+                return card[UI];
+              })}
             </cf-vstack>
             <cf-vstack slot="footer" gap="2" padding="4">
               {reply.get()
                 ? (
                   <cf-hstack gap="2">
                     <cf-text>Replying to a message</cf-text>
+                    <cf-text variant="caption">
+                      Placement: {reply.get()?.shownIn}
+                    </cf-text>
+                    {reply.get()?.message.get()?.replyTo?.shownIn !== "thread"
+                      ? (
+                        <cf-button
+                          variant="ghost"
+                          onClick={action(() => {
+                            const selected = reply.get();
+                            if (selected) {
+                              reply.set({ ...selected, shownIn: "main" });
+                              thread.set({});
+                            }
+                          })}
+                        >
+                          Conversation only
+                        </cf-button>
+                      )
+                      : null}
                     <cf-button
                       variant="ghost"
                       onClick={action(() => {
                         const selected = reply.get();
                         if (selected) {
-                          reply.set({
-                            ...selected,
-                            shownIn: selected.shownIn === "both"
-                              ? "thread"
-                              : "both",
-                          });
+                          reply.set({ ...selected, shownIn: "thread" });
                         }
                       })}
                     >
-                      {reply.get()?.shownIn === "both"
-                        ? "Also showing in conversation"
-                        : "Show in conversation too"}
+                      Thread only
                     </cf-button>
                     <cf-button
                       variant="ghost"
-                      onClick={action(() => reply.set(undefined))}
+                      onClick={action(() => {
+                        const selected = reply.get();
+                        if (selected) {
+                          reply.set({ ...selected, shownIn: "both" });
+                        }
+                      })}
+                    >
+                      Conversation and thread
+                    </cf-button>
+                    <cf-button
+                      variant="ghost"
+                      onClick={action(() => reply.set(null))}
                     >
                       Cancel reply
                     </cf-button>

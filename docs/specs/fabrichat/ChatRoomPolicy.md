@@ -1,6 +1,6 @@
 # ChatRoomPolicy
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 A room's policy: how it behaves where
 [`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior) leaves the

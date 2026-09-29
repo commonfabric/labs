@@ -1,6 +1,6 @@
 # ChatMessageVersion
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 One version of a message: its body, and a time. A
 [`ChatMessage`](ChatMessage.md) keeps its versions before the current one in

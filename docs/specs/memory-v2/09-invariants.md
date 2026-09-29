@@ -452,6 +452,17 @@ retain at least one concrete OWNER") restated as a checkable entry, because it
 is the invariant a client is most likely to violate without knowing the rule
 exists.
 
+The negotiated `atomicAclChanges` capability admits an ACL-free data commit
+carrying an `aclChange` companion intent. The engine checks its `before` ACL
+against the locked current ACL, validates the authenticated actor's authority,
+and writes the data commit and a separate ACL-only system commit in the same
+SQLite transaction. Both are durable before publication or reader revocation.
+The companion preserves the ACL-only commit shape above; its sequence is
+recorded with the data commit so replay does not repeat the ACL change. A stale
+`before` conflicts, and a non-OWNER can only remove their own explicit grant
+while retaining a concrete OWNER. Genesis and nondefault branches cannot carry
+this intent. Public low-level engine calls cannot enable the companion path.
+
 The generic invitation service commits its private admission records and unique
 redemption receipts in the same engine transaction as an ACL-only system commit.
 That internal operation reads current authority under the SQLite write lock and

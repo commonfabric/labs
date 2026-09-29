@@ -1,18 +1,14 @@
 # FabriChatRoom
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 `FabriChatRoom` is an implementation of [`ChatRoomOutput`](ChatRoomOutput.md),
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
 
-`FabriChatRoom` is the successor to the room in today's
-`packages/patterns/fabrichat/chat.tsx`, and keeps that room's record, writers,
-and reviewed surfaces. What changes is where it lives, what decides its
-membership, and the names of its records and surfaces, which are now neutral
-with respect to the implementation because they are part of the contract (for
-example, today's `FabriChatMessage` and `FabriChatSendSurface` become
-`ChatMessage` and `ChatSendSurface`).
+The implementation lives in `packages/patterns/fabrichat/room.tsx`. The protocol
+and UI bind separate verified handlers to shared write helpers. Their stored
+policies admit those named handlers with matching reviewed actions.
 
 ## State
 
@@ -20,9 +16,9 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 
 - The contract's own records: `about`, its messages, `recentActivity` with its
   next `seq` and `recentActivityExpiredThrough`, `roster`, and
-  `outgoingNotices`. The messages are a list ordered by `sentAt`. Each message's
-  reactions, and `roster`, are keyed collections, projected as lists in the
-  contract.
+  `outgoingNotices`. Messages, reactions, and activity use original document
+  references. Views order messages by `sentAt`; reaction and roster handlers
+  check identity before adding an entry.
 - The request memory: the requests the room has acted on, by sender and
   `requestId` (see [writers](#writers)).
 - The times the room has used, so it can make each new one unique.
@@ -33,9 +29,8 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   total. This is bookkeeping, not membership: the access list still decides who
   is a member. Once the runtime provides member sets, the order can come from
   them instead.
-- The membership changes in progress, each under its `requestId` (see
-  [membership changes take more than one
-  commit](#membership-changes-take-more-than-one-commit)).
+- Membership request identities, committed atomically with their access-list
+  changes and activity records.
 
 `participants` is computed from `roster` and the messages' authors, keyed by
 profile cell. `messages` (its `count`, `oldestAt`, `newestAt`, and `latest`) is
@@ -70,24 +65,18 @@ Every write goes through one handler per stream:
 | `commitRemove` | `remove` | `ChatMembersSurface` |
 | `commitDelivered` | `delivered` | none |
 
-`commitSend` and `commitSendReaction` keep the types of today's `commitSend` and
-`commitReact`: the stored value is
-`AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
-its writer and refuses it without a trusted gesture from the named surface. The
-room's own composer builds a send's `{ version: { body, sentAt }, replyTo? }`
-from the text the person submitted, which today's room reads as `target.value`,
-and the composer event's time as the proposed `sentAt`.
+Messages and reactions are separate `AuthoredByCurrentUser` documents with
+`WritePolicyAnyOf` branches for their permitted reviewed writers. The runtime
+labels each document with its writer and rejects a write without the required
+gesture. The composer captures exact submitted text and uses the gesture's
+handler clock as the proposed time.
 
 Every handler first checks its event's sender and `requestId` against a keyed
 collection of the requests the room has acted on, and does nothing for one it
 finds. It records the request there in the same transaction as its effect, and
-the collection drops a request once it was recorded longer ago than the greater
-of `proposedTimeMaxAgeNsec` plus `proposedTimeMaxLeadNsec`, and
-`recentActivityWindowNsec`. The collection keeps a request even after its
-message is obliterated: it says only that the sender made a request, not what,
-and without it a late redelivery of the original send would send the message
-again. The two bounds of its window for proposed times are constants of the
-pattern, documented beside it.
+retains the request for the room's lifetime. The runtime does not establish
+a finite maximum event redelivery delay, so finite retention would allow an old
+request to recreate removed content. Request memory retains no message body.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
 `commitEdit` moves the current version into `earlierVersions` before recording
@@ -110,21 +99,13 @@ times](ChatMessage.md#unique-times)). A room keeps the times it has used in a
 keyed collection, so the check doesn't scan every message, and two records made
 at once conflict and retry rather than share a time.
 
-Today's `commitReact` toggles a reaction, which a repeated or delayed event can
-turn into the opposite of what the person meant. It splits into
-`commitSendReaction` and `commitDeleteReaction`, each of which changes nothing
-when the reaction is already as asked.
-
-`commitSendReaction` keeps each reaction at an address within its message
-derived from its reactor's profile and its emoji (`reactionKeyFor`, which today
-also takes the message). One person's one reaction to one message has a single
-address in every session, which is how the room meets
-[`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
-the list. The reactions are a separately authorized part of the message:
-`commitSend` and `commitEdit` can't write them, and the reaction handlers can
-write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
-the runtime's write policies can split one document this way is a prerequisite
-to check.
+`commitSendReaction` and `commitDeleteReaction` are explicit idempotent
+operations. Each reaction is a separate authored document referenced from the
+message's reaction collection. A transaction reads that collection to find the
+reactor/profile and emoji pair before adding or removing it; concurrent changes
+conflict and rerun against the accepted collection. Message creation and editing
+do not receive the reaction documents' writer authority. Deletion and
+obliteration may clear them.
 
 `commitShowProfile` appends to `roster` as the `loom` pattern's `addParticipant`
 does: a mergeable set add, so concurrent additions all land and a profile is not
@@ -136,26 +117,14 @@ to grant OWNER to the remaining member admitted earliest. The room keeps the
 admission order (see [state](#state)) for that. It also records the sender in a
 keyed collection of principals who have left, which `commitAdd` checks.
 
-### Membership changes take more than one commit
+### Atomic membership changes
 
-`add`, `remove`, and `leave` change the room space's access list, and the memory
-layer requires an access-list change to be its commit's only operation (INV-12
-in the [memory invariants](../memory-v2/09-invariants.md)). So none of them can
-change the access list and the room's own records in one transaction. Each runs
-in steps, in an order that keeps an interruption safe, and records its progress
-under its `requestId`:
-
-1. Record the intent in the room: the request, marked pending, and for `leave`
-   the sender in the set of principals who have left, so the room already
-   refuses to re-add them.
-2. Change the access list, in a commit of its own.
-3. Complete the record: the `recentActivity` entry, the notice for an `add`, and
-   the request marked done.
-
-A room finds any request left pending, and finishes its remaining steps, before
-it acts on another event. So an interruption leaves at most a short gap between
-the access list and the room's records, never a lasting one. Between steps 2 and
-3, a member added may already have access with no notice or activity yet.
+`add`, `remove`, and `leave` use `setSpaceMembers()` to commit the room's
+metadata and an ACL companion together. The engine retains a separate ACL-only
+commit record while making both records durable in one storage transaction
+([INV-12](../memory-v2/09-invariants.md#inv-12--acl-mutation-commit-shape)). A
+stale ACL conflicts. Removing one's own WRITE grant is supported without OWNER
+authority; granting or removing another principal requires OWNER authority.
 
 `commitAdd` and `commitRemove` ask the host to change the room space's access
 list. They are the only handlers that reach beyond the room's own record.
@@ -164,13 +133,11 @@ removes one.
 
 `about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
 handler that creates the room, so it is labeled with its creator. `canSend` is
-computed for each viewer from their access and whether their profile resolves,
-as today's room computes `cannotSend`.
+computed for each viewer from their access and whether their profile resolves.
 
 Every handler that changes the room's own record, except `commitDelivered`,
 appends its `recentActivity` entry in the same transaction as the change, so the
-log never disagrees with the messages. A membership change appends its entry in
-its last step (see above). Entries older than the window are dropped as new ones
+log never disagrees with the messages. Membership changes include their activity in the atomic data commit. Entries older than the window are dropped as new ones
 are appended. `commitObliterate`, and `commitDelete` when it obliterates, also
 remove the message's earlier entries.
 
@@ -203,48 +170,15 @@ differ from them. A room states its settings in `about.policy`
 ([`ChatRoomPolicy`](ChatRoomPolicy.md)), with every key present, written when
 the room is created from the same settings the handlers read.
 
-## Prerequisites
+## Runtime support
 
-- **A private space, created from a pattern.** A host can already create a space
-  whose genesis grants only its creator (`registerSpaceIdentity` with a
-  `genesisAcl`). A pattern can't: `FabriChatRoom.inSpace()` works today, but the
-  space it creates takes the default grants, including `"*": "WRITE"`. Exposing
-  creator-only creation to patterns is the direction of [random space
-  identities](../random-space-identities.md). Until then, a prototype MAY use
-  `inSpace()`, and MUST say that the room is open to any authenticated
-  principal.
-- **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
-  for a pattern to ask its host to change an access list. Today only hosts can
-  do that (`ACLManager`, the runtime client's `space:setAclEntry`).
-- **Leaving without OWNER.** `commitLeave` removes the sender's own access list
-  entry even when the sender is only a WRITE member. Whether the memory layer
-  lets a non-OWNER remove their own entry, or the host has to do it on their
-  behalf, is part of pattern-facing access control.
-- **Member sets.** Until the runtime provides them, the room keeps `roster` (see
-  [shared spaces](README.md#shared-spaces)).
-- **Per-session state written by a handler.** `windows` is a `PerSession` cell
-  linked from the room's `PerSpace` message list, a nesting the scoped-cell
-  design provides across a `Cell` boundary (see [scoped cell
-  instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
-  the instance belonging to the session that sent the event, including when the
-  handler runs somewhere other than that session's client. Whether the runtime
-  does that today is still to check.
-- **A write policy split within one document.** A message's reactions are
-  written only by the reaction handlers (and obliteration), and the rest of the
-  message only by the message handlers (see
-  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
-  policies can be split between writers this way is still to check. If not,
-  reactions move to a record of their own, keyed by message.
-- **Redelivery ends.** Two things can make an event arrive, or run, more than
-  once. A client runtime re-submits an event when it can't tell whether its
-  append committed, and the memory ignores a re-submission by its event id, but
-  only while the client's append queue remembers the event, which lasts as long
-  as the client's process. And a served handler runs an event again until its
-  run is recorded as complete. The room's request memory covers both only as
-  long as it lasts (see [writers](#writers)). So the room relies on every event
-  being run to completion, or dropped, within the memory, including one queued
-  while its client was offline and appended much later. Whether the runtime
-  guarantees this is still to check.
-- **Admitting an access-list change atomically.** The steps above are the
-  pattern-level answer to INV-12. A host facility that changes an access list
-  and the room's records together would remove the gap between steps 2 and 3.
+`Factory.inPrivateSpace()` allocates random creator-only spaces.
+`currentPrincipal()`, `spaceMembers()`, `spaceAccess()`, and `setSpaceMembers()`
+provide authenticated identity, reactive membership, access status, and atomic
+membership changes. The [membership API guide](../../features/pattern-space-membership.md)
+describes these capabilities. Reactions have their own storage documents and
+writer policies. Session windows use scoped cells; rendered message-card
+instances explicitly use the viewer's session scope.
+
+A shared space-wide profile roster is future work. Rooms keep contributed
+profiles locally while the access list remains authoritative for membership.

@@ -42,7 +42,8 @@ find the same room.
 complete replacement access list together with the handler's ordinary writes.
 The host validates the actor, the previous ACL, and the replacement. An OWNER
 can administer the list while preserving a concrete owner. A WRITE member may
-remove only their own entry. No call grants a wildcard implicitly.
+remove only their own entry. READ members cannot submit this operation because
+its data writes require WRITE. No call grants a wildcard implicitly.
 
 The memory host's `atomicAclChanges` capability admits a separate ACL-only
 companion commit in the same database transaction as the data commit. The data

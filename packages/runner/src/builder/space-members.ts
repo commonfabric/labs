@@ -11,6 +11,14 @@ import { spaceReaderRole } from "../cfc/space-membership.ts";
 /** Spaces whose authoritative ACL has completed its initial replica load. */
 const loadedMemberships = new WeakMap<Runtime, Set<MemorySpace>>();
 
+/** Rearms a membership load after the storage provider changes its access verdict. */
+export function invalidateSpaceMembership(
+  runtime: Runtime,
+  space: MemorySpace,
+): void {
+  loadedMemberships.get(runtime)?.delete(space);
+}
+
 /** Loads membership before retrying a synchronous pattern action. */
 export async function loadSpaceMembership(
   runtime: Runtime,

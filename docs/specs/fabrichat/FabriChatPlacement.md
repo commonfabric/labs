@@ -1,6 +1,6 @@
 # FabriChatPlacement
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 `FabriChatPlacement` is one room placed in some other space: a container that
 shows chats among other things. It has no rendering. It is the thing a client

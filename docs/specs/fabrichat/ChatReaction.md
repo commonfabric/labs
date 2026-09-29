@@ -1,6 +1,6 @@
 # ChatReaction
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 One person's reaction to one message, with one emoji. A
 [`ChatMessage`](ChatMessage.md) holds its reactions, in no particular order, as
@@ -35,7 +35,7 @@ same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
   Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
   general interchange (`RGI_Emoji`), with its modifiers and joiners included.
   The room refuses anything else, including text, and two emoji written as one.
-  A room has no fixed list. The four cat faces in today's `FABRICHAT_REACJI` are
+  A room has no fixed list. A fixed palette of cat faces is
   a demo placeholder, not part of this design. Which emoji a client puts within
   easy reach is the client's choice.
 - **`sentAt`** is the handler clock when the room recorded the reaction, at

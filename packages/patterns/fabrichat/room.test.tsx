@@ -63,6 +63,7 @@ export default pattern(() => {
     records,
     memory,
   });
+  const reader = FabriChatRoom({ about, records, memory });
   const firstMessage: Cell<ChatMessage> = records.key(0);
   const sendEvent = { requestId: "send-1", version };
   const editEvent = {
@@ -85,6 +86,8 @@ export default pattern(() => {
       { assertion: assert(() => room.messages.latest.messages.length === 1) },
       { render: room[UI] },
       { assertion: assert(() => hasText(room[UI], "Hello")) },
+      { render: reader[UI] },
+      { assertion: assert(() => hasText(reader[UI], "Hello")) },
       {
         assertion: assert(() =>
           records.get().length === 1 && records.get()[0].body === "  Hello  "

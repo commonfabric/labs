@@ -1,3 +1,6 @@
+import { aclDocId } from "@commonfabric/memory/acl";
+import type { URI } from "@commonfabric/memory/interface";
+import { invalidateSpaceMembership } from "../builder/space-members.ts";
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { ensureNotRenderThread } from "@commonfabric/utils/env";
@@ -473,6 +476,9 @@ export class Scheduler {
    * can hand it back. */
   readonly #storageSubscription: IStorageSubscription;
 
+  /** Releases access-verdict observation when this scheduler is disposed. */
+  readonly #cancelSpaceAccessChange?: Cancel;
+
   #idlePromises: (() => void)[] = [];
   #backgroundTasks = new Set<Promise<unknown>>();
 
@@ -568,6 +574,23 @@ export class Scheduler {
     // will ever have to hand back, and one built inline is unreachable.
     this.#storageSubscription = this.#createStorageSubscription();
     this.runtime.storageManager.subscribe(this.#storageSubscription);
+    this.#cancelSpaceAccessChange = this.runtime.storageManager
+      .subscribeSpaceAccessChange?.((space) => {
+        invalidateSpaceMembership(this.runtime, space);
+        // Access changes can leave the ACL bytes unchanged. Re-run its readers
+        // so their access classification observes the provider's new verdict.
+        for (
+          const action of this.#triggerIndex.collectReadersForWrite({
+            space,
+            id: aclDocId(space) as URI,
+            type: "application/json",
+            scope: "space",
+            path: [],
+          })
+        ) {
+          this.invalidateAction(action);
+        }
+      });
 
     // Set up harness event listeners
     this.runtime.harness.addEventListener("console", (e: Event) => {
@@ -2511,6 +2534,7 @@ export class Scheduler {
     // `{ done: true }` is the only self-cancelling answer the contract has.
     // `unsubscribe` is optional on the capability, so a manager without one is
     // left as it was rather than crashing a disposal.
+    this.#cancelSpaceAccessChange?.();
     this.runtime.storageManager.unsubscribe?.(this.#storageSubscription);
     this.#headEventLoadPark = null;
     this.#headEventLoadParkHistory = null;

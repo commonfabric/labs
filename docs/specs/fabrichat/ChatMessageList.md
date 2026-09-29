@@ -1,6 +1,6 @@
 # ChatMessageList
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 A room's messages, offered for structured access rather than as one array. A
 room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `messages`. It says

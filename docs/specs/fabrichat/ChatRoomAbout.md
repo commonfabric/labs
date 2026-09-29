@@ -1,6 +1,6 @@
 # ChatRoomAbout
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 What a room says about itself: its kind, its title, when it was created, and its
 policy. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `about`,

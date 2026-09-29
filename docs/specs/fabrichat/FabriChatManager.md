@@ -1,6 +1,6 @@
 # FabriChatManager
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 `FabriChatManager` is an implementation of
 [`ChatManagerOutput`](ChatManagerOutput.md), which states everything a chat
@@ -15,12 +15,8 @@ one. The home target `#chatManager` resolves to that field. The spelling follows
 the camel case of the other multi-word targets (`#learnedSummary`,
 `#pieceRegistry`, `#profileName`).
 
-Adding the target takes the same steps `#agent_queue` took: the field and child
-piece in `home.tsx`, a case in `getResolutionKind` and in
-`resolveHomeSpaceTarget` (`packages/runner/src/builtins/wish.ts`), tests beside
-each, and a row in the built-in targets table of
-[`wish`](../../common/conventions/wish.md) and in
-[`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md).
+The home wish resolver supplies the manager child through `#chatManager`.
+Home's Conversations tab renders its index and creation controls.
 
 ## State
 
@@ -52,9 +48,8 @@ is what labels it `authored-by` this user.
 
 ## Prerequisites
 
-- **Creating a private space from a pattern**, and **pattern-facing access
-  control**: the same as the room's (see
-  [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
+- Private creation and grants use the room's
+  [runtime support](FabriChatRoom.md#runtime-support).
 - **A principal from a profile.** A client that starts a direct room from a
   person's profile needs that profile's principal. A profile's value carries a
   `represents-principal` label, but no pattern-facing call returns the

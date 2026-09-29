@@ -43,6 +43,20 @@ as policy decisions. A helper can build atoms like `PromptSlotBound` or
 `UserSurfaceInput`, but the caller must supply the user, surface, source, role,
 digest, and route-specific integrity requirements.
 
+## Alternative Reviewed Writers
+
+`WritePolicyAnyOf<T, [A, B]>` permits a write through one complete policy
+alternative. Each alternative can be a `TrustedActionWrite` naming its writer,
+action, and surface. The writer and UI evidence must match the same alternative;
+evidence from different alternatives cannot be combined. Use this when one
+record supports separate reviewed controls for sending, editing, and removal.
+
+`AuthenticatedActionWrite<T, typeof handler>` permits the named verified handler
+when its event has an authenticated actor, without requiring a reviewed UI
+control. It is appropriate for actions such as leaving a conversation. The
+handler must still check which record and principal the actor may affect.
+Neither helper replaces the space's access checks.
+
 ## Binding Private Stores To Their Creator
 
 A `Confidential` declaration with a direct `User` clause whose subject is

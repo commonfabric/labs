@@ -2337,6 +2337,12 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
+A widened bigint literal and the general `bigint` type emit
+`{ type: "bigint" }`, preserving exact integer values independently of the
+number schema. The `schema-injection/literal-widen-bigint` fixture pins positive,
+zero, and negative constructor arguments. A non-widened bigint literal schema
+is rejected because JSON schema constants cannot carry bigint values.
+
 Cell constructors whose authored type arguments name a `typeof` value binding
 retain those arguments when their result is lowered into a lift
 (`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated

@@ -1,6 +1,6 @@
 # ChatRoomActivity
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 One entry in a room's log of recent activity: something the room recorded, and
 when. A room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers its recent activity,

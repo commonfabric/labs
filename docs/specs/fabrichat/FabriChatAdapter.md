@@ -1,6 +1,6 @@
 # FabriChatAdapter
 
-Status: proposed design (see [`README.md`](README.md)).
+Status: normative reference (see [`README.md`](README.md)).
 
 `FabriChatAdapter` renders one placement
 ([`FabriChatPlacement.md`](FabriChatPlacement.md)) for hosts that render VDOM,

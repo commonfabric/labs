@@ -44,6 +44,13 @@ The authoritative field inventory is the `JSONSchema` type in
   mark on the other axis, produced from `@deprecated` JSDoc.
 - **`ifc`**: Information Flow Control (IFC) annotations (see [IFC](#ifc))
 
+### Exact integers
+
+The nonstandard `type: "bigint"` accepts JavaScript bigint values. It is distinct
+from `integer`, which accepts integral numbers. The distinction preserves exact
+nanosecond quantities above the safe-integer range. Bigint literals cannot be
+used in JSON schema `const` or `enum` constraints.
+
 ### Streams are declarations, not views
 
 `asCell: ["cell"]` is a flag about how the value beside it is handed over. The
@@ -63,7 +70,7 @@ The `ifc` extension attaches Information Flow Control metadata to schema
 nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
 `packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
+`writeAuthorizedBy`, `writePolicyAnyOf`, `authenticatedAction`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
 The compile-time side (CFC authoring aliases and UI helpers
 lowering to these keys) is specified in
 `docs/specs/ts-transformer/cfc_authoring_contract.md` and

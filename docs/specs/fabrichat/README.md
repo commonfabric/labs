@@ -1,7 +1,7 @@
 # FabriChat
 
-Status: implementation in progress. These protocol requirements remain
-normative. The implementation is in `packages/patterns/fabrichat`; its
+Status: normative protocol and implementation reference. The READ-member
+self-departure requirement remains pending runtime support. The implementation is in `packages/patterns/fabrichat`; its
 [README](../../../packages/patterns/fabrichat/README.md) describes the available
 surfaces and implementation choices.
 
@@ -160,7 +160,7 @@ provide, the document says so, under the heading "Prerequisites".
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
-   and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
+   and reviewed writer policies. A message's sender can
    edit or delete it, each change recorded as a new version, and a message can
    be obliterated, by an OWNER curating a group room or by either person in a
    direct room for their own messages, leaving only an attested tombstone. A
@@ -196,11 +196,11 @@ for a container, which decides who could see a room placed there. A shared space
 settles that with a member set: one entry per principal its access list admits,
 carrying that principal's access and the profile it contributed.
 
-Two things exist today that a member set would be built from:
+A member set combines these two sources:
 
 - **A space's access list** (`docs/specs/memory-v2/04-protocol.md`, §4.5.1) says
-  who can read and write. Only a host can read it (the runtime client's
-  `space:getAcl`), and it names principals, not people.
+  who can read and write. Patterns read it through `spaceMembers()`, and hosts through
+  `space:getAcl`. It names principals, not people.
 - **A roster of contributed profiles**, as the `loom` pattern keeps in
   `participants` ([shared-profile rosters](../shared-profile-rosters.md)). It
   names people, but every entry is a claim: any participant can add any profile.
@@ -241,37 +241,23 @@ With a member set:
   be surprising. A direct room is never placed that way (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
-## Prerequisites
+## Runtime capabilities and remaining client work
 
-The design depends on runtime capabilities that don't exist yet. Each document
-names the ones it needs, and they are gathered here:
+The implementation uses random creator-only spaces through
+`Factory.inPrivateSpace()`, authenticated identity through `currentPrincipal()`,
+and reactive access lists and atomic membership changes through `spaceMembers()`,
+`spaceAccess()`, and `setSpaceMembers()`. See the
+[membership API guide](../../features/pattern-space-membership.md).
 
-- **A member set for a shared space**, readable by the space's members and by
-  patterns running there (see [Shared spaces](#shared-spaces)).
-- **Creating a private space from a pattern.** A host can already create a space
-  whose genesis grants only its creator (`registerSpaceIdentity` with a
-  `genesisAcl`). A pattern can't: `Factory.inSpace()` creates a space with the
-  default genesis grants (`{ [creator]: "OWNER", "*": "WRITE" }`), which open it
-  to any authenticated principal. Exposing creator-only creation to patterns is
-  the direction of [random space identities](../random-space-identities.md).
-- **Granting access from a pattern.** Only a host can change an access list
-  today (`ACLManager`, the runtime client's `space:setAclEntry`). A room's
-  creator needs a pattern-facing way to grant and revoke members by principal,
-  gated as an outward act and implemented by the host. Space invitations don't
-  serve: they are bearer credentials, not bound to the person they are meant for
-  (see [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
-- **Delivering a notice.** Nothing in this repository lets a pattern deliver a
-  message to a principal who shares no space with the sender (see
-  [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
-- **Scoped sub-patterns and split write policies**, both still to check: a
-  room's handler writing the sending session's own windows, and one message
-  document written by two sets of writers (see
-  [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
-- **Host-issued trusted gestures.** A client that draws natively needs a
-  sanctioned way to issue a reviewed gesture without a DOM. That is the
-  "sanctioned headless issuance path" in the [host embedding policy
-  record](../../features/host-embedding.md#6-policy-record-trusted-mark-threat-model)
-  (see [`clients.md`](clients.md)).
+Native hosts bind reviewed actions through `bindNativeUiControl`, described in
+[host embedding](../../features/host-embedding.md#native-reviewed-controls).
+Message and reaction documents carry separate write policies, and session-scoped
+windows and message-card instances preserve each viewer's local state.
+
+A space-wide member set combining principal grants and contributed profiles is
+future work; each room keeps its own roster. Notice delivery remains the
+client's responsibility through `outgoingNotices` and `delivered`, as specified
+in [the manager contract](ChatManagerOutput.md#delivering-notices).
 
 ## Identity and presentation
 

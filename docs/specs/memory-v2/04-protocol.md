@@ -982,6 +982,18 @@ Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
 commands for that surface remain deferred in this pass.
 
+### Atomic ACL companions
+
+A peer advertising `atomicAclChanges: true` accepts a `ClientCommit.aclChange`
+intent with `before` and `after` access lists alongside ACL-free data operations.
+The authenticated session principal must be authorized for that transition.
+The server checks the current ACL under the engine transaction lock and commits
+a separate ACL-only system record atomically with the data record. A replay
+returns the recorded companion sequence rather than applying the transition
+again. A client must refuse to submit this intent to a peer that does not
+advertise the capability. The shape and authority constraints are stated in
+[INV-12](09-invariants.md#inv-12--acl-mutation-commit-shape).
+
 ## 4.4 Selectors
 
 Selectors still describe sets of entities or schema-guided traversals. The
