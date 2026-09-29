@@ -16,11 +16,12 @@ example, today's `FabriChatMessage` and `FabriChatSendSurface` become
 
 ## State
 
-The room keeps four `PerSpace` values, shared by everyone the space admits:
-`about`, `messages`, `roster`, and `outgoingNotices`. `participants` is computed
-from `roster` and the messages' authors, keyed by profile cell. `messages` is a
-list ordered by `sentAt`. Each message's reactions, and `roster`, are keyed
-collections, projected as lists in the contract.
+The room keeps five `PerSpace` values, shared by everyone the space admits:
+`about`, `messages`, `recentActivity`, `roster`, and `outgoingNotices`.
+`participants` is computed from `roster` and the messages' authors, keyed by
+profile cell. `messages` is a list ordered by `sentAt`. Each message's
+reactions, and `roster`, are keyed collections, projected as lists in the
+contract.
 
 The room also keeps its composer's state, `PerSession`: the draft, the message
 being replied to, and where the reply is to be shown. The composer is the room's
@@ -54,11 +55,12 @@ room's own composer builds a send's `{ version: { body, sentAt }, replyTo? }`
 from the text the person submitted, which today's room reads as `target.value`,
 and the composer event's time as the proposed `sentAt`.
 
-`commitSend` and `commitEdit` keep each sender's proposed times in a keyed
-collection, keyed by the sender's principal and the proposal (and, for an edit,
-the message), so a repeated send or edit finds what it already recorded without
-reading the list. Its plausibility window for proposed times is a constant of
-the pattern, documented beside it.
+Every handler first checks its event's sender and `requestId` against a keyed
+collection of the requests the room has acted on, and does nothing for one it
+finds. It records the request there in the same transaction as its effect, and
+the collection drops requests older than `recentActivityWindowNsec`, as
+`recentActivity` drops its entries. The two bounds of its window for proposed
+times are constants of the pattern, documented beside it.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
 `commitEdit` moves the current version into `earlierVersions` before recording
@@ -116,6 +118,12 @@ handler that creates the room, so it is labeled with its creator. `canSend` is
 computed for each viewer from their access and whether their profile resolves,
 as today's room computes `cannotSend`.
 
+Every handler that changes the room appends its `recentActivity` entry in the
+same transaction as the change, so the log never disagrees with `messages`.
+Entries older than the window are dropped as new ones are appended.
+`commitObliterate`, and `commitDelete` when it obliterates, also remove the
+message's earlier entries.
+
 ## Configuration
 
 [`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior) leaves
@@ -129,7 +137,9 @@ built at first. The first build fixes each setting at an initial value:
 | OWNERs may obliterate messages | `ownersMayObliterate` | yes |
 | An edit keeps the version it replaces in `earlierVersions` | `editKeepsHistory` | yes, every version |
 | A sender's deletion obliterates their message | `deletionIsObliteration` | no |
-| Window of plausible proposed times, before the handler clock | `proposedTimeWindowNsec` | a pattern constant |
+| How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
+| How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
+| How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. A room states its settings in `about.policy`

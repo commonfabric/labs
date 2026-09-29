@@ -41,7 +41,7 @@ interface ChatManagerOutput {
     counterpart?: string;
   }>;
   forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
-  delivered: Stream<{ id: string }>;
+  delivered: Stream<{ requestId: string; id: string }>;
 }
 ```
 
@@ -95,9 +95,9 @@ admitted to and by whom (see [delivering notices](#delivering-notices)).
 
 Each stream is a one-way, asynchronous request to the manager. Sending an event
 finishes when the event is accepted, not when it takes effect, and returns no
-value. So every event carries a `requestId` its sender chooses (except
-`delivered`), and the manager records the outcome under that id in `requests`:
-`pending`, then `done` or `refused`. A sender watches for it there.
+value. So every event carries a `requestId` its sender chooses, and the manager
+records the outcome under that id in `requests`: `pending`, then `done` or
+`refused`. A sender watches for it there.
 
 Each stream below is written as a call, with its event's keys as the parameters:
 `openDirect(requestId: string, counterpart: string)` sends
@@ -119,7 +119,7 @@ These rules hold for every stream:
 | [`createGroup`](#creategrouprequestid-string-members-string-title-string) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput) | none | the entry removed from `rooms`; the room itself is untouched |
-| [`delivered`](#deliveredid-string) | none | the notice removed from `outgoingNotices` |
+| [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
 
 ### `openDirect(requestId: string, counterpart: string)`
 
@@ -212,16 +212,18 @@ Removes a room from this user's list.
   The room, and this user's access to it, are untouched.
 - **Outcome:** `done`, with no entry.
 
-### `delivered(id: string)`
+### `delivered(requestId: string, id: string)`
 
+- `requestId: string` — Chosen by the sender, and unique among its requests.
+  Sending the same event again with it changes nothing further.
 - `id: string` — The id of a notice in `outgoingNotices`. An id that isn't there
   is ignored.
 
 Reports that a notice in `outgoingNotices` has been delivered.
 
 - **Admitted:** without a reviewed gesture.
-- **Effect:** removes the notice from `outgoingNotices`. It carries no
-  `requestId`, and has no outcome in `requests`.
+- **Effect:** removes the notice from `outgoingNotices`. It records no outcome
+  in `requests`.
 
 ## Creating a room: partial states
 

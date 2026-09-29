@@ -25,6 +25,8 @@ requires of the runtime and of the programs that use it.
   - [`ChatRoomAbout`](ChatRoomAbout.md)
   - [`ChatRoomPolicy`](ChatRoomPolicy.md): what a room claims about its own
     policy.
+  - [`ChatRoomActivity`](ChatRoomActivity.md): an entry in a room's recent
+    activity.
   - [`ChatProfile`](ChatProfile.md): the part of a profile the room reads.
 - Records a manager holds:
   - [`ChatIndexEntry`](ChatIndexEntry.md)
@@ -104,7 +106,8 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatReply.md`](ChatReply.md),
    [`ChatMessageVersion.md`](ChatMessageVersion.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatRoomAbout.md`](ChatRoomAbout.md),
-   [`ChatRoomPolicy.md`](ChatRoomPolicy.md), and
+   [`ChatRoomPolicy.md`](ChatRoomPolicy.md),
+   [`ChatRoomActivity.md`](ChatRoomActivity.md), and
    [`ChatProfile.md`](ChatProfile.md), the part of a person's profile the room
    reads.
 7. The record a manager holds: [`ChatIndexEntry.md`](ChatIndexEntry.md).

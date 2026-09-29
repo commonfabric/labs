@@ -65,6 +65,10 @@ A client that draws natively MUST:
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
+- **Follow the room through `recentActivity`** (see
+  [`ChatRoomActivity`](ChatRoomActivity.md)) rather than by comparing `messages`
+  with what it had, and read `messages` afresh after being away longer than the
+  room's `recentActivityWindowNsec`.
 - **Use each message's entity as its id**, or its `sentAt`, which is unique in
   its room.
 - **Show edits and deletions.** A client shows a deleted message as deleted,
@@ -110,13 +114,27 @@ A room refuses a bad event silently, so a client MUST check each event against
 its stream's rules before sending it: a non-empty body, a reply whose target is
 in the same room and allowed for its `shownIn`, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
-`canSend` to tell the person when they can't send at all. A client proposes a
-version's `sentAt` from its own clock when the person sends or edits a message,
-keeps that proposal for every retry of the same send or edit, and never reuses
-it for another: the proposal is what makes a retry harmless, and what keeps two
-messages, or two edits, with the same text apart. A client that resumes an
-interrupted `createGroup` MUST resend it with its original `requestId`, and
-SHOULD do the same for `openDirect` (see
+`canSend` to tell the person when they can't send at all. A client mints a fresh
+`requestId` for each request, such as a random 128-bit value, and keeps it for
+every retry of that request: the `requestId` is what makes a retry harmless, and
+what keeps two messages with the same text apart. It proposes a version's
+`sentAt` from its own clock when the person sends or edits, and keeps that too
+for every retry.
+
+A send can go unacknowledged: the room's `recentActivity` holds no entry with
+the send's `requestId`, labeled with the sender (see
+[`ChatRoomActivity`](ChatRoomActivity.md)). An entry that does match links, as
+its `what`, the message the send produced. While its proposal is within the
+room's `proposedTimeMaxAgeNsec`, the client can retry it with the same
+`requestId` and proposal, harmlessly. Once the proposal is older than that, the
+room would refuse it, so a client SHOULD show the message as not sent and offer
+the person an explicit retry, which sends it again as a new request, with a
+fresh `requestId` and a fresh proposal. The retry is the person's decision
+because it can duplicate the message, if the first send did arrive and the
+client never saw it. The same holds for an edit.
+
+A client that resumes an interrupted `createGroup` MUST resend it with its
+original `requestId`, and SHOULD do the same for `openDirect` (see
 [`ChatManagerOutput`](ChatManagerOutput.md#creating-a-room-partial-states)).
 
 **A client that renders the patterns' `[UI]`** meets this by construction. The

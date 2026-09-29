@@ -50,12 +50,10 @@ interface ChatMessage {
   plain object `{ deleted: true }`, with no other keys.
 - **`sentAt`** is the time the room recorded for the message's first version.
   The sender's client proposes a time with the message, and the room records
-  that proposal if it finds it plausible, possibly adjusted, and otherwise its
-  own handler clock (see [`ChatRoomOutput`](ChatRoomOutput.md#recorded-times)).
-  The handler clock is close to when the person sent the message when the room's
-  handler runs in the sender's own runtime, and later when it runs elsewhere,
-  since an event carries no time of its own apart from the proposal. The clock's
-  resolution is the system's to set (see the [timing side-channel
+  that proposal if it falls within the room's window, possibly adjusted, and
+  never later than the room's current time; a proposal outside the window is
+  refused (see [`ChatRoomOutput`](ChatRoomOutput.md#recorded-times)). The
+  clock's resolution is the system's to set (see the [timing side-channel
   mitigations](../sandboxing/TIMING_SIDE_CHANNELS.md)), and a client MUST NOT
   assume a finer one. See also [unique times](#unique-times).
 - **`editedAt`** is the time the room recorded for the current version, whether
@@ -129,10 +127,12 @@ room's reach.
 
 Every record a room makes has a time unique in that room: every message
 version's time (each `sentAt`, each `editedAt`, and each `sentAt` in
-`earlierVersions`) and every reaction's `sentAt`, across the main conversation,
-every thread, and every message's history. One record keeps one time, so a
-message's `sentAt` and its first earlier version's `sentAt` are the same
-recording, not two.
+`earlierVersions`), every reaction's `sentAt`, and every `recentActivity`
+entry's `at` that isn't one of those
+([`ChatRoomActivity`](ChatRoomActivity.md)), across the main conversation, every
+thread, and every message's history. One record keeps one time, so a message's
+`sentAt` and its first earlier version's `sentAt` are the same recording, not
+two.
 
 Every recorded time is a
 [`FabricEpochNsec`](../space-model-formal-spec/1-fabric-values.md): an exact

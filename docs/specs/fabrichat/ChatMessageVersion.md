@@ -7,9 +7,9 @@ One version of a message: its body, and a time. A
 `earlierVersions`, oldest first, each with the time the room recorded it. A
 sender also sends a new message, or an edit, as a version, whose `sentAt` is the
 time it proposes (see
-[`sendMessage`](ChatRoomOutput.md#sendmessageversion-chatmessageversion-replyto-chatreply)
+[`sendMessage`](ChatRoomOutput.md#sendmessagerequestid-string-version-chatmessageversion-replyto-chatreply)
 and
-[`editMessage`](ChatRoomOutput.md#editmessagemessage-cellchatmessage-version-chatmessageversion)).
+[`editMessage`](ChatRoomOutput.md#editmessagerequestid-string-message-cellchatmessage-version-chatmessageversion)).
 
 ```ts
 // Shown for illustration only.
@@ -34,8 +34,8 @@ interface ChatMessageVersion {
   times](ChatMessage.md#unique-times)).
 
 In a send or an edit, `body` must be a string, and `sentAt` is the sender's
-proposal: the idempotency token, and a hint to the room, which records its own
-time.
+proposal: a hint to the room, which records its own time. It doesn't identify
+the send; the stream's `requestId` does.
 
 A version is not a full message: it has no author, reply, or reactions of its
 own. Those belong to the message.

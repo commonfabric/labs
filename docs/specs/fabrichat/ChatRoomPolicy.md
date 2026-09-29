@@ -19,11 +19,14 @@ interface ChatRoomPolicy {
   /** Whether a sender's deletion of their own message obliterates it. */
   deletionIsObliteration: boolean;
 
-  /**
-   * How far before the room's clock a proposed time may be and still be
-   * recorded, in nanoseconds.
-   */
-  proposedTimeWindowNsec: bigint;
+  /** How far before the room's clock a proposed time is accepted, in ns. */
+  proposedTimeMaxAgeNsec: bigint;
+
+  /** How far after the room's clock a proposed time is accepted, in ns. */
+  proposedTimeMaxLeadNsec: bigint;
+
+  /** How long an entry stays in `recentActivity`, in ns. */
+  recentActivityWindowNsec: bigint;
 }
 ```
 
@@ -57,10 +60,19 @@ wrote it (see [`ChatRoomAbout`](ChatRoomAbout.md#who-created-the-room)).
   completely. It governs `deleteMessage` only: a direct room MUST let either
   person obliterate their own messages with `obliterateMessage`, whatever its
   policy.
-- **`proposedTimeWindowNsec`**: how far before the room's handler clock a
-  sender's proposed time may be and still be recorded (see [recorded
-  times](ChatRoomOutput.md#recorded-times)). A proposal later than the clock is
-  covered by the rule against recording future times, not by this key.
+- **`proposedTimeMaxAgeNsec`**: how far before the room's handler clock a
+  sender's proposed time is accepted, and recorded as proposed. It covers
+  network delay, retries, and sends queued offline, so it can be generous.
+- **`proposedTimeMaxLeadNsec`**: how far after the room's handler clock a
+  sender's proposed time is accepted. It covers only clock skew, so it can be
+  small. An accepted proposal on this side is recorded at the current time,
+  never later (see [recorded times](ChatRoomOutput.md#recorded-times)).
+
+A proposal outside both bounds is refused.
+
+- **`recentActivityWindowNsec`**: how long, before the room's handler clock, an
+  entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
+  It MUST be at least `proposedTimeMaxAgeNsec`.
 
 ## When it changes
 
