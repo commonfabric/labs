@@ -387,7 +387,6 @@ function rewriteTrackedOpaquePatternBody(
   ): expression is ts.ElementAccessExpression => {
     if (!ts.isElementAccessExpression(expression)) return false;
     const arg = expression.argumentExpression;
-    if (!arg || !ts.isExpression(arg)) return false;
     if (
       ts.isLiteralExpression(arg) ||
       ts.isNoSubstitutionTemplateLiteral(arg)
