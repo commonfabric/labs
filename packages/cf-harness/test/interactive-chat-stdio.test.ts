@@ -1647,7 +1647,13 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
   // the runsc runtime, through the real file system.
   const home = await Deno.makeTempDir();
   try {
-    const policy = join(home, ".local", "share", "runsc-cfc", "cfc-policy.json");
+    const policy = join(
+      home,
+      ".local",
+      "share",
+      "runsc-cfc",
+      "cfc-policy.json",
+    );
     assertEquals(
       await resolveInteractiveProvisioning({}, Deno.cwd(), {
         HOME: home,

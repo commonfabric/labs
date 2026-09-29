@@ -1,8 +1,4 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
 import { readHarnessRunArtifacts } from "../src/artifacts.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
@@ -691,7 +687,13 @@ Deno.test("local Loom interactive host finds the default CFC policy under the re
   const harnessHome = await Deno.makeTempDir();
   const home = await Deno.makeTempDir();
   try {
-    const policy = join(home, ".local", "share", "runsc-cfc", "cfc-policy.json");
+    const policy = join(
+      home,
+      ".local",
+      "share",
+      "runsc-cfc",
+      "cfc-policy.json",
+    );
     await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
       recursive: true,
     });
