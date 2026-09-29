@@ -212,7 +212,18 @@ address (absent candidates carry an `"absent"` marker so a grant appearing
 also invalidates), with a live prepare→revoke→commit-reject test. Item 5
 shipped in #4649 (single-use consumption receipts — see the build-order
 entry above; receipt consulted-state rides the same `consultedGrants`
-binding). Item 4 remains open._
+binding). Item 4's release-on-read half shipped on the display boundary
+(2026-09-29): the render resolver consults grants through
+`createRuntimeCfcGrantSource` in `cfc/grants.ts`, a replica read with no
+transaction, verified on read as the transaction-bound resolver verifies,
+and the reconciler subscribes to each candidate document a render consulted
+so a grant written or revoked afterward re-renders the value; a render is an
+observing site, so single-use grants resolve nothing there
+(`cfc-spec-changes.md` SC-50). What remains of item 4: the trusted share
+surface that writes the grant, and where a grant is hosted so that a
+viewer's runtime can read another owner's release — today a grant lives in
+the owner's identity space, and only a replica holding that space's
+documents resolves it._
 
 ### 3.1 Reviewed snapshot copies
 

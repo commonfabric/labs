@@ -39,13 +39,15 @@ import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
  *
  * Resolution runs RUNNER-side (this module) as B5's sink gate does
  * (`evaluateGatedConfidentiality` in prepare.ts): the same evaluator, acting
- * principal and deployment policy records. It differs in three things: the
- * boundary class, since this mints `sinkClass:"display"` where a sink gate
- * mints its sink's class; `STANDARD_RENDER_EXCHANGE_RULES`, which this
- * evaluates beside the deployment's records; and the switch, since this runs
+ * principal, deployment policy records and grant records. It differs in four
+ * things: the boundary class, since this mints `sinkClass:"display"` where a
+ * sink gate mints its sink's class; `STANDARD_RENDER_EXCHANGE_RULES`, which
+ * this evaluates beside the deployment's records; the switch, since this runs
  * wherever the render ceiling is on, whatever the `cfcPolicyEvaluation` dial
- * says. The reconciler consumes the resolved label; it never runs the
- * evaluator itself.
+ * says; and the grant read, which holds no transaction, so it reads the
+ * replica, binds nothing, and reports what it consulted for the caller to
+ * watch, and is observing, so a single-use grant resolves nothing. The
+ * reconciler consumes the resolved label; it never runs the evaluator itself.
  */
 
 /** The display sink class — the render sibling of B5's `"network"` class. */

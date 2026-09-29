@@ -1501,6 +1501,39 @@ writer the stamp itself names (its module, source file and export). Proposed edi
 one-time authenticated migration of legacy claims, and that once stored claims
 are stamped the file-correspondence rules are retired.
 
+## From the grants-at-display build (2026-09-29)
+
+**SC-50 [clarify] Grant lookups at a boundary that commits nothing — §4.3.5 +
+§8.10.6.** `open`. §4.3.5 has a rule's `policyState` guard consulted "at
+evaluation time" at any boundary, and §8.10.6 runs ordinary exchange
+evaluation before the display fit, so a grant-guarded rule fires at display.
+Two of §4.3.5's normative points are written for a boundary that prepares a
+commit and have no literal reading at one that does not. The digest binding
+("every consulted grant's content address MUST be bound into the prepared
+verification identity") guards a decision between prepare and commit; a
+display decision is remade on every render, so the runtime binds nothing and
+instead re-evaluates when a consulted document changes, subscribing to each
+candidate the evaluation named, present or absent, so a grant written or
+revoked after a render takes effect on the next one. The read exclusion
+("lookups MUST NOT enter the consumed set or PC") names a transaction's
+journal; a display read holds no transaction, and the lookup reaches no
+label. The observing-context rule for single-use grants applies as written:
+a render resolves none.
+
+Open point. A grant lives in the owner's identity space (§4.3.5 "the granting
+owner's space"), and a display evaluation reads its own replica, so the
+viewer sees a release only where their runtime holds the owner's documents.
+The spec does not say what a viewer's runtime may read of another owner's
+identity space, or whether the record is carried to the viewer another way.
+
+Proposed edit: in §4.3.5, state that at a boundary that commits nothing the
+consulted set is watched rather than bound, and that a decision there is
+remade on change; name where a grant a viewer must read is hosted.
+Implemented in `packages/runner/src/cfc/grants.ts`
+(`createRuntimeCfcGrantSource`), `packages/runner/src/cfc/render-ceiling.ts`
+(`RenderConsulted`) and `packages/html/src/worker/reconciler.ts` (the grant
+watch).
+
 ## From the acting-user and display-boundary build (2026-09-26)
 
 **SC-49 [normative] `$actingUser` in rule data, and deployment records at the
