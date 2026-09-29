@@ -11,6 +11,8 @@ import { debugStr } from "@/value-debug";
 import {
   type MappedResult,
   ValueVisitor,
+  type VisitingEntryResult,
+  type VisitingGapResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -63,27 +65,27 @@ export abstract class BaseValueVisitor<
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): VisitingResult<ResultType>;
+  ): VisitingGapResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingEntryResult<PlusType, ResultType>;
 
   //
   // Instance methods

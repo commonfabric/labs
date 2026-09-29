@@ -40,6 +40,16 @@ export type MapToForm<ResultType> = {
 };
 
 /**
+ * A `mapToEntry` form. This is analogous to `MapToForm` in every way except
+ * that a string `key` is additionally included.
+ */
+export type MapToEntryForm<ResultType> = {
+  readonly type: "mapTo";
+  readonly key: string;
+  readonly value: ResultType;
+};
+
+/**
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
@@ -69,6 +79,16 @@ export type RecurseForm = {
  */
 export type ReplaceForm<PlusType> = {
   readonly type: "replace";
+  readonly value: FabricValuePlus<PlusType>;
+};
+
+/**
+ * A `replaceEntry` form. This is analogous to `ReplaceForm` in every way except
+ * that a string `key` is additionally included.
+ */
+export type ReplaceEntryForm<PlusType> = {
+  readonly type: "replace";
+  readonly key: string;
   readonly value: FabricValuePlus<PlusType>;
 };
 
@@ -142,12 +162,44 @@ export type VisitResult<PlusType, ResultType> =
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from `visiting*()` calls (container iteration pre-visit
- * methods).
+ * Possible results from value-only `visiting*()` calls (container iteration
+ * pre-visit methods).
+ *
+ * A `mapTo` settles the sub-value's position without visiting it: in a
+ * structural-map operation its `value` is placed there as given, and in a plain
+ * visit the position is simply not visited. A `replace` visits its `value` in
+ * place of the sub-value, exactly as if `visitValue()` had returned that
+ * `replace`. Either way, in a structural-map operation the position is then
+ * reported to the matching `mapped*()` method, as any other is. `undefined`
+ * visits the sub-value itself.
  */
-export type VisitingResult<ResultType> = BaselineVisitorMethodResult<
-  ResultType
->;
+export type VisitingResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
+  | ReplaceForm<PlusType>;
+
+/**
+ * Possible results from value-free `visiting*()` calls (container iteration
+ * pre-visit methods).
+ */
+export type VisitingGapResult<PlusType, ResultType> =
+  BaselineVisitorMethodResult<ResultType>;
+
+/**
+ * Possible results from entry-bearing `visiting*()` calls (container iteration
+ * pre-visit methods).
+ *
+ * These mean what they do in a `VisitingResult`, for a whole entry. A `mapTo`
+ * places its `value` under its `key` without visiting either half of the
+ * entry, and its `key` is held to the rules a visited key's result is, among
+ * them that it may not be a key already mapped. A `replace` visits its `key`
+ * and `value` in place of the entry's own, the key only when the `recurse` that
+ * caused the iteration asked for keys to be visited.
+ */
+export type VisitingEntryResult<PlusType, ResultType> =
+  | BaselineVisitorMethodResult<ResultType>
+  | MapToEntryForm<ResultType>
+  | ReplaceEntryForm<PlusType>;
 
 //
 // Visitor interface
@@ -292,14 +344,14 @@ export interface ValueVisitor<
   /**
    * Indicates that an array element is about to be visited. This method is
    * called as a result of the visitor returning a `recurse` result for a
-   * visited array, and it is called _just before_ `visitValue()` is called on
-   * the element itself.
+   * visited array, and it is called _just before_ the element itself is
+   * visited, a visit its result may settle or redirect; see `VisitingResult`.
    */
   visitingFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /**
    * Indicates that an array gap (one or more holes) is about to be nominally
@@ -317,29 +369,31 @@ export interface ValueVisitor<
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): VisitingResult<ResultType>;
+  ): VisitingGapResult<PlusType, ResultType>;
 
   /**
    * Indicates that the instance state of a `FabricInstance` is about to be
    * visited. This method is called as a result of the visitor returning a
    * `recurse` result for a visited `FabricInstance`, and it is called _just
-   * before_ `visitValue()` is called on the instance state itself.
+   * before_ the instance state itself is visited, a visit its result may settle
+   * or redirect; see `VisitingResult`.
    */
   visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /**
    * Indicates that `FabricPlainObject` entry is about to be visited. This
    * method is called as a result of the visitor returning a `recurse` result
-   * for a visited `FabricPlainObject`, and it is called _just before_
-   * `visitValue()` is called on the key and/or value of the entry (as indicated
-   * by the `recurse` result that caused iteration to happen).
+   * for a visited `FabricPlainObject`, and it is called _just before_ the key
+   * and/or value of the entry are visited (as indicated by the `recurse` result
+   * that caused iteration to happen), a visit its result may settle or
+   * redirect; see `VisitingEntryResult`.
    */
   visitingFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingEntryResult<PlusType, ResultType>;
 }

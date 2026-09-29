@@ -28,10 +28,13 @@ import { debugStr } from "@/value-debug";
 
 import {
   type MainResultForm,
+  type MapToEntryForm,
   type MapToForm,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
+  type VisitingEntryResult,
+  type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -360,14 +363,7 @@ export class VisitInProgress<
           element,
         );
 
-        if (visitingResult?.type === "mainResult") {
-          return visitingResult;
-        }
-
-        const elemResult = this.#handleMappingAsAppropriate(
-          element,
-          this.#visitValue(element),
-        );
+        const elemResult = this.#resolveVisitingResult(element, visitingResult);
 
         switch (elemResult?.type) {
           case "mainResult": {
@@ -452,14 +448,7 @@ export class VisitInProgress<
         state,
       );
 
-      if (visitingResult?.type === "mainResult") {
-        return visitingResult;
-      }
-
-      const stateResult = this.#handleMappingAsAppropriate(
-        state,
-        this.#visitValue(state),
-      );
+      const stateResult = this.#resolveVisitingResult(state, visitingResult);
 
       switch (stateResult?.type) {
         case "mainResult": {
@@ -542,13 +531,47 @@ export class VisitInProgress<
           value,
         );
 
-        if (visitingResult?.type === "mainResult") {
-          return visitingResult;
+        // A `mapTo` settles the entry without visiting either half of it, and
+        // a `replace` puts another entry in its place, visited as the original
+        // would have been.
+        let settled: MapToEntryForm<ResultType> | undefined;
+        let entryKey = key;
+        let entryValue = value;
+
+        switch (visitingResult?.type) {
+          case "mainResult": {
+            return visitingResult;
+          }
+
+          case "mapTo": {
+            settled = visitingResult;
+            break;
+          }
+
+          case "replace": {
+            entryKey = visitingResult.key;
+            entryValue = visitingResult.value;
+            break;
+          }
+
+          case undefined: {
+            break;
+          }
+
+          default: {
+            // deno-coverage-ignore-start
+            this.#throwShouldntHappenResultType(visitingResult);
+          }
+            // deno-coverage-ignore-stop
         }
 
         const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
-          key,
-          doKeys ? this.#visitValue(key) : undefined,
+          entryKey,
+          settled
+            ? { type: "mapTo", value: settled.key }
+            : doKeys
+            ? this.#visitValue(entryKey)
+            : undefined,
         );
         let keyMappedTo: string | undefined;
 
@@ -580,8 +603,8 @@ export class VisitInProgress<
         }
 
         const valueResult = this.#handleMappingAsAppropriate(
-          value,
-          this.#visitValue(value),
+          entryValue,
+          settled ?? this.#visitValue(entryValue),
         );
         let valueMappedTo: ResultType | undefined;
 
@@ -766,12 +789,58 @@ export class VisitInProgress<
   }
 
   /**
+   * Helper for `#recurseFabricArray()` and `#recurseFabricInstance()`, which
+   * acts on a value-only `visiting*()` result for the sub-value `original`,
+   * returning the sub-value's result as `#handleMappingAsAppropriate()` would.
+   * A `mainResult` is returned as-is. A `mapTo` settles the position without
+   * visiting it, and a `replace` visits its replacement in the original's
+   * place. `undefined` visits the original.
+   */
+  #resolveVisitingResult(
+    original: FabricValuePlus<PlusType>,
+    visitingResult: VisitingResult<PlusType, ResultType>,
+  ): MainVisitResult<PlusType, ResultType> {
+    switch (visitingResult?.type) {
+      case "mainResult": {
+        return visitingResult;
+      }
+
+      case "mapTo": {
+        return this.#handleMappingAsAppropriate(original, visitingResult);
+      }
+
+      case "replace": {
+        const replacement = visitingResult.value;
+        return this.#handleMappingAsAppropriate(
+          replacement,
+          this.#visitValue(replacement),
+        );
+      }
+
+      case undefined: {
+        return this.#handleMappingAsAppropriate(
+          original,
+          this.#visitValue(original),
+        );
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitingResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  /**
    * Converts a `#visitValue()` result being used as a plain object key, from a
    * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
+   * A key settled by a `visiting*()` method's `mapTo` arrives here as a `mapTo`
+   * of its own, and is validated the same way.
    */
   #handlePlainObjectKeyMappingAsAppropriate(
     original: string,
-    visitResult: MainVisitResult<PlusType, ResultType>,
+    visitResult: MainVisitResult<PlusType, ResultType> | MapToForm<string>,
   ): MainResultForm<ResultType> | MapToForm<string> | undefined {
     if (!this.#mapMode) {
       return (visitResult?.type === "mainResult") ? visitResult : undefined;

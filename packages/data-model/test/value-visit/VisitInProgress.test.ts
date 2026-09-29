@@ -18,8 +18,10 @@ import {
   DO_DISPATCH,
   mainResult,
   mapTo,
+  mapToEntry,
   Recorder,
   replace,
+  replaceEntry,
 } from "./Recorder.ts";
 
 /** Runs a fresh visit of `value` with `vis`. */
@@ -403,6 +405,77 @@ describe("VisitInProgress", () => {
           expect(visit({ p: [1, "stop", 3], q: 4 }, rec)).toBe("deep");
           expect(rec.events.map((e) => e[1])).not.toContain(3);
           expect(rec.events.map((e) => e[1])).not.toContain(4);
+        });
+      });
+
+      describe("`visiting*()` results that settle or redirect a visit", () => {
+        it("does not visit an element that `visitingFabricArrayElement()` settles with a `mapTo`", () => {
+          const rec = new Recorder();
+          rec.onVisitingFabricArrayElement = (i) =>
+            (i === 0) ? mapTo("x") : undefined;
+
+          expect(visit([1, 2], rec)).toBeUndefined();
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", 2, "number"],
+          ]);
+        });
+
+        it("visits the replacement that `visitingFabricArrayElement()` names with a `replace`, in place of the element", () => {
+          const rec = new Recorder();
+          rec.onVisitingFabricArrayElement = (i) =>
+            (i === 0) ? replace(5) : undefined;
+
+          visit([1, 2], rec);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", 5, "number"],
+            ["primitive", 2, "number"],
+          ]);
+        });
+
+        it("does not visit instance state that `visitingFabricInstanceState()` settles with a `mapTo`", () => {
+          const rec = new Recorder();
+          rec.onVisitingFabricInstanceState = () => mapTo("x");
+
+          visit(error("boom"), rec);
+          expect(rec.names).not.toContain("primitive");
+        });
+
+        it("visits the replacement state that `visitingFabricInstanceState()` names with a `replace`", () => {
+          const rec = new Recorder();
+          rec.onVisitingFabricInstanceState = () =>
+            replace({ type: "Error", name: null, message: "bang" });
+
+          visit(error("boom"), rec);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", "Error", "string"],
+            ["primitive", null, "null"],
+            ["primitive", "bang", "string"],
+          ]);
+        });
+
+        it("visits neither half of an entry that `visitingFabricPlainObjectEntry()` settles with a `mapTo`", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+          rec.onVisitingFabricPlainObjectEntry = (k) =>
+            (k === "a") ? mapToEntry("z", 9) : undefined;
+
+          visit({ a: 1, b: 2 }, rec);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", "b", "string"],
+            ["primitive", 2, "number"],
+          ]);
+        });
+
+        it("visits the key and value that `visitingFabricPlainObjectEntry()` names with a `replace`, in place of the entry's own", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+          rec.onVisitingFabricPlainObjectEntry = () => replaceEntry("z", 9);
+
+          visit({ a: 1 }, rec);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", "z", "string"],
+            ["primitive", 9, "number"],
+          ]);
         });
       });
 
@@ -1417,6 +1490,152 @@ describe("VisitInProgress", () => {
             ).toEqual([
               ["mappedFabricArrayElement", array, 0, "x", 42],
             ]);
+          });
+        });
+
+        describe("`visiting*()` results", () => {
+          it("places the value of a `visitingFabricArrayElement()` `mapTo` as given, without visiting the element", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 0) ? mapTo("x") : undefined;
+
+            expect(map([1, 2], rec)).toEqual(["x", 2]);
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", 2, "number"],
+            ]);
+          });
+
+          it("maps the replacement of a `visitingFabricArrayElement()` `replace` in place of the element", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 0) ? replace(5) : undefined;
+            rec.onPrimitive = (v) => (v === 5) ? mapTo("five") : undefined;
+
+            expect(map([1, 2], rec)).toEqual(["five", 2]);
+          });
+
+          it("places the replacement of a `visitingFabricArrayElement()` `replace` as itself when its visit maps nothing", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 0) ? replace(5) : undefined;
+
+            expect(map([1, 2], rec)).toEqual([5, 2]);
+          });
+
+          it("reports the original element and a `mapTo` result to `mappedFabricArrayElement()`", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = () => mapTo("x");
+            const array = [1];
+
+            map(array, rec);
+            expect(
+              rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
+            ).toEqual([
+              ["mappedFabricArrayElement", array, 0, 1, "x"],
+            ]);
+          });
+
+          it("reports the original element and a `replace` result to `mappedFabricArrayElement()`", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = () => replace(5);
+            const array = [1];
+
+            map(array, rec);
+            expect(
+              rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
+            ).toEqual([
+              ["mappedFabricArrayElement", array, 0, 1, 5],
+            ]);
+          });
+
+          it("rebuilds an instance from the state of a `visitingFabricInstanceState()` `mapTo`, without visiting the original state", () => {
+            const rec = new Recorder();
+            const settled = { type: "Error", name: null, message: "bang" };
+            rec.onVisitingFabricInstanceState = () => mapTo(settled);
+            const original = error("boom");
+
+            const result = map(original, rec);
+            expect(result).toBeInstanceOf(FabricError);
+            expect((result as FabricError).message).toBe("bang");
+            expect(rec.names).not.toContain("primitive");
+            expect(rec.events.slice(-1)).toEqual([
+              ["mappedFabricInstanceState", original, {
+                type: "Error",
+                name: null,
+                message: "boom",
+              }, settled],
+            ]);
+          });
+
+          it("rebuilds an instance from the mapped replacement of a `visitingFabricInstanceState()` `replace`", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricInstanceState = () =>
+              replace({ type: "Error", name: null, message: "bang" });
+            rec.onPrimitive = (v) => (v === "bang") ? mapTo("pow") : undefined;
+
+            const result = map(error("boom"), rec);
+            expect(result).toBeInstanceOf(FabricError);
+            expect((result as FabricError).message).toBe("pow");
+          });
+
+          it("places the key and value of a `visitingFabricPlainObjectEntry()` `mapTo` as given, without visiting the entry", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "a") ? mapToEntry("z", 9) : undefined;
+            const object = { a: 1, b: 2 };
+
+            expect(map(object, rec)).toEqual({ z: 9, b: 2 });
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", "b", "string"],
+              ["primitive", 2, "number"],
+            ]);
+            expect(
+              rec.events.filter((e) =>
+                e[0] === "mappedFabricPlainObjectEntry"
+              )[0],
+            ).toEqual(["mappedFabricPlainObjectEntry", object, "a", 1, "z", 9]);
+          });
+
+          it("maps the key and value of a `visitingFabricPlainObjectEntry()` `replace` in place of the entry's own, when keys are visited", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onVisitingFabricPlainObjectEntry = () => replaceEntry("z", 9);
+            rec.onPrimitive = (v) => (v === "z") ? mapTo("y") : undefined;
+            const object = { a: 1 };
+
+            expect(map(object, rec)).toEqual({ y: 9 });
+            expect(rec.events.slice(-1)).toEqual([
+              ["mappedFabricPlainObjectEntry", object, "a", 1, "y", 9],
+            ]);
+          });
+
+          it("places the key of a `visitingFabricPlainObjectEntry()` `replace` without visiting it, when keys are not visited", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = () => replaceEntry("z", 9);
+
+            expect(map({ a: 1 }, rec)).toEqual({ z: 9 });
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", 9, "number"],
+            ]);
+          });
+
+          it("throws for a `visitingFabricPlainObjectEntry()` `mapTo` naming a key already mapped", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "b") ? mapToEntry("a", 9) : undefined;
+
+            expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
+              "mapped to already-mapped key",
+            );
+          });
+
+          it("throws for a `visitingFabricPlainObjectEntry()` `mapTo` naming an unsafe key", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = () =>
+              mapToEntry("__proto__", 9);
+
+            expect(() => map({ a: 1 }, rec)).toThrow("mapped to unsafe key");
           });
         });
 

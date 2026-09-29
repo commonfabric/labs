@@ -31,6 +31,8 @@ import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
   type MappedResult,
+  type VisitingEntryResult,
+  type VisitingGapResult,
   type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
@@ -477,7 +479,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _index: number,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -490,7 +492,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _start: number,
     _count: number,
-  ): VisitingResult<ResultType> {
+  ): VisitingGapResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -502,7 +504,7 @@ export abstract class DefaultValueVisitor<
   override visitingFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -515,7 +517,7 @@ export abstract class DefaultValueVisitor<
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingEntryResult<PlusType, ResultType> {
     return undefined;
   }
 }
