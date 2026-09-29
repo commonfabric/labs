@@ -7,8 +7,10 @@
  *
  * The id namespace is reserved. The transaction write chokepoint refuses every
  * unprivileged write to it. `IExtendedStorageTransaction.ensureRuntimeSecret()`
- * is the one writer: it mints a random value when no trusted one is stored and
- * hands none back, so calling it tells the caller nothing.
+ * is the one writer: it mints a random value when no trusted one is stored,
+ * hands none back, and takes the runtime's in-package authorization, so
+ * executed code cannot mint a secret in its own transaction and read it there
+ * before its label is stored.
  *
  * A stored value is trusted only when its stored schema carries the writer
  * claim `writeAuthorizedBy: [RUNTIME_SECRET_WRITER]`, or when the transaction

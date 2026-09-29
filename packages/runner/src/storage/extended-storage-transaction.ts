@@ -2772,7 +2772,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return id;
   }
 
-  ensureRuntimeSecret(space: MemorySpace, name: string): void {
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    if (!runtimeWritePolicyAuthorized(authorization)) {
+      throw new Error(
+        "ensureRuntimeSecret() requires the runtime's authorization",
+      );
+    }
     this.#assertWritable("ensureRuntimeSecret()");
     if (readRuntimeSecret(this, space, name) !== undefined) return;
     const link = runtimeSecretLink(space, name);
@@ -4111,8 +4120,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.stageContentAddressedDocument(space, value);
   }
 
-  ensureRuntimeSecret(space: MemorySpace, name: string): void {
-    this.#wrapped.ensureRuntimeSecret(space, name);
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {

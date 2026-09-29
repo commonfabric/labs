@@ -294,14 +294,15 @@ source rows' labels and the label of the query's own statement and parameters,
 and labels the `withheld` count with that same join. A shared result joins
 every source row's label, including rows skipped by the query contract; a
 session-scoped result joins the labels of the rows it holds. Which row sits at
-a position of `result` carries the parameters' label and that row's label. A
+a position of `result` carries the label of the query's statement and
+parameters and that row's label. A
 reader outside the join therefore cannot observe the array's membership,
 length, or withheld count, and code that reads any of them carries the join
 into what it writes: a row count of a query over labeled columns carries the
 columns' labels, and so does anything computed by mapping over `result`,
 which reads its membership. A row read through `result` by its position
-carries the parameters' label and that row's own labels, and not the other
-rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
+carries the label of the query's statement and parameters and that row's own
+labels, and not the other rows'. `cf cell get-label <cell> <path>/result/<i>/<col>` follows the links
 the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.

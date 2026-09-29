@@ -761,6 +761,24 @@ describe("sqlite-query-row-set-members", () => {
       expect(first.id).not.toBe(underPlanted);
     });
 
+    it("refuses to mint a salt without the runtime's authorization", () => {
+      // Code that minted the salt in its own transaction could read it back
+      // there before its label is stored, so the mint is the runtime's alone.
+
+      const tx = runtime.edit();
+      try {
+        expect(() =>
+          tx.ensureRuntimeSecret(
+            space,
+            SQLITE_ROW_SALT,
+            {} as Parameters<typeof tx.ensureRuntimeSecret>[2],
+          )
+        ).toThrow(/runtime's authorization/);
+      } finally {
+        tx.abort("refused mint");
+      }
+    });
+
     it("refuses a write to the salt from outside the runtime", async () => {
       await saltedRows("salt-write");
 

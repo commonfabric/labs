@@ -89,6 +89,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { type Cell, createCell, encodeSqliteParams } from "../cell.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
+import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { stripEntityUriScheme } from "../entity-kind.ts";
 import { toURI } from "../uri-utils.ts";
@@ -1810,7 +1811,11 @@ export function sqliteQuery(
                 // own. Nothing that varies between runs over unchanged data
                 // may reach a key, or an unchanged result would mint a
                 // document per row per run.
-                wtx.ensureRuntimeSecret(base.space, SQLITE_ROW_SALT);
+                wtx.ensureRuntimeSecret(
+                  base.space,
+                  SQLITE_ROW_SALT,
+                  runtimeWritePolicyAuthorization,
+                );
                 const salt = readRuntimeSecret(
                   wtx,
                   base.space,

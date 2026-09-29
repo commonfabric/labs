@@ -1841,13 +1841,22 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI;
 
   /**
-   * Mints the runtime secret called `name` in `space` when none is stored:
-   * a random value, written under the secret's label (`runtime-secret.ts`).
-   * Returns nothing, so a caller learns no secret by calling it; the runtime
-   * reads one back with `readRuntimeSecret()`. The one writer of the
-   * reserved namespace, which refuses every unprivileged write.
+   * Mints the runtime secret called `name` in `space` when no trusted value
+   * is stored: a random value, written under the secret's label and writer
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
+   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
+   * one writer of the reserved namespace, which refuses every unprivileged
+   * write, and callable only with the runtime's authorization, since code
+   * that minted a secret in its own transaction could read it back there
+   * before its label is stored.
+   *
+   * @throws Error without the runtime's authorization.
    */
-  ensureRuntimeSecret(space: MemorySpace, name: string): void;
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
 
   tx: IStorageTransaction;
 
