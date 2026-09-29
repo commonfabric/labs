@@ -50,9 +50,11 @@ client that can't learn it MUST treat the container as admitting others.
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `canSend`: the room's, for the viewer (see
     [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
-  - `about`, `messages`, `participants`, and `reactionTallies` (per message:
-    emoji, count, whether the viewer is among them, and the reactors' profiles),
-    each read through the link. They're empty unless `state` is `"member"`.
+  - `about`, `messages` (the room's [`ChatMessageList`](ChatMessageList.md),
+    read a window at a time), `recentActivity`, `participants`, and
+    `reactionTallies` (per message in the windows: emoji, count, whether the
+    viewer is among them, and the reactors' profiles), each read through the
+    link. They're empty unless `state` is `"member"`.
 
 A placement offers no stream that sends or reacts. A client sends to the room's
 own `sendMessage` and `sendReaction` streams, reached through `room`. If a

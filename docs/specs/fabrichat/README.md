@@ -18,6 +18,9 @@ requires of the runtime and of the programs that use it.
     to.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
+  - [`ChatMessageList`](ChatMessageList.md): a room's messages, read a window at
+    a time.
+  - [`ChatMessageWindow`](ChatMessageWindow.md): one window of them.
   - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
   - [`ChatMessageVersion`](ChatMessageVersion.md): an earlier version of a
     message.
@@ -103,6 +106,8 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
+   [`ChatMessageList.md`](ChatMessageList.md),
+   [`ChatMessageWindow.md`](ChatMessageWindow.md),
    [`ChatReply.md`](ChatReply.md),
    [`ChatMessageVersion.md`](ChatMessageVersion.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatRoomAbout.md`](ChatRoomAbout.md),

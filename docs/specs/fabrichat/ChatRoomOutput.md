@@ -14,8 +14,8 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
-  /** The conversation, oldest first, each with its reactions and history. */
-  messages: ChatMessage[];
+  /** The conversation, for access a window at a time. */
+  messages: ChatMessageList;
 
   /** What the room recorded recently, oldest first. */
   recentActivity: ChatRoomActivity[];
@@ -126,13 +126,14 @@ put (see [`leave`](#leaverequestid-string)).
 
 - **`about`** is a [`ChatRoomAbout`](ChatRoomAbout.md), set once when the room
   is created.
-- **`messages`** are [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`,
-  which is unique in the room. An obliterated message stays as a tombstone. Each
-  version of a message is labeled `authored-by` the principal who recorded it. A
-  message changes only through `editMessage`, `deleteMessage`, and
-  `obliterateMessage`, and is never removed from `messages`. A deleted message
-  accepts nothing further except obliteration (see [deleted
-  messages](ChatMessage.md#deleted-messages)).
+- **`messages`** is a [`ChatMessageList`](ChatMessageList.md): the room's
+  [`ChatMessage`](ChatMessage.md)s, ordered by `sentAt`, which is unique in the
+  room, and read a window at a time. An obliterated message stays as a
+  tombstone. Each version of a message is labeled `authored-by` the principal
+  who recorded it. A message changes only through `editMessage`,
+  `deleteMessage`, and `obliterateMessage`, and is never removed from
+  `messages`. A deleted message accepts nothing further except obliteration (see
+  [deleted messages](ChatMessage.md#deleted-messages)).
 - **Reactions** live on their messages, as each message's `reactions`
   ([`ChatReaction`](ChatReaction.md)), each labeled `authored-by` its reactor. A
   reaction is removed only by its own reactor, or with its message when it is
@@ -563,8 +564,10 @@ group rooms of their own.
   composer's state: the draft, and the reply being composed. An adapter's
   rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. A client uses it to show a room outside any container.
-  Inside a container, it reads the placement's `chat` group instead
+  that draw natively. Its `messages` is the list itself, whose windows and
+  request streams a client reaches through the list's link. A client uses it to
+  show a room outside any container. Inside a container, it reads the
+  placement's `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
 
 ## Implementation-defined behavior
@@ -581,6 +584,8 @@ these, and an implementation MUST state its choice for each in its rooms'
   chat, takes back what they said completely.
 - **Obliteration at all.** Whether an OWNER may obliterate messages.
 - **What an edit keeps** in a message's history.
+- **The limits on windows** of `messages`: how many messages a window holds
+  (`maxWindowCount`), and how many a session can have open (`maxOpenWindows`).
 - **The window of accepted proposed times**, on each side of the clock (see
   [recorded times](#recorded-times)).
 - **How long recent activity lasts** in `recentActivity`, at least as long as

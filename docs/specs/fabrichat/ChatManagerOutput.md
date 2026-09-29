@@ -42,6 +42,8 @@ interface ChatManagerOutput {
   }>;
   forget: Stream<{ requestId: string; room: Cell<ChatRoomOutput> }>;
   delivered: Stream<{ requestId: string; id: string }>;
+
+  [VIEWS]: { chats: object };
 }
 ```
 
@@ -70,6 +72,14 @@ room's `counterpart` has to be exactly that person.
 A grant gives access but tells the recipient nothing. So the manager also
 produces a **notice** for each other member, saying which room they have been
 admitted to and by whom (see [delivering notices](#delivering-notices)).
+
+## Views
+
+The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
+hosts that draw natively: `rooms`, `direct`, `requests`, and `outgoingNotices`,
+and every stream below. A native client drives the manager through that group as
+it drives a room through the room's `room` group (see
+[`clients.md`](clients.md#showing-a-room)).
 
 ## Facts
 

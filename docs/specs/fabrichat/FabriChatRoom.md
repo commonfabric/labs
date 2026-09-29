@@ -124,6 +124,12 @@ Entries older than the window are dropped as new ones are appended.
 `commitObliterate`, and `commitDelete` when it obliterates, also remove the
 message's earlier entries.
 
+`messages` is a sub-pattern the room instantiates over its record: it computes
+`count`, `oldestAt`, and `newestAt`, keeps `windows` as a `PerSession` keyed
+collection, and fulfills `openWindow` and `closeWindow` by setting and removing
+entries in it. A window is a computed selection over the record, so it stays
+live as the messages in it change.
+
 ## Configuration
 
 [`ChatRoomOutput`](ChatRoomOutput.md#implementation-defined-behavior) leaves
@@ -140,6 +146,8 @@ built at first. The first build fixes each setting at an initial value:
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
+| The most messages a window holds | `maxWindowCount` | 100 |
+| The most windows a session can have open | `maxOpenWindows` | 50 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. A room states its settings in `about.policy`

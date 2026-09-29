@@ -27,6 +27,12 @@ interface ChatRoomPolicy {
 
   /** How long an entry stays in `recentActivity`, in ns. */
   recentActivityWindowNsec: bigint;
+
+  /** The most messages a window of `messages` holds. */
+  maxWindowCount: number;
+
+  /** The most windows of `messages` a session can have open. */
+  maxOpenWindows: number;
 }
 ```
 
@@ -73,6 +79,11 @@ A proposal outside both bounds is refused.
 - **`recentActivityWindowNsec`**: how long, before the room's handler clock, an
   entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
   It MUST be at least `proposedTimeMaxAgeNsec`.
+- **`maxWindowCount`**: the most messages a window of `messages` holds (see
+  [`ChatMessageList`](ChatMessageList.md#limits)). A request for more gets this
+  many.
+- **`maxOpenWindows`**: the most windows of `messages` a session can have open
+  at once. Opening one more is refused.
 
 ## When it changes
 

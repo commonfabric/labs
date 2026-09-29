@@ -40,9 +40,12 @@ a room to anyone its space doesn't admit.
 
 ## Showing a room
 
-A client that draws natively reads a placement's `chat` group, reached through
-an adapter's `placement` output, or a room's `room` group for a room shown
-outside any container. Both are in `[VIEWS]` (see [views a host draws
+A client that draws natively reads a placement's `chat` group, which the adapter
+a container holds re-exports, or a room's `room` group for a room shown outside
+any container, and drives the manager through its `chats` group. It reads a
+room's messages a window at a time, through the room's
+[`ChatMessageList`](ChatMessageList.md), and never asks for the whole
+conversation at once. Both are in `[VIEWS]` (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
 
