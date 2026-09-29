@@ -190,6 +190,7 @@ import type {
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
   allowMutableTransactionRead,
+  excludeReadFromConflict,
   internalVerifierRead,
   markReadAsAttemptedWrite,
   mergeableOpRead,
@@ -405,8 +406,23 @@ const arrayItemPolicyInput = (
     path: link.path.slice(0, -1),
     schema: undefined,
   };
+  // What the parent holds decides how a policy input is spelled, not what
+  // the write depends on, so the read is a SHAPE read kept out of the
+  // commit's conflict set: `nonRecursive` with `excludeReadFromConflict`,
+  // which is the one form the commit leaves out (storage v2 keeps every
+  // recursive read as a value dependency, however it is marked). A
+  // recursive read here made a concurrent write to the container reject a
+  // commit whose body never read it (collection-naming-concurrency). Only a
+  // parent that holds nothing yet is asked of the stored envelope, whose
+  // read of the label path is a policy observation the commit leaves out
+  // too.
   const held = tx.readValueOrThrow(parent, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    nonRecursive: true,
+    meta: {
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+      ...excludeReadFromConflict,
+    },
   });
   if (
     !Array.isArray(held) &&
@@ -2431,7 +2447,9 @@ export class CellImpl<T extends FabricValue>
       // had the room's idea of an entry merged into the box's own schema on
       // the second seal, and refused the seal's commit as an incompatible
       // migration. The schema is the slot's own where the resolution left
-      // it none (a redirect carries its target's).
+      // it none (a redirect carries its target's). An object the diff
+      // anchors into an element's own document gets that document's input
+      // from the diff itself (`anchorValueAsEntity`), on every visit.
       //
       // A slot that is an item of an array is recorded as the array with the
       // item's schema as its `items`: a candidate envelope spells a path
