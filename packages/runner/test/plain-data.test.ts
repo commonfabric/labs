@@ -1,5 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import {
+  FabricDurationNsec,
+  FabricEpochNsec,
+} from "@commonfabric/data-model/fabric-primitives";
 import { FrozenMap, FrozenSet } from "@commonfabric/data-model/frozen-builtins";
 import {
   assertPlainData,
@@ -102,6 +106,26 @@ describe("plain-data sandbox helper", () => {
     expect(() => freezeVerifiedPlainData(Symbol("nope"))).toThrow(
       "Unsupported value type 'symbol'",
     );
+  });
+
+  it("assertPlainData accepts fabric primitives, alone and nested", () => {
+    expect(() => assertPlainData(new FabricEpochNsec(1n))).not.toThrow();
+    expect(() =>
+      assertPlainData({
+        spans: [new FabricDurationNsec(5n)],
+        byName: new Map([["start", new FabricEpochNsec(2n)]]),
+      })
+    ).not.toThrow();
+  });
+
+  it("returns a fabric primitive unchanged when freezing, alone and nested", () => {
+    const span = new FabricDurationNsec(5n);
+    expect(freezeVerifiedPlainData(span)).toBe(span);
+
+    const result = freezeVerifiedPlainData({ span, list: [span] });
+    expect(result.span).toBe(span);
+    expect(result.list[0]).toBe(span);
+    expect(Object.isFrozen(result)).toBe(true);
   });
 
   it("rejects unsupported object prototypes during validation", () => {
