@@ -8,6 +8,7 @@ import {
   action,
   type AddIntegrity,
   assert,
+  currentPrincipal,
   pattern,
   TESTS,
   Writable,
@@ -21,6 +22,7 @@ import {
   type MessagesValue,
   type ReactionList,
   type ReactionTally,
+  requestKeyOf,
   type RequestMemo,
   type RosterValue,
   type SentActivity,
@@ -90,8 +92,13 @@ export default pattern(() => {
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
   const requests = Writable.of<RequestMemo[]>([]);
-  // Forgets every request, as the room does once a request's memo expires.
-  const action_forget_requests = action(() => requests.set([]));
+  // Forgets the request "again", as the room does once its memo expires.
+  const action_expire_again = action(() => {
+    const key = requestKeyOf(currentPrincipal() ?? "", "again");
+    const memo: Writable<RequestMemo | undefined> = requests.elementById(key);
+    requests.removeByValue(requests.elementById(key));
+    memo.set(undefined);
+  });
   // The first message's reaction list, held apart from the message, whose link
   // to it a deletion drops.
   const firstReactions = Writable.of<{ list?: Writable<ReactionList> }>({});
@@ -225,7 +232,7 @@ export default pattern(() => {
         event: { requestId: "again", target: { value: "Again" } },
         trustedUi: sendGesture,
       },
-      { action: action_forget_requests },
+      { action: action_expire_again },
       {
         action: alice.sendMessage,
         event: { requestId: "again", target: { value: "Changed" } },

@@ -402,7 +402,7 @@ const entityKeyOf = (cell: unknown): string | undefined => {
 const clockNsec = (): bigint => nsecOf(epochNsecFromMsec(Date.now()));
 
 /** A request's key: its sender's principal, and its id. */
-const requestKeyOf = (sender: string, requestId: string): string =>
+export const requestKeyOf = (sender: string, requestId: string): string =>
   JSON.stringify([sender, requestId]);
 
 /** Whether the room has acted on the request `key` and still remembers it. */
