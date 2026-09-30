@@ -91,7 +91,8 @@ export interface LoomPairingQuestion {
  * since a redeem spends the code and the Loom records this browser as holding
  * the key. A Loom anywhere else may be someone else's, and its link could sign
  * this browser in as them. So its code is redeemed first and the person is
- * always asked, shown the Loom and the identity it handed over.
+ * asked, shown the Loom and the identity it handed over, unless that is the
+ * identity already signed in, in which case nothing changes.
  *
  * @throws LoomPairingError as `pairWithLoom()` does.
  */

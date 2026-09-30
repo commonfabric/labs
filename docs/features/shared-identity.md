@@ -146,8 +146,9 @@ in at once when nobody is signed in. When someone is, the shell asks whether to
 replace that identity before it redeems the code, because the redeem spends the
 code and Loom records this browser as holding the key. A Loom anywhere else may
 be someone else's, and a link to it could sign the browser in as them, so the
-shell redeems the code and then always asks, showing the Loom's address and the
-identity it handed over. A code typed into the login form signs in without a
+shell redeems the code and then asks, showing the Loom's address and the
+identity it handed over. The one exception is a Loom that hands over the
+identity already signed in: nothing changes, so nothing is asked. A code typed into the login form signs in without a
 question, since the person entered both the code and the address. The
 link's fragment is removed from the address bar as soon as the shell reads it,
 and a shell running in a frame never acts on one.
