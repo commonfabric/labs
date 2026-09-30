@@ -290,12 +290,12 @@ describe("executor-acl-document-write", () => {
           const entry = await fire("takeover", "bob");
 
           expect(actor).toBe(bobSigner.did());
+          expect(Engine.read(engine, { id: aclId })?.value).toEqual(
+            genesisAcl,
+          );
           expect(entry.error).toContain(
             `${aclId} is the space ACL document, and no run on the served ` +
               "plane may write it",
-          );
-          expect(Engine.read(engine, { id: aclId })?.value).toEqual(
-            genesisAcl,
           );
         } finally {
           cancelProbe();
@@ -322,12 +322,12 @@ describe("executor-acl-document-write", () => {
         try {
           const entry = await fire("mixed");
 
-          expect(entry.error).toContain("is the space ACL document");
           expect(Engine.read(engine, { id: aclId })?.value).toEqual(
             genesisAcl,
           );
           expect(Engine.read(engine, { id: argumentLink.id })?.value)
             .toEqual(valueBefore);
+          expect(entry.error).toContain("is the space ACL document");
         } finally {
           cancelProbe();
         }
