@@ -42,6 +42,7 @@ import {
 import type { DID } from "@commonfabric/identity/did";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
+  ACLManager,
   type Cell,
   type ConsoleHandler,
   ConsoleMethod,
@@ -475,6 +476,12 @@ const handlers: Record<
       await cell.sync();
       markersCells.set(name, cell);
     }
+
+    // Load the space's access list before any pattern runs, so that
+    // `spaceAccess()` in a computed reads the list on its first run. A run
+    // before the list arrives returns `undefined`, and an assertion, which is
+    // read once, can read that value before the list's arrival replaces it.
+    await new ACLManager(rt(), space).get();
 
     // Minimal wish("#default") environment, seeded once by the first worker.
     if (args.seedDefaults === true) {
