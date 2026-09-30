@@ -1164,6 +1164,11 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
       // `null & carrier` is nothing, and the reduced type keeps no alias name.
       // A written reference still names the policy; a type alone has only its
       // carrier, which holds the labels but cannot spell a writer binding.
+      const TITLE_AND_RANK = {
+        type: "object",
+        properties: { title: { type: "string" }, rank: { type: "number" } },
+        required: ["title", "rank"],
+      };
       for (
         const [spelling, declaration, a, input, output] of [
           [
@@ -1263,6 +1268,53 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               items: { type: "string" },
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
+          ],
+          [
+            "a nullable intersection written directly",
+            "",
+            `Confidential<({ title: string } & { rank: number }) | null, ["secret"]>`,
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable intersection in another label's payload",
+            `type Sec<T> = Confidential<(T & { rank: number }) | null, ["secret"]>;`,
+            `Integrity<Sec<{ title: string }>, ["trusted"]>`,
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+            {
+              ...TITLE_AND_RANK,
+              ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+            },
+          ],
+          [
+            "an intersection whose name `NonNullable` drops",
+            "",
+            `NonNullable<Confidential<{ title: string } & { rank: number }, ["secret"]>>`,
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+          ],
+          [
+            "a nullable intersection's writer written directly",
+            `const setEntry = handler<{ title: string }, { entry: Writable<({ title: string } & { rank: number }) | null> }>((event, { entry }) => { entry.set({ title: event.title, rank: 0 }); });`,
+            "WriteAuthorizedBy<({ title: string } & { rank: number }) | null, typeof setEntry>",
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    file: "/main.tsx",
+                    path: ["setEntry"],
+                  },
+                },
+              },
+            },
+            TITLE_AND_RANK,
           ],
         ] as const
       ) {

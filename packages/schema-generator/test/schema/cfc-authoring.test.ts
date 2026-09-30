@@ -593,6 +593,203 @@ describe("Schema: CFC authoring aliases", () => {
     ).toEqual(payload);
   });
 
+  it("reads a two-member payload's carriers in full, or not at all, when only its type is read", async () => {
+    // A type-only read has the carriers alone. A payload of two members is
+    // read as their intersection, labeled whole, and a writer the read
+    // cannot spell leaves the payload unlabeled.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
+      function save() {}
+      type Pair = { a: string } & { b: number };
+      type Labelled = Cfc<Confidential<Pair, readonly ["a"]>, { ownerPrincipal: CurrentPrincipal }>;
+      type Owned = Cfc<WriteAuthorizedBy<Pair, typeof save>, { ownerPrincipal: CurrentPrincipal }>;
+      interface SchemaRoot {
+        labelled: NonNullable<Labelled | null>;
+        owned: NonNullable<Owned | null>;
+      }
+    `,
+      "SchemaRoot",
+    );
+    const typeOnly = (name: string) =>
+      new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbol(checker.getPropertyOfType(type, name)!),
+        checker,
+      );
+
+    const pair = {
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "number" } },
+      required: ["a", "b"],
+    };
+    expect(typeOnly("labelled")).toEqual({
+      ...pair,
+      ifc: {
+        confidentiality: ["a"],
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+      },
+    });
+    expect(typeOnly("owned")).toEqual(pair);
+  });
+
+  describe("a policy no reference names, whose payload is not one member", () => {
+    // A policy's carriers are members of the intersection its type is, beside
+    // its payload's members, so a payload that is itself an intersection
+    // leaves several members besides the carriers, and one the checker drops
+    // from an intersection, as it drops `{}`, leaves none. With the alias name
+    // gone, the value is read as those members' intersection, and the
+    // carriers label it as the policy written by name is labeled.
+
+    const DECLARATIONS = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      declare const BRAND: unique symbol;
+      type Branded = { readonly [BRAND]: true };
+      interface Named { n: string }
+      /** A documented part. */
+      interface Documented { d: string }
+    `;
+
+    /** The schemas of `value` written by name and with its name dropped. */
+    const byNameAndDropped = async (value: string) => {
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `
+        type Policy = ${value};
+        interface SchemaRoot {
+          byName: Policy;
+          dropped: NonNullable<Policy | null>;
+        }
+      `,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const definitions = schema.$defs as Record<string, unknown>;
+      return {
+        byName: definitions.Policy,
+        dropped: schema.properties?.dropped,
+      };
+    };
+
+    it("reads an intersection of objects as their properties together, labeled", async () => {
+      const { dropped } = await byNameAndDropped(
+        'Confidential<{ a: string } & { b: number }, readonly ["a"]>',
+      );
+      expect(dropped).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        ifc: { confidentiality: ["a"] },
+      });
+    });
+
+    for (
+      const payload of [
+        "{ a: string } & { b: number } & { c: boolean }",
+        "Named & { b: number }",
+        "Documented & { b: number }",
+        "string & Branded",
+        "string[] & Branded",
+        "Cell<{ a: string }> & Branded",
+      ]
+    ) {
+      it(`reads a payload of \`${payload}\` as the policy written by name`, async () => {
+        const { byName, dropped } = await byNameAndDropped(
+          `Confidential<${payload}, readonly ["a"]>`,
+        );
+        expect((byName as Record<string, unknown>).ifc).toEqual({
+          confidentiality: ["a"],
+        });
+        expect(dropped).toEqual(byName);
+      });
+    }
+
+    it("labels each member of a union the payload distributes into", async () => {
+      // `(A | C) & B` is `(A & B) | (C & B)`, and the carriers distribute with
+      // it, so each member of the union is a policy of several members.
+      const { dropped } = await byNameAndDropped(
+        'Confidential<({ a: string } | { c: boolean }) & { b: number }, readonly ["a"]>',
+      );
+      const members = (dropped as Record<string, unknown>).anyOf as Record<
+        string,
+        unknown
+      >[];
+      expect(members.map((member) => Object.keys(member.properties!)))
+        .toEqual([["a", "b"], ["c", "b"]]);
+      expect(members.map((member) => member.ifc)).toEqual([
+        { confidentiality: ["a"] },
+        { confidentiality: ["a"] },
+      ]);
+    });
+
+    it("reads each nested policy's carriers", async () => {
+      const { byName, dropped } = await byNameAndDropped(
+        'Integrity<Confidential<{ a: string } & { b: number }, readonly ["c"]>, readonly ["i"]>',
+      );
+      expect((byName as Record<string, unknown>).ifc).toEqual({
+        confidentiality: ["c"],
+        integrity: ["i"],
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("reads nested policies over a payload the checker dropped as the policies written by name", async () => {
+      const { byName, dropped } = await byNameAndDropped(
+        'Integrity<Confidential<{}, readonly ["c"]>, readonly ["i"]>',
+      );
+      expect(byName).toEqual({
+        type: "object",
+        properties: {},
+        ifc: { confidentiality: ["c"], integrity: ["i"] },
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("labels an intersection written with a policy as one member", async () => {
+      // The checker flattens `A & Confidential<B, L>` into the one
+      // intersection `Confidential<A & B, L>` is, so the carrier labels the
+      // whole value.
+      const { byName, dropped } = await byNameAndDropped(
+        '{ a: string } & Confidential<{ b: number }, readonly ["a"]>',
+      );
+      expect(byName).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(dropped).toEqual(byName);
+    });
+
+    it("labels a recursion through the policy's type, which is its own definition", async () => {
+      // The recursion's reference drops the name as the root's does, so the
+      // type recurs as itself, read from its carriers alone.
+      const { type, checker } = await getTypeFromCode(
+        DECLARATIONS + `
+        type Chain = Confidential<{ next?: NonNullable<Chain | null> } & { v: number }, readonly ["a"]>;
+        interface SchemaRoot { chain: NonNullable<Chain | null> }
+      `,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const definitions = schema.$defs as Record<string, Record<string, any>>;
+      const resolve = (at: any) =>
+        typeof at?.$ref === "string"
+          ? definitions[at.$ref.split("/").pop()]!
+          : at;
+      const chain = resolve(schema.properties?.chain);
+      expect(chain.ifc).toEqual({ confidentiality: ["a"] });
+      expect(resolve(chain.properties.next)).toBe(chain);
+    });
+  });
+
   it("formats a projection reached through a user alias over the root its reference carries", async () => {
     const { type, checker } = await getTypeFromCode(
       `
@@ -3114,6 +3311,10 @@ describe("Schema: CFC authoring aliases", () => {
             ifc: secret,
           },
         ],
+        [
+          'Pick<Sec<{ x?: string } & { y: number }>, "x">',
+          { type: "object", properties: { x }, ifc: secret },
+        ],
         ["Readonly<Sec<string>>", { type: "string", ifc: secret }],
         [
           "Readonly<Sec<string[]>>",
@@ -3237,6 +3438,25 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    it("reads `Readonly` of a labeled branded primitive as the unlabeled one, labeled", async () => {
+      // A payload of several members is an intersection, which `Readonly`
+      // maps as it maps an object rather than leaving it as it is.
+      const branded = `
+        declare const BRAND: unique symbol;
+        type Branded = { readonly [BRAND]: true };
+      `;
+      const labeled = await generate(
+        "Readonly<Sec<string & Branded>>",
+        branded,
+      );
+      const unlabeled = await generate("Readonly<string & Branded>", branded);
+      expect(labeled.schema).toEqual({
+        ...(unlabeled.schema as Record<string, unknown>),
+        ifc: secret,
+      });
+      expect(labeled.diagnostics).toEqual([]);
+    });
+
     it("reads such an alias over an unlabelled type as the type it builds", async () => {
       // Only a labelled operand is read in the alias's place; any other is
       // the mapped type the checker builds, a named one no reference to it.
@@ -3296,6 +3516,7 @@ describe("Schema: CFC authoring aliases", () => {
         type SelectSecond<A, B extends { x?: string }> = Pick<B, "x">;
         type SelectDefault<T extends { x?: string } = Sec<Pair>> = Pick<T, "x">;
         type SelectSec<T extends { x?: string }> = Pick<Sec<T>, "x">;
+        type SelectPair<T extends { x?: string }> = Pick<Sec<T & { y: number }>, "x">;
         type SelectBoth<T extends { x?: string }, L extends readonly unknown[]> =
           Pick<Confidential<Sec<T>, L>, "x">;
         type SelectNothing<T> = Pick<Sec<T>, never>;
@@ -3329,6 +3550,16 @@ describe("Schema: CFC authoring aliases", () => {
             'SelectSec<Confidential<Pair, readonly ["b"]>>',
             'Pick<Sec<Confidential<Pair, readonly ["b"]>>, "x">',
             { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectPair<Confidential<{ x?: string }, readonly ["b"]>>',
+            'Pick<Sec<Confidential<{ x?: string }, readonly ["b"]> & { y: number }>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            "SelectPair<never>",
+            'Pick<Sec<never & { y: number }>, "x">',
+            undefined,
           ],
           [
             'SelectBoth<Pair, readonly ["b"]>',
