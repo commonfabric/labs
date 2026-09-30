@@ -122,9 +122,12 @@ holding `READ`, and it tells a non-member only that they are one.
 
 ## In a pattern test
 
-`cf test` gives the test's space an access list, the test's identity as OWNER
-in a single-user test and a level per user in a multi-user one, so
-`spaceAccess(target)` returns a level there rather than `undefined`. The test
-lane's storage does not enforce that list.
+`cf test` gives the test's space an access list, so `spaceAccess(target)`
+returns a level there rather than `undefined`. A multi-user test's list holds a
+level per user. A single-user test's space holds no list on the store `cf test`
+creates, and gets one naming the test's identity as its only OWNER; a store a
+caller supplies to the runner (`TestRunnerOptions.storageHost`) keeps any list
+it already holds, and that list decides the level. The test lane's storage does
+not enforce the list.
 [The test's space and its access list](../common/workflows/pattern-testing.md#the-tests-space-and-its-access-list)
 says how a participant declares its level.

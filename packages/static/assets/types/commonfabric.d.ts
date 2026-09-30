@@ -4593,6 +4593,10 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * leaves the user out of the list. It is what `spaceAccess()` reads. The
  * storage server does not enforce it: a participant reads and writes the space
  * whatever its level.
+ *
+ * The run fails before any participant starts when a participant of the first
+ * participant's user declares a level other than `"OWNER"`, or when two
+ * participants of one user declare different levels.
  */
 export interface MultiUserTestDescriptor {
   setup?: (...args: never[]) => unknown;
