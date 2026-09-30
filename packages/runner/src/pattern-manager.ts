@@ -1785,10 +1785,10 @@ export class PatternManager {
    *
    * With `persistence`, the program's module closure is also written into
    * `persistence.space`, as an ordinary compile into that space writes it,
-   * whenever CFC is enforcing. A pattern the program instantiates in a space
-   * of its own, with `inSpace()`, is replicated there from that closure, so a
-   * caller that runs the program in `persistence.space` passes it. A failed
-   * write fails the call.
+   * unless CFC enforcement is `disabled`. A pattern the program instantiates
+   * in a space of its own, with `inSpace()`, is replicated there from that
+   * closure, so a caller that runs the program in `persistence.space` passes
+   * it. A failed write fails the call.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
@@ -1800,9 +1800,7 @@ export class PatternManager {
       ...options,
       patternCoverage,
     };
-    // The same condition `compileOrGetPattern()` persists under: the
-    // compiled-set integrity label is only written, and only trusted on read,
-    // under an enforcing mode.
+    // The same condition `compileOrGetPattern()` persists under.
     const persistenceSpace = this.#runtime.cfcEnforcementMode === "disabled"
       ? undefined
       : persistence?.space;
