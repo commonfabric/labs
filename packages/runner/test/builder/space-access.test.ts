@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import type { FabricValue } from "@commonfabric/data-model";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
@@ -56,12 +57,12 @@ describe("spaceAccess()", () => {
   });
 
   /**
-   * Returns a setter for the access list of the space `owner` is the identity
-   * of, `space` unless given, which writes as that identity.
+   * Returns a function writing a document in the space `owner` is the
+   * identity of, `space` unless given, as that identity.
    */
-  async function aclWriter(
+  async function writerFor(
     owner: Identity = spaceSigner,
-  ): Promise<(acl: AclValue) => Promise<void>> {
+  ): Promise<(id: string, value: FabricValue) => Promise<void>> {
     const target = owner.did() as MemorySpace;
     const client = await connect({ transport: loopback(server) });
     cleanups.push(() => client.close());
@@ -77,13 +78,24 @@ describe("spaceAccess()", () => {
       }),
     );
     let localSeq = 0;
-    return async (acl) => {
+    return async (id, value) => {
       await session.transact({
         localSeq: ++localSeq,
         reads: { confirmed: [], pending: [] },
-        operations: [{ op: "set", id: `of:${target}`, value: { value: acl } }],
+        operations: [{ op: "set", id: id as URI, value: { value } }],
       });
     };
+  }
+
+  /**
+   * Returns a setter for the access list of the space `owner` is the identity
+   * of, `space` unless given, which writes as that identity.
+   */
+  async function aclWriter(
+    owner: Identity = spaceSigner,
+  ): Promise<(acl: AclValue) => Promise<void>> {
+    const write = await writerFor(owner);
+    return (acl) => write(`of:${owner.did()}`, acl);
   }
 
   /** Returns a client runtime acting as `user`. */
@@ -269,6 +281,46 @@ describe("spaceAccess()", () => {
         .toBe("OWNER");
     });
 
+    it("returns the level in the space a linked cell's value lives in", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
+      const home = carol.did() as MemorySpace;
+      await (await aclWriter(carol))({ [home]: "OWNER" });
+
+      const runtime = clientRuntime(carol);
+      await syncAcl(runtime);
+      const tx = runtime.edit();
+      const link = runtime.getCell<unknown>(
+        home,
+        "space-access link",
+        undefined,
+        tx,
+      );
+      link.set(runtime.getCell<unknown>(space, "space-access target"));
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(
+        callIn(runtime, runtime.edit(), { frameSpace: home, target: link }),
+      )
+        .toBe("READ");
+    });
+
+    it("returns `undefined` for a target passed as `undefined`, not the calling code's level", async () => {
+      const runtime = clientRuntime(bob);
+      const frame = pushFrame({
+        runtime,
+        tx: runtime.edit(),
+        space: bob.did() as MemorySpace,
+        frameKind: "lift",
+      });
+      try {
+        expect(spaceAccess()).toBe("OWNER");
+        expect(spaceAccess(undefined)).toBeUndefined();
+      } finally {
+        popFrame(frame);
+      }
+    });
+
     it("narrows a computation's read scope to `user`", async () => {
       const setAcl = await aclWriter();
       await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
@@ -330,11 +382,6 @@ describe("spaceAccess()", () => {
   });
 
   describe("in a dependent computation", () => {
-    const argumentSchema = {
-      type: "object",
-      properties: { target: { type: "unknown", asCell: ["cell"] } },
-      required: ["target"],
-    } as const satisfies JSONSchema;
     const resultSchema = {
       type: "object",
       properties: { level: { type: "string" } },
@@ -342,17 +389,27 @@ describe("spaceAccess()", () => {
 
     /**
      * Runs, in `user`'s home space, a pattern whose one computation returns
-     * `user`'s level in `space`, and returns the cell holding that level;
-     * `unknown` stands in for `undefined`.
+     * `user`'s level in the space of a cell in `space`, and returns the cell
+     * holding that level; `unknown` stands in for `undefined`. The computation
+     * takes the cell as a cell, or with `byValue` as the value it holds.
      */
     async function levelCell(
       runtime: Runtime,
       user: Identity,
+      options: { byValue?: boolean } = {},
     ): Promise<Cell<string>> {
+      const argumentSchema = {
+        type: "object",
+        properties: {
+          target: options.byValue
+            ? { type: "object" }
+            : { type: "unknown", asCell: ["cell"] },
+        },
+      } as const satisfies JSONSchema;
       const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
       const level = lift(
-        (input: { target: Cell<unknown> }) =>
-          spaceAccess(input.target) ?? "unknown",
+        (input: { target: unknown }) =>
+          spaceAccess(input.target as Cell<unknown>) ?? "unknown",
         argumentSchema,
         { type: "string" },
       );
@@ -389,6 +446,27 @@ describe("spaceAccess()", () => {
       expect(level.resolveAsCell().getAsNormalizedFullLink().scope).toBe(
         "user",
       );
+    });
+
+    it("returns the level in the space of a value it reads, and `undefined` for one it cannot read", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+      const bobRuntime = clientRuntime(bob);
+      const targetId = bobRuntime.getCell<unknown>(space, "space-access target")
+        .getAsNormalizedFullLink().id;
+      await (await writerFor())(targetId, { note: "in the space" });
+
+      const bobLevel = await levelCell(bobRuntime, bob, { byValue: true });
+      await waitForCellValue(bobRuntime, bobLevel, (v) => v === "WRITE", {
+        stuckLabel: "bob's level to arrive as `WRITE`",
+      });
+
+      const daveRuntime = clientRuntime(dave);
+      const daveLevel = await levelCell(daveRuntime, dave, { byValue: true });
+      await waitForCellValue(daveRuntime, daveLevel, (v) => v !== undefined, {
+        stuckLabel: "dave's level to arrive",
+      });
+      expect(daveLevel.get()).toBe("unknown");
     });
 
     it("runs again when a grant or revoke changes the level", async () => {

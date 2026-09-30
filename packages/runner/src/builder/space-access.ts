@@ -19,8 +19,9 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
 };
 
 /**
- * Returns the current principal's own access to `target`'s space, or to the
- * space the calling code runs in when `target` is omitted. The level is the
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, or to the space the calling code runs in when no `target` is
+ * passed. The level is the
  * one the memory server enforces, `acl[principal] ?? acl["*"]` over the
  * space's access list, with the space's own identity holding `OWNER`
  * implicitly; {@link spaceReaderRole} decides it, as it does for the render
@@ -30,7 +31,9 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * nothing, or, on a client, the memory server has refused the principal the
  * space outright. `undefined` means the answer is not known yet, which is
  * what an access list that has not arrived, a space that has no access list,
- * and a run with no principal all return.
+ * a run with no principal, and a `target` passed as `undefined` all return.
+ * The last is what a computation's input reads as while the value it names
+ * cannot be read, so it is not taken to mean the calling code's own space.
  *
  * Who the principal is depends on where the call runs. In a reactive
  * computation it is the principal demanding the value, and the call makes the
@@ -42,9 +45,11 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * already read, since any member can read the whole access list.
  *
  * @throws If called outside a handler or a reactive computation, or with a
- *   `target` that is not a cell.
+ *   `target` that is neither a cell nor `undefined`.
  */
-export function spaceAccess(target?: unknown): SpaceAccessLevel | undefined {
+export function spaceAccess(
+  ...args: [target?: unknown]
+): SpaceAccessLevel | undefined {
   const frame = topFrame();
   const kind = frame?.frameKind;
   if (kind !== "lift" && kind !== "handler") {
@@ -72,8 +77,18 @@ export function spaceAccess(target?: unknown): SpaceAccessLevel | undefined {
     throw new Error("`spaceAccess()` in a handler is not available yet.");
   }
 
-  const targetSpace = target === undefined ? space : spaceOfTarget(target);
-  return accessLevel(runtime, tx, targetSpace, principal, kind === "lift");
+  if (args.length === 0) {
+    return accessLevel(runtime, tx, space, principal, kind === "lift");
+  }
+  const [target] = args;
+  if (target === undefined) return undefined;
+  return accessLevel(
+    runtime,
+    tx,
+    spaceOfTarget(target),
+    principal,
+    kind === "lift",
+  );
 }
 
 /**
@@ -87,7 +102,7 @@ function spaceOfTarget(target: unknown): MemorySpace {
   } else if (isCellResult(target)) {
     cell = getCellOrThrow(target);
   } else {
-    throw new Error("`spaceAccess()` takes a cell as its target.");
+    throw new Error("`spaceAccess()` takes a cell, or nothing, as its target.");
   }
   return cell.resolveAsCell().getAsNormalizedFullLink().space;
 }

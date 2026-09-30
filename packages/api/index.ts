@@ -3804,15 +3804,16 @@ export declare const getEntityId: GetEntityIdFunction;
 export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
 
 /**
- * Returns the current principal's own access to `target`'s space, or to the
- * space the calling code runs in when `target` is omitted. The level is the
- * one the memory server enforces: the principal's entry in the space's access
- * list, else the list's `"*"` entry, with the space's own identity holding
- * `OWNER` implicitly.
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, or to the space the calling code runs in when no `target` is
+ * passed. The level is the one the memory server enforces: the principal's
+ * entry in the space's access list, else the list's `"*"` entry, with the
+ * space's own identity holding `OWNER` implicitly.
  *
  * `"none"` means the principal holds nothing there. `undefined` means the
  * answer is not known yet: the access list has not arrived, the space has no
- * access list, or there is no principal. It is never a guess.
+ * access list, there is no principal, or `target` was passed as `undefined`,
+ * which is what a value that cannot be read yet reads as. It is never a guess.
  *
  * In a reactive computation (`computed()`, `lift()`) the principal is whoever
  * is viewing, and the result is theirs alone, so two users never see each
