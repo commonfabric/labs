@@ -39,6 +39,7 @@
     "generateText",
     "handler",
     "ifElse",
+    "isWellFormedDID",
     "lift",
     "navigateTo",
     "pattern",

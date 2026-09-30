@@ -329,6 +329,33 @@ use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
 
+### Checking a DID read from data
+
+A DID a pattern reads from its data — a member list, a message's author, an
+invitation — is only a string, and anything can be written there. Before showing
+one to a person or treating it as the principal a record names, ask
+`isWellFormedDID()`, exported from `commonfabric`. It returns whether the value is
+a DID in DID Core syntax, and narrows it to `DID` when it is:
+
+```tsx
+// Shown inside a pattern body.
+const donutFans = new Writable<string[]>([]);
+
+const addFan = action(({ fan }: { fan: unknown }) => {
+  if (!isWellFormedDID(fan)) return;
+  donutFans.push(fan);
+});
+```
+
+- It is the same predicate the runtime decides DID syntax with, so a DID it
+  passes is one the runtime accepts as written. Do not restate the syntax in a
+  pattern.
+- It checks syntax alone. A value that passes names no one in particular and says
+  nothing about who wrote it; `currentPrincipal()` is what names the acting user.
+- It reads nothing but its argument, so it works anywhere: in an action or
+  handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
+  call on a reactive value is lifted like a call to any other function.
+
 ### Anti-patterns (do not ship these)
 
 - A "your name" text field used as the current user's identity → resolve `#profile`.
