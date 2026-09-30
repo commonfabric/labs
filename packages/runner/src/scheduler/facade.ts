@@ -670,6 +670,15 @@ export class Scheduler {
   }
 
   /**
+   * The action executing right now, if one is. Code running inside an action
+   * that learns of a change from somewhere the action's reads cannot see hands
+   * this to {@link invalidateAction} to run the action again.
+   */
+  get executingAction(): Action | null {
+    return this.#executingAction;
+  }
+
+  /**
    * Per-runtime enter, leave, and re-arm tallies of demand roots. The space
    * server reads the enter and leave delta per pass and folds it into its
    * space-lived `stats.demand` accumulators; these reset with the runtime on
