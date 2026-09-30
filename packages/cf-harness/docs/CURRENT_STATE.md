@@ -87,12 +87,24 @@ uses Docker.
 
 `--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy` are flags of
 the batch CLI, which the batch lane of the Loom local host also hands its
-arguments to. The interactive stdio entrypoint and the interactive lane of the
-Loom local host take the selection from the environment alone, and refuse each
-of the three flags as an unsupported argument. All four derive the selection
-through one function, so runs started from one environment execute on the same
-driver. The console does not read the selection, and its sessions run on the
-Docker driver.
+arguments to. The interactive stdio entrypoint, the interactive lane of the Loom
+local host, and the console take the selection from the environment alone, and
+refuse each of the three flags. All five derive the selection through one
+function, so runs started from one environment execute on the same driver.
+
+The console's launcher, `console:launch`, derives the selection from the same
+environment the console serves under, and refuses the three selection flags as
+the console does. It takes the two sidecar directory flags, `--cfc-result-dir`
+and `--cfc-invocation-context-dir`, on the Docker driver only. Under the direct
+driver it reads no Docker runtime table, sites no CFC sidecar directory, and
+refuses those two flags; the console's operator snapshot reports the direct
+driver's configuration, `runsc` binary, and CFC policy in place of Docker's
+registration, with its rootfs and whether its CFC policy reads and parses as a
+JSON object. The console takes no enforcement mode, so its turns run at
+`enforce-strict`; with no CFC policy the snapshot reports the runtime failed,
+since the engine refuses each turn before any tool runs, and the launcher and
+the server both print that every turn is refused. The console's `bash` takes no
+`session`, as on Docker.
 
 The selection belongs to a run. The direct driver registers nothing with Docker
 and keeps its `runsc` state under the run's own scratch directory, so runs on
@@ -169,15 +181,19 @@ macOS VM is present.
 
 ### The `bash` descriptor and sessions
 
-The model-facing descriptor of `bash` depends on the runtime. Before each model
-request the prompt loop reads the sandbox's description and offers the
-descriptor that fits it:
+The model-facing descriptor of `bash` depends on the runtime and on the run's
+CFC enforcement mode. Before each model request the prompt loop reads the
+sandbox's description and the run's mode, and offers the descriptor that fits
+them:
 
-- where the description reports `sessions`, which is the direct driver, `bash`
-  takes an optional `session` argument;
-- otherwise, which is the Docker driver, `bash` takes `command`, `cwd`, and
-  `timeoutMs` and no `session`. Selecting the direct driver is the only thing
-  that changes the descriptor.
+- where the description reports `sessions`, which is the direct driver, and the
+  mode allows a session, which is `disabled` or `observe`, `bash` takes an
+  optional `session` argument;
+- otherwise `bash` takes `command`, `cwd`, and `timeoutMs` and no `session`: the
+  Docker driver in every mode, and the direct driver in the enforcing modes,
+  which refuse every session. `enforce-strict`, the default, is one of them, so
+  a run on the direct driver is offered a `session` only where it is started at
+  a weaker mode.
 
 A session is a long-lived container. The first call that names a session starts
 it, and each later call that names it executes inside it, so what a command
@@ -359,9 +375,9 @@ The current package provides:
 
 - a console operator snapshot at `GET /api/health/detail`, retaining launch
   decisions for all connector grants and refusals alongside independently cached
-  Docker and index observations, with deciding records, timestamps, causes, and
-  remedies; unknown observations remain distinct from failures, and reading the
-  route never waits for a live probe;
+  observations of the selected sandbox driver and the index, with deciding
+  records, timestamps, causes, and remedies; unknown observations remain
+  distinct from failures, and reading the route never waits for a live probe;
 - owner retraction through console `POST /api/index/retract`, signed by the
   configured identity and requiring an active same-owner direct successor; the
   generic index proxy stays read-only and standalone deletion is unsupported;

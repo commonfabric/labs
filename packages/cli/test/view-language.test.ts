@@ -39,6 +39,7 @@ import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
+import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
@@ -141,6 +142,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
   assertEquals(languageForName("toml"), tomlLanguage);
+  assertEquals(languageForName("shell"), shellLanguage);
+  assertEquals(languageForName("sh"), shellLanguage);
+  assertEquals(languageForName("bash"), shellLanguage);
   assertEquals(languageForName("properties"), propertiesLanguage);
   assertEquals(languageForName("java-properties"), propertiesLanguage);
   assertEquals(languageForName("proguard"), proguardLanguage);
@@ -164,6 +168,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "swift",
     "kotlin",
     "toml",
+    "shell",
     "properties",
     "proguard",
     "xml",
@@ -190,6 +195,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "kotlin",
     "kt",
     "toml",
+    "shell",
+    "sh",
+    "bash",
     "properties",
     "java-properties",
     "proguard",
@@ -434,7 +442,7 @@ Deno.test("languageForSource: filenames precede direct and env shebangs", () => 
     plainTextLanguage,
   );
   assertEquals(
-    languageForSource("tool", "#!/usr/bin/env bash\necho plain\n"),
+    languageForSource("tool", "#!/usr/bin/env zsh\necho plain\n"),
     plainTextLanguage,
   );
 });
@@ -563,6 +571,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
     "Package.swift",
     "build.gradle.kts",
     "libs.versions.toml",
+    "deploy.sh",
     "gradle.properties",
     "proguard-rules.pro",
     "AndroidManifest.xml",
@@ -581,6 +590,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
       "swift",
       "kotlin",
       "toml",
+      "shell",
       "properties",
       "proguard",
       "xml",

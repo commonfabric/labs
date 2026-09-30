@@ -46,11 +46,12 @@ import {
   awaitEach,
   awaitEdges,
   awaitReplica,
+  awaitSettled,
+  settleServing,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   readWatermarkSeq,
-  waitForSettled,
   watermarkCell,
   watermarkDocLink,
 } from "../src/executor/watermark.ts";
@@ -297,8 +298,14 @@ describe("stage F serving loop", () => {
     });
   };
 
-  it("preserves serving row producers and skips untouched rows after client edits", async () => {
-    type Row = { key: string; value: number };
+  type Row = { key: string; value: number };
+
+  /**
+   * Serves a pattern that maps two input rows to rows whose values are
+   * computed, seeding the inputs and running the pattern on each serving
+   * runtime the host builds. The returned view reads the latest runtime.
+   */
+  const serveRowPattern = () => {
     const ready = Promise.withResolvers<void>();
     let cancel: (() => void) | undefined;
     let readRows: (() => Row[]) | undefined;
@@ -329,11 +336,19 @@ describe("stage F serving loop", () => {
         const inputs = [0, 1].map((index) =>
           runtime.getCell<Row>(space, `row-input-${index}`)
         );
-        const tx = runtime.edit();
-        inputs.forEach((cell, index) =>
-          cell.withTx(tx).set({ key: String(index), value: index + 1 })
+        // A later tenure's fresh runtime reads the store as it stands, and
+        // keeps the inputs a client may have edited since the seeding.
+        await Promise.all(
+          [argument, result, ...inputs].map((cell) => cell.sync()),
         );
-        argument.withTx(tx).set({ rows: inputs });
+        await runtime.storageManager.synced();
+        const tx = runtime.edit();
+        if (argument.withTx(tx).get() === undefined) {
+          inputs.forEach((cell, index) =>
+            cell.withTx(tx).set({ key: String(index), value: index + 1 })
+          );
+          argument.withTx(tx).set({ rows: inputs });
+        }
         runtime.run(tx, compiled, argument, result);
         expect((await tx.commit()).error).toBeUndefined();
         cancel = result.sink(() => {});
@@ -363,7 +378,19 @@ describe("stage F serving loop", () => {
         throw error;
       }
     };
-    host = newHost();
+    return {
+      ready: ready.promise,
+      readRows: () => readRows!(),
+      inspect: () => inspect!(),
+      cancel: () => cancel?.(),
+    };
+  };
+
+  it("preserves serving row producers and skips untouched rows after client edits", async () => {
+    const { ready, readRows, inspect, cancel } = serveRowPattern();
+    // The run counts compared below belong to one runtime, so the lease
+    // outlives any stall a loaded machine puts between renewals.
+    host = newHost({ leaseTtlMs: 600_000 });
     openClient();
     try {
       const clientResult = clientRuntime.getCell<{ rows: Row[] }>(
@@ -371,12 +398,12 @@ describe("stage F serving loop", () => {
         "row-result",
       );
       await clientResult.sync();
-      await ready.promise;
-      expect(readRows!()).toEqual([{ key: "0", value: 2 }, {
+      await ready;
+      expect(readRows()).toEqual([{ key: "0", value: 2 }, {
         key: "1",
         value: 4,
       }]);
-      let before = inspect!();
+      let before = inspect();
       const engine = await server.engineForSpace(space);
       for (const edited of [0, 1]) {
         const input = clientRuntime.getCell<Row>(space, `row-input-${edited}`);
@@ -389,13 +416,13 @@ describe("stage F serving loop", () => {
           `SELECT MAX(seq) AS seq FROM "commit" WHERE class = 'authored'`,
         ).get() as { seq: number };
         expect(authored.seq).toBeGreaterThan(0);
-        await waitForSettled(clientRuntime, space, authored.seq);
+        await awaitSettled(clientRuntime, space, authored.seq);
         await servingRuntime!.idle();
-        expect(readRows!()).toEqual([{ key: "0", value: 20 }, {
+        expect(readRows()).toEqual([{ key: "0", value: 20 }, {
           key: "1",
           value: edited === 0 ? 4 : 22,
         }]);
-        const after = inspect!();
+        const after = inspect();
         expect(after.map(({ link, id }) => ({ link, id }))).toEqual(
           before.map(({ link, id }) => ({ link, id })),
         );
@@ -404,7 +431,89 @@ describe("stage F serving loop", () => {
         before = after;
       }
     } finally {
-      cancel?.();
+      cancel();
+    }
+  });
+
+  it("re-serves the row pattern after a lease lapse parks its tenure: the next tenure's setup succeeds and serves the client's edit (serving-loop.md §1, §2)", async () => {
+    const { ready, cancel } = serveRowPattern();
+    // Neither renewal driver comes due during this test, so the lapse
+    // below is the only one.
+    host = newHost({
+      idleParkMs: 600_000,
+      renewIntervalMs: 600_000,
+      leaseTtlMs: 600_000,
+    });
+    openClient();
+    try {
+      // Read under the rows' schema, so the client tracks the computed
+      // documents behind each row's value.
+      const clientResult = clientRuntime.getCell<{ rows: Row[] }>(
+        space,
+        "row-result",
+        {
+          type: "object",
+          properties: {
+            rows: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  key: { type: "string" },
+                  value: { type: "number" },
+                },
+                required: ["key", "value"],
+              },
+            },
+          },
+          required: ["rows"],
+        } as const satisfies JSONSchema,
+      );
+      await clientResult.sync();
+      await ready;
+      const engine = await server.engineForSpace(space);
+      const spaceServer = host.spaceServer(space)!;
+      await awaitEach(cycles, () => spaceServer.suspendedOnInput);
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 2 },
+        { key: "1", value: 4 },
+      ]);
+
+      // The lapse: the row still names this holder, but it has expired.
+      // The client's next edit drives a wave whose commit the store
+      // refuses, and the tenure parks.
+      expect(
+        acquireExecutionLease(engine, {
+          space,
+          holder: spaceServer.holder,
+          now: 0,
+          ttlMs: 1,
+        }),
+      ).toBe(true);
+      const settledBefore = activations.entries.length;
+      const input = clientRuntime.getCell<Row>(space, "row-input-0");
+      await input.sync();
+      const tx = clientRuntime.edit();
+      input.withTx(tx).key("value").set(10);
+      expect((await tx.commit()).error).toBeUndefined();
+      await parked();
+      expect(parks.entries).toEqual([{ space, reason: "lease-lost-abort" }]);
+
+      // The client's session is still live, so the host builds a fresh
+      // runtime for the space, and that tenure serves the edit.
+      await activations.reached(settledBefore + 1);
+      expect(activations.entries[settledBefore]).toEqual({
+        space,
+        outcome: "active",
+      });
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 20 },
+        { key: "1", value: 4 },
+      ]);
+    } finally {
+      cancel();
     }
   });
 
@@ -448,9 +557,7 @@ describe("stage F serving loop", () => {
 
     // waitForSettled (testing.md §3): resolves through the ordinary
     // client subscription — no text polling.
-    const settled = await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    const settled = await awaitSettled(clientRuntime, space, authoredSeq);
     expect(settled).toBeGreaterThanOrEqual(authoredSeq);
 
     // The derived value: the pattern computed 41 + 1 server-side. The
@@ -526,7 +633,7 @@ describe("stage F serving loop", () => {
     clientArg.withTx(tx2).set({ n: 99 });
     expect((await tx2.commit()).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, authored2);
+    await awaitSettled(clientRuntime, space, authored2);
     // Read past the barrier: a write is counted as SEEN when it reaches
     // the tenure's admission feed, and a write that arrives while the
     // tenure is still activating is covered by the activation scan,
@@ -613,9 +720,7 @@ describe("stage F serving loop", () => {
     clientArg.withTx(tx).set({ n: 7 });
     expect((await tx.commit()).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    await awaitSettled(clientRuntime, space, authoredSeq);
 
     // Read with the loop stopped. A running loop records a cycle's drain
     // before the cycle that encloses it, so the counts differ by one at an
@@ -1078,9 +1183,7 @@ describe("stage F serving loop", () => {
     clientArg.withTx(tx).set({ n: 41 });
     expect((await tx.commit()).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 10_000,
-    });
+    await awaitSettled(clientRuntime, space, authoredSeq);
     await waitForCellValue(
       clientRuntime,
       clientResult.key("total"),
@@ -1099,9 +1202,7 @@ describe("stage F serving loop", () => {
     clientArg.withTx(tx2).set({ n: 99 });
     expect((await tx2.commit()).error).toBeUndefined();
     const authored2 = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, authored2, {
-      timeoutMs: 10_000,
-    });
+    await awaitSettled(clientRuntime, space, authored2);
     expect(clientResult.key("total").get()).toBe(100);
   });
 
@@ -1188,9 +1289,7 @@ describe("stage F serving loop", () => {
     clientArg.withTx(tx).set({ n: 41 });
     expect((await tx.commit()).error).toBeUndefined();
     const authoredSeq = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, authoredSeq, {
-      timeoutMs: 15_000,
-    });
+    await awaitSettled(clientRuntime, space, authoredSeq);
     await waitForCellValue(
       clientRuntime,
       clientResult.key("total"),

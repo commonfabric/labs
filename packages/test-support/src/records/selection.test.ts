@@ -55,6 +55,140 @@ describe("selection", () => {
       ]);
     });
 
+    it("round-trips the health of the cost model", () => {
+      const manifest: Manifest = {
+        ...sampleManifest(),
+        health: {
+          suites: {
+            "pattern-unit": {
+              fixed: 350.4,
+              tooLong: 181,
+              batches: 36,
+              ratio: { median: 0.36, p90: 0.82 },
+            },
+            "cli-core": { fixed: 28, tooLong: 0, batches: 0 },
+          },
+          lanes: {
+            observed: 40,
+            pastBound: 3,
+            projectedInside: 38,
+            overran: 2,
+          },
+          previous: {
+            generatedAt: "2026-09-25T16:30:00.000Z",
+            suites: { "pattern-unit": { fixed: 184.2, tooLong: 0 } },
+          },
+          tooLongBaseline: 3,
+          alarms: ["pattern-unit: a lane pays 5m50s before it runs any of it"],
+        },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a manifest carrying no health as having none", () => {
+      const parsed = parseManifest(serializeManifest(sampleManifest()));
+      expect(parsed).toBeDefined();
+      expect(Object.hasOwn(parsed!, "health")).toBe(false);
+    });
+
+    it("reads a manifest whose health it cannot read, without the health", () => {
+      // Nothing obeys the health, so a figure this reader cannot read
+      // costs the figures and not the packing every lane obeys.
+      const healthy = {
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+      };
+      for (
+        const health of [
+          7,
+          { ...healthy, suites: [] },
+          {
+            ...healthy,
+            suites: { unit: { fixed: -1, tooLong: 0, batches: 0 } },
+          },
+          {
+            ...healthy,
+            suites: { unit: { fixed: 3, tooLong: 0.5, batches: 0 } },
+          },
+          {
+            ...healthy,
+            suites: { unit: { fixed: 3, tooLong: 0, batches: 1, ratio: 2 } },
+          },
+          { ...healthy, lanes: { observed: 1 } },
+          {
+            ...healthy,
+            lanes: {
+              observed: 1,
+              pastBound: 2,
+              projectedInside: 1,
+              overran: 0,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 1,
+              pastBound: 0,
+              projectedInside: 2,
+              overran: 0,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 3,
+              pastBound: 1,
+              projectedInside: 3,
+              overran: 2,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 3,
+              pastBound: 3,
+              projectedInside: 1,
+              overran: 2,
+            },
+          },
+          { ...healthy, previous: { generatedAt: "yesterday", suites: {} } },
+          {
+            ...healthy,
+            previous: {
+              generatedAt: "2026-09-25T16:30:00.000Z",
+              suites: { unit: { fixed: 3 } },
+            },
+          },
+          { ...healthy, alarms: "none" },
+          { ...healthy, tooLongBaseline: -1 },
+          { ...healthy, alarms: [3] },
+          { ...healthy, alarms: undefined },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.health = health;
+        const parsed = parseManifest(JSON.stringify(object));
+        expect(parsed).toBeDefined();
+        expect(Object.hasOwn(parsed!, "health")).toBe(false);
+      }
+    });
+
+    it("drops a health figure it does not know, keeping the rest", () => {
+      const object = JSON.parse(serializeManifest(sampleManifest()));
+      object.health = {
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2, drift: 9 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+        verdict: "fine",
+      };
+      expect(parseManifest(JSON.stringify(object))?.health).toEqual({
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+      });
+    });
+
     it("returns undefined for a schema version it does not know", () => {
       const ahead = {
         ...sampleManifest(),

@@ -132,7 +132,8 @@ export interface AggregateState {
 
   /**
    * What lanes have measured about themselves, against the day each ran.
-   * A lane's cost beyond its tests is fitted from this, and it is kept
+   * A lane's cost beyond its tests is fitted from this, and the model's
+   * health is measured from it, and it is kept
    * here rather than recomputed because a publisher run folds a few
    * hours of objects and a fit wants the window `COST_WINDOW_DAYS`
    * names.

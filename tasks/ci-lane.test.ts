@@ -60,6 +60,8 @@ import {
   batchMeasurement,
   batchMeasurementName,
   excusedMeasurement,
+  type LaneMeasurementKind,
+  laneMeasurementName,
   MEASURED_BATCH_SUFFIX,
 } from "./lane-measurement.ts";
 import {
@@ -83,6 +85,7 @@ import {
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
   FULL_LANES_MAX,
+  LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANE_PROLOGUE_SECONDS,
   UNMEASURED_COST_SECONDS,
@@ -1358,6 +1361,7 @@ describe("running a lane's work", () => {
         suite: recording,
         units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
         runs: new Map([["packages/bakery/glaze.test.ts", 1]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -1392,6 +1396,7 @@ describe("running a lane's work", () => {
         suite: recording,
         units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
         runs: new Map([["packages/bakery/glaze.test.ts", 1]]),
+        projected: 0,
       },
       { ...lane, full: true },
       workDir,
@@ -1414,6 +1419,7 @@ describe("running a lane's work", () => {
         suite: runnable([Deno.execPath(), "eval", "0"]),
         units: [{ unit: "a-unit", skip: [] }],
         runs: new Map([["a-unit", 3]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -1427,6 +1433,7 @@ describe("running a lane's work", () => {
         suite: runnable([Deno.execPath(), "eval", "Deno.exit(1)"], "red"),
         units: [{ unit: "a-unit", skip: [] }],
         runs: new Map([["a-unit", 2]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -1459,6 +1466,7 @@ describe("running a lane's work", () => {
         ]),
         units: [{ unit: "a-unit", skip: [] }],
         runs: new Map([["a-unit", 1]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -1480,6 +1488,7 @@ describe("running a lane's work", () => {
           suite: runnable(["true"], "workspace-unit"),
           units: [{ unit: "a-unit", skip: [] }],
           runs: new Map([["a-unit", 2]]),
+          projected: 0,
         }],
         ["deno", "toolshed"],
         { objectName: "manifest-x.json.gz" },
@@ -1599,6 +1608,7 @@ describe("running a lane's work", () => {
           suite: runnable(["true"], "workspace-unit"),
           units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
           runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+          projected: 0,
         }],
         ["deno"],
         { objectName: "manifest-x.json.gz" },
@@ -1640,6 +1650,7 @@ describe("running a lane's work", () => {
           suite: runnable(["true"], "workspace-unit"),
           units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
           runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+          projected: 0,
         }],
         ["deno"],
         { objectName: "manifest-x.json.gz" },
@@ -2332,6 +2343,10 @@ describe("the lane's own housekeeping", () => {
         topology: () => Promise.resolve([bare]),
         manifest: ({ at }) =>
           Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+        // The lane ends red, and what it records about itself would
+        // otherwise land in the spool of the run testing it, as a failure
+        // of that run.
+        spool: () => undefined,
       });
     } finally {
       console.log = log;
@@ -2641,7 +2656,7 @@ describe("what a lane records about itself", () => {
         }]),
     });
     const result = await runBatch(
-      { suite: suiteUnderTest, units: [], runs: new Map() },
+      { suite: suiteUnderTest, units: [], runs: new Map(), projected: 0 },
       lane,
       workDir,
       spool,
@@ -2690,6 +2705,7 @@ describe("what a lane records about itself", () => {
             suite: suite({ id: "workspace-unit", units: ["one"] }),
             units: [],
             runs: new Map(),
+            projected: 0,
           },
           lane,
           workDir,
@@ -2754,6 +2770,7 @@ describe("what a lane records about itself", () => {
           }),
           units: [{ unit: "one", skip: [] }],
           runs: new Map([["one", 1]]),
+          projected: 0,
         },
         lane,
         workDir,
@@ -2823,6 +2840,7 @@ describe("what a lane records about itself", () => {
           }),
           units: [{ unit: "slow", skip: [] }, { unit: "quick", skip: [] }],
           runs: new Map([["slow", 1], ["quick", 3]]),
+          projected: 0,
         },
         lane,
         workDir,
@@ -2885,6 +2903,7 @@ describe("what a lane records about itself", () => {
             }),
             units: [{ unit: "one", skip: [] }],
             runs: new Map([["one", 1]]),
+            projected: 0,
           },
           lane,
           workDir,
@@ -3024,6 +3043,7 @@ describe("what a lane records about itself", () => {
           }),
           units: [{ unit: "a-unit", skip: [] }],
           runs: new Map([["a-unit", 1]]),
+          projected: 0,
         },
         lane,
         workDir,
@@ -3212,6 +3232,7 @@ describe("reading a batch's records against what it was asked to run", () => {
       }),
       units: [{ unit: UNIT, skip: [] }],
       runs: new Map([[UNIT, 1]]),
+      projected: 0,
     };
   }
 
@@ -3577,6 +3598,77 @@ describe("what a lane does with the batches it was given", () => {
     // while the lane reports red, or the other way about, is one commit
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
+  });
+
+  describe("what a lane records about itself as a whole", () => {
+    /**
+     * The manifest the lane selects by, charging the suite twelve
+     * seconds to hold, three to open the unit, and the identity's own
+     * second: sixteen in all, and nothing to open `deno`.
+     */
+    function charging(): Manifest {
+      const manifest = manifestOf([{ unit: UNIT }]);
+      manifest.calibration.suites["workspace-unit"] = {
+        overhead: 12,
+        correction: 1,
+        unitOverhead: 3,
+      };
+      return manifest;
+    }
+
+    /** The figure one of the lane's own measurements holds. */
+    function figure(
+      measured: readonly TestRecord[],
+      kind: LaneMeasurementKind,
+    ): TestRecord | undefined {
+      return measured.find((record) =>
+        record.test.n === laneMeasurementName(kind)
+      );
+    }
+
+    it("records what its batch was charged beside what it spent", async () => {
+      const { measured } = await run(recording(""), { manifest: charging() });
+      const named = (kind: "spent" | "projected") =>
+        measured.find((record) =>
+          record.test.n === batchMeasurementName("workspace-unit", false, kind)
+        );
+      expect(named("projected")?.durationMs).toBe(16_000);
+      expect(named("projected")?.outcome).toBe("pass");
+      expect(named("spent")?.outcome).toBe("pass");
+    });
+
+    it("records its work, its projection and its bound", async () => {
+      const { measured } = await run(recording(""), { manifest: charging() });
+      // The lane holds one batch and opens nothing with a cost, so its
+      // projection is the batch's charge.
+      expect(figure(measured, "projected")?.durationMs).toBe(16_000);
+      expect(figure(measured, "bound")?.durationMs).toBe(
+        (LANE_BOUND_SECONDS - LANE_PROLOGUE_SECONDS) * 1000,
+      );
+      const spent = figure(measured, "spent");
+      expect(spent?.outcome).toBe("pass");
+      expect(spent!.durationMs).toBeGreaterThan(0);
+    });
+
+    it("records a lane of the full run against the full run's bound", async () => {
+      const { measured } = await run(recording(""), {
+        full: true,
+        manifest: charging(),
+      });
+      expect(figure(measured, "bound")?.durationMs).toBe(
+        (FULL_LANE_BOUND_SECONDS - LANE_PROLOGUE_SECONDS) * 1000,
+      );
+    });
+
+    it("records a lane whose batch failed as having failed", async () => {
+      // A batch that failed stopped at its first failure, so the lane's
+      // time reads short, and a reader of the figures passes over it.
+      const { ok, measured } = await run(recording("", "fail"), {
+        manifest: charging(),
+      });
+      expect(ok).toBe(false);
+      expect(figure(measured, "spent")?.outcome).toBe("fail");
+    });
   });
 
   it("gives each batch the environment its own suite asked for", async () => {

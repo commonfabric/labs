@@ -41,8 +41,8 @@ type PathPrefixNode = {
   /** Next path segments, including wildcard tails retained for deduplication. */
   children: Map<string, PathPrefixNode>;
 
-  /** Whether an added path ends here. */
-  terminal: boolean;
+  /** The added path that ends here, if one does. */
+  path: readonly string[] | undefined;
 
   /** Sources whose first wildcard immediately follows this node. */
   wildcardPaths: (readonly string[])[];
@@ -51,7 +51,7 @@ type PathPrefixNode = {
 /** Constructs an empty path node. */
 const createNode = (): PathPrefixNode => ({
   children: new Map(),
-  terminal: false,
+  path: undefined,
   wildcardPaths: [],
 });
 
@@ -86,9 +86,9 @@ export class PathPrefixIndex {
       }
       node = next;
     }
-    if (node.terminal) return;
-    node.terminal = true;
+    if (node.path !== undefined) return;
     const copy = [...path];
+    node.path = copy;
     this.#paths.push(copy);
     wildcardNode?.wildcardPaths.push(copy);
   }
@@ -103,8 +103,36 @@ export class PathPrefixIndex {
     return this.#matches(path, true);
   }
 
+  /**
+   * The added paths that prefix `path` or have `path` as a prefix, by
+   * `isPrefix`'s rules, each once and in no particular order.
+   */
+  overlapping(path: readonly string[]): (readonly string[])[] {
+    const overlaps = (source: readonly string[]) =>
+      isPrefix(source, path) || isPrefix(path, source);
+    if (path.includes("*")) return this.#paths.filter(overlaps);
+    const found = new Set<readonly string[]>();
+    let node = this.#root;
+    for (const segment of path) {
+      if (node.path !== undefined) found.add(node.path);
+      for (const source of node.wildcardPaths) {
+        if (overlaps(source)) found.add(source);
+      }
+      const next = node.children.get(segment);
+      if (next === undefined) return [...found];
+      node = next;
+    }
+    // Everything at or below `path` has it as a prefix, wildcards included.
+    const below = [node];
+    for (let current = below.pop(); current; current = below.pop()) {
+      if (current.path !== undefined) found.add(current.path);
+      for (const child of current.children.values()) below.push(child);
+    }
+    return [...found];
+  }
+
   #matches(path: readonly string[], includeDescendants: boolean): boolean {
-    if (this.#root.terminal) return true;
+    if (this.#root.path !== undefined) return true;
     if (path.includes("*")) {
       return this.#paths.some((source) =>
         isPrefix(source, path) || includeDescendants && isPrefix(path, source)
@@ -119,7 +147,7 @@ export class PathPrefixIndex {
       }
       const next = node.children.get(segment);
       if (next === undefined) return false;
-      if (next.terminal) return true;
+      if (next.path !== undefined) return true;
       node = next;
     }
     return includeDescendants && node.children.size > 0;

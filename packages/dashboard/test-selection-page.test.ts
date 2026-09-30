@@ -13,6 +13,7 @@ import {
 
 import {
   FLAKY_SECTION_ID,
+  HEALTH_SECTION_ID,
   testSelectionPage,
   UNSCHEDULABLE_SECTION_ID,
 } from "./test-selection-page.ts";
@@ -139,6 +140,112 @@ describe("test-selection-page", () => {
     it("leaves out a section with nothing to list", () => {
       const page = pageHtml(heldBack(), NOW);
       expect(page).not.toContain("Too long for any lane");
+    });
+
+    describe("the cost model", () => {
+      /** A manifest whose publisher measured the model as broken. */
+      const broken = () =>
+        sampleManifest({
+          health: {
+            suites: {
+              "cli-core": { fixed: 28, tooLong: 0, batches: 0 },
+              "pattern-unit": {
+                fixed: 351.3,
+                tooLong: 181,
+                batches: 36,
+                ratio: { median: 0.36, p90: 0.82 },
+              },
+            },
+            lanes: {
+              observed: 40,
+              pastBound: 3,
+              projectedInside: 38,
+              overran: 2,
+            },
+            previous: {
+              generatedAt: "2026-09-25T16:30:32.893Z",
+              suites: {
+                "cli-core": { fixed: 28, tooLong: 0 },
+                "pattern-unit": { fixed: 185.5, tooLong: 0 },
+              },
+            },
+            alarms: [
+              "pattern-unit: a lane pays 5m51s before it runs any of it",
+            ],
+          },
+        });
+
+      it("says what the publisher found broken", () => {
+        const page = pageHtml(broken(), NOW);
+        expect(page).toContain(`id="${HEALTH_SECTION_ID}"`);
+        expect(page).toContain("The cost model is broken.");
+        expect(page).toContain(
+          "<li>pattern-unit: a lane pays 5m51s before it runs any of it</li>",
+        );
+      });
+
+      it("lists the dearest suite first, marked where it is past the budget", () => {
+        const page = pageHtml(broken(), NOW);
+        expect(page.indexOf("pattern-unit</td>"))
+          .toBeLessThan(page.indexOf("cli-core</td>"));
+        expect(page).toContain(
+          `<tr class="over"><td class="name">pattern-unit</td>`,
+        );
+        expect(page).toContain(`<tr><td class="name">cli-core</td>`);
+      });
+
+      it("shows a figure beside what it was in the manifest before", () => {
+        const page = pageHtml(broken(), NOW);
+        expect(page).toContain(`351s <span class="was">was 186s</span>`);
+        expect(page).toContain(`181 <span class="was">was 0</span>`);
+        // Unchanged, so nothing is said about what it was.
+        expect(page).toContain(`<td class="measure">28s</td>`);
+      });
+
+      it("shows what batches spent over what they were charged", () => {
+        const page = pageHtml(broken(), NOW);
+        expect(page).toContain(`<td class="measure">0.36</td>`);
+        expect(page).toContain(`<td class="measure">0.82</td>`);
+      });
+
+      it("says how the lanes came out", () => {
+        const page = pageHtml(broken(), NOW);
+        expect(page).toContain(
+          "3 of the 40 lanes in the cost window ran past their bound, 2 of " +
+            "them among the 38 the packer projected to finish inside it.",
+        );
+      });
+
+      it("says nothing is broken where the publisher found nothing", () => {
+        const manifest = broken();
+        manifest.health!.alarms = [];
+        expect(pageHtml(manifest, NOW))
+          .not.toContain("The cost model is broken.");
+      });
+
+      it("says so where no lane recorded its work, and names no earlier manifest where there is none", () => {
+        const manifest = broken();
+        manifest.health!.lanes = {
+          observed: 0,
+          pastBound: 0,
+          projectedInside: 0,
+          overran: 0,
+        };
+        delete manifest.health!.previous;
+        const page = pageHtml(manifest, NOW);
+        expect(page).toContain(
+          "No lane in the cost window recorded its work as a whole.",
+        );
+        expect(page).not.toContain("A grayed figure is the one in");
+        expect(page).toContain(`351s</td>`);
+      });
+
+      it("says so where the manifest carries no model figures", () => {
+        expect(pageHtml(sampleManifest(), NOW)).toContain(
+          "This manifest carries no figures about its cost model that this " +
+            "page can read.",
+        );
+      });
     });
 
     it("names the tests that are too long for any lane", () => {

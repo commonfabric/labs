@@ -19,10 +19,10 @@ Every local query about test selection goes through one entry point:
 deno task test-selection <mode>
 ```
 
-Every mode that reads a manifest reads the one the lanes testing the
-checked-out commit read: the newest the store had created at or before
-that commit's committer date, resolved by the same code a lane resolves it
-with. [The spec](../specs/test-selection.md#determinism) says why a lane
+Every mode that reads a manifest, apart from `health`, reads the one the
+lanes testing the checked-out commit read: the newest the store had created
+at or before that commit's committer date, resolved by the same code a lane
+resolves it with. [The spec](../specs/test-selection.md#determinism) says why a lane
 resolves at that moment. On a commit made before the newest manifest was
 published, a mode therefore describes what lanes testing that commit would
 read, not what the newest manifest says.
@@ -91,6 +91,19 @@ Where it resolves a manifest, it then prints what the measured sets cost with
 coverage on. These are the lines [the publisher's
 summary](#what-measured-sets-cost-with-coverage-on) carries, without the
 `test selection: ` prefix the publisher puts on each one.
+
+### `health`
+
+Whether the cost model the lanes are packed by still describes what they
+spend. It reads the newest manifest, not the commit's, because what it
+judges is the model lanes are packing by now, and `--at` names another
+moment instead. It prints each suite's fixed charge, its tests too long for
+any lane, and what its batches spent over what they were charged, then how
+many lanes ran past their bound, and then either that the model holds or
+each thing that broke, naming the suite and the figure. It exits 1 where
+anything broke, and where it could not read a manifest to judge. [When the
+cost model breaks](#when-the-cost-model-breaks) says what it looks at and what
+to do.
 
 ### `plan --dry-run [--lane N]`
 
@@ -488,6 +501,12 @@ measurement to look at rather than a setting to fix.
 | `FILL_EXPLORATION_SHARE` | 0.15 | share of the run's budget | chosen | Up when the unselected corpus is going stale; down when lanes spend the share on tests that never find anything. |
 | `MIN_CORRECTION_SPAN_SECONDS` | 23 | seconds | derived | A tenth of a lane's budget, measured as the widest gap between the time two batches' own tests took. Nothing edits it: it moves only when the lane's budget does. |
 | `MIN_CORRECTION_SAMPLES` | 3 | batches | chosen | Up when a slope is being fitted from too little and swinging about; down when a suite's real slope takes too long to be believed. It is also how many of the batches a suite's fit is still reading must carry a figure before the batches lacking it are left out. |
+| `HEALTH_TOO_LONG_FACTOR` | 2 | multiplier | chosen | Up when the test selection tile goes red for ordinary growth in the tests too long for any lane; down when a jump that took tests out of every pull request went unreported. |
+| `HEALTH_TOO_LONG_JUMP` | 20 | identities | chosen | Up when a handful of newly slow tests turns the test selection tile red; down when a suite's worth of tests left pull requests without it going red. |
+| `HEALTH_OVERRUN_SHARE` | 0.15 | share of lanes | chosen | Up when the test selection tile goes red over lanes a slow runner held up; down when lanes ran past their bound for days without it going red. |
+| `HEALTH_MIN_LANES` | 20 | lanes | chosen | Up when a quiet week's few lanes turn the test selection tile red; down when lanes running long go unjudged for want of enough of them. |
+| `HEALTH_DRIFT_FACTOR` | 2 | multiplier | chosen | Up when the test selection tile goes red for a suite whose charges are off in a way nobody will fix; down when a suite charged twice or half what it spends went unreported. |
+| `HEALTH_MIN_BATCHES` | 10 | batches | chosen | Up when a suite few lanes run turns the test selection tile red on a handful of batches; down when a suite's drift goes unjudged for want of enough of them. |
 | `FLAKE_EXCLUSION_RATE` | 0.005 | share of runs | chosen | Up when fewer tests should be held back from pull requests; down when flakes are still blocking people. |
 | `FLAKE_MIN_EXECUTIONS` | 2 | runs of one item | chosen | What an item that has ever disagreed runs. Down to one when the cheapest evidence of intermittency is not worth a second execution; nowhere useful above two, since the line through the anchor covers everything flakier. |
 | `FLAKE_ANCHOR_RATE` | 0.01 | share of runs | chosen | With `FLAKE_ANCHOR_EXECUTIONS`, the point the count's line passes through. Down to make the count climb faster with the rate; up to make it climb slower. |
@@ -781,6 +800,45 @@ no names.
 The selection dashboard tile supplies the existing stale signal: it turns
 amber when the newest manifest is more than eight hours old.
 
+### When the cost model breaks
+
+Where the cost model a new manifest carries has broken, the dashboard's test
+selection tile goes red and links to the cost model section of the page behind
+it, which names each suite and figure that broke. The publisher's log and job
+summary carry the same report, and the run itself succeeds: the manifest is
+published whatever its health says, since nothing obeys the health.
+
+The publisher measures the model in the manifest it creates, under
+`health`, from the lanes' own records over `COST_WINDOW_DAYS`. Each batch
+records what the packer charged the lane for it, `ci-lane projected batch
+<suite>`, beside what it spent, and each lane records its work as a whole
+once its work is done: `ci-lane lane`, from opening its first capability to
+the end of the lane's own work, coverage conversion included; `ci-lane
+projected lane`, what the packer projected that to be; and `ci-lane bound
+lane`, the bound the lane was packed to finish inside less
+`LANE_PROLOGUE_SECONDS`. The packer charges nothing for converting coverage,
+so a lane whose conversion is slow is one the model under-charges, and it
+counts as such. Only a lane that passed is read, since one that went red
+stopped early.
+
+Four things count as broken. Their dials are in [Every dial](#every-dial).
+
+| What broke | What it takes | Where to look |
+| --- | --- | --- |
+| Some number of tests are too long for any lane, up from a lower count | More than `HEALTH_TOO_LONG_FACTOR` times as many as the manifest before, and more than `HEALTH_TOO_LONG_JUMP` more. Once reported, later manifests are judged against the same count from before the jump, so the alarm holds until the count falls back | The suites the message names. A jump this size is a suite's fixed charge moving rather than tests growing slow, so read that suite's fixed charge on the dashboard and the batches its fit came from. |
+| A lane pays some seconds to hold a suite, past what a lane may fill | A fixed charge (overhead, one unit, its process's setup, and its capabilities' setup) past `LANE_BUDGET_SECONDS` | The suite's fit: what batches in the window spent beyond their tests, and which of them set the ninetieth percentile. [When the cost model is empty](#when-the-cost-model-is-empty) covers a fit with nothing in it. |
+| Some of the lanes projected to finish inside their bound ran past it | More than `HEALTH_OVERRUN_SHARE` of them, over at least `HEALTH_MIN_LANES` | The model is charging less than lanes spend. The suites whose ratio is high are the ones to read first. |
+| A suite's batches spent more than twice, or under half, what they were charged | The ninetieth percentile of spent over charged outside `1 / HEALTH_DRIFT_FACTOR` to `HEALTH_DRIFT_FACTOR`, over at least `HEALTH_MIN_BATCHES` batches | The suite's fit against its batches. The fit charges what nine batches in ten spent, so that percentile sits near one while the model holds. |
+
+`deno task test-selection health --at <moment>` judges the manifest current
+at any moment, including one from before the publisher measured its model.
+Such a manifest is judged on what it and the one before it hold, which is
+the first two rows, since the other two need the lanes' recorded charges.
+Asked of the manifest of 2026-09-25 20:25, when the pattern unit suite's
+fixed charge took about 180 tests out of every pull request, it names that
+suite and the jump; asked of the manifests either side of that break, it
+says the model holds.
+
 ### Recovery
 
 Read the failed run's log and the public object listing before taking action.
@@ -958,8 +1016,11 @@ and seven per batch: what the batch spent, what its own tests took between
 them, how many times its passes opened a unit, what the longest unit of each
 pass took added together, how many passes it made, what the processes it
 started spent before their units began, and how many such processes it
-started. None of the seven can be recovered from the records the batch
-produced: a reader of a report cannot tell which of its records came from
+started, and an eighth that the fit does not read: what the packer charged the
+lane for the batch, which [When the cost model
+breaks](#when-the-cost-model-breaks) reads with the three a lane writes once
+about its work as a whole. None of the first seven can be recovered from the
+records the batch produced: a reader of a report cannot tell which of its records came from
 which batch, and a unit whose tests all recorded nothing leaves no trace of
 having been opened. The second and third are what the correction and the
 per-unit charge are fitted from. The fourth bounds what the batch spent on
@@ -1298,8 +1359,11 @@ Two tiles read the newest manifest. The flake tile reports how many tests
 are too noisy to judge a change by. The selection tile reports what share
 of the corpus five lanes would run and how close the fullest lane is to
 its budget; it goes amber when the manifest has gone stale and red when a
-lane's projected work is past its bound. Both tiles link to the full
-manifest detail page.
+lane's projected work is past its bound, or when the publisher found the
+cost model broken. Both tiles link to the full manifest detail page, and a
+broken model links the selection tile straight to that page's cost model
+section, which shows what broke, how the lanes came out, and each suite's
+charges against the manifest before and against what its batches spent.
 
 Each tile charts its measurement from every available manifest, positioned
 by generation time. The selected percentage uses each manifest's own corpus

@@ -311,6 +311,7 @@ form.
 |---|---|---|
 | `FabricBytes` | `Bytes@1` | `ArrayBuffer` |
 | `FabricHash` | `Hash@1` | `{ tag: string, hash: ArrayBuffer }` |
+| `FabricDurationNsec` | `DurationNsec@1` | `bigint` |
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |

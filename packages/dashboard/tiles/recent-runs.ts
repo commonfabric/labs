@@ -79,25 +79,25 @@ export function commitGanttHref(run: Run, candidates: Run[]): string | null {
   return `/ci-gantt?${parameters}`;
 }
 
+const sources = [
+  runSource(REPO, CI_WORKFLOW, "main"),
+  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+];
+
 export const recentRuns: Tile = {
   label: "recent main runs",
   intervalMs: 30_000,
   wide: true,
-  runSources: [
-    runSource(REPO, CI_WORKFLOW),
-    runSource(LOOM_REPO, LOOM_CI_WORKFLOW),
-  ],
+  runSources: sources,
   async collect(ctx): Promise<TileView> {
     // Two shared bases (labs + loom), merged newest-first and cut to the most
     // recent RECENT_DISPLAY across both.
-    const [labs, loom] = await Promise.all([
-      ctx.runsFor(REPO, CI_WORKFLOW),
-      ctx.runsFor(LOOM_REPO, LOOM_CI_WORKFLOW),
-    ]);
-    const allRuns = [...labs, ...loom]
-      .sort((a, b) =>
-        Date.parse(b.run_started_at) - Date.parse(a.run_started_at)
-      );
+    const snapshots = await Promise.all(
+      sources.map((source) => ctx.runsFor(source)),
+    );
+    const allRuns = snapshots.flat().sort((a, b) =>
+      Date.parse(b.run_started_at) - Date.parse(a.run_started_at)
+    );
     const runs = allRuns.slice(0, RECENT_DISPLAY);
 
     const completedOutcomes = [...runs].filter((r) =>

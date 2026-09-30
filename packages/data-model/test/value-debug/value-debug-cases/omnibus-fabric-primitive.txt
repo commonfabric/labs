@@ -2,6 +2,8 @@
   "epoch nsec": new FabricEpochNsec(123456789n),
   "epoch nsec, negative": new FabricEpochNsec(-1n),
   "epoch day": new FabricEpochDay(19000),
+  "duration nsec": new FabricDurationNsec(1500000000n),
+  "duration nsec, negative": new FabricDurationNsec(-1n),
   bytes: new FabricBytes(new Uint8Array([0, 1, 2, 254, 255])),
   "bytes, empty": new FabricBytes(new Uint8Array(0)),
   regexp: new FabricRegExp(/ab+c/gi),
@@ -27,6 +29,16 @@ epoch day:
 /EpochDay(19000)
 /EpochDay(19000)
 /EpochDay(19000)
+
+duration nsec:
+/DurationNsec(1500000000n)
+/DurationNsec(1500000000n)
+/DurationNsec(1500000000n)
+
+duration nsec, negative:
+/DurationNsec(-1n)
+/DurationNsec(-1n)
+/DurationNsec(-1n)
 
 bytes:
 /Bytes(buf[000102fe ff])

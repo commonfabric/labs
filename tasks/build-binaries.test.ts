@@ -7,23 +7,33 @@ import {
   assertThrows,
 } from "@std/assert";
 import { exists, walk } from "@std/fs";
-import { fromFileUrl, join, relative, SEPARATOR, toFileUrl } from "@std/path";
+import {
+  dirname,
+  fromFileUrl,
+  join,
+  relative,
+  SEPARATOR,
+  toFileUrl,
+} from "@std/path";
 
 import {
   BINARY_NAMES,
   BINARY_SOURCES,
+  type BinaryName,
   build,
   BUILD_HOST_VARIABLES,
   BuildConfig,
   type BuildDependencies,
   type BuildSignalApi,
   defaultBuildDependencies,
+  embedArgs,
   installBuildSignalCleanup,
   prepareWorkspace,
   requestedBinaries,
   revertWorkspace,
   runBuildBinaries,
   runBuildWithSignalCleanup,
+  unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { type Config, ResolvedConfig } from "../packages/felt/interface.ts";
@@ -34,6 +44,8 @@ import {
   VERSION_NAMESPACE,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../packages/runner/src/compilation-cache/compile-cache-version.ts";
+import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
+import { shellGrammar } from "../packages/cli/lib/view/languages/shell/shell.ts";
 
 const FAKE_MANIFEST = `{
   // Frontend-only types, stripped for the shipped binary and restored on revert.
@@ -269,6 +281,28 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+Deno.test("the cf binary leaves out every grammar package directory but its parser's", () => {
+  const excluded = unusedGrammarDirectories();
+  const repo = fromFileUrl(new URL("../", import.meta.url));
+  const config = new BuildConfig({ root: repo, toolshedFlags: [] });
+  const excludedBy = (binary: BinaryName) => {
+    const args = embedArgs(config, binary);
+    return args.filter((_, index) => args[index - 1] === "--exclude");
+  };
+  assertEquals(excluded.filter((at) => !excludedBy("cf").includes(at)), []);
+  assertEquals(
+    excluded.filter((at) => excludedBy("toolshed").includes(at)),
+    [],
+  );
+  for (const grammar of treeSitterGrammars) {
+    const parser = fromFileUrl(grammar.wasmUrl());
+    assertEquals(excluded.filter((at) => isWithin(at, parser)), []);
+  }
+  const bash = dirname(fromFileUrl(shellGrammar.wasmUrl()));
+  assert(excluded.includes(join(bash, "src")));
+  assert(excluded.includes(join(bash, "prebuilds")));
 });
 
 /** Whether `at` is `parent` or lies beneath it. */

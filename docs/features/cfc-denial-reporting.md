@@ -14,8 +14,8 @@ decision, so each gate says what it turned away at the moment it decides.
 
 ## The reporter
 
-`packages/runner/src/cfc/denial-report.ts` is one function, and both gates call
-it where they block:
+`packages/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
+call it where they block:
 
 ```ts
 // docs-context: none
@@ -32,10 +32,10 @@ reportCfcDenial(
 );
 ```
 
-`code` names the kind of decision. The current set is `write-policy-gate`,
-`write-prepare-crashed`, `write-unprepared`, `write-prepared-digest-mismatch`,
-`render-confidentiality-ceiling`, `render-text-integrity`, and
-`render-literal-text-integrity`.
+`code` names the kind of decision, and is one of `CFC_DENIAL_CODES`:
+`write-policy-gate`, `write-prepare-crashed`, `write-unprepared`,
+`write-prepared-digest-mismatch`, `render-confidentiality-ceiling`,
+`render-text-integrity`, and `render-literal-text-integrity`.
 
 Only a decision that stopped something reports. Under `observe` the write gate
 records its reasons and lets the commit through, so nothing was turned away and
@@ -63,8 +63,8 @@ confidentiality label, and the literal-text one has no cell to read a label
 from at all. A write denial's inputs carry the prepare reasons, and a prepare
 reason may name the confidentiality atoms it refused over, rendered as JSON —
 the sink-ceiling and writer-fit reasons both do. So the inputs go only to
-debug, and they are passed as a function so a gate builds them only where
-something prints them.
+debug and to a denial listener (below), and they are passed as a function so a
+gate builds them only where something takes them.
 
 Where a label is read, `labelSource` says where from: `stored` for the cell's
 own label, `schema` for the information-flow constraint the gate falls back to,
@@ -103,7 +103,9 @@ so `commonfabric.logger["cfc"].countsByKey` carries the per-kind totals and
 refused once at startup from a write refused on every tick of a retry loop.
 
 `resetCfcDenialAnnouncements()` forgets which codes have been announced; the
-next denial of each announces again.
+next denial of each announces again. `cf test` calls it as each test file
+starts, since a file that does not allow for a warning fails on one, and a
+second file denied like the first would otherwise log nothing.
 
 ## Reading a denial
 
@@ -113,21 +115,34 @@ next denial of each announces again.
 
 That is the default, and it is the whole of it: which kind of decision, and
 that it happened. For the reasons, the labels, and the dials behind it, raise
-the `cfc` logger to debug and reproduce; the inputs ride the same key.
+the `cfc` logger to debug and reproduce; the inputs ride the same key. In a
+pattern test, `cf test --cfc-denials` prints every denial with its inputs, laid
+out for reading, without raising any logger.
+
+## Listening for denials
+
+`addCfcDenialListener()` registers a function that is told of every denial from
+then on — repeats included, with the inputs built — and returns the function
+that unregisters it. It is how `cf test --cfc-denials` prints them. A listener
+sees exactly what debug does, labels included, so only a diagnostic tool the
+user asked for registers one. Registration is per module instance, so it
+reaches the gates running in the same process or worker and no others.
 
 ## Adding a denial
 
 A new gate decision that turns something away should report one.
 
-The `code` is what a search, the logger's per-key counts, and the once-per-kind
-warning all match on, so it is stable and names the kind of decision rather
-than the occasion. The `summary` is written without being asked for, so it is a
-fixed sentence: text chosen by the kind of decision, never assembled from a
-reason, a label, a value, or a path.
+The `code` is what a search, the logger's per-key counts, the once-per-kind
+warning, and `cf test`'s hint to run again with `--cfc-denials` all match on,
+so it is stable and names the kind of decision rather than the occasion. A new
+one joins `CFC_DENIAL_CODES`, since `reportCfcDenial()` takes no other. The
+`summary` is written without being asked for, so it is a fixed sentence: text
+chosen by the kind of decision, never assembled from a reason, a label, a
+value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
-only debug. Nothing derived from them may reach the surface the denial
-produced.
+only debug and a denial listener. Nothing derived from them may reach the
+surface the denial produced.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which
 input decided is the gate's business, and a gate reads them together: the

@@ -21,9 +21,19 @@
  * What a task runs under is not decided here. This server resolves flags, the
  * environment and the request body into a `HarnessSessionConfig` — the same
  * description the batch CLI resolves argv into — and `src/session-assembly.ts`
- * turns that into the run. So a capability configurable on the CLI is
- * configurable here by the same name, and the tools a session offers are
- * derived from what it can back rather than listed by this file.
+ * turns that into the run. Where this surface takes a capability the CLI also
+ * takes, it takes it by the CLI's name, and the tools a session offers are
+ * derived from what it can back rather than listed by this file. Not every
+ * CLI capability is taken here: the Docker image and the Docker runtime name
+ * are not.
+ *
+ * The sandbox runtime is selected as the interactive entrypoints select it:
+ * from the environment alone, by the variables the CLI reads
+ * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions), through the derivation
+ * every entrypoint shares. The CLI's three selection flags are refused rather
+ * than ignored, because `console:launch` reads the same environment to decide
+ * whether Docker is involved at all, and a flag it cannot see would leave the
+ * launch and the server describing two different sandboxes.
  *
  * The one piece of configuration this surface insists on is the fabric
  * session, whose space has to be a name rather than a `did:key`: `assign_slug`
@@ -59,11 +69,12 @@ import {
 } from "../src/auth/provider-settings.ts";
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
 import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
-import type {
-  HarnessFabricCfcEnforcementMode,
-  HarnessFabricCfcFlowLabelsMode,
-  HarnessFabricSessionConfig,
-  HarnessModelProviderId,
+import {
+  type HarnessFabricCfcEnforcementMode,
+  type HarnessFabricCfcFlowLabelsMode,
+  type HarnessFabricSessionConfig,
+  type HarnessModelProviderId,
+  resolveCfcEnforcementMode,
 } from "../src/config.ts";
 import type { CfcPosture } from "@commonfabric/runner";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -124,6 +135,18 @@ import {
   CFC_INVOCATION_CONTEXT_DIR_ENV,
   CFC_RESULT_DIR_ENV,
 } from "../src/sandbox/docker-runsc.ts";
+import {
+  assertRunscCfcPolicyForMode,
+  resolveRunscSandboxConfig,
+  type RunscSandboxConfig,
+} from "../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  resolveSandboxRuntimeSelection,
+  RUNSC_CFC_POLICY_ENV,
+  SANDBOX_ROOTFS_ENV,
+  SANDBOX_RUNTIME_ENV,
+} from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
@@ -136,6 +159,7 @@ import {
 } from "./health.ts";
 import {
   consolePatternIndexHealthProbes,
+  consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
 } from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
@@ -480,12 +504,14 @@ interface ConsoleConfig extends HarnessSessionConfig {
   fabricSession: HarnessFabricSessionConfig;
 
   /**
-   * The sandbox's two CFC sidecar transports, always sited: this surface
-   * creates them under its own data directory rather than asking an operator
-   * to name a path before their first run.
+   * The Docker driver's two CFC sidecar transports, sited whenever that
+   * driver is selected: this surface creates them under its own data
+   * directory rather than asking an operator to name a path before their
+   * first run. Absent under the direct runsc driver, which carries its CFC
+   * transport on descriptors it opens for each call.
    */
-  cfcResultDir: string;
-  cfcInvocationContextDir: string;
+  cfcResultDir?: string;
+  cfcInvocationContextDir?: string;
 
   sessionDbPath?: string;
 
@@ -543,6 +569,38 @@ const positiveInteger = (value: string, flag: string): number => {
 };
 
 /**
+ * The batch CLI's sandbox selection flags, each with the variable that selects
+ * the same thing here.
+ */
+const BATCH_SANDBOX_FLAGS = [
+  ["sandbox-runtime", SANDBOX_RUNTIME_ENV],
+  ["sandbox-rootfs", SANDBOX_ROOTFS_ENV],
+  ["sandbox-cfc-policy", RUNSC_CFC_POLICY_ENV],
+] as const;
+
+/**
+ * Refuses the batch CLI's sandbox selection flags in any spelling, naming the
+ * variable to set instead. The console and its launcher select the sandbox
+ * from the environment alone: a flag one of them read and the other did not
+ * would leave the launch and the console describing two different sandboxes.
+ *
+ * @throws Error when `parsed` holds any of the three flags.
+ */
+export const refuseBatchSandboxFlags = (
+  parsed: Readonly<Record<string, unknown>>,
+): void => {
+  for (const [name, variable] of BATCH_SANDBOX_FLAGS) {
+    if (parsed[name] !== undefined) {
+      throw new Error(
+        `--${name} is a flag of the batch CLI; the console selects its ` +
+          `sandbox from the environment, as the interactive entrypoints do, ` +
+          `so set ${variable} instead`,
+      );
+    }
+  }
+};
+
+/**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
@@ -589,6 +647,14 @@ export const resolveConsoleConfig = async (
   const flag = (name: string): string | undefined =>
     typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
 
+  refuseBatchSandboxFlags(parsed);
+  // The one derivation every entrypoint shares, over this server's own
+  // environment. Nothing beyond the runtime kind is returned unless the
+  // runtime is runsc, so a console that names no runtime hands the engine no
+  // sandbox option at all, and the engine builds the Docker driver.
+  const sandbox = await resolveSandboxRuntimeSelection(env, {}, { cwd });
+  const onDocker = sandbox.sandboxRuntimeKind !== "runsc";
+
   const loomAuthoring = await readLoomAuthoringConfig(
     flag("loom-authoring-config") ??
       nonEmpty(env.CF_HARNESS_LOOM_AUTHORING_CONFIG),
@@ -617,19 +683,24 @@ export const resolveConsoleConfig = async (
       join(dataDir, "runs"),
   );
 
-  // The sandbox's two CFC sidecar transports. The harness refuses to start an
-  // enforcing run without them, and they are scratch directories the host and
-  // the sandbox exchange files through, so this surface sites them itself
-  // rather than asking an operator to name a path before their first run.
-  const cfcResultDir = resolve(
-    cwd,
-    nonEmpty(env[CFC_RESULT_DIR_ENV]) ?? join(dataDir, "cfc", "results"),
-  );
-  const cfcInvocationContextDir = resolve(
-    cwd,
-    nonEmpty(env[CFC_INVOCATION_CONTEXT_DIR_ENV]) ??
-      join(dataDir, "cfc", "invocation-context"),
-  );
+  // The Docker driver's two CFC sidecar transports. The harness refuses to
+  // start an enforcing run on that driver without them, and they are scratch
+  // directories the host and the sandbox exchange files through, so this
+  // surface sites them itself rather than asking an operator to name a path
+  // before their first run. The direct runsc driver reads neither.
+  const cfcSidecars = onDocker
+    ? {
+      cfcResultDir: resolve(
+        cwd,
+        nonEmpty(env[CFC_RESULT_DIR_ENV]) ?? join(dataDir, "cfc", "results"),
+      ),
+      cfcInvocationContextDir: resolve(
+        cwd,
+        nonEmpty(env[CFC_INVOCATION_CONTEXT_DIR_ENV]) ??
+          join(dataDir, "cfc", "invocation-context"),
+      ),
+    }
+    : {};
 
   const identityKeyPath = flag("fabric-identity") ??
     nonEmpty(env.CF_HARNESS_FABRIC_IDENTITY);
@@ -739,8 +810,8 @@ export const resolveConsoleConfig = async (
     port,
     workspace: workspacePath,
     artifactRoot,
-    cfcResultDir,
-    cfcInvocationContextDir,
+    ...cfcSidecars,
+    ...sandbox,
     harnessHome: resolve(
       nonEmpty(env.CF_HARNESS_HOME) ??
         join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
@@ -846,6 +917,12 @@ export const resolveConsoleConfig = async (
         : nonEmpty(env.MEMORY_DIR) !== undefined
         ? "MEMORY_DIR"
         : "space database discovery at read time",
+    }, {
+      name: "sandbox",
+      value: sandbox.sandboxRuntimeKind ?? "docker",
+      source: nonEmpty(env[SANDBOX_RUNTIME_ENV]) !== undefined
+        ? SANDBOX_RUNTIME_ENV
+        : "console default",
     }, {
       name: "skill scripts",
       value: config.allowSkillScripts ? "run in the sandbox" : "not run",
@@ -983,6 +1060,7 @@ export const consoleHealthRows = (
     "skill scripts": "skills",
     index: "index",
     model: "model",
+    sandbox: "sandbox",
   };
   const rows: ConsoleHealthRow[] = config.healthFacts.map((fact) => {
     // A server flag can override a launch value. Only an equal active value
@@ -1139,16 +1217,73 @@ export const consoleHealthRows = (
   return rows;
 };
 
-/** Combines retained decisions with independently cached host probes. */
-const createConsoleHealth = (
+/**
+ * The direct driver's configuration for this console's turns, resolved from
+ * the options every turn is built with, as the engine resolves them. Throws
+ * where a turn would be refused.
+ */
+const resolveConsoleRunscConfig = (
+  config: ConsoleConfig,
+): RunscSandboxConfig => {
+  const options = harnessSessionEngineOptions(config);
+  return resolveRunscSandboxConfig({
+    workspaceHostPath: config.workspace,
+    rootfs: options.sandboxRootfs,
+    runscBinary: options.sandboxRunscBinary,
+    cfcPolicyPath: options.sandboxCfcPolicy,
+    networkMode: options.sandboxRunscNetworkMode,
+    additionalMounts: options.additionalMounts,
+    homeDir: Deno.env.get("HOME"),
+  });
+};
+
+/**
+ * The CFC enforcement mode every turn of this console runs at, resolved the
+ * way the engine resolves it from the options a turn is built from.
+ */
+export const consoleTurnEnforcementMode = (
+  config: ConsoleConfig,
+): CfcEnforcementMode =>
+  resolveCfcEnforcementMode(harnessSessionEngineOptions(config));
+
+/**
+ * Whether the engine refuses every turn at `mode` of a console on the direct
+ * runsc driver with no CFC policy, decided by the engine's own floor rather
+ * than a copy of it. Where it does not refuse, commands run untracked.
+ */
+export const runscWithoutPolicyRefusesTurns = (
+  mode: CfcEnforcementMode,
+): boolean => {
+  try {
+    assertRunscCfcPolicyForMode(mode, {});
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * Combines retained decisions with independently cached host probes. The
+ * sandbox probe is the selected driver's: a console on the direct runsc
+ * driver never asks Docker anything, and is judged at the enforcement mode
+ * its turns resolve from the options each is built with. `readDockerRuntimes`
+ * replaces the Docker driver's `docker info` reading.
+ */
+export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
   modelOptions?: CreateHarnessPromptLoopOptions,
   env?: Record<string, string | undefined>,
   indexFactory?: HarnessPatternIndexClientFactory,
+  readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
-    consoleSandboxHealthProbe(),
+    config.sandboxRuntimeKind === "runsc"
+      ? consoleRunscHealthProbe(
+        () => resolveConsoleRunscConfig(config),
+        consoleTurnEnforcementMode(config),
+      )
+      : consoleSandboxHealthProbe(readDockerRuntimes),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,
@@ -2093,6 +2228,83 @@ export const createConsoleInteractiveServiceOptions = (
 });
 
 /**
+ * The lines naming what a turn's sandbox depends on, printed at startup for
+ * the same reason the posture is.
+ *
+ * Under the Docker driver that is the two sidecar transports a run's
+ * mediation moves over. The engine's guard asks only that they are named, so
+ * a console pointed at directories no sandbox sidecar writes starts cleanly
+ * and then denies every observation of the run; printing them is what lets an
+ * operator read at startup which directories that depends on. Under the
+ * direct driver it is the `runsc` binary, the rootfs and the CFC policy the
+ * environment selected; an unnamed binary is looked for on `PATH`, and an
+ * unnamed rootfs is the driver's own default, when a turn resolves them.
+ */
+export const consoleSandboxBanner = (
+  config: ConsoleConfig,
+): readonly string[] =>
+  config.sandboxRuntimeKind === "runsc"
+    ? [
+      "  sandbox:    runsc, the direct driver (no Docker)",
+      `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
+      `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
+      `  policy:     ${
+        config.sandboxCfcPolicy ??
+          (runscWithoutPolicyRefusesTurns(consoleTurnEnforcementMode(config))
+            ? `(none: every turn is refused at ${
+              consoleTurnEnforcementMode(config)
+            })`
+            : "(none: runsc runs without --cfc)")
+      }`,
+    ]
+    : [
+      `  results:    ${config.cfcResultDir}`,
+      `  contexts:   ${config.cfcInvocationContextDir}`,
+    ];
+
+/**
+ * The directories the server creates before it serves: the workspace, the
+ * artifact root, and the Docker driver's two sidecar transports where that
+ * driver is selected. A console on the direct runsc driver creates no sidecar
+ * directory, because nothing would read one.
+ */
+export const consoleDataDirectories = (
+  config: Pick<
+    ConsoleConfig,
+    | "workspace"
+    | "artifactRoot"
+    | "cfcResultDir"
+    | "cfcInvocationContextDir"
+  >,
+): readonly string[] => [
+  config.workspace,
+  config.artifactRoot,
+  ...(config.cfcResultDir !== undefined ? [config.cfcResultDir] : []),
+  ...(config.cfcInvocationContextDir !== undefined
+    ? [config.cfcInvocationContextDir]
+    : []),
+];
+
+/**
+ * What the server prints once it is listening: its address, the fabric it
+ * runs against, the index and registry, the posture, what a turn's sandbox
+ * depends on ({@link consoleSandboxBanner}), and where its state lives.
+ */
+export const consoleStartupBanner = (
+  config: ConsoleConfig,
+): readonly string[] => [
+  `\n  cf-harness console: http://${HOSTNAME}:${config.port}`,
+  `  space:      ${config.fabricSession.space}`,
+  `  fabric:     ${config.fabricSession.apiUrl}`,
+  `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
+  `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
+  ...harnessFabricSessionPostureBanner(config.fabricSession),
+  ...consoleSandboxBanner(config),
+  `  workspace:  ${config.workspace}`,
+  `  artifacts:  ${config.artifactRoot}\n`,
+];
+
+/**
  * Builds the service and starts serving. The fabric session and the pattern
  * index reach the engine as resolved configuration on the base prompt-loop
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
@@ -2107,14 +2319,7 @@ export const startConsoleServer = async (
   launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
   const config = await resolveConsoleConfig(args, env, cwd);
-  for (
-    const directory of [
-      config.workspace,
-      config.artifactRoot,
-      config.cfcResultDir,
-      config.cfcInvocationContextDir,
-    ]
-  ) {
+  for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });
   }
   const modelOptions = await resolveModelOptions(config, env);
@@ -2152,30 +2357,9 @@ export const startConsoleServer = async (
     hostname: HOSTNAME,
     port: config.port,
     onListen: () => {
-      console.log(`\n  cf-harness console: http://${HOSTNAME}:${config.port}`);
-      console.log(`  space:      ${config.fabricSession.space}`);
-      console.log(`  fabric:     ${config.fabricSession.apiUrl}`);
-      console.log(
-        `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
-      );
-      console.log(
-        `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
-      );
-      for (
-        const line of harnessFabricSessionPostureBanner(config.fabricSession)
-      ) {
+      for (const line of consoleStartupBanner(config)) {
         console.log(line);
       }
-      // The two sidecar transports a run's mediation moves over. The engine's
-      // guard asks only that they are named, so a console pointed at
-      // directories no sandbox sidecar writes starts cleanly and then denies
-      // every observation of the run; printing them is what lets an operator
-      // read at startup which directories that depends on, for the same
-      // reason the posture is printed rather than left to be inferred.
-      console.log(`  results:    ${config.cfcResultDir}`);
-      console.log(`  contexts:   ${config.cfcInvocationContextDir}`);
-      console.log(`  workspace:  ${config.workspace}`);
-      console.log(`  artifacts:  ${config.artifactRoot}\n`);
     },
     onError: (error) => {
       console.error(error instanceof Error ? error.message : String(error));

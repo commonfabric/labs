@@ -53,14 +53,18 @@ describe("profile-create surface across runtimes", () => {
   });
 
   it("runs the compiled system pattern for the session that opened it", async () => {
-    await harness.settle();
+    await harness.settleUntil(async () =>
+      await alice.readRaw([...SURFACE_PIECE, "$NAME"]) !== undefined
+    );
     expect(await alice.readRaw([...SURFACE_PIECE, "$NAME"])).toBe(
       "Create Profile",
     );
   });
 
   it("runs it for a session that only ever saw the stored piece", async () => {
-    await harness.settle();
+    await harness.settleUntil(async () =>
+      await bob.readRaw([...SURFACE_PIECE, "$NAME"]) !== undefined
+    );
     expect(await bob.readRaw([...SURFACE_PIECE, "$NAME"])).toBe(
       "Create Profile",
     );

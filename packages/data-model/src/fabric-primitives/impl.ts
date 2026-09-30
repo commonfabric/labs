@@ -20,6 +20,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import type { FabricPrimitiveSchemaType } from "@/api.ts";
 
 import { FabricBytes } from "./FabricBytes.ts";
+import { FabricDurationNsec } from "./FabricDurationNsec.ts";
 import { FabricEpochDay } from "./FabricEpochDay.ts";
 import { FabricEpochNsec } from "./FabricEpochNsec.ts";
 import { FabricHash } from "./FabricHash.ts";
@@ -88,6 +89,7 @@ export function isFabricPrimitiveSchemaType(
 // own `.name` follows its renamed binding.
 const CLASSES_BY_NAME = Object.freeze({
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,

@@ -161,7 +161,7 @@ const UNCLASSIFIABLE_CODEC: FabricCodec<never, string> = {
     throw new Error("Unimplemented.");
   },
 
-  canDecode(_state: string): boolean {
+  canDecode(_state: string): _state is string {
     throw new Error("Unimplemented.");
   },
 

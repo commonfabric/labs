@@ -1,5 +1,5 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
-import { exists, walkSync } from "@std/fs";
+import { exists, existsSync, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
@@ -8,6 +8,7 @@ import {
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 
 export interface BuildConfigInitializer {
@@ -496,11 +497,39 @@ async function buildCli(config: BuildConfig): Promise<void> {
  * Helper for the compile steps, which turns what `binary` embeds besides its
  * entry point's module graph into `deno compile` flags.
  */
-function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
+export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
   return [
     ...config.includePaths(binary).flatMap((at) => ["--include", at]),
-    ...config.excludePaths(binary).flatMap((at) => ["--exclude", at]),
+    ...[
+      ...config.excludePaths(binary),
+      ...(binary === "cf" ? unusedGrammarDirectories() : []),
+    ].flatMap((at) => ["--exclude", at]),
   ];
+}
+
+/**
+ * Returns the directories in each Tree-sitter grammar package that the pager
+ * never reads, which the `cf` binary leaves out: every directory in the
+ * package but the one holding its compiled parser, such as generated C source
+ * and native builds. The packages are in Deno's npm cache rather than in the
+ * repository.
+ */
+export function unusedGrammarDirectories(): string[] {
+  return treeSitterGrammars.flatMap((grammar) => {
+    const parser = path.fromFileUrl(grammar.wasmUrl());
+    let root = path.dirname(parser);
+    while (!existsSync(path.join(root, "package.json"))) {
+      if (path.dirname(root) === root) {
+        throw new Error(`No package holds the ${grammar.id} grammar ${parser}`);
+      }
+      root = path.dirname(root);
+    }
+    const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
+    return Array.from(Deno.readDirSync(root))
+      .filter((entry) => entry.isDirectory && entry.name !== kept)
+      .map((entry) => path.join(root, entry.name))
+      .sort();
+  });
 }
 
 function lockedCompileArgs(config: BuildConfig): string[] {

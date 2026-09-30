@@ -9,6 +9,7 @@
  *   deno task test-selection explain <identity>
  *   deno task test-selection plan --dry-run [--lane N]
  *   deno task test-selection plan --verify
+ *   deno task test-selection health
  *
  * `explain` is the one this will be asked most often, because "why did my
  * test not run?" is the question a selected run provokes and the one it
@@ -16,6 +17,8 @@
  *
  * Every mode that reads a manifest reads the one the lanes testing this
  * checkout's commit read, or the one current at the moment `--at` names.
+ * `health` reads the newest one instead, since what it judges is the
+ * model the lanes are packing by now.
  * `plan` and `explain` pack the tree through the lanes' own code, for a
  * change that touches nothing, so what they say a lane would do is what
  * such a lane does.
@@ -44,7 +47,11 @@ import {
   lanePlan,
   resolveManifest,
 } from "./ci-lane.ts";
-import { loadTopology } from "./test-topology.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  unitProcesses,
+} from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 import {
   measuredCostLines,
@@ -53,6 +60,7 @@ import {
   measuredSets,
 } from "./test-selection/coverage.ts";
 import type { Manifest } from "./test-selection/manifest.ts";
+import { calibrationHealth, healthLines } from "./test-selection/health.ts";
 import { crowdingLine, unholdableSuites } from "./test-selection/plan.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
@@ -63,10 +71,13 @@ const USAGE = `usage: test-selection <mode>
   explain <identity>          one test's score, and whether it is selected
   plan --dry-run [--lane N]   what would run, and what it would cost
   plan --verify               what the topology and the store disagree about
+  health                      whether the cost model still describes the
+                              lanes, failing where it has broken
 
 Every mode that reads a manifest reads the one the lanes testing the
-checked-out commit read. --at <moment>, in ISO 8601, reads the one that
-was current at that moment instead.
+checked-out commit read, except health, which reads the newest one.
+--at <moment>, in ISO 8601, reads the one that was current at that moment
+instead.
 
 An identity is its canonical key, either three parts or four when the
 test ran in a non-default configuration:
@@ -666,6 +677,44 @@ export async function dispatch(
       if (planned === undefined) return 1;
       for (const line of planLines(planned, laneNumber)) console.log(line);
       return 0;
+    }
+    case "health": {
+      // The newest manifest rather than the commit's, because what this
+      // judges is the model the lanes are packing by now.
+      const found = await sources.manifest({
+        at: at ?? new Date().toISOString(),
+      });
+      if (found.manifest === undefined) {
+        console.error(`no manifest: ${found.absent}`);
+        return 1;
+      }
+      const manifest = found.manifest;
+      console.log(`the manifest of ${manifest.generatedAt}`);
+      // A manifest published before the publisher measured its model
+      // carries no health. What can be read from it and the one before it
+      // is read, and what only the lanes' measurements say is absent.
+      let health = manifest.health;
+      if (health === undefined) {
+        console.log(
+          "it carries no health, so it is judged on its own charges and the " +
+            "manifest before it, and no lane figures are read",
+        );
+        const before = await sources.manifest({ at: manifest.generatedAt });
+        const topology = await sources.topology(root);
+        if (before.unreachable) {
+          console.error(`no previous manifest: ${before.absent}`);
+          return 1;
+        }
+        health = calibrationHealth({
+          manifest,
+          previous: before.manifest,
+          capabilities: capabilitiesBySuite(topology),
+          processes: unitProcesses(topology),
+          observations: { charges: [], lanes: [] },
+        });
+      }
+      for (const line of healthLines(health)) console.log(line);
+      return health.alarms.length === 0 ? 0 : 1;
     }
     default:
       fail(`unknown mode ${mode}\n\n${USAGE}`);

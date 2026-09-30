@@ -36,6 +36,7 @@ import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
+import { shellLanguage } from "./shell/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
@@ -246,8 +247,8 @@ export interface LanguageMetadata {
 export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
-   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"binary"`,
-   * or `"plain-text"`.
+   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
+   * `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -464,6 +465,7 @@ function allLanguages(): readonly Language[] {
     swiftLanguage,
     kotlinLanguage,
     tomlLanguage,
+    shellLanguage,
     propertiesLanguage,
     proguardLanguage,
     xmlLanguage,

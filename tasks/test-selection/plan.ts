@@ -97,6 +97,12 @@ export interface Plan {
   budgetSeconds: number;
 
   /**
+   * Seconds a lane of this plan is packed to finish inside, which the
+   * policy decides, carried for the reason `budgetSeconds` is.
+   */
+  boundSeconds: number;
+
+  /**
    * Identities this plan declined to run, so a lane can say why. Empty
    * for a full run, which declines nothing.
    */
@@ -446,7 +452,10 @@ function fixedCost(
  * How a lane names the process the unit of `entry` runs in among the
  * processes it starts, or `undefined` where its suite names none.
  */
-function processOf(input: PlanInput, entry: ManifestEntry): string | undefined {
+function processOf(
+  input: Pick<PlanInput, "processes">,
+  entry: ManifestEntry,
+): string | undefined {
   const process = input.processes.get(openedUnit(entry));
   return process === undefined ? undefined : `${entry.suite}\t${process}`;
 }
@@ -509,7 +518,7 @@ export interface Folding {
  *   was written, which is the date of every other score in it.
  *
  * A unit holding one identity keeps that identity's entry. Each identity is
- * taken to be listed once, as `plan()` reduces the corpus before folding it.
+ * taken to be listed once, as `plan()` refuses a corpus listing one twice.
  */
 export function foldWholeUnits(
   manifest: Manifest,
@@ -652,6 +661,36 @@ export function suiteLoad(
     chargesOf(manifest.calibration.suites[suite]).correction,
     testsOf(selections),
   );
+}
+
+/**
+ * What a lane is charged for holding `selections`, all of `suite`: the
+ * suite's overhead for each pass, its per-unit charge for each time a pass
+ * opens a unit, its process setup for each time a process starts, and
+ * what `suiteLoad()` makes of their tests. A lane's projection is this
+ * added up over the suites it holds, and the setup of each capability it
+ * opens, so it is what the lane's batch of the suite was projected to
+ * spend.
+ */
+export function suiteCharge(
+  input: Pick<PlanInput, "manifest" | "processes">,
+  suite: string,
+  selections: readonly Pick<Selection, "entry" | "repeats">[],
+): number {
+  const fitted = chargesOf(
+    calibrationFor(input.manifest.calibration, input.processes).suites[suite],
+  );
+  const tests = testsOf(selections);
+  const started = new Map<string, number>();
+  for (const { entry, repeats } of selections) {
+    const process = processOf(input, entry);
+    if (process === undefined) continue;
+    started.set(process, Math.max(started.get(process) ?? 0, repeats));
+  }
+  const starts = [...started.values()].reduce((sum, runs) => sum + runs, 0);
+  return fitted.overhead * tests.longest.length +
+    fitted.unitOverhead * tests.opened + fitted.setup * starts +
+    chargedTests(fitted.correction, tests);
 }
 
 /**
@@ -951,17 +990,33 @@ function cheaperIn(
 }
 
 /**
- * Helper for `plan()`, which reduces an identity `entries` lists more than
- * once to the last of its rows, in the place of the first. Every pass then
- * reads the one row, so no two of them can disagree about what the
- * identity costs or scores.
+ * Helper for `plan()`, which lists the identities of `entries` in the order
+ * of their keys. What every pass reads after that, the units run whole
+ * included, is then in an order that depends on which identities there
+ * are and not on where the manifest listed them, so where two tie, their
+ * position does not decide.
+ *
+ * Throws where `entries` lists one identity twice, which a manifest may
+ * not do: two rows can disagree about what the identity costs or scores,
+ * and nothing here can say which of them is right.
  */
-function oncePerIdentity(
+function inKeyOrder(
   entries: readonly ManifestEntry[],
 ): ManifestEntry[] {
   const byKey = new Map<string, ManifestEntry>();
-  for (const entry of entries) byKey.set(testIdentityKey(entry.test), entry);
-  return [...byKey.values()];
+  for (const entry of entries) {
+    const key = testIdentityKey(entry.test);
+    if (byKey.has(key)) {
+      throw new Error(
+        `${key} is listed more than once in the corpus this was given, ` +
+          `so nothing here knows which of its rows to plan by`,
+      );
+    }
+    byKey.set(key, entry);
+  }
+  return [...byKey]
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([, entry]) => entry);
 }
 
 /**
@@ -995,7 +1050,7 @@ export function plan(given: PlanInput): Plan {
     },
   };
   const folding = foldWholeUnits(
-    { ...input.manifest, entries: oncePerIdentity(input.manifest.entries) },
+    { ...input.manifest, entries: inKeyOrder(input.manifest.entries) },
     input.wholeUnits,
   );
   const manifest: Manifest = { ...input.manifest, entries: folding.entries };
@@ -1305,6 +1360,7 @@ export function plan(given: PlanInput): Plan {
       capabilities: [...lane.capabilities].sort(),
     })),
     budgetSeconds: laneBudget,
+    boundSeconds: bound,
     // A full run withholds nothing: every identity is required, so the
     // reasons the manifest gives for holding one back never applied.
     // Reporting the manifest's list here would have a run that ran a
@@ -1381,6 +1437,30 @@ export function unholdableSuites(
   return new Set(
     crowding.filter(unholdable).map((suite) => suite.suite),
   );
+}
+
+/**
+ * What a lane pays before it runs anything of each suite the manifest
+ * holds an identity of: the charge `crowding` compares against a lane's
+ * budget, for every suite rather than only the ones past it.
+ */
+export function fixedCharges(
+  given: Pick<PlanInput, "manifest" | "capabilities" | "processes">,
+): Record<string, number> {
+  const input: PlanInput = {
+    ...given,
+    manifest: {
+      ...given.manifest,
+      calibration: calibrationFor(given.manifest.calibration, given.processes),
+    },
+    mandatory: new Map(),
+    wholeUnits: new Set(),
+  };
+  const charges: Record<string, number> = {};
+  for (const entry of input.manifest.entries) {
+    charges[entry.suite] ??= fixedCost(input.manifest, input, entry);
+  }
+  return charges;
 }
 
 /**

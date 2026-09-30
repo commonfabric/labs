@@ -3,7 +3,8 @@
  * which is all a dashboard glanced at from across a room can hold; everything a
  * person wants once that number has caught their eye is here, at full width and
  * with nothing abbreviated: how close each of a pull request's lanes is to its
- * budget, and every test held back from those lanes together with the
+ * budget, whether the cost model the lanes are packed by still describes what
+ * they spend, and every test held back from those lanes together with the
  * measurement that held it back.
  *
  * Following the dashboard's values (README.md): it reports on the system. It
@@ -11,6 +12,7 @@
  */
 
 import {
+  type CalibrationHealth,
   type Manifest,
   type ManifestEntry,
   type TestIdentity,
@@ -45,6 +47,9 @@ export const FLAKY_SECTION_ID = "flaky";
 /** The fragment the tests no lane can hold are listed under. */
 export const UNSCHEDULABLE_SECTION_ID = "unschedulable";
 
+/** The fragment the cost model's health is under. */
+export const HEALTH_SECTION_ID = "cost-model";
+
 /** Where the page lives, and what both tiles link to. */
 export const TEST_SELECTION_PATH = "/test-selection";
 
@@ -69,6 +74,13 @@ const STYLES = `
   td{padding:5px 12px 5px 0;border-top:1px solid var(--divider);color:var(--text-secondary);vertical-align:top}
   td.measure{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--text)}
   td.name{width:99%;word-break:break-word}
+  .alarm{background:${statusLayer("bad", STATUS_WASH.bad)};border:1px solid ${
+  statusLayer("bad", STATUS_EDGE.bad)
+};border-radius:10px;padding:8px 14px;margin:0 0 8px;font-size:13px;color:var(--text)}
+  .alarm ul{margin:4px 0 0;padding-left:18px}
+  .scroll{overflow-x:auto}
+  tr.over td{color:var(--status-bad)}
+  td .was{color:var(--text-faint)}
   td .variant{color:var(--text-faint)}`;
 
 /** One second count, to the precision a page of them stays readable at. */
@@ -210,6 +222,93 @@ function lanesSection(manifest: Manifest): string {
   ${rows}`;
 }
 
+/** A figure, and what it was in the manifest before where that differs. */
+function against(now: string, was: string | undefined): string {
+  return was === undefined || was === now
+    ? escapeHtml(now)
+    : `${escapeHtml(now)} <span class="was">was ${escapeHtml(was)}</span>`;
+}
+
+/**
+ * Whether the cost model this manifest was packed by still describes what
+ * lanes spend: what the publisher found broken, how many lanes ran past their
+ * bound, and each suite's charges against the manifest before and against
+ * what its batches spent. The suites a lane pays most to hold come first,
+ * since those are nearest to crowding everything else out.
+ */
+function healthSection(manifest: Manifest): string {
+  const health = manifest.health;
+  const heading = `<h2 id="${HEALTH_SECTION_ID}">Cost model</h2>`;
+  if (health === undefined) {
+    return `${heading}
+  <p class="lead">This manifest carries no figures about its cost model that this page can read.</p>`;
+  }
+  const budget = laneBudgetOf(manifest.dials);
+  const alarms = health.alarms.length === 0
+    ? ""
+    : `<div class="alarm"><b>The cost model is broken.</b><ul>${
+      health.alarms.map((alarm) => `<li>${escapeHtml(alarm)}</li>`).join("")
+    }</ul></div>`;
+  const rows = Object.entries(health.suites)
+    .sort(([a, x], [b, y]) => y.fixed - x.fixed || (a < b ? -1 : 1))
+    .map(([suite, figures]) => {
+      const was = health.previous?.suites[suite];
+      return `<tr${figures.fixed > budget ? ' class="over"' : ""}>` +
+        `<td class="name">${escapeHtml(suite)}</td>` +
+        `<td class="measure">${
+          against(
+            seconds(figures.fixed),
+            was === undefined ? undefined : seconds(was.fixed),
+          )
+        }</td>` +
+        `<td class="measure">${
+          against(
+            String(figures.tooLong),
+            was === undefined ? undefined : String(was.tooLong),
+          )
+        }</td>` +
+        `<td class="measure">${groupDigits(figures.batches)}</td>` +
+        `<td class="measure">${
+          figures.ratio === undefined ? "—" : figures.ratio.median.toFixed(2)
+        }</td>` +
+        `<td class="measure">${
+          figures.ratio === undefined ? "—" : figures.ratio.p90.toFixed(2)
+        }</td></tr>`;
+    }).join("");
+  return `${heading}
+  <p class="lead">${escapeHtml(healthLead(health))}</p>
+  ${alarms}
+  <div class="scroll"><table><thead><tr><th>suite</th><th>to hold</th><th>too long</th><th>batches</th><th>median</th><th>90th</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/**
+ * What the figures in the cost model's table are, and how the lanes it was
+ * measured against came out.
+ */
+function healthLead(health: CalibrationHealth): string {
+  const { observed, pastBound, projectedInside, overran } = health.lanes;
+  const lanes = observed === 0
+    ? "No lane in the cost window recorded its work as a whole."
+    : `${groupDigits(pastBound)} of the ${
+      groupDigits(observed)
+    } lanes in the cost window ran past their bound, ${
+      groupDigits(overran)
+    } of them among the ${
+      groupDigits(projectedInside)
+    } the packer projected to finish inside it.`;
+  const previous = health.previous === undefined
+    ? ""
+    : ` A grayed figure is the one in the manifest of ${
+      minutePrecision(health.previous.generatedAt)
+    }.`;
+  return `${lanes} "To hold" is what a lane pays before it runs anything of ` +
+    "a suite; past a lane's budget, nothing can share a lane with it. " +
+    '"Too long" counts its tests no lane can hold. The last two columns ' +
+    "are what its batches spent over what the packer charged for them, at " +
+    "the middle batch and at the ninetieth percentile, which the model is " +
+    `fitted to hold near one.${previous}`;
+}
+
 /** The counts the two tiles headline, spelled out. */
 function summary(manifest: Manifest): string {
   const selected = selectedCount(manifest);
@@ -262,6 +361,7 @@ export function testSelectionPage(
     head,
     `${summary(manifest)}
   ${lanesSection(manifest)}
+  ${healthSection(manifest)}
   ${
       testSection({
         heading: "Held back as flaky",

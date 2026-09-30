@@ -38,6 +38,7 @@ export {
   cfcLabelViewForDereferenceTraces,
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
+  cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cfcLabelViewSymbol,
@@ -115,7 +116,10 @@ export {
   CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON,
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
-export { LABEL_METADATA_OBSERVATION } from "./observation-classes.ts";
+export {
+  LABEL_METADATA_OBSERVATION,
+  readConsumesEntry,
+} from "./observation-classes.ts";
 export type { LabelMetadataObservationClass } from "./observation-classes.ts";
 export {
   CFC_ENFORCEMENT_MODES,
@@ -265,6 +269,12 @@ export type {
   StoredCfcEnvelope,
 } from "./prepare.ts";
 export {
+  addCfcDenialListener,
+  CFC_DENIAL_CODES,
+  type CfcDenial,
+  type CfcDenialCode,
+  type CfcDenialListener,
+  isCfcDenialCode,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "./denial-report.ts";

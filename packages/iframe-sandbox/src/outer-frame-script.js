@@ -7,7 +7,8 @@
  * forwards what the guest posts outside its port. Plain JavaScript, because
  * the browser runs this text as it stands: `outer-frame.ts` inlines it into
  * the document it assembles, on a `<script>` element whose `data-host-origin`
- * attribute carries the host's origin.
+ * attribute carries the host's origin, and a host that serves the outer frame
+ * from a URL of its own (`outerFrameUrl`) serves it as it stands.
  */
 
 const HOST_ORIGIN = hostOrigin();
@@ -105,17 +106,27 @@ function onOuterError({ message, filename, lineno, colno, error }) {
 }
 
 /**
- * Returns the host's origin, which the assembly places on this script's
- * element.
+ * Returns the host's origin. The assembly in `outer-frame.ts` places it on
+ * this script's element, which is the only place a `srcdoc` document can get
+ * it from: its URL is `about:srcdoc`. A document the host serves from a URL
+ * of its own (`outerFrameUrl`) may leave the attribute off, and the
+ * host's origin is then the one the document was served from.
+ *
+ * `location` names the URL even in a sandboxed frame, whose own origin is
+ * opaque.
  *
  * @returns {string}
  */
 function hostOrigin() {
   const origin = document.currentScript?.dataset.hostOrigin;
-  if (!origin) {
-    throw new Error("The outer frame's script needs `data-host-origin`.");
+  if (origin) {
+    return origin;
   }
-  return origin;
+  const served = new URL(location.href);
+  if (served.protocol === "https:" || served.protocol === "http:") {
+    return served.origin;
+  }
+  throw new Error("The outer frame's script needs `data-host-origin`.");
 }
 
 /**

@@ -46,6 +46,7 @@ const IFC_KEYS = [
   "maxConfidentiality",
   "ownerPrincipal",
   "writeAuthorizedBy",
+  "writePolicyAnyOf",
   "exactCopyOf",
   "projection",
   "collection",
@@ -312,6 +313,8 @@ const mergeSetLikeIfcArray = (
       }
       return mergeArraySet(candidateArray);
     }
+    case "writePolicyAnyOf":
+      return mergeWritePolicyAnyOf(existing, candidate, path, adoptsStamp);
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -329,6 +332,56 @@ const mergeSetLikeIfcArray = (
     default:
       return candidate;
   }
+};
+
+/**
+ * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
+ * lists. The alternatives stay as stored — the same ones, in the same order,
+ * each with the same contract — so a later schema can neither admit a writer
+ * nor drop one. Each alternative's writer claim reconciles as a lone
+ * `writeAuthorizedBy` does, which is how an alternative gains its stamp.
+ */
+const mergeWritePolicyAnyOf = (
+  existing: unknown,
+  candidate: unknown,
+  path: string,
+  adoptsStamp?: (claim: unknown) => boolean,
+): unknown => {
+  const unstable = () =>
+    new Error(`writePolicyAnyOf must remain stable at ${path || "/"}`);
+  if (
+    !Array.isArray(existing) || !Array.isArray(candidate) ||
+    existing.length !== candidate.length
+  ) {
+    throw unstable();
+  }
+  return existing.map((policy, index) => {
+    const other = candidate[index];
+    if (
+      !isObjectNotArray(policy) || !isObjectNotArray(other) ||
+      !sameKeys(policy, other) ||
+      !deepEqual(policy.uiContract, other.uiContract)
+    ) {
+      throw unstable();
+    }
+    if (deepEqual(policy.writeAuthorizedBy, other.writeAuthorizedBy)) {
+      return policy;
+    }
+    const writer = reconcileWriterClaimStamp(
+      policy.writeAuthorizedBy,
+      other.writeAuthorizedBy,
+      adoptsStamp,
+    );
+    if (writer === undefined) throw unstable();
+    return { ...policy, writeAuthorizedBy: writer };
+  });
+};
+
+/** Helper for `mergeWritePolicyAnyOf()`, which compares two key sets. */
+const sameKeys = (a: object, b: object): boolean => {
+  const keys = Object.keys(a);
+  const other = new Set(Object.keys(b));
+  return keys.length === other.size && keys.every((key) => other.has(key));
 };
 
 const mergeIfc = (
@@ -357,6 +410,19 @@ const mergeIfc = (
       adoptsStamp,
     );
     if (value !== undefined) merged[key] = value;
+  }
+  // Each side may name its writers in one shape while the other names them in
+  // the other, and the two do not combine: a position holding both is one
+  // the runtime refuses every write to.
+  if (
+    merged.writePolicyAnyOf !== undefined &&
+    (merged.writeAuthorizedBy !== undefined || merged.uiContract !== undefined)
+  ) {
+    throw new Error(
+      `writePolicyAnyOf cannot join writeAuthorizedBy or uiContract at ${
+        path || "/"
+      }`,
+    );
   }
   // `observes` is a scalar consumption class, not a set-like claim:
   // agreement keeps the class through the merge; any disagreement —

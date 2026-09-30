@@ -64,6 +64,7 @@ export type {
   TrustedActionWrite,
   TrustedActionWriteWithIntegrity,
   WriteAuthorizedBy,
+  WritePolicyAnyOf,
 } from "./cfc.ts";
 
 export {

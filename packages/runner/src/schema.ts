@@ -9,6 +9,7 @@ import {
   FabricInstance,
   FabricPrimitive,
   type FabricValue,
+  hashStringOf,
   isDeepFrozen,
   isWalkableObjectOrArray,
   shallowMutableClone,
@@ -34,13 +35,18 @@ import {
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
 import {
+  type CfcDocumentLabels,
   type CfcLabelView,
   cfcLabelViewForAddress,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
+  cfcLabelViewInDocument,
+  cfcLabelViewOriginSpaces,
   cloneCfcLabelView,
   mergeCfcLabelViews,
+  readCfcDocumentLabels,
   rebaseCfcLabelView,
+  referenceRestrictionsOf,
 } from "./cfc/label-view-state.ts";
 import { storedCfcMetadataAppliesToPath } from "./cfc/metadata.ts";
 import type { CfcAddress } from "./cfc/types.ts";
@@ -90,6 +96,7 @@ import {
   getJsonType,
   IObjectCreator,
   isUnknownCellSchema,
+  type LinkCrossingRoute,
   mergeAnyOfMatches,
   schemaAcceptsType,
   SchemaObjectTraverser,
@@ -246,6 +253,14 @@ const isPrefix = (
 ): boolean =>
   prefix.length <= path.length &&
   prefix.every((segment, index) => segment === path[index]);
+
+/** Whether `inner` addresses `outer` or a position below it. */
+const linkContains = (
+  outer: NormalizedFullLink,
+  inner: NormalizedFullLink,
+): boolean =>
+  outer.space === inner.space && outer.id === inner.id &&
+  outer.scope === inner.scope && isPrefix(outer.path, inner.path);
 
 const labelViewForLink = (
   baseLink: NormalizedFullLink,
@@ -991,8 +1006,9 @@ export function annotateWithBackToCellSymbols(
  *
  * The derivation reads each involved document's `cfc` path. Those are
  * runtime-internal verifier reads — the runtime made them to check a label, not
- * the reader on its own behalf — and an eager read makes them once, for the
- * document it was handed, never for the documents its traversal reaches.
+ * the reader on its own behalf — and an eager read makes them here once, for
+ * the document it was handed. For the documents its traversal reaches through
+ * links, `TransformObjectCreator.cross()` reads the slot each link leaves.
  *
  * A view re-enters here per property, so the same reads would land once per
  * child. They are kept out of the scheduler's view of what the ACTION read:
@@ -1526,6 +1542,9 @@ export function validateAndTransform(
       }
     },
   );
+  if (options?.traverseCells !== true) {
+    context.linkCrossingRoute = objectCreator;
+  }
   const traverser = new SchemaObjectTraverser<any>(
     tx!,
     selector,
@@ -1645,8 +1664,32 @@ export function createOpaqueReference(
   );
 }
 
+/**
+ * One link on the route a traversal took, or one value it copied into a
+ * document of its own, with the label view in effect at the target.
+ */
+type RouteCrossing = {
+  /** Where the link points, or where the value was copied to. */
+  readonly target: NormalizedFullLink;
+
+  /** The label view at `target`, reached this way. */
+  readonly view: CfcLabelView | undefined;
+
+  /** The label view at the slot the link or value left. */
+  readonly slotView: CfcLabelView | undefined;
+
+  /** The crossing recorded before this one on the route. */
+  readonly previous: RouteCrossing | undefined;
+
+  /**
+   * Names what this crossing and those before it decide, for
+   * `LinkCrossingRoute.memoKey()`; derived when first asked for.
+   */
+  memoKey?: string;
+};
+
 class TransformObjectCreator
-  implements IObjectCreator<AnyCellWrapping<FabricValue>> {
+  implements IObjectCreator<AnyCellWrapping<FabricValue>>, LinkCrossingRoute {
   #runtime: Runtime;
 
   #tx: IExtendedStorageTransaction;
@@ -1654,6 +1697,13 @@ class TransformObjectCreator
   #synced: boolean;
   #baseLink: NormalizedFullLink;
   #cfcLabelView: CfcLabelViewRebaser;
+  #baseViewEmpty: boolean;
+  #route: RouteCrossing[] = [];
+  #keys = new Map<string, string>();
+  #labelsByDocument = new Map<
+    string,
+    { labels: CfcDocumentLabels | undefined }
+  >();
 
   constructor(
     runtime: Runtime,
@@ -1667,6 +1717,7 @@ class TransformObjectCreator
     this.#synced = synced;
     this.#baseLink = baseLink;
     this.#cfcLabelView = new CfcLabelViewRebaser(cfcLabelView);
+    this.#baseViewEmpty = cloneCfcLabelView(cfcLabelView) === undefined;
   }
 
   setBase(
@@ -1675,10 +1726,63 @@ class TransformObjectCreator
   ): void {
     this.#baseLink = baseLink;
     this.#cfcLabelView.setView(cfcLabelView);
+    this.#baseViewEmpty = cloneCfcLabelView(cfcLabelView) === undefined;
   }
 
-  #labelViewFor(link: NormalizedFullLink): CfcLabelView | undefined {
-    return labelViewForLink(this.#baseLink, this.#cfcLabelView, link);
+  /**
+   * Records the crossing with the label view in effect at its target: the
+   * reference restrictions of the slot the link left, given the view the
+   * route has there and the labels stored at the slot (`referenceRestrictionsOf`).
+   *
+   * The target's own stored labels are not part of the view. They are read
+   * from the target wherever a cell there is labeled, and reading them here
+   * would read into a document that minting a handle to it does not read.
+   */
+  cross(source: NormalizedFullLink, target: NormalizedFullLink): void {
+    const slotView = this.#labelViewFor(source);
+    this.#push(
+      target,
+      slotView,
+      referenceRestrictionsOf(
+        mergeCfcLabelViews([slotView, this.#storedLabelViewAt(source)]),
+      ),
+    );
+  }
+
+  /**
+   * Records the copy with the label view in effect at its target: the view
+   * the route has at the value's position, with the labels stored there and
+   * below, which are the copied value's own.
+   */
+  copy(source: NormalizedFullLink, target: NormalizedFullLink): void {
+    const slotView = this.#labelViewFor(source);
+    this.#push(
+      target,
+      slotView,
+      mergeCfcLabelViews([slotView, this.#storedLabelViewAt(source)]),
+    );
+  }
+
+  /** @inheritDoc */
+  mark(): number {
+    return this.#route.length;
+  }
+
+  /** @inheritDoc */
+  restore(mark: number): void {
+    this.#route.length = mark;
+  }
+
+  /**
+   * Names the target of each crossing on the route and the views at its slot
+   * and its target. The traversal below the current position mints under the
+   * last target, under crossings it goes on to record, or at the slot of a
+   * crossing on the route, so these decide the views it mints. The key names
+   * views rather than slots, so routes that reach one position with the same
+   * labels share it.
+   */
+  memoKey(): string {
+    return this.#memoKeyOf(this.#route.at(-1));
   }
 
   /**
@@ -1956,6 +2060,115 @@ class TransformObjectCreator
       this.#synced,
       this.#labelViewFor(link),
     );
+  }
+
+  /** Helper for `cross()` and `copy()`, which records the crossing. */
+  #push(
+    target: NormalizedFullLink,
+    slotView: CfcLabelView | undefined,
+    view: CfcLabelView | undefined,
+  ): void {
+    this.#route.push({ target, slotView, view, previous: this.#route.at(-1) });
+  }
+
+  /**
+   * Helper for `memoKey()`, which derives the key of `crossing` and of those
+   * before it, memoizing each on its crossing.
+   */
+  #memoKeyOf(crossing: RouteCrossing | undefined): string {
+    if (crossing === undefined) return "";
+    if (crossing.memoKey !== undefined) return crossing.memoKey;
+    const previous = this.#memoKeyOf(crossing.previous);
+    const { target, view, slotView } = crossing;
+    // With no view anywhere on the route, what is minted below is labeled as
+    // what is reached without it is, so it keeps that memo key.
+    crossing.memoKey = view === undefined && slotView === undefined &&
+        previous === "" && this.#baseViewEmpty
+      ? ""
+      : this.#internKey(JSON.stringify([
+        previous,
+        target.space,
+        target.scope,
+        target.id,
+        target.path,
+        this.#viewKey(slotView),
+        view === slotView ? "" : this.#viewKey(view),
+      ]));
+    return crossing.memoKey;
+  }
+
+  /**
+   * The label view at `link`. A position below a crossing's target was
+   * reached through that crossing, so it takes the crossing's view, and the
+   * innermost such crossing is the one the traversal went through last.
+   */
+  #labelViewFor(link: NormalizedFullLink): CfcLabelView | undefined {
+    const crossing = this.#route.findLast((crossing) =>
+      linkContains(crossing.target, link)
+    );
+    if (crossing === undefined) {
+      return labelViewForLink(this.#baseLink, this.#cfcLabelView, link);
+    }
+    // A view rebased onto its own root is the view itself.
+    const view = link.path.length === crossing.target.path.length
+      ? crossing.view
+      : rebaseCfcLabelView(
+        crossing.view,
+        link.path.slice(crossing.target.path.length),
+      );
+    // A crossing into the base's own document leaves the position under the
+    // base as well, and what the base carries there still applies.
+    return this.#baseViewEmpty || !linkContains(this.#baseLink, link)
+      ? view
+      : mergeCfcLabelViews([
+        view,
+        labelViewForLink(this.#baseLink, this.#cfcLabelView, link),
+      ]);
+  }
+
+  /**
+   * Helper for `cross()`, which returns the labels stored at `link`, reading
+   * its document's labels once per read. The read is a dependency like any
+   * other, so a change to the slot's labels runs the reader again.
+   */
+  #storedLabelViewAt(link: NormalizedFullLink): CfcLabelView | undefined {
+    const document = `${link.space}\0${link.scope}\0${link.id}`;
+    let known = this.#labelsByDocument.get(document);
+    if (known === undefined) {
+      known = {
+        labels: readCfcDocumentLabels(this.#tx, cfcAddressFromLink(link)),
+      };
+      this.#labelsByDocument.set(document, known);
+    }
+    return known.labels === undefined
+      ? undefined
+      : cfcLabelViewInDocument(known.labels, link.space, link.path);
+  }
+
+  /**
+   * Helper for `memoKey()`, which names `view` by a key, the same for every
+   * view carrying the same labels from the same spaces, and empty for none.
+   */
+  #viewKey(view: CfcLabelView | undefined): string {
+    return view === undefined ? "" : this.#internKey(
+      JSON.stringify([
+        hashStringOf(cloneCfcLabelView(view)),
+        cfcLabelViewOriginSpaces(view),
+      ]),
+    );
+  }
+
+  /**
+   * Helper for `memoKey()`, which replaces `text` with a short key, the same
+   * for the same text, so that the memo keys built from it stay short.
+   */
+  #internKey(text: string): string {
+    let key = this.#keys.get(text);
+    if (key === undefined) {
+      key = `k${this.#keys.size}`;
+      this.#keys.set(text, key);
+    }
+    return key;
   }
 }
 

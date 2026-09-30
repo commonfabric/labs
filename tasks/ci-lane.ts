@@ -80,6 +80,7 @@ import {
   plan,
   type Selection,
   type SelectionReason,
+  suiteCharge,
   suiteLoad,
   testsOf,
   unholdableSuites,
@@ -118,6 +119,7 @@ import {
   excusedMeasurementName,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
+  laneMeasurementName,
 } from "./lane-measurement.ts";
 
 /** What the lane was asked to do. */
@@ -398,6 +400,13 @@ export interface Batch {
    * would cost the lane time the packer never charged it for.
    */
   runs: Map<Unit, number>;
+
+  /**
+   * Seconds the packer charged the lane for this batch: `suiteCharge()`
+   * over the selections it holds. The lane records it beside what the
+   * batch spent, which is what says how far the calibration was out.
+   */
+  projected: number;
 }
 
 /**
@@ -435,6 +444,7 @@ export function batchesOf(
   const wholeOf = new Map<Suite, ReadonlySet<Unit>>(
     suites.map((suite) => [suite, new Set(suite.whole)]),
   );
+  const processes = unitProcesses(suites);
   const inUnit = new Map<string, ManifestEntry[]>();
   for (const entry of manifest.entries) {
     const key = `${entry.suite}\t${entry.unit}`;
@@ -477,6 +487,11 @@ export function batchesOf(
         suite,
         units: [request],
         runs: new Map([[unit, repeats]]),
+        projected: suiteCharge(
+          { manifest, processes },
+          suiteId,
+          selections.filter(({ entry }) => entry.suite === suiteId),
+        ),
       });
     } else {
       batch.units.push(request);
@@ -940,8 +955,10 @@ export async function runBatch(
       // is the least the batch could have spent on its tests however many
       // of them ran side by side, since its passes follow one another, the
       // fifth is how many times it paid for starting the suite's command,
-      // and the last two measure what each process it started paid before
-      // its units began.
+      // and the sixth and seventh measure what each process it started
+      // paid before its units began. The eighth, what the packer charged
+      // the lane for the batch, is not fitted from: set beside the first,
+      // it says how far the fit the lane was packed by was out.
       //
       // The tests' own time is summed here rather than read back from
       // the records, because a reader has no way to tell which of a
@@ -1007,6 +1024,15 @@ export async function runBatch(
           "processes",
         ),
         processes,
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "projected",
+        ),
+        batch.projected,
         ok,
       ),
     ]);
@@ -1805,6 +1831,9 @@ export async function runLane(
     }
   };
   const spool = (deps.spool ?? recordsDir)();
+  // Where the work the packer projected starts: opening the capabilities
+  // is part of it, and what came before is the prologue.
+  const startedAt = performance.now();
   // The directory belongs to the lane from the moment it exists, and a
   // capability that refuses to open is one of the ways the lane ends.
   let opened;
@@ -1937,6 +1966,31 @@ export async function runLane(
   const marked = await markMeasuredFailures(options, suites, failedUnits);
   if (compileCacheState !== undefined) {
     await writeCompileCacheState(options, compileCacheState);
+  }
+  // What the lane's work came to against what it was projected to come
+  // to and the most it could come to inside the lane's bound, which is the
+  // bound less the prologue the budget was derived with. Read last, so that
+  // it holds everything the lane did after its prologue. The publisher
+  // counts from these how many lanes ran past their bound, and how many of
+  // those the packer had expected to.
+  if (spool !== undefined) {
+    spoolRecords(spool, [
+      timingRecord(
+        laneMeasurementName("spent"),
+        (performance.now() - startedAt) / 1000,
+        ok,
+      ),
+      timingRecord(
+        laneMeasurementName("projected"),
+        mine.projectedSeconds,
+        ok,
+      ),
+      timingRecord(
+        laneMeasurementName("bound"),
+        laid.boundSeconds - LANE_PROLOGUE_SECONDS,
+        ok,
+      ),
+    ]);
   }
   describeCoverage(seen.coverage, converted.reports, marked);
   return ok;

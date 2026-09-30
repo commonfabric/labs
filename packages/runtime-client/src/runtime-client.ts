@@ -90,8 +90,26 @@ import {
 } from "./shared/security-context.ts";
 import { cellRefToInstanceId, cellRefToKey } from "./shared/utils.ts";
 
+/**
+ * What a client is told about the page it runs in. None of it is posture, and
+ * none of it crosses the wire: it is read back from the client by what renders
+ * on the page.
+ */
+export interface RuntimeClientPageSettings {
+  /**
+   * Where `cf-iframe` loads its sandbox's outer frame from, for a page whose
+   * own Content Security Policy refuses inline script and so refuses the
+   * `srcdoc` frame the sandbox otherwise inlines. The page serves the document
+   * at this URL; `common-iframe-sandbox`'s `outerFrameUrl` says what it has
+   * to be. Unset, the outer frame is inlined.
+   */
+  iframeOuterFrameUrl?: string;
+}
+
 export interface RuntimeClientOptions
-  extends Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity"> {
+  extends
+    Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity">,
+    RuntimeClientPageSettings {
   apiUrl: URL;
   identity: Identity;
   spaceIdentity?: Identity;
@@ -107,15 +125,22 @@ export interface RuntimeClientOptions
  * key in it to hand. `RuntimeClientOptions` keeps the `Identity`, and is what
  * initialization takes.
  *
- * The rest is the security posture this client asserts. Nothing here is
- * declared to the runtime: the runtime is running under a posture of its own,
- * and an assertion that differs anywhere is refused.
+ * The rest, apart from the page's settings, is the security posture this
+ * client asserts. None of it is declared to the runtime: the runtime is
+ * running under a posture of its own, and an assertion that differs anywhere
+ * is refused.
+ *
+ * The page's settings ({@link RuntimeClientPageSettings}) are no part of that.
+ * They say something of the document that attaches, the client keeps them,
+ * and the runtime is neither sent them nor asked to agree: two documents that
+ * join one runtime may differ in them.
  */
 export interface RuntimeAttachOptions extends
   Omit<
     RuntimeSecurityContext,
     "apiUrl" | "spaceHostMap" | "identity"
-  > {
+  >,
+  RuntimeClientPageSettings {
   /** The backend this client believes the runtime reads from. */
   apiUrl: URL;
 
@@ -150,6 +175,10 @@ export type RuntimeClientEvents = {
  * Everything else is named, which the `satisfies` clause holds: a posture
  * field this one drops is one the client asserts nothing about, and the
  * runtime's own value for it then goes unchecked.
+ *
+ * The page's settings come across as they are. They are not posture and an
+ * attach asserts nothing by them; they are here because the client an attach
+ * makes keeps them as the one initialization makes does.
  */
 export function attachOptionsFrom(
   options: RuntimeClientOptions,
@@ -168,7 +197,21 @@ export function attachOptionsFrom(
     renderDeclassificationPolicy: options.renderDeclassificationPolicy,
     renderConfidentialityCeiling: options.renderConfidentialityCeiling,
     trustSnapshot: options.trustSnapshot,
+    iframeOuterFrameUrl: options.iframeOuterFrameUrl,
   } satisfies EveryFieldOf<RuntimeAttachOptions>;
+}
+
+/**
+ * The page settings in `options`, apart from everything else there. Named
+ * field by field, as the posture is, so that a setting added to the type is a
+ * type error here until a client carries it.
+ */
+function pageSettingsFrom(
+  options: RuntimeClientPageSettings,
+): RuntimeClientPageSettings {
+  return {
+    iframeOuterFrameUrl: options.iframeOuterFrameUrl,
+  } satisfies EveryFieldOf<RuntimeClientPageSettings>;
 }
 
 export const $conn = Symbol("$request");
@@ -298,6 +341,7 @@ const scheduleAnimationFrame = (callback: () => void): number => {
 export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   #conn: InitializedRuntimeConnection;
   readonly #principal: DID | undefined;
+  readonly #pageSettings: RuntimeClientPageSettings;
   readonly #sessionInstanceId = crypto.randomUUID();
   #pendingWrites = false;
   #operationSubscriptions = new Map<
@@ -320,10 +364,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   private constructor(
     conn: InitializedRuntimeConnection,
     principal: DID | undefined,
+    pageSettings: RuntimeClientPageSettings = {},
   ) {
     super();
     this.#conn = conn;
     this.#principal = principal;
+    this.#pageSettings = pageSettings;
     this.#conn.on("console", this.#onConsole);
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
@@ -339,6 +385,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   /** Acting principal established by the runtime connection posture. */
   actingPrincipalDid(): DID | undefined {
     return this.#principal;
+  }
+
+  /**
+   * Where the page serves the outer frame of `cf-iframe`'s sandbox, as the
+   * host said when it made this client, or `undefined` for a page that
+   * serves none.
+   */
+  iframeOuterFrameUrl(): string | undefined {
+    return this.#pageSettings.iframeOuterFrameUrl;
   }
 
   /** Returns an opaque identity for the scoped document instance in `ref`. */
@@ -778,6 +833,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new RuntimeClient(
       attached,
       options.trustSnapshot?.actingPrincipal ?? options.identity,
+      pageSettingsFrom(options),
     );
   }
 
@@ -816,6 +872,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new RuntimeClient(
       initialized,
       options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+      pageSettingsFrom(options),
     );
   }
 

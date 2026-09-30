@@ -146,6 +146,14 @@ two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
 
+`packages/runner/test/eager-link-read.bench.ts` measures an eager schema read of
+a list of 200 and of 2,000 links to row documents, each row linking to one
+shared subject that the schema reads as a handle, so each row crosses two
+links. Nothing in the fixture is labeled, so the timing includes the read of
+each crossed document's stored labels that a read makes whether or not any
+exist. Fixture construction and opening the transaction stay outside timing;
+the timed interval is the one `get()`.
+
 `packages/runner/test/executor-sustained-input.bench.ts` measures how long the
 serving watermark takes to cover an input while input keeps arriving. Each
 iteration opens a fresh served space outside the timed interval, then starts a

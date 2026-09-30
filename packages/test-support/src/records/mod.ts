@@ -157,14 +157,17 @@ export {
 } from "./selection-testing.ts";
 export type {
   Calibration,
+  CalibrationHealth,
   CoverageBaseline,
   FlakeEvidence,
   LanePlan,
   Manifest,
   ManifestEntry,
+  PreviousSuiteHealth,
   ProcessFit,
   ScoreInputs,
   SuiteFit,
+  SuiteHealth,
   UnavailableEntry,
   UnschedulableEntry,
   WithheldEntry,
