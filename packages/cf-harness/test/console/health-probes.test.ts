@@ -11,6 +11,7 @@ import {
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
   consoleVmHealthProbe,
+  type ConsoleVmImage,
   consoleVmStore,
   readConsolePath,
   readConsolePolicy,
@@ -602,7 +603,11 @@ describe("health-probes", () => {
           consoleVmStore(rootfs, { CFC_VM_HOME: directory }, {
             platform: "darwin",
           }),
-        ).toEqual({ directory, imageKey: "kitchensink", idleTimeoutSec: 300 });
+        ).toEqual({
+          directory,
+          image: { found: "image", key: "kitchensink" },
+          idleTimeoutSec: 300,
+        });
       });
     });
 
@@ -620,7 +625,11 @@ describe("health-probes", () => {
         for (const env of [{ HOME: home }, { CFC_VM_HOME: "", HOME: home }]) {
           expect(
             consoleVmStore("/elsewhere/rootfs", env, { platform: "darwin" }),
-          ).toEqual({ directory, idleTimeoutSec: 600 });
+          ).toEqual({
+            directory,
+            image: { found: "none" },
+            idleTimeoutSec: 600,
+          });
         }
       });
     });
@@ -634,7 +643,11 @@ describe("health-probes", () => {
             consoleVmStore("/r", { CFC_VM_HOME: directory }, {
               platform: "darwin",
             }),
-          ).toEqual({ directory, idleTimeoutSec: 600 });
+          ).toEqual({
+            directory,
+            image: { found: "none" },
+            idleTimeoutSec: 600,
+          });
         });
       }
     });
@@ -647,7 +660,53 @@ describe("health-probes", () => {
           { platform: "darwin" },
         );
 
-        expect(store).toEqual({ directory, idleTimeoutSec: 600 });
+        expect(store).toEqual({
+          directory,
+          image: { found: "none" },
+          idleTimeoutSec: 600,
+        });
+      });
+    });
+
+    it("returns the image unresolved where the store's own path could not be resolved to compare the rootfs with", async () => {
+      await withStore({}, (directory) => {
+        const denied = new Deno.errors.PermissionDenied("denied");
+
+        const store = consoleVmStore(
+          join(directory, "images", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          {
+            platform: "darwin",
+            realPath: () => {
+              throw denied;
+            },
+          },
+        );
+
+        expect(store).toEqual({
+          directory,
+          image: { found: "unresolved", reason: String(denied) },
+          idleTimeoutSec: 600,
+        });
+      });
+    });
+
+    it("compares the rootfs with the store as named where the store's path is not there to resolve", async () => {
+      await withStore({}, (directory) => {
+        const store = consoleVmStore(
+          join(directory, "images", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          {
+            platform: "darwin",
+            realPath: () => {
+              throw new Deno.errors.NotFound("gone");
+            },
+          },
+        );
+
+        expect(store).toMatchObject({
+          image: { found: "image", key: "kitchensink" },
+        });
       });
     });
 
@@ -731,11 +790,10 @@ describe("health-probes", () => {
       }
     };
 
-    const store = (directory: string, imageKey = "kitchensink") => ({
-      directory,
-      imageKey,
-      idleTimeoutSec: 600,
-    });
+    const store = (
+      directory: string,
+      image: ConsoleVmImage = { found: "image", key: "kitchensink" },
+    ) => ({ directory, image, idleTimeoutSec: 600 });
 
     /** The row the probe returns, alone. */
     const readRow = async (probe: ReturnType<typeof consoleVmHealthProbe>) => {
@@ -903,6 +961,33 @@ describe("health-probes", () => {
             value: "the VM has no kitchensink image",
           });
           expect(row.remedy).toContain("ext4/kitchensink.ext4");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns unknown, not running, where which image the rootfs names could not be told", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const row = await readRow(
+            consoleVmHealthProbe(
+              store(directory, {
+                found: "unresolved",
+                reason: "PermissionDenied: denied",
+              }),
+            ),
+          );
+
+          expect(row).toMatchObject({
+            state: "unknown",
+            value: "not verified",
+          });
+          expect(row.reason).toContain("PermissionDenied: denied");
         } finally {
           await daemon.close();
         }

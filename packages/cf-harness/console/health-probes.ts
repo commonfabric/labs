@@ -467,8 +467,8 @@ export interface ConsoleVmConfiguredStore {
   /** The store directory, which holds `daemon.sock` and `config.json`. */
   directory: string;
 
-  /** The key of the image the rootfs names, where it is `<store>/images/<key>`. */
-  imageKey?: string;
+  /** What the configured rootfs names in the store. */
+  image: ConsoleVmImage;
 
   /** Seconds the daemon waits without a client before it stops the VM. */
   idleTimeoutSec: number;
@@ -487,6 +487,17 @@ export interface ConsoleVmUnreadableStore {
   unreadable: string;
 }
 
+/**
+ * What the configured rootfs names in a cfc-vm store: the image `key`, where
+ * the rootfs is `<store>/images/<key>`; none of the store's images, where it
+ * is anywhere else; or unresolved, where the store's own path could not be
+ * resolved to compare the rootfs with.
+ */
+export type ConsoleVmImage =
+  | { found: "image"; key: string }
+  | { found: "none" }
+  | { found: "unresolved"; reason: string };
+
 /** The daemon's idle timeout where its `config.json` names none. */
 const CFC_VM_DEFAULT_IDLE_TIMEOUT_SEC = 600;
 
@@ -500,13 +511,15 @@ const CFC_VM_IDLE_CHECK_SEC = 15;
  * `config.json`, without which runsc cannot start a VM; unreadable where it
  * holds one that cannot be read as a JSON object. `rootfs` names one of the
  * store's images when it is `<store>/images/<key>`, compared against the store
- * with its links resolved, as a resolved rootfs has them. `platform` replaces
- * `Deno.build.os`.
+ * with its links resolved, as a resolved rootfs has them, and the image is
+ * unresolved where the store's path could not be resolved for any reason but
+ * its not being there. `platform` replaces `Deno.build.os`, and `realPath`
+ * replaces `Deno.realPathSync`.
  */
 export const consoleVmStore = (
   rootfs: string,
   env: Record<string, string | undefined>,
-  options: { platform?: string } = {},
+  options: { platform?: string; realPath?: (path: string) => string } = {},
 ): ConsoleVmStore | undefined => {
   if ((options.platform ?? Deno.build.os) !== "darwin") return undefined;
   const directory = env.CFC_VM_HOME !== undefined && env.CFC_VM_HOME !== ""
@@ -543,21 +556,25 @@ export const consoleVmStore = (
       Number.isFinite(configured) && configured > 0
     ? configured
     : CFC_VM_DEFAULT_IDLE_TIMEOUT_SEC;
-  let resolved = directory;
+  const realPath = options.realPath ?? Deno.realPathSync;
+  let resolved: string;
   try {
-    resolved = Deno.realPathSync(directory);
-  } catch {
-    // Compared as named; a rootfs under a store that cannot be resolved names
-    // no image of it.
+    resolved = realPath(directory);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) {
+      return {
+        directory,
+        image: { found: "unresolved", reason: String(error) },
+        idleTimeoutSec,
+      };
+    }
+    // A store that is not there has no links to resolve.
+    resolved = directory;
   }
-  const imageKey = dirname(rootfs) === join(resolved, "images")
-    ? basename(rootfs)
-    : undefined;
-  return {
-    directory,
-    ...(imageKey !== undefined ? { imageKey } : {}),
-    idleTimeoutSec,
-  };
+  const image: ConsoleVmImage = dirname(rootfs) === join(resolved, "images")
+    ? { found: "image", key: basename(rootfs) }
+    : { found: "none" };
+  return { directory, image, idleTimeoutSec };
 };
 
 /** What asking a cfc-vm daemon for its status found. */
@@ -956,8 +973,10 @@ const readVmStatus = (
  * The VM row for a daemon that answered `status` at `answeredAt`: running,
  * unless its guest gave the daemon no figures, or the VM lacks the image the
  * rootfs names and the store holds no block image runsc could attach it from.
- * The block image is looked for at every call, so installing it clears the
- * row without asking the daemon again.
+ * Where which image the rootfs names could not be told, or the block image
+ * could not be looked at, whether the VM can run a sandbox is unknown. The
+ * block image is looked for at every call, so installing it clears the row
+ * without asking the daemon again.
  */
 const vmStatusRow = (
   fact: ConsoleHealthFact,
@@ -999,8 +1018,19 @@ const vmStatusRow = (
     } s and in ` +
     "between only connects, which does not count, to see that the daemon " +
     "still listens.";
-  const key = store.imageKey;
-  if (key === undefined || images.includes(key)) {
+  const { image } = store;
+  if (image.found === "unresolved") {
+    return {
+      ...fact,
+      state: "unknown",
+      checkedAt,
+      value: "not verified",
+      detail,
+      reason:
+        `Which of the store's images the rootfs names could not be told, since ${store.directory} could not be resolved: ${image.reason}`,
+    };
+  }
+  if (image.found === "none" || images.includes(image.key)) {
     return {
       ...fact,
       state: "ok",
@@ -1010,6 +1040,7 @@ const vmStatusRow = (
       reason: asked,
     };
   }
+  const { key } = image;
   const blockImage = join(store.directory, "ext4", `${key}.ext4`);
   const found = at.examine(blockImage);
   if (found.found === "file") {
