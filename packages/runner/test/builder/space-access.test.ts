@@ -305,7 +305,7 @@ describe("spaceAccess()", () => {
         .toBe("READ");
     });
 
-    it("returns `undefined` for a target passed as `undefined`, not the calling code's level", async () => {
+    it("returns `undefined` for a target passed as `undefined`, not the calling code's level", () => {
       const runtime = clientRuntime(bob);
       const frame = pushFrame({
         runtime,
@@ -408,7 +408,7 @@ describe("spaceAccess()", () => {
       } as const satisfies JSONSchema;
       const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
       const level = lift(
-        (input: { target: unknown }) =>
+        (input: { target?: unknown }) =>
           spaceAccess(input.target as Cell<unknown>) ?? "unknown",
         argumentSchema,
         { type: "string" },
