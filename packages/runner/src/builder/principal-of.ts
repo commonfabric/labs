@@ -47,8 +47,8 @@ import { cellOfTarget } from "./space-access.ts";
  *   neither a cell nor `undefined`.
  */
 export function principalOf(
-  // Unknowns here, though the declared API types them, so that the runtime
-  // checks below have cases to catch from untyped callers.
+  // Typed `unknown` here, though the declared API types both, so that the
+  // runtime checks below have cases to catch from untyped callers.
   target: unknown,
   kind: unknown,
 ): DID | undefined {

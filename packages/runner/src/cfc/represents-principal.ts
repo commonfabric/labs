@@ -159,11 +159,12 @@ export const principalClaimEntries = (
  * The principals `view` attests with claims of `kind`, in exactly the form a
  * runtime mints, read from the entries {@link principalClaimEntries} names, or
  * `undefined` when a claim of `kind` there names a principal in another form,
- * or any claim there is in the string form. A runtime binds a `{ kind, subject }` atom's subject to its
- * acting principal and refuses a literal DID only in that form, so the string
- * form, a padded subject, or an atom with another key may have been written by
- * someone other than the principal it names. A caller that must know who wrote
- * the attestation, rather than whom a claim is about, refuses those.
+ * or any claim there is in the string form. A runtime binds a
+ * `{ kind, subject }` atom's subject to its acting principal and refuses a
+ * literal DID only in that form, so the string form, a padded subject, or an
+ * atom with another key may have been written by someone other than the
+ * principal it names. A caller that must know who wrote the attestation,
+ * rather than whom a claim is about, refuses those.
  */
 export const exactPrincipalAttestations = (
   view: CfcLabelView | undefined,

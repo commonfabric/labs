@@ -157,7 +157,7 @@ describe("principalOf()", () => {
     inFrame(
       tx,
       frame,
-      () => (principalOf as (t: unknown, k: unknown) => unknown)(target, kind),
+      () => principalOf(target, kind),
     );
 
   /** Returns the id of the document `cause` names in the test's space. */
