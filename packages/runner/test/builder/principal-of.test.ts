@@ -21,6 +21,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
+import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
 const alice = await Identity.fromPassphrase("principal-of alice");
 const bob = await Identity.fromPassphrase("principal-of bob");
@@ -445,6 +446,89 @@ describe("principalOf()", () => {
       }
     });
 
+    it("runs a `lift()` that called it again when the label alone changes", async () => {
+      // A second lift holds the same cell and reads nothing of it but the
+      // link probe, so it shows that the change reaches only a computation
+      // that read the label.
+
+      await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const runs = { principal: 0, held: 0 };
+      const argumentSchema = {
+        type: "object",
+        properties: { target: { type: "unknown", asCell: ["cell"] } },
+      } as const satisfies JSONSchema;
+      const { lift, pattern: trustedPattern } =
+        createTrustedBuilder(runtime).commonfabric;
+      const principal = lift(
+        (input: { target?: unknown }) => {
+          runs.principal++;
+          return principalOf(
+            input.target as Cell<unknown>,
+            "represents-principal",
+          ) ??
+            "none";
+        },
+        argumentSchema,
+        { type: "string" },
+      );
+      const held = lift(
+        (input: { target?: unknown }) => {
+          runs.held++;
+          (input.target as Cell<unknown>).resolveAsCell();
+          return "held";
+        },
+        argumentSchema,
+        { type: "string" },
+      );
+      const probe = trustedPattern(
+        ({ target }) => ({
+          principal: principal({ target }),
+          held: held({ target }),
+        }),
+        argumentSchema,
+        {
+          type: "object",
+          properties: {
+            principal: { type: "string" },
+            held: { type: "string" },
+          },
+        },
+      );
+      const tx = runtime.edit();
+      const result = runtime.run(
+        tx,
+        probe,
+        { target: runtime.getCell(space, "profile") },
+        runtime.getCell(space, "principal-of-lift", undefined, tx),
+      ) as Cell<{ principal?: string; held?: string }>;
+      expect((await tx.commit()).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      try {
+        await waitForCellValue(
+          runtime,
+          result.key("principal"),
+          (value) => value === bob.did(),
+          { stuckLabel: "the lift to return bob's DID" },
+        );
+        expect(runs).toEqual({ principal: 1, held: 1 });
+
+        await relabel("profile", [
+          claimsAt([], claim("represents-principal", alice.did())),
+        ]);
+        await waitForCellValue(
+          runtime,
+          result.key("principal"),
+          (value) => value === alice.did(),
+          { stuckLabel: "the lift to follow the label to alice's DID" },
+        );
+        expect(runs).toEqual({ principal: 2, held: 1 });
+      } finally {
+        cancel();
+      }
+    });
+
     it("records no label-metadata observation, since a claim's subject is public", async () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
@@ -506,28 +590,17 @@ describe("principalOf()", () => {
       }
     });
 
-    it("returns the principal to a `computed()`, and again when the label changes", async () => {
+    it("returns the principal to a `computed()`", async () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
       ]);
       const { result, cancel } = await runProbe(profile);
       try {
-        const viaComputed = result.key("viaComputed");
         await waitForCellValue(
           runtime,
-          viaComputed,
+          result.key("viaComputed"),
           (value) => value === `returned ${bob.did()}`,
           { stuckLabel: "the computed to return bob's DID" },
-        );
-
-        await relabel("profile", [
-          claimsAt([], claim("represents-principal", alice.did())),
-        ]);
-        await waitForCellValue(
-          runtime,
-          viaComputed,
-          (value) => value === `returned ${alice.did()}`,
-          { stuckLabel: "the computed to follow the label to alice's DID" },
         );
       } finally {
         cancel();
