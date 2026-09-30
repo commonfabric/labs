@@ -47,6 +47,14 @@ const editDistance = (left: string, right: string): number => {
 const FLAG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
+ * Whether `name`, written without its dashes, is one a refusal may repeat: it
+ * could be a flag's name, and it does not start with a digit, since a word
+ * that starts with `-` and then a digit is most likely a negative number.
+ */
+export const isNameable = (name: string): boolean =>
+  FLAG_NAME.test(name) && !/^[0-9]/.test(name);
+
+/**
  * Helper for `nearestDeclaredFlag()`, which returns whether `name` is negated:
  * an odd count of leading `no-`.
  */
@@ -99,7 +107,7 @@ export const undeclaredFlagMessage = (
   surface: string,
 ): string => {
   const name = flag.replace(/^-+/, "");
-  if (!FLAG_NAME.test(name) || /^[0-9]/.test(name)) {
+  if (!isNameable(name)) {
     return `An argument starting with \`-\` is not a flag of ${surface}. A ` +
       "value starting with `-` needs the `--<flag>=<value>` spelling.";
   }
@@ -111,17 +119,6 @@ export const undeclaredFlagMessage = (
 };
 
 /**
- * A callback for the `unknown` option of `parseArgs()` that keeps a dotted
- * flag, `--prompt.x`, out of the parsed result and passes everything else.
- * `parseArgs()` would write a dotted flag into the flag before the dot, and,
- * where that holds a string, throw a TypeError quoting it. Every
- * `parseArgs()` over a caller's arguments is handed this, or
- * `recordUndeclaredFlags()`, which does the same.
- */
-export const keepDottedFlagsOut = (_arg: string, key?: string): boolean =>
-  key === undefined || !key.includes(".");
-
-/**
  * A callback for the `unknown` option of `parseArgs()` that records, in
  * `into`, each undeclared flag once, as the word it was typed as up to any
  * `=`. That is the name `parseArgs()` was handed, which is not always the one
@@ -129,14 +126,17 @@ export const keepDottedFlagsOut = (_arg: string, key?: string): boolean =>
  * taken letter by letter. The callback keeps the flag in the parsed result, so
  * a surface that refuses one particular flag with a message of its own still
  * finds it there, and it leaves positional arguments as they are. A dotted
- * flag is the exception, kept out as `keepDottedFlagsOut()` keeps it out.
+ * flag, `--prompt.x`, is the exception: `parseArgs()` would write it into the
+ * flag before the dot, and, where that holds a string, throw a TypeError
+ * quoting it. Every `parseArgs()` over a caller's arguments is handed this,
+ * and what it records is refused.
  */
 export const recordUndeclaredFlags =
   (into: string[]) => (arg: string, key?: string): boolean => {
     if (key === undefined) return true;
     const flag = arg.split("=")[0];
     if (!into.includes(flag)) into.push(flag);
-    return keepDottedFlagsOut(arg, key);
+    return !key.includes(".");
   };
 
 /** The words that ask an entrypoint for its usage. */
@@ -157,13 +157,37 @@ export const argvHolds = (
 };
 
 /**
- * Refuses the first flag named in `valued` that is written with no value:
- * last before the end of `argv` or its first `--`, or followed by a word that
- * starts with `-`. `parseArgs()` never takes such a word as a value, so it
- * leaves the flag empty and reads the word as flags, and the word, which may
- * be a whole prompt, is not repeated. A value written `--name=<value>` is not
+ * The refusal of the first flag named in `valued` that is written with no
+ * value, or `undefined` where there is none. A flag has no value when it is
+ * last before the end of `argv` or its first `--`, or when the word after it
+ * starts with `-`: `parseArgs()` never takes such a word as a value, so it
+ * leaves the flag empty and reads the word as flags. The word, which may be a
+ * whole prompt, is not repeated. A value written `--name=<value>` is not
  * refused here, whatever it starts with or however empty it is. `valued` is
  * written without dashes.
+ */
+export const flagWithoutValue = (
+  argv: readonly string[],
+  valued: Iterable<string>,
+): string | undefined => {
+  const names = new Set(valued);
+  const end = argv.indexOf("--") === -1 ? argv.length : argv.indexOf("--");
+  for (let index = 0; index < end; index += 1) {
+    const argument = argv[index];
+    if (!argument.startsWith("--") || !names.has(argument.slice(2))) continue;
+    if (index + 1 === end) return `\`${argument}\` was given no value`;
+    if (argv[index + 1].startsWith("-")) {
+      return `\`${argument}\` was given no value; a value starting with ` +
+        `\`-\` needs the \`${argument}=<value>\` spelling`;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Refuses the first flag named in `valued` that is written with no value, as
+ * `flagWithoutValue()` finds it. A caller that answers `--help` does this
+ * first, since the `-h` a missing value leaves behind is not a question.
  *
  * @throws HarnessControlError `invalid-request` for the first such flag.
  */
@@ -171,24 +195,9 @@ export const refuseFlagsWithoutValue = (
   argv: readonly string[],
   valued: Iterable<string>,
 ): void => {
-  const names = new Set(valued);
-  const end = argv.indexOf("--") === -1 ? argv.length : argv.indexOf("--");
-  for (let index = 0; index < end; index += 1) {
-    const argument = argv[index];
-    if (!argument.startsWith("--") || !names.has(argument.slice(2))) continue;
-    if (index + 1 === end) {
-      throw new HarnessControlError(
-        "invalid-request",
-        `\`${argument}\` was given no value`,
-      );
-    }
-    if (argv[index + 1].startsWith("-")) {
-      throw new HarnessControlError(
-        "invalid-request",
-        `\`${argument}\` was given no value; a value starting with \`-\` ` +
-          `needs the \`${argument}=<value>\` spelling`,
-      );
-    }
+  const refusal = flagWithoutValue(argv, valued);
+  if (refusal !== undefined) {
+    throw new HarnessControlError("invalid-request", refusal);
   }
 };
 

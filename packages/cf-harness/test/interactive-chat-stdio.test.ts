@@ -755,8 +755,7 @@ Deno.test("interactive stdio CLI parses runtime options", () => {
   assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions([
-        "--chat-max-in-memory-events",
-        "-1",
+        "--chat-max-in-memory-events=-1",
       ], {}),
     Error,
     "--chat-max-in-memory-events requires a non-negative integer value",
@@ -780,7 +779,7 @@ Deno.test("interactive stdio CLI parses runtime options", () => {
   assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions([
-        "--chat-max-in-memory-events",
+        "--chat-max-in-memory-events=",
       ], {}),
     Error,
     "--chat-max-in-memory-events requires a non-empty value",
@@ -1316,6 +1315,26 @@ Deno.test("interactive stdio CLI refuses a word starting with `-` without repeat
     error.message,
     "An argument starting with `-` is not a flag of the interactive stdio entrypoint. A value starting with `-` needs the `--<flag>=<value>` spelling.",
   );
+});
+
+Deno.test("interactive stdio CLI refuses a flag given no value, rather than taking the next word as its value", () => {
+  for (
+    const [argv, flag] of [
+      [["--chat-session-db", "--api-key=sk-secret"], "--chat-session-db"],
+      [["--host-mount", "-hidden"], "--host-mount"],
+      [["--max-model-turns", "-1"], "--max-model-turns"],
+      [["--fabric-space", "--x"], "--fabric-space"],
+      [["--loom-authoring-config", "-h"], "--loom-authoring-config"],
+      [["--chat-max-in-memory-events"], "--chat-max-in-memory-events"],
+    ] as const
+  ) {
+    const error = assertThrows(
+      () => parseHarnessInteractiveChatStdioCliOptions(argv, {}),
+      HarnessControlError,
+    );
+    assertStringIncludes(error.message, `\`${flag}\` was given no value`);
+    assertEquals(/sk-secret|hidden/.test(error.message), false);
+  }
 });
 
 Deno.test("interactive stdio CLI refuses a positional argument without repeating it", () => {

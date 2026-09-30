@@ -425,17 +425,22 @@ rather than running with every tool. The refusal names the flag and, where one
 is close, the declared flag it most likely meant, and never the value typed with
 it, nor a word that could not be a flag's name. The control commands (`config`,
 `auth`, `models`, `whoami`), the interactive stdio entrypoint, the local Loom
-host's `batch` and `interactive` modes over those two, the console and
-`console:launch` refuse the same way; through the local Loom host the refusal is
-an `invalid-request` host failure carrying that message. `--help` or `-h`,
+host's `batch` and `interactive` modes over those two, the console,
+`console:launch` and the measurement scripts refuse the same way. Through the
+local Loom host a `batch` refusal is an `invalid-request` host failure carrying
+that message; an `interactive` one stays on the chat protocol, as the error the
+host returns, with that message, for each request it is sent. `--help` or `-h`,
 written as a word of its own, answers whatever else is on the line, and text
 after `--` is prompt text, flags included.
 
-The batch CLI, the console and `console:launch` also refuse a flag that takes a
-value when nothing follows it or the word after it starts with `-`, since the
-parser never takes such a word as a value: it would read `--prompt "- buy milk"`
-as an empty prompt followed by a run of flags. Such a value is written in one
-word, `--prompt=- buy milk`.
+The batch CLI, the interactive stdio entrypoint, the console and
+`console:launch` also refuse a flag that takes a value when nothing follows it
+or the word after it starts with `-`, since the word after it would otherwise be
+taken apart as flags or taken as the value of the wrong flag: the batch CLI
+would read `--prompt "- buy milk"` as an empty prompt followed by a run of
+flags. Such a value is written in one word, `--prompt=- buy milk`. That refusal
+comes before help, so `--prompt -h` is a prompt given no value rather than a
+question.
 
 Standard bearer-auth mode:
 

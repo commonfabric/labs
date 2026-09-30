@@ -2159,15 +2159,47 @@ describe("run-measurement-batch", () => {
       }
     });
 
-    it("returns 2 with its usage for a dotted flag and no suite, rather than throwing with the value of the flag before the dot", async () => {
+    it("returns 2 naming an undeclared flag, dotted or not, before it reads the suite", async () => {
+      // The suite named does not exist, so reading it would throw.
+      for (
+        const [args, refusal] of [
+          [
+            ["/nowhere/suite.json", "--expect-git-sha-typo="],
+            "`--expect-git-sha-typo` is not a flag of `measure-batch`.",
+          ],
+          [
+            [
+              "/nowhere/suite.json",
+              "--console",
+              "http://secret.example/",
+              "--console.x",
+              "y",
+            ],
+            "`--console.x` is not a flag of `measure-batch`. Did you mean `--console`?",
+          ],
+        ] as const
+      ) {
+        const lines: string[] = [];
+        const code = await main(args, (line) => lines.push(line));
+
+        expect(code).toBe(2);
+        expect(lines[0]).toBe(refusal);
+        expect(lines.join("\n")).not.toContain("secret.example");
+      }
+    });
+
+    it("returns 2 for a flag given no value, before it reads the suite", async () => {
       const lines: string[] = [];
       const code = await main(
-        ["--console", "http://secret.example/", "--console.x", "y"],
+        ["/nowhere/suite.json", "--out", "-x"],
         (line) => lines.push(line),
       );
 
       expect(code).toBe(2);
-      expect(lines.join("\n")).toContain("usage: measure-batch");
+      expect(lines[0]).toBe(
+        "`--out` was given no value; a value starting with `-` needs the " +
+          "`--out=<value>` spelling",
+      );
     });
 
     it("returns 3 and runs no task when the index does not answer the pre-flight", async () => {

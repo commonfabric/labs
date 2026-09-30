@@ -159,6 +159,7 @@ import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
 import { parseInputCellArgument } from "./input-cells.ts";
 import {
   argvHolds,
+  flagWithoutValue,
   HELP_SPELLINGS,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
@@ -1350,10 +1351,11 @@ export const parseCfHarnessCliArgs = async (
     unknown: recordUndeclaredFlags(undeclared),
   });
 
+  // A flag with no value first: the `-h` it leaves behind is not a question.
+  refuseFlagsWithoutValue(normalizedArgv, CLI_STRING_FLAGS);
   if (argvHolds(normalizedArgv, HELP_SPELLINGS)) {
     return { help: true };
   }
-  refuseFlagsWithoutValue(normalizedArgv, CLI_STRING_FLAGS);
   refuseUndeclaredFlags(
     undeclared,
     [...CLI_STRING_FLAGS, ...CLI_BOOLEAN_FLAGS],
@@ -2949,6 +2951,11 @@ export const cfHarnessCliInformationalControl = (
 ): CfHarnessCliInformationalControl | undefined => {
   if (cfHarnessCliCommandName(argv) !== "prompt") return undefined;
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+  // A `-h` left by a flag with no value is not a question; the parse refuses
+  // the flag.
+  if (flagWithoutValue(normalizedArgv, CLI_STRING_FLAGS) !== undefined) {
+    return undefined;
+  }
   if (argvHolds(normalizedArgv, HELP_SPELLINGS)) return "help";
   if (argvHolds(normalizedArgv, ["--describe-capabilities"])) {
     return "describe-capabilities";
@@ -3092,7 +3099,7 @@ const runCfHarnessConfigCommand = async (
       action === "set";
     const flagRefusal = controlFlagRefusal(
       knownAction ? `config ${action}` : "config",
-      normalized.slice(2),
+      normalized.slice(1),
       ["--json"],
     );
     if (
@@ -3192,9 +3199,11 @@ const runCfHarnessAuthCommand = async (
     path: defaultHarnessCredentialStorePath(harnessHome),
   });
   const auth = new OpenAICodexAuthService(store, "local");
-  const allowedArguments = action === "login"
-    ? new Set(["--device", "--json"])
-    : new Set(["--json"]);
+  // Where the action is missing or unknown, a flag of any action is still a
+  // flag of `auth`, and only the usage is owed.
+  const allowedArguments = action === "status" || action === "logout"
+    ? new Set(["--json"])
+    : new Set(["--device", "--json"]);
   const knownAction = action === "login" || action === "status" ||
     action === "logout";
   if (
@@ -3208,7 +3217,7 @@ const runCfHarnessAuthCommand = async (
         "usage: auth login|status|logout openai-codex [--device] [--json]",
         controlFlagRefusal(
           knownAction ? `auth ${action}` : "auth",
-          normalized.slice(2),
+          normalized.slice(1),
           [...allowedArguments],
         ),
       ),

@@ -1297,14 +1297,38 @@ describe("measure-runs", () => {
       expect(out).toContain("===== ALL 5 FAMILIES");
     });
 
-    it("returns 0 for a dotted flag, rather than throwing with the value of the flag before the dot", async () => {
-      const { code, out } = await runMain([
-        `--artifact-root=${FIXTURE_ROOT}`,
-        "--artifact-root.x=y",
-      ]);
+    it("returns 2 naming an undeclared flag, dotted or not, and measures nothing", async () => {
+      for (
+        const [args, refusal] of [
+          [
+            ["--artifact.root=/secret/runs"],
+            "`--artifact.root` is not a flag of `measure-runs`. Did you mean `--artifact-root`?",
+          ],
+          [
+            [`--artifact-root=${FIXTURE_ROOT}`, "--artifact-root.x=y"],
+            "`--artifact-root.x` is not a flag of `measure-runs`. Did you mean `--artifact-root`?",
+          ],
+          [
+            ["--jsno"],
+            "`--jsno` is not a flag of `measure-runs`. Did you mean `--json`?",
+          ],
+        ] as const
+      ) {
+        const { code, out } = await runMain(args);
 
-      expect(code).toBe(0);
-      expect(out).toContain(`artifact root: ${FIXTURE_ROOT}`);
+        expect(code).toBe(2);
+        expect(out).toBe(refusal);
+      }
+    });
+
+    it("returns 2 for a flag given no value", async () => {
+      const { code, out } = await runMain(["--artifact-root", "-x"]);
+
+      expect(code).toBe(2);
+      expect(out).toBe(
+        "`--artifact-root` was given no value; a value starting with `-` " +
+          "needs the `--artifact-root=<value>` spelling",
+      );
     });
 
     it("reports only the families it is named", async () => {

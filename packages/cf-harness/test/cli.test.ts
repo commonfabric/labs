@@ -947,12 +947,31 @@ Deno.test("parseCfHarnessCliArgs returns help whatever else is on the line", asy
     const argv of [
       ["--allowed-tools", "read_file", "--help"],
       ["--bogus", "-h"],
-      ["--prompt", "--help"],
+      ["--prompt", "hi", "--help"],
     ]
   ) {
     assertEquals(
       await parseCfHarnessCliArgs(argv, { cwd: "/tmp/project", env: {} }),
       { help: true },
+    );
+  }
+});
+
+Deno.test("runCfHarnessCli refuses a flag whose value reads as help, rather than printing it", async () => {
+  for (const help of ["-h", "--help"]) {
+    const buffers = createIoBuffers();
+    assertEquals(
+      await runCfHarnessCli(["--prompt", help], {
+        io: buffers.io,
+        cwd: "/tmp/project",
+        env: {},
+      }),
+      1,
+    );
+    assertEquals(buffers.stdout, []);
+    assertStringIncludes(
+      buffers.stderr.join(""),
+      "`--prompt` was given no value; a value starting with `-` needs the `--prompt=<value>` spelling",
     );
   }
 });
@@ -6284,6 +6303,34 @@ Deno.test("structured control usage failures always return one bounded envelope"
     assertEquals(envelope.ok, false);
     assertEquals(envelope.error.code, "invalid-request");
     assertEquals(buffers.stderr, []);
+  }
+});
+
+Deno.test("control commands name an undeclared flag given where their action goes", async () => {
+  for (
+    const [argv, message] of [
+      [
+        ["config", "--jsno"],
+        "`--jsno` is not a flag of `config`. Did you mean `--json`?",
+      ],
+      [
+        ["auth", "--devcie"],
+        "`--devcie` is not a flag of `auth`. Did you mean `--device`?",
+      ],
+      [["auth", "--bogus=sk-secret"], "`--bogus` is not a flag of `auth`."],
+    ] as const
+  ) {
+    const buffers = createIoBuffers();
+    assertEquals(
+      await runCfHarnessCli(argv, {
+        io: buffers.io,
+        env: {},
+        credentialStore: new InMemoryHarnessCredentialStore(),
+      }),
+      1,
+    );
+    assertStringIncludes(buffers.stderr.join(""), message);
+    assertEquals(buffers.stderr.join("").includes("sk-secret"), false);
   }
 });
 

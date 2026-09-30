@@ -1383,6 +1383,15 @@ describe("launch", () => {
       );
     });
 
+    it("throws for a positional argument after `--`, which the console does not take", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--", "hunter2"], {}, io()),
+      ).rejects.toThrow(
+        "The console takes no positional arguments, and reads no flag after " +
+          "`--`.",
+      );
+    });
+
     it("leaves the registries out when both are waived", async () => {
       const { plan } = await prepareConsoleLaunch(
         [...NAMED_ARGS, "--no-pattern-index", "--no-skills-registry"],
@@ -1665,6 +1674,28 @@ describe("launch", () => {
         ).then(() => undefined, (error: Error) => error.message);
 
         expect(message).toBe(refusal);
+      }
+    });
+
+    it("refuses a flag whose value reads as help, before `--` or after it, rather than printing usage", async () => {
+      for (
+        const [args, flag] of [
+          [["--instance", "-h"], "--instance"],
+          [["--instance", "--help"], "--instance"],
+          [[...ARGS, "--", "--port", "-h"], "--port"],
+        ] as const
+      ) {
+        let served = false;
+        await expect(
+          launchConsole(args, {}, () => {
+            served = true;
+            return Promise.resolve();
+          }, io),
+        ).rejects.toThrow(
+          `\`${flag}\` was given no value; a value starting with \`-\` ` +
+            `needs the \`${flag}=<value>\` spelling`,
+        );
+        expect(served).toBe(false);
       }
     });
 

@@ -2743,6 +2743,36 @@ describe("console/server", () => {
       ).rejects.toThrow("`--no-pattern-index-publish` takes no value.");
     });
 
+    it("throws naming a flag written after `--`, which it does not read", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "--", "--bogus"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--bogus` follows `--`, after which the console reads no flag; it " +
+          "takes no positional arguments.",
+      );
+    });
+
+    it("throws for a positional argument without repeating it", async () => {
+      for (
+        const extra of [["hunter2"], ["--", "--Secret words"], ["--", "-15"]]
+      ) {
+        const refusal = await resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+          {},
+          "/console",
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(refusal).toBe(
+          "The console takes no positional arguments, and reads no flag " +
+            "after `--`.",
+        );
+      }
+    });
+
     it("throws naming an undeclared flag without the value given with it", async () => {
       const refusal = await resolveConsoleConfig(
         [
@@ -2784,6 +2814,17 @@ describe("console/server", () => {
     it("prints usage for `--help` rather than resolving a configuration", async () => {
       // Resolving one would throw: no fabric session is named here.
       await startConsoleServer(["--help"], {}, "/console");
+    });
+
+    it("refuses a flag whose value reads as help, rather than printing usage", async () => {
+      for (const help of ["-h", "--help"]) {
+        await expect(
+          startConsoleServer(["--port", help], {}, "/console"),
+        ).rejects.toThrow(
+          "`--port` was given no value; a value starting with `-` needs " +
+            "the `--port=<value>` spelling",
+        );
+      }
     });
 
     it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {

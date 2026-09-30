@@ -81,6 +81,7 @@ import type {
 } from "./health.ts";
 import {
   CONSOLE_FLAGS,
+  CONSOLE_STRING_FLAGS,
   consoleHelpText,
   parseConsoleArgs,
   refuseBatchSandboxFlags,
@@ -1170,6 +1171,13 @@ export const launchConsole = async (
     startConsoleServer(consoleArgs, undefined, undefined, health),
   io: ConsoleLaunchIo = REAL_IO,
 ): Promise<void> => {
+  // A flag with no value first, on either side of `--`: the `-h` it leaves
+  // behind is not a question.
+  refuseFlagsWithoutValue(args, LAUNCH_STRING_FLAGS);
+  const split = args.indexOf("--");
+  if (split !== -1) {
+    refuseFlagsWithoutValue(args.slice(split + 1), CONSOLE_STRING_FLAGS);
+  }
   const help = consoleLaunchHelpText(args);
   if (help !== undefined) {
     console.log(help);

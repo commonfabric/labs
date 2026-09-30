@@ -6,7 +6,6 @@ import { fromFileUrl, join, relative } from "@std/path";
 
 import {
   argvHolds,
-  keepDottedFlagsOut,
   nearestDeclaredFlag,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
@@ -237,17 +236,6 @@ describe("cli-flags", () => {
     });
   });
 
-  describe("keepDottedFlagsOut()", () => {
-    it("keeps a dotted flag out of the result, where it would write into the flag before the dot", () => {
-      const parsed = parseArgs(["--prompt", "hunter2", "--prompt.x", "y"], {
-        unknown: keepDottedFlagsOut,
-      });
-
-      expect(parsed.prompt).toBe("hunter2");
-      expect(parsed._).toEqual([]);
-    });
-  });
-
   describe("argvHolds()", () => {
     it("returns whether one of the spellings stands as a word of its own before `--`", () => {
       const spellings = ["--help", "-h"];
@@ -261,25 +249,31 @@ describe("cli-flags", () => {
   });
 
   describe("every parseArgs() over a caller's arguments in the package", () => {
-    it("is handed an `unknown` callback", async () => {
-      // Without one, a dotted flag makes `parseArgs()` throw a TypeError
-      // quoting the value of the flag before the dot.
+    it("records the flags it does not declare and refuses them", async () => {
+      // Without a callback, a dotted flag makes `parseArgs()` throw a
+      // TypeError quoting the value of the flag before the dot, and without
+      // the refusal an undeclared flag goes unapplied.
       const root = fromFileUrl(new URL("..", import.meta.url));
-      const unguarded: string[] = [];
+      const unrefused: string[] = [];
       for (const tree of ["src", "console", "scripts", "audit"]) {
         for await (const file of walkSources(join(root, tree))) {
           const text = await Deno.readTextFile(file);
           for (const call of text.matchAll(/\bparseArgs\((?!\))/g)) {
+            const recorded = callText(text, call.index + call[0].length)
+              .match(/unknown: recordUndeclaredFlags\((\w+)\)/)?.[1];
             if (
-              !callText(text, call.index + call[0].length).includes("unknown:")
+              recorded === undefined ||
+              !new RegExp(`refuseUndeclaredFlags\\(\\s*${recorded}\\b`).test(
+                text,
+              )
             ) {
-              unguarded.push(relative(root, file));
+              unrefused.push(relative(root, file));
             }
           }
         }
       }
 
-      expect(unguarded).toEqual([]);
+      expect(unrefused).toEqual([]);
     });
   });
 

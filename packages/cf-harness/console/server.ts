@@ -102,10 +102,12 @@ import {
   argvHolds,
   flagUsageLines,
   HELP_SPELLINGS,
+  isNameable,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
 } from "../src/cli-flags.ts";
+import { HarnessControlError } from "../src/control-errors.ts";
 import {
   checkInputCellSpec,
   parseInputCellArgument,
@@ -609,7 +611,7 @@ export const refuseBatchSandboxFlags = (
 };
 
 /** The flags the console takes that carry a value. */
-const CONSOLE_STRING_FLAGS = [
+export const CONSOLE_STRING_FLAGS = [
   "port",
   "workspace",
   "artifact-root",
@@ -670,7 +672,8 @@ export const consoleHelpText = (args: readonly string[]): string | undefined =>
 /**
  * Parses the console's arguments. The batch CLI's sandbox selection flags are
  * refused first, each naming the variable to set instead, then a flag given
- * no value, and then any other flag the console does not take.
+ * no value, then any other flag the console does not take, and then any
+ * positional argument, since it takes none; what follows `--` is one.
  * `console:launch` checks the arguments it passes through with this before it
  * reads anything.
  *
@@ -688,6 +691,19 @@ export const parseConsoleArgs = (args: readonly string[]) => {
   refuseBatchSandboxFlags(parsed);
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
   refuseUndeclaredFlags(undeclared, CONSOLE_FLAGS, "the console");
+  const [positional] = parsed._;
+  if (positional !== undefined) {
+    // Only a word shaped like a flag is named, never a value.
+    const flag = String(positional).split("=")[0];
+    throw new HarnessControlError(
+      "invalid-request",
+      flag.startsWith("-") && isNameable(flag.replace(/^-+/, ""))
+        ? `\`${flag}\` follows \`--\`, after which the console reads no ` +
+          "flag; it takes no positional arguments."
+        : "The console takes no positional arguments, and reads no flag " +
+          "after `--`.",
+    );
+  }
   return parsed;
 };
 
@@ -2406,6 +2422,8 @@ export const startConsoleServer = async (
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
+  // A flag with no value first: the `-h` it leaves behind is not a question.
+  refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
   const help = consoleHelpText(args);
   if (help !== undefined) {
     console.log(help);

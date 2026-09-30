@@ -120,11 +120,13 @@ switch stops the launch rather than going unapplied. A console flag given to the
 launcher is refused with a pointer to `--`. A flag given no value is refused
 too, whether nothing follows it, the word after it starts with `-`, or its value
 is empty, rather than falling back to the default: a value starting with `-`
-needs the `--name=<value>` spelling. `--help` or `-h`, as a word of its own,
+needs the `--name=<value>` spelling. The server takes no positional argument,
+and so nothing after a `--` of its own. `--help` or `-h`, as a word of its own,
 prints the flags each takes, the launcher's before `--` and the server's after
-it, and serves nothing. [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator
-procedure it belongs to, including the tailnet topology and the pre-demo
-preflight.
+it, and serves nothing, unless it is the word after a flag that takes a value,
+which is that flag given no value. [`../docs/WEAVER.md`](../docs/WEAVER.md) is
+the operator procedure it belongs to, including the tailnet topology and the
+pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:
