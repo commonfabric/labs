@@ -39,6 +39,7 @@ import {
   parseMemoryCompressionControlMessage,
 } from "./message-compression.ts";
 import * as MemoryServer from "./server.ts";
+import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import { verifySessionOpenAuthorization } from "./session-open-auth.ts";
 
 const standaloneMemoryAudience = (await Identity.fromPassphrase(
@@ -125,6 +126,11 @@ export class StandaloneMemoryServer {
         serviceDids?: readonly string[];
       };
 
+      /** Whether the server verifies `connection.auth`, and so advertises
+       *  `connectionAuth`. Default: it does not, and every `session.open`
+       *  is signed. */
+      connectionAuth?: boolean;
+
       /** Answers the non-websocket requests this address receives. Anything
        *  it declines, by answering `undefined`, is told to upgrade. */
       serve?: (
@@ -134,6 +140,9 @@ export class StandaloneMemoryServer {
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
       authorizeSessionOpen,
+      ...(options.connectionAuth === true
+        ? { authorizeConnection: verifyConnectionAuthorization }
+        : {}),
       sessionOpenAuth: {
         audience: standaloneMemoryAudience,
       },

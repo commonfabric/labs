@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-09-21. Each flag's section carries the date its status
+**Last reviewed:** 2026-09-29. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -38,6 +38,8 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env / shell build define, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
+| [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
@@ -738,6 +740,46 @@ holds the measurements and the conditions for revisiting.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority entry, and the refusal branch after the default-on posture soaks.
 
+### `sharedMemoryConnection`
+
+- **Toggle via.** `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` environment variable
+  (through the canonical env registry), the shell build define of the same
+  name, or `RuntimeOptions.experimental.sharedMemoryConnection`.
+  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection
+  may carry several spaces is a property of how the deployment routes
+  connections, so a client follows what the deployment publishes.
+- **Added by.** Bernhard Seefeld, 2026-09-29
+  ([`docs/specs/memory-v2/connection-multiplexing.md`](../specs/memory-v2/connection-multiplexing.md)).
+- **Purpose.** With the flag on, the runner's storage manager opens one
+  memory connection per host, dialed without a space in its address, and
+  mounts the session of every space on that host on it. Each key
+  authenticates once per connection with `connection.auth`, and its sessions
+  open without a signature of their own. Toolshed under the flag verifies
+  `connection.auth` and advertises the [`connectionAuth`](#connectionauth)
+  capability. With the flag off, each space has a connection of its own
+  whose address names the space, every `session.open` is signed, and
+  toolshed advertises no `connectionAuth`. A client with the flag on
+  against a server that does not advertise `connectionAuth` still shares
+  the connection, and signs each `session.open` on it, one at a time.
+- **Current default and planned end state.** Off by default. A deployment
+  that routes a memory connection to a toolshed by the space its address
+  names cannot serve a connection that carries several spaces, so the flag
+  stays off there until a router terminates client connections. The end
+  state is always-on.
+- **Status on 2026-09-29.** Implemented behind the flag. The server side is
+  covered by `packages/memory/test/v2-server-connection-auth.test.ts`, the
+  client library by `packages/memory/test/v2-client-connection-auth.test.ts`,
+  and the runner's connection sharing by
+  `packages/runner/test/remote-session-shared-connection.test.ts`. Three
+  server behaviors that a connection carrying one space cannot observe are
+  not gated: a connection handles frames for different spaces independently,
+  `session.close` ends one session, and a presence membership belongs to a
+  session.
+- **Path to removal.** Turn the default on once every deployment serves
+  shared connections; then remove the env mapping, the runtime option and its
+  authority entry, the shell define, `RemoteSessionFactory`'s
+  connection-per-space path, and the `?space=` address parameter.
+
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
 Contextual Flow Control (CFC) is the label-propagation and egress-gating layer
@@ -1171,6 +1213,24 @@ the per-epic implementation notes).
   capability only as part of a protocol version that requires view support.
 - **Status (2026-09-09):** optional; the runtime feature remains off by default.
 
+
+### `connectionAuth`
+
+- **Added by:** Bernhard Seefeld, 2026-09-29.
+- **Toggle and default:** a Memory hello capability, advertised by a server
+  whose host verifies `connection.auth` (`Server` option
+  `authorizeConnection`). Toolshed configures it under
+  [`sharedMemoryConnection`](#sharedmemoryconnection); the standalone server
+  takes a `connectionAuth` option. An absent field means unsupported.
+- **Gates:** `connection.auth`, `connection.challenge`, `connection.release`,
+  and a `session.open` that names an authenticated principal in place of
+  carrying a signature
+  ([`04-protocol.md`](../specs/memory-v2/04-protocol.md), section 4.5.1).
+- **End state and removal:** retain the negotiation while deployments may
+  contain clients that sign each `session.open`. Remove the capability as
+  part of a protocol version that requires connection authentication.
+- **Status (2026-09-29):** optional; off wherever `sharedMemoryConnection` is
+  off.
 
 ### `conflictAdmissionMode`
 

@@ -1,6 +1,12 @@
 # Memory Connection Multiplexing
 
-Status: proposed design. Nothing in this document is implemented yet.
+Status: the direct setup of section 3 is implemented behind the
+`sharedMemoryConnection` experimental flag, which is off by default
+([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
+The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
+where the two differ, that chapter describes the system. `space.genesis`
+(section 4), the router (section 5), and attestation (section 6) are proposed
+and not implemented.
 
 This document describes how a client reaches every space it uses over one
 memory connection per toolshed instead of one per space, and how routers that

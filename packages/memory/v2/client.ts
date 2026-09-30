@@ -452,15 +452,28 @@ export class Client {
         genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
       }),
     };
-    const result = await runWithAbortSignal(
-      signal,
-      "memory session mount cancelled",
-      () => this.openSession(space, options, auth),
-    );
-    if (signal?.aborted) {
-      throw signal.reason instanceof Error
-        ? signal.reason
-        : new Error("memory session mount cancelled");
+    let opening: Promise<SessionOpenResult> | undefined;
+    let result: SessionOpenResult;
+    try {
+      result = await runWithAbortSignal(
+        signal,
+        "memory session mount cancelled",
+        () => (opening = this.openSession(space, options, auth)),
+      );
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error("memory session mount cancelled");
+      }
+    } catch (error) {
+      // A cancelled mount hands out no session, so one the server opened for
+      // it has no holder to close it.
+      if (signal?.aborted) {
+        void opening?.then(({ sessionId }) =>
+          this.#closeUnheldSession(space, sessionId)
+        ).catch(() => undefined);
+      }
+      throw error;
     }
     // Between openSession resolving (the session now exists server-side)
     // and the registration below, a session-scoped frame would find no
@@ -556,6 +569,24 @@ export class Client {
       throw error;
     }
     return result.ok as Result;
+  }
+
+  /**
+   * Helper for `mount()`, which ends a session the server holds on this
+   * connection and no `SpaceSession` stands for. A server that does not
+   * advertise `sessionClose` keeps it until the connection closes.
+   */
+  async #closeUnheldSession(space: string, sessionId: string): Promise<void> {
+    if (
+      this.#closed || !this.#connected ||
+      this.serverFlags?.sessionClose !== true
+    ) return;
+    await this.request({
+      type: "session.close",
+      requestId: this.#nextRequestId(),
+      space,
+      sessionId,
+    });
   }
 
   /**

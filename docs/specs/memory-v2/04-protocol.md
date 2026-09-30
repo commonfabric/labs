@@ -21,7 +21,9 @@ rewrite. In particular:
   remains deferred for this pass
 - the toolshed v2 websocket route requires a signed `session.open`
   invocation whose subject, challenge, audience, and session descriptor match
-  the current request
+  the current request, or, where the server advertises `connectionAuth`, a
+  `session.open` naming a principal a signed `connection.auth` authenticated
+  on the same connection
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
@@ -282,6 +284,18 @@ sessions open. It is build-inherent and defaults to `false` when absent: a
 client connected to an older server closes a session locally, and the server
 keeps the session attached until the connection closes.
 
+`connectionAuth` advertises that the server verifies `connection.auth`, and
+that a `session.open` may name an authenticated principal of its connection
+in place of carrying a signature (section 4.5.1). A server advertises it when
+its host verifies `connection.auth`; toolshed does under the
+`sharedMemoryConnection` experimental flag. It defaults to `false` when
+absent: a client then signs each `session.open`, one at a time, since each
+uses the connection's current challenge and receives the next.
+
+`spaceGenesis` is reserved for the `space.genesis` request of
+[connection-multiplexing.md](./connection-multiplexing.md). No server
+advertises it.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -296,6 +310,9 @@ interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
   space: SpaceId;
+  // An authenticated principal of the connection (section 4.5.1). A request
+  // naming one carries neither `invocation` nor `authorization`.
+  principal?: DID;
   session: {
     sessionId?: SessionId;
     seenSeq?: number;
@@ -385,6 +402,9 @@ Rules:
 
 - the client MUST open or resume a session before issuing any memory commands
   for that space on the current connection
+- a connection may hold sessions for several spaces, and several sessions for
+  one space, each opened as the principal its own `session.open` was
+  authorized as
 - `sessionId` is caller-supplied in the current pass when the client wants to
   resume an existing logical session; server-issued, principal-bound ids remain
   deferred
@@ -464,6 +484,8 @@ interface HelloMessage {
     sessionReadCeiling?: boolean;
     presenceV1?: boolean;
     sessionClose?: boolean;
+    connectionAuth?: boolean;
+    spaceGenesis?: boolean;
   };
 }
 
@@ -485,6 +507,12 @@ interface RequestMessage {
   requestId: string;
   space: SpaceId;
   sessionId?: SessionId;
+}
+
+/** Requests about the connection itself, which name no space. */
+interface ConnectionRequestMessage {
+  type: "connection.auth" | "connection.challenge" | "connection.release";
+  requestId: string;
 }
 ```
 
@@ -1043,7 +1071,8 @@ Write-class requests may carry `invocation` / `authorization` payloads so they
 can be persisted alongside accepted commits, but the current wire protocol
 still uses plain JSON envelopes rather than full UCAN message framing.
 
-On memory WebSocket routes, `session.open` itself is authenticated:
+On memory WebSocket routes, `session.open` itself is authenticated, in one of
+two ways. A signed `session.open` carries its own authorization:
 
 - the request must carry `invocation` and `authorization`
 - `invocation.cmd` must be `"session.open"`
@@ -1059,6 +1088,89 @@ On memory WebSocket routes, `session.open` itself is authenticated:
 - `invocation.exp` must not be expired beyond the server clock-skew grace
 - the signature must verify against `invocation.iss` for the hash of
   `invocation`
+
+A `session.open` naming a `principal` rests on the connection's
+authentication of that principal, where the server advertises
+`connectionAuth`. A key authenticates once per connection:
+
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionAuthInvocation {
+  iss: DID;
+  cmd: "connection.auth";
+  aud: DID;
+  args: { protocol: "memory" };
+  challenge: string;
+  iat: number;
+  exp: number;
+}
+
+interface ConnectionAuthRequest {
+  type: "connection.auth";
+  requestId: string;
+  invocation: ConnectionAuthInvocation;
+  authorization: { signature: Uint8Array };
+}
+
+/** `ok` of the response. */
+interface ConnectionAuthResult {
+  principal: DID;
+}
+
+interface ConnectionChallengeRequest {
+  type: "connection.challenge";
+  requestId: string;
+}
+
+/** `ok` of the response. */
+interface ConnectionChallengeResult {
+  challenge: { value: string; expiresAt: number };
+}
+
+interface ConnectionReleaseRequest {
+  type: "connection.release";
+  requestId: string;
+  principal: DID;
+}
+```
+
+- `invocation.cmd` must be `"connection.auth"` and `invocation.args.protocol`
+  the memory protocol
+- `invocation.aud` must match the server audience from `hello.ok`
+- `invocation.challenge` must be a challenge the server issued on this
+  connection — in `hello.ok`, in a `session.open` response, or in response to
+  `connection.challenge` — that has not expired and that `invocation.iss` has
+  not already signed
+- `invocation.exp` must not be expired beyond the server clock-skew grace
+- the signature must verify against `invocation.iss` for the hash of
+  `invocation`
+
+A challenge that is unknown to the connection, expired, or already signed by
+the same key is refused with a `retriable` `AuthorizationError`; every other
+refusal is permanent. One challenge accepts several keys, once each, so
+authenticating two keys needs no ordering between them. A client holding no
+usable challenge asks for one with `connection.challenge`.
+
+An authenticated principal stays authenticated until the connection closes
+or a `connection.release` names it. A connection holds at most 64, and a
+`connection.auth` past that is refused, permanently, until one is released.
+Sessions a principal opened stay open after its release.
+
+A `session.open` naming a principal the connection has not authenticated is
+refused with a permanent `AuthorizationError`. One naming an authenticated
+principal is admitted as that principal exactly as a signed open is admitted
+as its verified issuer: the space's ACL decides what the session may do, and
+a resume by a principal other than the one the session is bound to is
+refused. It uses no challenge, so such opens are handled concurrently across
+spaces. Its session descriptor is not signed; the connection is what
+authenticates the sender.
+
+A signed `connection.auth` authorizes more than a signed `session.open`
+does: every space its key can reach through this server, for as long as the
+connection stays open, where a signed open is good for one space. The
+challenge binds it to one connection.
 
 Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
@@ -1342,8 +1454,10 @@ serializable isolation.
 A connection handles the frames it is handed in turns, and a turn is per space.
 A frame naming a space is handled after the frames handed over before it for
 that space, and after every frame naming no space that was handed over before
-it. A frame naming no space — `hello`, or a message the server cannot read — is
-handled after every frame handed over before it. Frames for different spaces on
+it. A frame naming no space — `hello`, a `connection.*` request, or a message
+the server cannot read — is handled after every frame handed over before it,
+so a `session.open` handed over behind the `connection.auth` it depends on
+finds its principal authenticated. Frames for different spaces on
 one connection do not wait for each other, so a `transact` waiting for its
 space's publication lock delays nothing addressed to another space. Presence
 messages stay outside these turns (section 4.13.4).
