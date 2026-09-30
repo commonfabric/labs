@@ -21,11 +21,10 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
 /**
  * Returns the current principal's own access to the space `target`'s value
  * lives in, or to the space the calling code runs in when no `target` is
- * passed. The level is the
- * one the memory server enforces, `acl[principal] ?? acl["*"]` over the
- * space's access list, with the space's own identity holding `OWNER`
- * implicitly; {@link spaceReaderRole} decides it, as it does for the render
- * membership lookup.
+ * passed. The level is the one the memory server enforces,
+ * `acl[principal] ?? acl["*"]` over the space's access list, with the space's
+ * own identity holding `OWNER` implicitly; {@link spaceReaderRole} decides it,
+ * as it does for the render membership lookup.
  *
  * `"none"` means the principal holds nothing there: the list grants them
  * nothing, or, on a client, the memory server has refused the principal the
@@ -77,18 +76,13 @@ export function spaceAccess(
     throw new Error("`spaceAccess()` in a handler is not available yet.");
   }
 
-  if (args.length === 0) {
-    return accessLevel(runtime, tx, space, principal, kind === "lift");
+  let targetSpace = space;
+  if (args.length > 0) {
+    const [target] = args;
+    if (target === undefined) return undefined;
+    targetSpace = spaceOfTarget(target);
   }
-  const [target] = args;
-  if (target === undefined) return undefined;
-  return accessLevel(
-    runtime,
-    tx,
-    spaceOfTarget(target),
-    principal,
-    kind === "lift",
-  );
+  return accessLevel(runtime, tx, targetSpace, principal, kind === "lift");
 }
 
 /**

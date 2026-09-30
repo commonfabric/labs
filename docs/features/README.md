@@ -76,6 +76,10 @@ a line for each new document to the index below.
 - [`home-space-internals.md`](home-space-internals.md) — the runtime
   implementation behind home-space behavior, including how the runtime derives
   the user's identity DID
+- [`space-access.md`](space-access.md) — what `spaceAccess()` tells a pattern
+  about the access its principal holds in a space: where the level comes from,
+  who the principal is, when the answer is `"none"` and when it is not known,
+  and how it stays current
 
 ## Talking to the outside world
 

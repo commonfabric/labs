@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import type { FabricValue } from "@commonfabric/data-model";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
-import type { Cell } from "../../src/cell.ts";
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
+import type { Cell } from "../../src/cell.ts";
 import { stampWaveRunContext } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
