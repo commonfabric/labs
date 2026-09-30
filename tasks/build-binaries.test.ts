@@ -537,7 +537,8 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   for (const binary of BINARY_NAMES) {
     for (const at of config.includePaths(binary)) {
       if (unread.has(at)) continue;
-      roots.push(...await followedModules(at, config.excludePaths(binary)));
+      const followed = await followedModules(at, config.excludePaths(binary));
+      for (const module of followed) roots.push(module);
     }
   }
   const { modules, rootModule } = await moduleGraph(repo, roots);
@@ -574,7 +575,8 @@ Deno.test("the toolshed's pattern trees reach no npm package of their own", asyn
   for (const at of config.includePaths("toolshed")) {
     if (unread.has(at)) continue;
     const modules = await followedModules(at, config.excludePaths("toolshed"));
-    (trees.includes(at) ? patterns : server).push(...modules);
+    const into = trees.includes(at) ? patterns : server;
+    for (const module of modules) into.push(module);
   }
   assert(patterns.length > 0);
   const serverPackages = importedNpmPackages(await moduleGraph(repo, server));

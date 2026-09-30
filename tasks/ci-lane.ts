@@ -48,6 +48,7 @@ import {
   commitMoment,
   pinShuffleSeed,
 } from "@commonfabric/test-support/shuffle";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   type CapabilityId,
   COMPILE_CACHE_FILE,
@@ -931,15 +932,15 @@ export async function runBatch(
           (unitSeconds.get(location.unit) ?? 0) + record.durationMs / 1000,
         );
       }
-      records.push(...collected.records);
-      conflicts.push(...collected.conflicts);
+      for (const record of collected.records) records.push(record);
+      for (const conflict of collected.conflicts) conflicts.push(conflict);
       await Deno.remove(batchSpool, { recursive: true }).catch(() => {});
       await Deno.mkdir(batchSpool, { recursive: true });
     }
     for (const request of asked) {
       if (!heard.has(request.unit)) silent.add(request.unit);
     }
-    longest += Math.max(0, ...unitSeconds.values());
+    longest += Math.max(0, maxOf(unitSeconds.values()));
   }
   if (spool !== undefined) {
     spoolRecords(spool, [
@@ -1651,7 +1652,7 @@ export async function fullLanes(
 export function describeFullLanes(laid: Plan, prologue: number): void {
   const longest = Math.max(
     0,
-    ...laid.lanes.map((lane) => lane.projectedSeconds),
+    maxOf(laid.lanes.map((lane) => lane.projectedSeconds)),
   );
   say([
     `## The full run's ${laid.lanes.length} lane(s)`,
@@ -1894,7 +1895,7 @@ export async function runLane(
         opened.envFor(batch.suite.needs),
         batchCoverage(options, batch.suite.id, seen.coverage),
       );
-      conflicts.push(...result.conflicts);
+      for (const conflict of result.conflicts) conflicts.push(conflict);
       // The records decide, rather than the command's exit status: a
       // runner that failed only on identities a flake rate excuses
       // exits non-zero and has told this run nothing it should stop

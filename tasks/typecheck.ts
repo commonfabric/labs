@@ -526,7 +526,7 @@ export async function scopesReached(
       }
       const naming = ambient.get(at);
       if (naming !== undefined) pending.push(naming);
-      pending.push(...importers.get(at) ?? []);
+      for (const importer of importers.get(at) ?? []) pending.push(importer);
     }
     return [...reached].sort();
   };

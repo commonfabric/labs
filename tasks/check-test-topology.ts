@@ -212,7 +212,7 @@ export async function workflowRecords(
       }
       if (!entry.isFile || !/\.ya?ml$/.test(entry.name)) continue;
       const text = await Deno.readTextFile(path.join(root, at));
-      found.push(...recordedIdentities(text, at));
+      for (const identity of recordedIdentities(text, at)) found.push(identity);
     }
   };
   await walk(CI_DEFINITIONS);
@@ -549,8 +549,9 @@ async function recordFiles(at: string): Promise<RecordFile[]> {
   const from = path.basename(at);
   for await (const entry of Deno.readDir(at)) {
     const child = path.join(at, entry.name);
-    if (entry.isDirectory) found.push(...await recordFiles(child));
-    else if (entry.isFile && entry.name.endsWith(".ndjson")) {
+    if (entry.isDirectory) {
+      for (const file of await recordFiles(child)) found.push(file);
+    } else if (entry.isFile && entry.name.endsWith(".ndjson")) {
       found.push({
         path: child,
         from,
@@ -589,7 +590,9 @@ export async function readRecords(
   const resolver = aliases ?? await loadAliasResolver();
   const records: StoredIdentity[] = [];
   const files: RecordFile[] = [];
-  for (const at of paths) files.push(...await recordFiles(at));
+  for (const at of paths) {
+    for (const file of await recordFiles(at)) files.push(file);
+  }
   for (const file of files) {
     const text = await Deno.readTextFile(file.path);
     for (const group of parseReportGroups(text)) {
@@ -706,9 +709,10 @@ export async function check(
     await candidateSurfaces(options.root),
     { fixtures: NOT_A_TEST_SURFACE },
   );
-  findings.push(
-    ...checkWorkflows(suites, await workflowRecords(options.root)),
-  );
+  const workflows = await workflowRecords(options.root);
+  for (const finding of checkWorkflows(suites, workflows)) {
+    findings.push(finding);
+  }
   if (options.store !== undefined) {
     // Each named path is read on its own, because a path holding nothing
     // is a part of the run the store half did not see, and summing them
