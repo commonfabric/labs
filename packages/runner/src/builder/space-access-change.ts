@@ -138,6 +138,9 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
  * well, so a refusal throws from the call; {@link commitSpaceAccessChanges}
  * checks both again against the list it replaces. A change that would leave
  * the list as it is stages nothing.
+ *
+ * A service DID or a delegating DID as `principal` is not refused: the memory
+ * server's configuration names those, and nothing hands them to a runtime.
  */
 function stageChange(
   call: string,

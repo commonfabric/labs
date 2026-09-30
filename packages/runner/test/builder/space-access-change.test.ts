@@ -115,11 +115,14 @@ function gesture(payload: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * A loopback session factory recording the ids each commit it sends writes,
- * one list per commit, in the order they were sent.
+ * one list per commit, in the order they were sent. `beforeNextAclCommit`, when
+ * set, runs once before the next commit that writes an access list is sent,
+ * and a rejection from it takes the place of that commit's result.
  */
 class RecordingSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
   readonly commits: string[][] = [];
+  beforeNextAclCommit: (() => Promise<void>) | undefined;
 
   readonly #server: Server;
 
@@ -147,13 +150,20 @@ class RecordingSessionFactory implements SessionFactory {
       }),
     );
     const transact = session.transact.bind(session);
-    (session as { transact: typeof transact }).transact = (commit) => {
-      this.commits.push(
-        commit.operations.flatMap((operation) =>
-          "id" in operation ? [operation.id] : []
-        ),
+    (session as { transact: typeof transact }).transact = async (
+      commit,
+      beforeIssue,
+    ) => {
+      const ids = commit.operations.flatMap((operation) =>
+        "id" in operation ? [operation.id] : []
       );
-      return transact(commit);
+      this.commits.push(ids);
+      const before = this.beforeNextAclCommit;
+      if (before !== undefined && ids.includes(`of:${space}`)) {
+        this.beforeNextAclCommit = undefined;
+        await before();
+      }
+      return await transact(commit, beforeIssue);
     };
     return { client, session };
   }
@@ -246,6 +256,44 @@ describe("space-access-change", () => {
       path: [],
     }).sync();
     await runtime.storageManager.synced();
+  }
+
+  /**
+   * Replaces the access list of `space` with `acl` on the memory server,
+   * writing as `writer` through a session of its own.
+   */
+  async function writeAclAs(
+    writer: Identity,
+    space: MemorySpace,
+    acl: ACL,
+  ): Promise<void> {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+    });
+    try {
+      const session = await client.mount(
+        space,
+        {},
+        (_space, _session, context) => ({
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+          },
+          authorization: { principal: writer.did() },
+        }),
+      );
+      await session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}` as URI,
+          value: { value: acl },
+        }],
+      });
+    } finally {
+      await client.close();
+    }
   }
 
   /** Returns the access list the memory server holds for `space`. */
@@ -456,6 +504,51 @@ describe("space-access-change", () => {
       await send(runtime, result, "relay", gesture({ principal: bob.did() }));
 
       expect(errors.join("\n")).toContain("requires the handler's event");
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+      expect(result.key("notes").get()).toEqual([]);
+    });
+
+    it("runs the handler again when the list changes under its commit, with the same gesture, and commits its writes once", async () => {
+      const { runtime, factory, errors } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const result = await runAccessPattern(runtime, space);
+      const before = aclCommitCount(factory, space);
+      factory.beforeNextAclCommit = () =>
+        writeAclAs(alice, space, {
+          [alice.did()]: "OWNER",
+          [carol.did()]: "READ",
+        });
+
+      await send(runtime, result, "grant", gesture({ principal: bob.did() }));
+
+      // The first commit conflicted with the concurrent write, and the second,
+      // from the run the conflict started, is the one that landed.
+      expect(aclCommitCount(factory, space)).toBe(before + 2);
+      expect(errors).toEqual([]);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [carol.did()]: "READ",
+        [bob.did()]: "WRITE",
+      });
+      expect(result.key("notes").get()).toEqual([`granted ${bob.did()}`]);
+    });
+
+    it("commits none of the handler's writes when the memory server refuses the change to the list", async () => {
+      const { runtime, factory, errors } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const result = await runAccessPattern(runtime, space);
+      factory.beforeNextAclCommit = () =>
+        Promise.reject(
+          Object.assign(new Error("refused for the test"), {
+            name: "AuthorizationError",
+          }),
+        );
+
+      await send(runtime, result, "grant", gesture({ principal: bob.did() }));
+
+      expect(errors.join("\n")).toContain(
+        "The memory server refused the change to the access list",
+      );
       expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
       expect(result.key("notes").get()).toEqual([]);
     });

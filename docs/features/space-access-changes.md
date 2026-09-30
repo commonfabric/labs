@@ -41,6 +41,17 @@ body, and either way drops the handler's whole transaction.
 | An actor without `OWNER` in the space | the call when the runtime holds the list, and always the commit |
 | A change leaving the list with no concrete `OWNER` | the call when the runtime holds the list, and always the commit |
 
+A service DID or a delegating DID is not refused as `principal`. The memory
+server's configuration names both (`acl.serviceDids` and `acl.delegatingDids`,
+set from toolshed's environment), and nothing hands either list to a runtime,
+so a runtime cannot tell one from any other DID. A service DID already holds
+`OWNER` in every space at the memory server, so an entry for one adds nothing
+there. A delegating DID, the identity a toolshed's serving runtime presents,
+holds nothing of its own; what an entry granting one would let a serving
+runtime do directly, outside the delegated carriage its served writes go
+through, is not settled, and a refusal at the memory server of an access list
+that names either kind is the way to close it.
+
 The trusted gesture is the renderer's mark on an event a person caused on a
 rendered surface, the test `commitSnapshotShare()` applies without its match on
 which surface. The runner records it on the handler's frame when the run
