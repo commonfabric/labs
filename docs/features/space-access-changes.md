@@ -14,6 +14,10 @@ end in is `writeAcl()` in `packages/runner/src/acl-manager.ts`, the same one
 in [`space-access.md`](space-access.md): a cell, or a value read through one,
 stands for the space its value lives in, after following any links it holds.
 
+A handler that admits someone can tell them about the space in the same run
+with `noticeSpaceAccess()`, which [`space-access-notices.md`](space-access-notices.md)
+describes.
+
 ## What a grant exposes
 
 Adding a member changes no value's label, so a grant exposes to the grantee

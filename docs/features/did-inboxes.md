@@ -13,6 +13,10 @@ Construct a client with `{host, signer}`. Host normalization requires an HTTPS
 origin, with HTTP allowed for loopback development. Requests refuse redirects
 and mutations are never automatically retried.
 
+A handler sends through this client with `noticeSpaceAccess()`, which tells a
+member of a space about it; [`space-access-notices.md`](space-access-notices.md)
+describes the payload it sends and when.
+
 `GET /api/inbox` advertises version 1 and limits. All other operations use signed
 JSON POSTs under `/api/inbox/`:
 

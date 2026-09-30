@@ -665,6 +665,42 @@ Both calls throw on a serving runtime for now.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
 details.
 
+### Telling someone about a space
+
+`noticeSpaceAccess(principal, entry)` tells `principal` about the space
+`entry` lives in, by a message to their DID inbox, so that someone a handler
+has admitted can find the space without sharing another one with the sender.
+`entry` is what they should open: a piece, or any cell at the root of its own
+document, in the space's own scope. The message names the space and that
+document and nothing else, and arrives from the person who sent the event.
+
+```tsx
+// Shown at module scope.
+const invite = handler<
+  { member: DID },
+  { board: Writable<{ title: string }>; members: Writable<DID[]> }
+>(({ member }, { board, members }) => {
+  grantSpaceAccess(members, member, "WRITE");
+  noticeSpaceAccess(member, board);
+  members.addUnique(member);
+});
+```
+
+The person who sent the event must hold `OWNER` in the space, and `principal`
+must have an entry of their own in its access list, counting any
+`grantSpaceAccess()` the same handler made; an entry for `"*"` does not count.
+The call works only in a handler, and throws anywhere else and on a serving
+runtime. A refusal throws, before anything is sent, as it does for a grant.
+
+The message goes out only after the handler's writes commit. Every run of one
+event sends the same message, which the inbox holds once. Nothing retries a
+message that fails to send, and one reaches only a recipient who has enabled
+their inbox, so a notice may not arrive: keep another way for the person to
+find the space. The recipient cannot trust what a notice says beyond who sent
+it, and opening the space is what checks the rest.
+[`space-access-notices.md`](../../features/space-access-notices.md) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell

@@ -1,0 +1,124 @@
+# Telling a member of a space about it from a handler
+
+`noticeSpaceAccess(principal, entry)` lets a handler tell someone about a space
+they can reach: once the handler's commit is accepted, it sends a message to
+`principal`'s [DID inbox](did-inboxes.md) naming the space and a document in
+it. It is what a pattern that admits someone uses to let them know, when the
+two share no space the person would think to look in. The implementation is
+`packages/runner/src/builder/space-access-notice.ts`.
+
+`entry` names the space and the document the way `target` does for
+`spaceAccess(target)`, described in [`space-access.md`](space-access.md): a
+cell, or a value read through one, after following any links it holds. It must
+land at the root of a document in the space's own scope, since the notice names
+a document the recipient can open, and a document of one principal's own scope
+names nothing another principal can.
+
+## What the message holds
+
+The payload is inert JSON, and holds exactly this:
+
+```json
+{
+  "type": "space-access-notice",
+  "v": 1,
+  "space": "did:key:…",
+  "entry": "of:…"
+}
+```
+
+`space` is the space's DID, and `entry` the id of the document `entry` resolved
+to. Nothing the pattern chooses reaches the payload beyond which document it
+names: no title, no text, no claim about who created the space. The inbox
+service records the sender's DID from the request's signature, so the recipient
+learns who sent it without the payload saying so.
+
+The recipient trusts none of what the payload says. A sender can put any
+payload in an enabled inbox, notice or not, so a notice may name a space the
+recipient is not in, or a document that does not exist. What a notice tells the
+recipient is only who sent it. Opening the space is what checks the rest: the
+memory server admits the recipient or refuses them.
+
+The message discloses to the recipient the space's DID and a document id,
+which the space's access list and its documents show them anyway once they open
+it, and that the sender told them. The host's operator can read who notifies
+whom about which space, in the service-private inbox database; the same host
+already holds the access lists. The inbox's public `status` operation says to
+anyone whether a DID has an enabled inbox, whether or not anything is sent.
+
+## Who may tell whom
+
+The call acts for the event's actor, `Runtime.actingPrincipalFor()`, the same
+principal `currentPrincipal()` returns, and the message is signed as that
+actor: on a client runtime the actor is the runtime's own identity, which is
+also the identity that signs its requests.
+
+| Refused | Where |
+| --- | --- |
+| A call anywhere but a handler: a pattern body, a `computed()`, a `lift()` | the call |
+| A call on a serving runtime | the call |
+| A `principal` that is not a DID in DID Core syntax, `"*"` among them | the call |
+| An `entry` that is not a cell | the call |
+| An `entry` below the root of its document, or in a scope other than the space's | the call |
+| An actor without `OWNER` in the space | the call when the runtime holds the list, and always the send |
+| A `principal` without an entry of its own in the space's list | the call when the runtime holds the list, and always the send |
+
+An entry for `"*"` does not count as the principal's own: the call tells a
+principal the list names. A principal may be told about a space in which they
+hold any level.
+
+The list the checks read is the list as it stands once the handler's own
+`grantSpaceAccess()` and `revokeSpaceAccess()` calls are applied, so a handler
+can admit someone and tell them in one run. The call reads the list this
+runtime holds, with those calls applied. The send reads it again, after the
+handler's access-list changes and its own writes have committed, having caught
+up with the memory server, so a principal whose entry is gone by then is not
+told.
+
+No trusted gesture is required. The call adds no power to send: anyone holding
+a key can already put a message in an enabled inbox, within the inbox's limits.
+The checks keep a pattern honest about whom it tells, and bound nothing else.
+The inbox's per-sender and per-recipient limits, and the recipient's choice to
+enable it, are what bound unwanted messages.
+
+## How the message is sent
+
+A refusal at the call throws before anything is staged, so a handler that
+catches one sends nothing for that call, and one it lets escape drops the
+handler's whole transaction.
+
+Otherwise the call stages the send as a post-commit effect on the handler's
+transaction. It runs once the memory server accepts the handler's commit, and
+never if the commit is refused or the transaction aborted. A handler that runs
+again for a conflict stages it again, and only the run that commits sends. A
+handler that also changes the space's access list commits that change first,
+as [`space-access-changes.md`](space-access-changes.md) describes, so the send
+reads a list that holds it.
+
+The message goes to the inbox at the host this runtime's `apiUrl` names, the
+host a client of the same deployment reads its own inbox from.
+
+The inbox operation id is derived from `eventKey()`, `principal` and the
+payload. Every run of one event therefore sends the same operation id and the
+same payload, and the inbox keeps the first and returns its receipt for the
+rest, so two runs of one event that both commit leave one message. An event
+delivered twice ordinarily commits once, since the second delivery's commit is
+refused, and then only one run sends at all.
+
+Nothing retries a send that fails. A refusal at the send, an inbox that is not
+enabled or is full, a network failure, and a tab closed between the commit and
+the send all leave the handler's writes committed and the notice unsent. The
+failure is logged on the sending runtime and reaches neither the handler nor
+the recipient. A notice may therefore not arrive, and a pattern that depends on
+one arriving needs another way for the recipient to find the space.
+
+## Serving runtimes
+
+The call throws on a serving runtime. A serving runtime holds no key of the
+event's actor, and the inbox authenticates a sender by the signature on the
+request, so a notice sent there could name only the service as its sender.
+
+Under server execution a client's run of a handler is speculative, and its
+post-commit effects that send anything outside the runtime are dropped in
+favor of the serving runtime's run, which throws. So a notice is sent only
+where handlers run on the client.

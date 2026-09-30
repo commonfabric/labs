@@ -970,7 +970,9 @@ testing, and submitting changes.
 
 `InboxClient` from `@commonfabric/runner/inbox` provides signed generic
 delivery, private recipient reads, and durable deduplication. See
-[DID inboxes](../../docs/features/did-inboxes.md) for the wire contract.
+[DID inboxes](../../docs/features/did-inboxes.md) for the wire contract. A
+handler sends through it with `noticeSpaceAccess()`, described in
+[telling a member of a space about it](../../docs/features/space-access-notices.md).
 `ACLManager.grant(did, "READ" | "WRITE")` adds access monotonically inside the
 conflict-retried transaction, preserving existing WRITE or OWNER grants.
 Delivery and access changes are separate operations; callers own their workflow
