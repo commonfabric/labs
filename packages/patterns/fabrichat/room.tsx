@@ -396,16 +396,6 @@ const entityKeyOf = (cell: unknown): string | undefined => {
   return ref === undefined ? undefined : entityRefToString(ref);
 };
 
-/**
- * The cell `cell` resolves to, if there is one. It comes back inside an object
- * so that an absent cell stays absent: a cell bound to a name directly is
- * given that name, which an absent one can't take.
- */
-const resolvedCell = <T,>(
-  cell: Cell<T> | undefined,
-): { cell?: Cell<T> } =>
-  cell === undefined ? {} : { cell: cell.resolveAsCell() };
-
 /** A fresh request id, for an event a rendered control sends without one. */
 const freshRequestId = (): string =>
   `ui-${Math.random().toString(36).slice(2)}${
@@ -772,7 +762,7 @@ const performMessageAct = (
     counters,
     composer,
   } = state;
-  const { cell: profile } = resolvedCell(myProfile);
+  const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
   const senderKey = entityKeyOf(profile);
   if (senderKey === undefined) return;
@@ -797,9 +787,8 @@ const performMessageAct = (
       : undefined;
     // A cleared link still reads back as a cell, holding nothing.
     const fromComposer = composed?.get() === undefined ? undefined : composed;
-    const { cell: replyCell } = resolvedCell(
-      event?.replyTo?.message ?? state.message ?? fromComposer,
-    );
+    const replyCell = (event?.replyTo?.message ?? state.message ?? fromComposer)
+      ?.resolveAsCell();
     const shownIn = event?.replyTo?.shownIn ?? state.shownIn ?? "main";
     const target = replyCell === undefined
       ? undefined
@@ -842,7 +831,7 @@ const performMessageAct = (
     return;
   }
 
-  const { cell: target } = resolvedCell(event?.message ?? state.message);
+  const target = (event?.message ?? state.message)?.resolveAsCell();
   const entry = entryFor(entries, target);
   if (target === undefined || entry === undefined) return;
   const current = entry.record;
@@ -942,7 +931,7 @@ const performReactionAct = (
 ): void => {
   const { myProfile, messages, requests, usedTimes, activity, counters } =
     state;
-  const { cell: profile } = resolvedCell(myProfile);
+  const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
   const senderKey = entityKeyOf(profile);
   if (senderKey === undefined) return;
@@ -952,7 +941,7 @@ const performReactionAct = (
   const requestId = event?.requestId ?? freshRequestId();
   const requestKey = requestKeyOf(senderKey, requestId);
   if (actedOn(requests, requestKey)) return;
-  const { cell: target } = resolvedCell(event?.message ?? state.message);
+  const target = (event?.message ?? state.message)?.resolveAsCell();
   const entry = entryFor(messageEntries(messages), target);
   if (target === undefined || entry === undefined) return;
   if (isDeleted(entry.record)) return;
@@ -1009,7 +998,7 @@ const performMembershipAct = (
     activity,
     counters,
   } = state;
-  const { cell: profile } = resolvedCell(myProfile);
+  const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
   const senderKey = entityKeyOf(profile);
   if (senderKey === undefined) return;
@@ -1192,7 +1181,7 @@ export const commitWindow = handler<
     return;
   }
   const entries = messageEntries(messages);
-  const { cell: root } = resolvedCell(request.root);
+  const root = request.root?.resolveAsCell();
   const rootEntry = root === undefined ? undefined : entryFor(entries, root);
   if (root !== undefined && rootEntry === undefined) return;
   const view = rootEntry === undefined
