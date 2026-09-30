@@ -226,6 +226,43 @@ Prefer an exported `Stream<T>` when you own the pattern: it states the entry
 point in the output type. Use the tree walk when the handler belongs to the UI
 and exporting it would only serve the test.
 
+### Putting a cell link in an event
+
+A step's `event` may carry a link to a cell, such as one element of a stored
+list. The steps are part of the test pattern's own result, and that result's
+schema comes from the types of what the test returns. So where the linked
+cell's type carries a write policy — a `TrustedActionWrite` or a
+`writeAuthorizedBy` naming the pattern's own handler — the test pattern's
+setup has to satisfy that policy just to store the step, and CFC refuses it:
+
+```
+CFC denied (write-policy-gate): a policy check refused the commit
+  - writeAuthorizedBy requires a trusted verified binding identity at /$TESTS/*/event/message
+```
+
+Give the link the type the handler's event declares, in a local with a type
+annotation, and put that in the event. The annotation is what sets the schema,
+and the event's type names no policy. A cast is refused by the transformer.
+
+```tsx
+// Shown for illustration only.
+// `messages` holds policy-typed messages; the event's `message` is a
+// `Cell<MessageRecord>`.
+const first: Cell<MessageRecord> = messages.key(0);
+
+return {
+  [TESTS]: [
+    {
+      action: room.editMessage,
+      event: { message: first, target: { value: "Edited" } },
+      trustedUi: messageGesture,
+    },
+  ],
+};
+```
+
+`cf test --cfc-denials` prints a setup refusal like this one with its reason.
+
 ## Writing Assertions
 
 Use `assert()` to state each condition a test checks:
