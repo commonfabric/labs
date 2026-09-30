@@ -1,15 +1,17 @@
 /**
- * The primitive base class's own behavior, which comes down to one invariant.
+ * The primitive base class's own behavior, which comes down to one invariant:
+ * every `FabricPrimitive` is a genuine instance of a class the `data-model`
+ * blessed.
  *
- * Every concrete primitive is required to extend this class rather than the
- * contract above it, and the type guard enforces that rather than merely
- * reporting on it: a value that is a `FabricPrimitive` but not a
- * `BaseFabricPrimitive` is a broken subclass, so the guard throws instead of
- * quietly returning `false` and letting the mistake travel.
+ * The constructor enforces that for construction, by refusing any class that
+ * was not blessed, and the type guard enforces it for everything else, by
+ * throwing for a value that is a `FabricPrimitive` without having been built
+ * that way instead of quietly returning `false` and letting the forgery
+ * travel.
  *
- * The placeholder member is here in order to be a member at all -- an instance
- * type with nothing in it would make an ordinary `value is` guard collapse --
- * and its only observable behavior is refusing to be called.
+ * The genuine instances here are of a production class, since a test cannot
+ * bless a class of its own. `FabricEpochDay` has the shape every concrete
+ * primitive has, a private field assigned after `super()`.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -17,34 +19,13 @@ import { expect } from "@std/expect";
 
 import { FabricPrimitive } from "@";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { FabricEpochDay } from "@/fabric-primitives";
 
 /**
- * Minimal `BaseFabricPrimitive` subclass for exercising the static guard in
- * isolation, independent of any production primitive.
+ * A `BaseFabricPrimitive` subclass that nothing blessed, as is true of any
+ * class defined outside the `data-model`.
  */
-class ProbePrimitive extends BaseFabricPrimitive {
-  get [VALUE_TAG](): never {
-    throw new Error("Called VALUE_TAG on probe.");
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/**
- * A `BaseFabricPrimitive` subclass that assigns a private field after
- * `super()`, which is the shape every concrete primitive has.
- */
-class StatefulProbe extends BaseFabricPrimitive {
-  readonly #value: bigint;
-
-  constructor(value: bigint) {
-    super();
-
-    this.#value = value;
-  }
-
+class UnblessedPrimitive extends BaseFabricPrimitive {
   get [VALUE_TAG](): never {
     throw new Error("Unimplemented.");
   }
@@ -52,11 +33,10 @@ class StatefulProbe extends BaseFabricPrimitive {
   get schemaType(): never {
     throw new Error("Unimplemented.");
   }
-
-  get value(): bigint {
-    return this.#value;
-  }
 }
+
+/** A subclass of a blessed class, which is not itself blessed. */
+class SubEpochDay extends FabricEpochDay {}
 
 /**
  * A rogue direct subclass of `FabricPrimitive` that bypasses
@@ -73,46 +53,70 @@ class RoguePrimitive extends FabricPrimitive {
 describe("BaseFabricPrimitive", () => {
   describe("inheritance", () => {
     it("is a subclass of `FabricPrimitive`", () => {
-      const probe = new ProbePrimitive();
-      expect(probe instanceof BaseFabricPrimitive).toBe(true);
-      expect(probe instanceof FabricPrimitive).toBe(true);
+      const day = new FabricEpochDay(1n);
+      expect(day instanceof BaseFabricPrimitive).toBe(true);
+      expect(day instanceof FabricPrimitive).toBe(true);
     });
   });
 
   describe("constructor()", () => {
     it("leaves the instance frozen and non-extensible", () => {
-      const probe = new ProbePrimitive();
-      expect(Object.isFrozen(probe)).toBe(true);
-      expect(Object.isExtensible(probe)).toBe(false);
+      const day = new FabricEpochDay(1n);
+      expect(Object.isFrozen(day)).toBe(true);
+      expect(Object.isExtensible(day)).toBe(false);
     });
 
     it("refuses a new property, whichever way it is added", () => {
       // Every path here is strict-mode, which is what a module is. Sloppy-mode
       // assignment is the one path that fails silently instead of throwing.
-      const probe = new ProbePrimitive() as unknown as Record<string, unknown>;
+      const day = new FabricEpochDay(1n) as unknown as Record<string, unknown>;
 
       expect(() => {
-        probe.extra = 42;
+        day.extra = 42;
       }).toThrow(TypeError);
-      expect(() => Object.defineProperty(probe, "extra", { value: 42 }))
+      expect(() => Object.defineProperty(day, "extra", { value: 42 }))
         .toThrow(TypeError);
-      expect(Reflect.set(probe, "extra", 42)).toBe(false);
+      expect(Reflect.set(day, "extra", 42)).toBe(false);
     });
 
     it("freezes without disturbing a subclass's private fields", () => {
       // The freeze lands before a subclass's own assignments. Private fields
       // are not properties and so are unaffected, which is what makes freezing
       // here rather than in each concrete constructor sound.
-      const probe = new StatefulProbe(7n);
-      expect(Object.isFrozen(probe)).toBe(true);
-      expect(probe.value).toBe(7n);
+      const day = new FabricEpochDay(7n);
+      expect(Object.isFrozen(day)).toBe(true);
+      expect(day.value).toBe(7n);
+    });
+
+    it("throws for a class that was not blessed", () => {
+      expect(() => new UnblessedPrimitive()).toThrow("unblessed");
+    });
+
+    it("throws for a subclass of a blessed class", () => {
+      expect(() => new SubEpochDay(1n)).toThrow("unblessed");
+    });
+
+    it("throws for a blessed class constructed on behalf of another", () => {
+      // The prototype of what `Reflect.construct()` builds comes from its third
+      // argument, which here inherits from the blessed class's prototype and
+      // claims its constructor. Checking the class that was asked for, rather
+      // than whatever the prototype says, is what refuses it.
+      function Forger() {}
+      Forger.prototype = Object.create(FabricEpochDay.prototype, {
+        constructor: { value: FabricEpochDay },
+      });
+
+      expect(() => Reflect.construct(FabricEpochDay, [1n], Forger))
+        .toThrow("unblessed");
     });
   });
 
   describe("static members", () => {
     describe("isInstance()", () => {
       it("is `true` for a `BaseFabricPrimitive`", () => {
-        expect(BaseFabricPrimitive.isInstance(new ProbePrimitive())).toBe(true);
+        expect(BaseFabricPrimitive.isInstance(new FabricEpochDay(1n))).toBe(
+          true,
+        );
       });
 
       it("is `false` for a `FabricValue` that is not a `BaseFabricPrimitive`", () => {
@@ -125,10 +129,28 @@ describe("BaseFabricPrimitive", () => {
 
       it("throws for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
         expect(() => BaseFabricPrimitive.isInstance(new RoguePrimitive()))
-          .toThrow(
-            "Shouldn't happen",
-          );
+          .toThrow("counterfeit");
       });
+
+      it("throws for an object on a blessed prototype that no constructor built", () => {
+        const fake = Object.create(FabricEpochDay.prototype);
+
+        expect(() => BaseFabricPrimitive.isInstance(fake))
+          .toThrow("counterfeit");
+      });
+
+      it("throws for a proxy over a genuine instance", () => {
+        const proxy = new Proxy(new FabricEpochDay(1n), {});
+
+        expect(() => BaseFabricPrimitive.isInstance(proxy))
+          .toThrow("counterfeit");
+      });
+    });
+  });
+
+  describe("blessFabricPrimitiveClass()", () => {
+    it("leaves a blessed class's prototype frozen", () => {
+      expect(Object.isFrozen(FabricEpochDay.prototype)).toBe(true);
     });
   });
 });

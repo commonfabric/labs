@@ -11,6 +11,7 @@ import type {
 import type { FabricValue } from "@/interface.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { blessFabricPrimitiveClass } from "@/fabric-bases/blessing.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import type { RealmCodecValue } from "@/codec-realm";
@@ -138,6 +139,10 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
   //
   // Static members
   //
+
+  static {
+    blessFabricPrimitiveClass(this);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class BytesCodec extends BaseTerminalCodec<JsonCodecValue, string> {

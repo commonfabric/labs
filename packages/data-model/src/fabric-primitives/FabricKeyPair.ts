@@ -8,6 +8,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { blessFabricPrimitiveClass } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -241,6 +242,10 @@ export class FabricKeyPair extends BaseFabricPrimitive {
   //
   // Static members
   //
+
+  static {
+    blessFabricPrimitiveClass(this);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class KeyPairCodec
