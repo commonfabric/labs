@@ -641,11 +641,12 @@ const closeQuietly = (connection: Deno.Conn): void => {
  * `idleTimeoutSec` without a client, and the daemon counts a status request
  * as one. So every read looks for the daemon's socket, where no socket is
  * no daemon, and a daemon is asked for its status at most once per idle
- * timeout and two of its idle checks, and at once where the socket is not the
- * one it last answered on, or the answer was not ok. Between two questions a
- * read connects and hangs up without asking, which the daemon does not count
- * as activity, and reports the last answer as of when it was given. So a
- * daemon that stops, however it stops, reads idle at the next read.
+ * timeout and two of its idle checks, whatever its answer said, and at once
+ * where the socket is not the one it last answered on, or the last question
+ * got no status. Between two questions a read connects and hangs up without
+ * asking, which the daemon does not count as activity, and reports the last
+ * answer as of when it was given, against the block images the store holds
+ * now. So a daemon that stops, however it stops, reads idle at the next read.
  *
  * Polling the row never starts a VM, and does not on its own keep one up: a
  * VM that nothing else uses stops before the next question, which then finds
@@ -704,10 +705,21 @@ export const consoleVmHealthProbe = (
     "No VM daemon is running for this store; the next sandbox command starts one.";
   const nothingListening =
     "Nothing listens on the daemon socket, which is what a daemon that stopped without removing it leaves; the next sandbox command starts one.";
-  /** The last ok answer, the socket it came on, and when it was asked for. */
+  /**
+   * The last status the daemon gave, the socket it came on, when it was asked
+   * for on the interval's clock, and when it was given.
+   */
   let last:
-    | { askedAt: number; socket: string; row: ConsoleHealthRow }
+    | { askedAt: number; socket: string; status: VmStatus; answeredAt: string }
     | undefined;
+  const statusRow = (status: VmStatus, checkedAt: string, answeredAt: string) =>
+    vmStatusRow(fact, store, status, {
+      checkedAt,
+      answeredAt,
+      askIntervalMs,
+      examine,
+      socket,
+    });
   return {
     id: "sandbox.vm",
     initial: [fact],
@@ -744,7 +756,9 @@ export const consoleVmHealthProbe = (
         now() - last.askedAt < askIntervalMs
       ) {
         const found = await touch(socket);
-        if (found === "listening") return [{ ...last.row, checkedAt }];
+        if (found === "listening") {
+          return [statusRow(last.status, checkedAt, last.answeredAt)];
+        }
         last = undefined;
         return [
           found === "no-daemon"
@@ -757,16 +771,23 @@ export const consoleVmHealthProbe = (
       if (reading.found === "no-daemon") {
         return [idle(checkedAt, nothingListening)];
       }
-      const row = reading.found === "status"
-        ? vmStatusRow(fact, store, reading.status, checkedAt, askIntervalMs, {
-          examine,
-          socket,
-        })
-        : notAnswering(checkedAt, reading.reason);
-      last = row.state === "ok"
-        ? { askedAt, socket: identity, row }
+      const status = reading.found === "status"
+        ? readVmStatus(reading.status)
         : undefined;
-      return [row];
+      if (status === undefined) {
+        return [
+          notAnswering(
+            checkedAt,
+            reading.found === "no-answer"
+              ? reading.reason
+              : "The daemon's answer carries no `guest` object or no `images` list, so it is not a status.",
+          ),
+        ];
+      }
+      // Held whatever it says: the daemon answered, and asking it again is
+      // activity that would keep the VM up for as long as the row is read.
+      last = { askedAt, socket: identity, status, answeredAt: checkedAt };
+      return [statusRow(status, checkedAt, checkedAt)];
     },
   };
 };
@@ -792,35 +813,61 @@ const vmNotAnsweringRow = (
   }; ending the cfc-vm process that serves this store lets the next sandbox command start a fresh VM.`,
 });
 
+/** What the VM row reads of a daemon's status. */
+interface VmStatus {
+  /** The guest agent's own figures, empty where it did not answer. */
+  guest: Readonly<Record<string, unknown>>;
+
+  /** The images the VM attached when it started. */
+  images: readonly string[];
+
+  /** Seconds since the daemon started, where it said. */
+  uptimeSec?: number;
+}
+
 /**
- * The VM row for a daemon that answered with a status: running, unless its
- * guest gave the daemon no figures, or the VM lacks the image the rootfs names
- * and the store holds no block image runsc could attach it from.
+ * Helper for the VM probe, which returns the parts of `status` the row reads,
+ * or `undefined` where it carries no `guest` object or no list of image names,
+ * and so is not a status.
+ */
+const readVmStatus = (
+  status: Readonly<Record<string, unknown>>,
+): VmStatus | undefined => {
+  const { guest, images, uptimeSec } = status;
+  if (!isObjectNotArray(guest) || !Array.isArray(images)) return undefined;
+  const names: string[] = [];
+  for (const image of images) {
+    if (typeof image !== "string") return undefined;
+    names.push(image);
+  }
+  return {
+    guest,
+    images: names,
+    ...(typeof uptimeSec === "number" ? { uptimeSec } : {}),
+  };
+};
+
+/**
+ * The VM row for a daemon that answered `status` at `answeredAt`: running,
+ * unless its guest gave the daemon no figures, or the VM lacks the image the
+ * rootfs names and the store holds no block image runsc could attach it from.
+ * The block image is looked for at every call, so installing it clears the
+ * row without asking the daemon again.
  */
 const vmStatusRow = (
   fact: ConsoleHealthFact,
   store: ConsoleVmStore,
-  status: Readonly<Record<string, unknown>>,
-  checkedAt: string,
-  askIntervalMs: number,
-  looks: {
+  status: VmStatus,
+  at: {
+    checkedAt: string;
+    answeredAt: string;
+    askIntervalMs: number;
     examine: (path: string) => ConsolePathReading;
     socket: string;
   },
 ): ConsoleHealthRow => {
   const { guest, images, uptimeSec } = status;
-  if (
-    !isObjectNotArray(guest) || !Array.isArray(images) ||
-    images.some((image) => typeof image !== "string")
-  ) {
-    return vmNotAnsweringRow(
-      fact,
-      store,
-      checkedAt,
-      "the VM daemon does not answer",
-      "The daemon's answer carries no `guest` object or no `images` list, so it is not a status.",
-    );
-  }
+  const { checkedAt } = at;
   const { memAvailableKiB, memTotalKiB } = guest;
   if (typeof memAvailableKiB !== "number" || typeof memTotalKiB !== "number") {
     return vmNotAnsweringRow(
@@ -828,20 +875,23 @@ const vmStatusRow = (
       store,
       checkedAt,
       "the VM guest does not answer",
-      "The daemon answered without its guest's figures, so the agent inside the VM did not answer the daemon.",
+      `The daemon answered at ${at.answeredAt} without its guest's figures, so the agent inside the VM did not answer the daemon.`,
     );
   }
   const detail = [
-    `#cfcvm status at ${looks.socket}`,
-    ...(typeof uptimeSec === "number" ? [`up ${vmUptime(uptimeSec)}`] : []),
+    `#cfcvm status at ${at.socket}`,
+    ...(uptimeSec !== undefined ? [`up ${vmUptime(uptimeSec)}`] : []),
     `guest memory ${Math.round(memAvailableKiB / 1024)} MiB available of ${
       Math.round(memTotalKiB / 1024)
     } MiB`,
     `images ${images.length === 0 ? "none" : images.join(", ")}`,
   ].join("; ");
-  const asked = `The daemon answered \`#cfcvm status\` at ${checkedAt}. A ` +
+  const asked =
+    `The daemon answered \`#cfcvm status\` at ${at.answeredAt}. A ` +
     "status request counts as activity, which restarts the VM's idle timer, " +
-    `so this row asks at most once every ${askIntervalMs / 1_000} s and in ` +
+    `so this row asks at most once every ${
+      at.askIntervalMs / 1_000
+    } s and in ` +
     "between only connects, which does not count, to see that the daemon " +
     "still listens.";
   const key = store.imageKey;
@@ -856,7 +906,7 @@ const vmStatusRow = (
     };
   }
   const blockImage = join(store.directory, "ext4", `${key}.ext4`);
-  const found = looks.examine(blockImage);
+  const found = at.examine(blockImage);
   if (found.found === "file") {
     return {
       ...fact,

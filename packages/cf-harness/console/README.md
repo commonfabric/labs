@@ -358,16 +358,18 @@ images the VM attached. The daemon answers it after asking its guest, which it
 gives up on after ten seconds, so the row waits fifteen for the answer. The
 daemon counts the question as client activity, which restarts its idle timer. So
 the row asks nothing where there is no socket, and asks a running daemon at most
-once per idle timeout and 30 seconds. It asks at once where the socket is not
-the one the last answer came on, or that answer was not ok. In between, it
-connects and hangs up without a word, which the daemon closes without counting
-as activity, and reports the last answer, with the time it was given; a daemon
-that has stopped, whether it removed its socket or not, reads idle at the next
-refresh. Watching the row therefore never starts a VM, and does not on its own
-keep one up: a VM nothing else uses stops before the next question, which finds
-no daemon. The most it does is keep a VM up for one idle timeout after its last
-use. Another client asking in between, a second console's row among them, counts
-as use.
+once per idle timeout and 30 seconds, whatever the answer said. It asks at once
+where the socket is not the one the last answer came on, or where the last
+question got no status. In between, it connects and hangs up without a word,
+which the daemon closes without counting as activity, and reports the last
+answer, with the time it was given, against the store as it is: installing a
+missing image's block file clears that row at the next refresh without a
+question. A daemon that has stopped, whether it removed its socket or not, reads
+idle at the next refresh. Watching the row therefore never starts a VM, and does
+not on its own keep one up: a VM nothing else uses stops before the next
+question, which finds no daemon. The most it does is keep a VM up for one idle
+timeout after its last use. Another client asking in between, a second console's
+row among them, counts as use.
 
 Each probe caches independently for 30 seconds. Reading the route returns the
 current snapshot immediately and schedules stale checks in the background,

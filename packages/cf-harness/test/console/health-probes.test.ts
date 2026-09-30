@@ -14,6 +14,7 @@ import {
   consoleVmStore,
   readConsolePath,
   readConsolePolicy,
+  touchCfcVmDaemon,
 } from "../../console/health-probes.ts";
 import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
@@ -48,8 +49,8 @@ const searchesDespiteMode = (): boolean => {
 /**
  * A fake cfc-vm daemon at `<directory>/daemon.sock`, serving each connection
  * the way the real one does. A connection closed before it sends a line is
- * counted and closed in turn, and nothing else happens: the real daemon does
- * not count it as activity. A line is recorded without its newline and
+ * closed in turn, and nothing else happens: the real daemon does not count it
+ * as activity. A line is recorded without its newline and
  * answered with what `answer` returns before the daemon hangs up, or, where
  * that is `undefined`, held open unanswered until the daemon is closed.
  * `leaveSocket` makes closing the daemon leave its socket file behind, as a
@@ -69,7 +70,6 @@ const fakeVmDaemon = (
   const lines: string[] = [];
   const held: Deno.Conn[] = [];
   const asked = Promise.withResolvers<void>();
-  let connections = 0;
   const serve = async (connection: Deno.Conn) => {
     const line = await readLine(connection);
     if (line === undefined) {
@@ -88,13 +88,11 @@ const fakeVmDaemon = (
   };
   const serving = (async () => {
     for await (const connection of listener) {
-      connections += 1;
       await serve(connection).catch(() => {});
     }
   })().catch(() => {});
   return {
     lines,
-    connections: () => connections,
     /** Settles once the daemon has read its first line. */
     asked: asked.promise,
     /** Answers every connection held so far with `reply`, and hangs up. */
@@ -894,24 +892,29 @@ describe("health-probes", () => {
       });
     });
 
-    it("returns failed when the daemon answers with a JSON object that is not a status", async () => {
-      await withStore(async (directory) => {
-        const daemon = fakeVmDaemon(
-          directory,
-          () => JSON.stringify({ error: "busy", guest: STATUS.guest }),
-        );
-        try {
-          const row = await readRow(consoleVmHealthProbe(store(directory)));
+    for (
+      const [what, answer] of [
+        ["no `images` list", { error: "busy", guest: STATUS.guest }],
+        ["an image that is not a name", { ...STATUS, images: [1] }],
+        ["a `guest` that is not an object", { ...STATUS, guest: "down" }],
+      ] as const
+    ) {
+      it(`returns failed when the daemon answers with ${what}, which is not a status`, async () => {
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(answer));
+          try {
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
 
-          expect(row).toMatchObject({
-            state: "failed",
-            value: "the VM daemon does not answer",
-          });
-        } finally {
-          await daemon.close();
-        }
+            expect(row).toMatchObject({
+              state: "failed",
+              value: "the VM daemon does not answer",
+            });
+          } finally {
+            await daemon.close();
+          }
+        });
       });
-    });
+    }
 
     for (
       const guest of [{}, { memTotalKiB: 2_040_268 }, {
@@ -940,24 +943,34 @@ describe("health-probes", () => {
 
     it("asks a running daemon no more often than its idle timeout and two of its idle checks, finding it listening between", async () => {
       await withStore(async (directory) => {
+        // Fake time moves the wall clock the row's times are read from, so
+        // the second read is not in the first one's millisecond.
+        using time = new FakeTime();
         const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
         try {
           let now = 1_000_000;
+          let touches = 0;
           const probe = consoleVmHealthProbe(store(directory), {
             now: () => now,
+            touch: (socket) => {
+              touches += 1;
+              return touchCfcVmDaemon(socket);
+            },
           });
 
           const first = await readRow(probe);
           now += 629_999;
+          time.tick(629_999);
           const between = await readRow(probe);
 
           expect(daemon.lines).toEqual(["#cfcvm status"]);
-          expect(daemon.connections()).toBe(2);
+          expect(touches).toBe(1);
           expect(between).toMatchObject({
             state: first.state,
             value: first.value,
             detail: first.detail,
           });
+          expect(between.checkedAt).not.toBe(first.checkedAt);
           expect(between.reason).toContain(first.checkedAt);
 
           now += 1;
@@ -1001,6 +1014,84 @@ describe("health-probes", () => {
           expect(second.lines).toEqual(["#cfcvm status"]);
         } finally {
           await second.close();
+        }
+      });
+    });
+
+    const answeredButNotOk: {
+      what: string;
+      answer: Record<string, unknown>;
+      examine?: (path: string) => ConsolePathReading;
+      expected: { state: string; value: string };
+    }[] = [{
+      what: "the image the rootfs names missing",
+      answer: { ...STATUS, images: ["other"] },
+      expected: { state: "failed", value: "the VM has no kitchensink image" },
+    }, {
+      what: "the image's block file unreadable",
+      answer: { ...STATUS, images: ["other"] },
+      examine: () => ({ found: "unreadable", reason: "denied" }),
+      expected: { state: "unknown", value: "not verified" },
+    }, {
+      what: "no figures from the guest",
+      answer: { ...STATUS, guest: {} },
+      expected: { state: "failed", value: "the VM guest does not answer" },
+    }];
+    for (const { what, answer, examine, expected } of answeredButNotOk) {
+      it(`asks once in five reads within its interval where the answer found ${what}`, async () => {
+        // A status question is activity, so asking one at every read would
+        // keep the VM up for as long as anything reads the row.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(answer));
+          try {
+            let now = 1_000_000;
+            let touches = 0;
+            const probe = consoleVmHealthProbe(store(directory), {
+              now: () => now,
+              touch: (socket) => {
+                touches += 1;
+                return touchCfcVmDaemon(socket);
+              },
+              ...(examine !== undefined ? { examine } : {}),
+            });
+
+            for (let read = 0; read < 5; read += 1) {
+              expect(await readRow(probe)).toMatchObject(expected);
+              now += 30_000;
+            }
+
+            expect(daemon.lines).toEqual(["#cfcvm status"]);
+            expect(touches).toBe(4);
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    it("returns running once the missing image's block file is installed, without asking the daemon again", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          expect(await readRow(probe)).toMatchObject({ state: "failed" });
+
+          await Deno.mkdir(join(directory, "ext4"));
+          await Deno.writeTextFile(
+            join(directory, "ext4", "kitchensink.ext4"),
+            "",
+          );
+
+          expect(await readRow(probe)).toMatchObject({
+            state: "ok",
+            value: "running",
+          });
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await daemon.close();
         }
       });
     });
