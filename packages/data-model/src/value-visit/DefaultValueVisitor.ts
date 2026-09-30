@@ -279,6 +279,12 @@ export abstract class DefaultValueVisitor<
    * `visitUnhandledValue()`, because it is expected that most useful visitors
    * will in fact want to recurse into containers. Subclasses that don't want
    * this can of course just override this implementation.
+   *
+   * An override which wants a container left as it is returns `mapTo` of the
+   * container, not `undefined`. For a container, `undefined` asks the engine
+   * to visit `undefined` in its place (see `VisitResult`), which this class
+   * sends on to `visitUnhandledValue()` unless `visitUndefined()` or one of
+   * the methods it rolls up to is overridden too.
    */
   visitFabricContainerValue(
     _value: FabricContainerValuePlus<PlusType>,

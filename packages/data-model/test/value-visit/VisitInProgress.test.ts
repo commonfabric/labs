@@ -1230,9 +1230,12 @@ describe("VisitInProgress", () => {
           it("counts `-0` mapped to `0` as a change", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => Object.is(v, -0) ? mapTo(0) : undefined;
-            const array = [-0];
+            const array = Object.freeze([-0]);
             const result = map(array, rec) as number[];
 
+            // Frozen, so that the original would be returned were the change
+            // not seen; and `toBe()`, which is `Object.is()`, tells `0` from
+            // `-0`.
             expect(result).not.toBe(array);
             expect(result[0]).toBe(0);
           });
