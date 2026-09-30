@@ -691,9 +691,9 @@ depends on them rather than proposing to do it.
 [#7771](https://github.com/commonfabric/labs/issues/7771) — the code editor
 reads a mention's short name from the destination piece, where the spec
 reserves that for a universe row — is a rule the spec already states, and the
-fix is local to the component. None of the options here removes a raw-list universe, so none
-of them fixes it incidentally. A universe row now carries a member's number for
-the component to read instead.
+fix is local to the component. None of the options here removes a raw-list
+universe, so none of them fixes it incidentally. A universe row now carries a
+member's number for the component to read instead.
 
 ## What this design does not cover
 
