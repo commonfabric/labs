@@ -293,8 +293,8 @@ function stageChange(
  *
  * Refusing the actor's Home space keeps one click from exposing everything a
  * user keeps there, and keeps a user from leaving their own Home. Every other
- * space the actor holds `OWNER` in stays reachable, with the trusted gesture
- * as the only bar between a pattern and its list.
+ * space the actor holds `OWNER` in stays reachable to a grant or a revoke,
+ * with the trusted gesture as the only bar between a pattern and its list.
  *
  * @throws Error on every refusal.
  */
@@ -487,7 +487,10 @@ function knownAcl(runtime: Runtime, space: MemorySpace): ACL | undefined {
  * Returns the access list of `space` as `tx` reads it, or `null` when the
  * space has none.
  */
-function readAcl(tx: IExtendedStorageTransaction, space: MemorySpace) {
+function readAcl(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): ACL | null {
   const envelope = tx.readOrThrow({
     ...aclLink(space),
     type: "application/json",
