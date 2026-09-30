@@ -557,10 +557,17 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
   return Math.max(lo, Math.min(hi, Math.floor(n)));
 }
 
+/**
+ * The error a run source records when a fetch's newest run is older than the
+ * newest run of the snapshot it already holds.
+ */
+export const STALE_RUNS_ERROR = "newest run older than the one already collected";
+
 // Turn a raw collector error into a short, calm tile message. The full error is
 // still logged; the dashboard shows a human phrase, not a stack trace or API
 // path.
 export function friendlyError(msg: string): string {
+  if (msg === STALE_RUNS_ERROR) return "run list out of date";
   const m = msg.toLowerCase();
   if (/connect|sending request|network|dns|refused|unreachable|timed ?out|timeout|econn/.test(m)) {
     return "source unreachable";

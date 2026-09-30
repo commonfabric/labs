@@ -369,6 +369,17 @@ instead of the flow join:
 - **Render label views** consume per-class the same way: a public `value`
   read of a child under a secret container `shape` no longer inherits the
   container's shape label (today the flat model takes the max).
+- **Label views across a link.** A view derived by following a link carries
+  the followed slot's reference restrictions: the confidentiality of
+  everything that resolves at the slot, whatever its class, wildcard
+  templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
+  at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
+  query-result proxy, and every link an eager schema read crosses. A rebase
+  keeps a class-less ancestor entry, so every position reached through the
+  link carries them, as spec §4.6.3 and §8.2.4 require, where the slot's own
+  `followRef` entry is dropped below the target. An eager schema read carries
+  nothing else from the slot. The other paths also keep the slot's own
+  entries, integrity included, and the labels stored below the slot.
 
 That precision win is what pays for the epic on the LLM/agent surface.
 

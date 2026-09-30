@@ -33,6 +33,13 @@ export type MainResultForm<ResultType> = {
  * The visitor engine places `value` as given, frozen or not, whether or not the
  * operation freezes the structure it builds: it is the visitor's statement of
  * what it wants in that position.
+ *
+ * In a plain visit there is no structural-map result to place `value` in. A
+ * `mapTo` which `visitValue()` returns for the top-level value ends the visit
+ * with `value` as its result, as a `mainResult` would, and one which
+ * `visitValue()` or `visitCycle()` returns for any other value is ignored. A
+ * `visiting*()` method's `mapTo` still keeps its position from being visited;
+ * see `VisitingResult`.
  */
 export type MapToForm<ResultType> = {
   readonly type: "mapTo";
@@ -43,9 +50,10 @@ export type MapToForm<ResultType> = {
  * A `mapToEntry` form. This is analogous to `MapToForm` in every way except
  * that a string `key` is additionally included.
  *
- * `key` is held to the rules a visited key's result is: it must be a key which
- * is safe to set on a plain object, and it may not be a key already mapped in
- * the same result.
+ * In a structural-map operation, `key` is held to the rules a visited key's
+ * result is: it must be a key which is safe to set on a plain object, and it
+ * may not be a key already mapped in the same result. A plain visit places no
+ * key, and checks none.
  */
 export type MapToEntryForm<ResultType> = {
   readonly type: "mapTo";
@@ -67,9 +75,10 @@ export type OmitForm = {
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
- * contained by the container which is being recursed into. The container's
- * values are always visited. `doKeys` indicates whether its keys are visited
- * too, and is ignored in a context where there is no key.
+ * contained by the container which is being recursed into. Each of the
+ * container's values is visited, unless a `visiting*()` method settles or omits
+ * its position instead. `doKeys` indicates whether its keys are visited too,
+ * and is ignored in a context where there is no key.
  *
  * If a visitor returns an instance of this type which (implicitly) references a
  * non-container, that situation is detected by the visitor engine at runtime
@@ -102,7 +111,8 @@ export type ReplaceForm<PlusType> = {
  *
  * `key` is visited only when the `recurse` that caused the iteration asked for
  * keys to be visited, and is otherwise taken as the entry's final key. Either
- * way, the final key is held to the rules a `MapToEntryForm`'s `key` is.
+ * way, in a structural-map operation the final key is held to the rules a
+ * `MapToEntryForm`'s `key` is.
  */
 export type ReplaceEntryForm<PlusType> = {
   readonly type: "replace";
@@ -150,11 +160,9 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * Baseline possible results from most `ValueVisitor` and `DefaultValueVisitor`
  * methods, defining the result cases common to all of these methods.
  *
- * See the included result types for details on what they mean. As for
- * `undefined`, if a visitor returns it in the context of this type, it means
- * that the visit of the given value was completed; the visitor engine will not
- * process it further. (`VisitResult` gives `undefined` a more specific meaning
- * for a container.)
+ * A `mainResult` means the same wherever it is returned; see `MainResultForm`.
+ * What `undefined` means differs from one method to another, and each result
+ * type which includes this one says what it means there.
  */
 export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
@@ -162,7 +170,7 @@ export type BaselineVisitorMethodResult<ResultType> =
 
 /**
  * Possible results from `mapped*()` calls (container iteration post-visit
- * methods).
+ * methods). `undefined` continues the iteration.
  */
 export type MappedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
@@ -212,7 +220,8 @@ export type VisitingResult<PlusType, ResultType> =
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from `visitingFabricArrayGap()`.
+ * Possible results from `visitingFabricArrayGap()`. `undefined` continues the
+ * iteration.
  */
 export type VisitingGapResult<PlusType, ResultType> =
   BaselineVisitorMethodResult<ResultType>;
@@ -299,7 +308,8 @@ export interface ValueVisitor<
    * Indicates that an array element was just mapped. This method is called as a
    * result of the visitor returning a `recurse` result for a visited array
    * while doing a structural-map operation, and it is called _after_ the
-   * element itself was directly visited.
+   * element's position is resolved: by a visit of the element or of a
+   * replacement for it, or by `visitingFabricArrayElement()` settling it.
    *
    * `value` is the element as it stands in `array`, even where its visit
    * returned a `replace`, and `resultValue` is what it mapped to.
@@ -315,8 +325,9 @@ export interface ValueVisitor<
    * Indicates that the instance state of a `FabricInstance` was just mapped.
    * This method is called as a result of the visitor returning a `recurse`
    * result for a visited `FabricInstance` while doing a structural-map
-   * operation, and it is called _after_ the instance's state was directly
-   * visited.
+   * operation, and it is called _after_ the instance's state is resolved: by a
+   * visit of the state or of a replacement for it, or by
+   * `visitingFabricInstanceState()` settling it.
    *
    * `state` is the state as the instance's codec encoded it, and `resultState`
    * is what it mapped to.
@@ -331,11 +342,14 @@ export interface ValueVisitor<
    * Indicates that `FabricPlainObject` entry was just mapped. This method is
    * called as a result of the visitor returning a `recurse` result for a
    * visited `FabricPlainObject` while doing a structural-map operation, and it
-   * is called _after_ the entry's key and/or value were directly visited.
+   * is called _after_ the entry is resolved: by visits of its key and/or value
+   * or of a replacement entry's, or by `visitingFabricPlainObjectEntry()`
+   * settling it.
    *
    * `key` and `value` are the entry as it stands in `container`, and
-   * `resultKey` and `resultValue` are what they mapped to. Where keys are not
-   * visited, `resultKey` is `key`.
+   * `resultKey` and `resultValue` are the entry's final key and mapped value,
+   * whether visits or a `visiting*()` result settled them. Where keys are not
+   * visited and that result named no key, `resultKey` is `key`.
    */
   mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,

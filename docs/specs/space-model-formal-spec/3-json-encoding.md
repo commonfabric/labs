@@ -92,9 +92,10 @@ round-trip correctly.
 > Section 5). Encoders **must omit** trailing `=` padding characters. Decoders
 > **must accept** both padded and unpadded input for compatibility;
 > standard-base64 characters (`+`, `/`) are still invalid and must be rejected.
-> This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`, and
-> `EpochDay@1` state values, to the `hash` field of `Hash@1` state, and to the
-> `publicKey` and `privateKey` fields of `KeyPair@1` state.
+> This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
+> `EpochDay@1`, and `DurationNsec@1` state values, to the `hash` field of
+> `Hash@1` state, and to the `publicKey` and `privateKey` fields of `KeyPair@1`
+> state.
 
 The JSON key for a tagged value is the tag with `/` prepended, per Section 2:
 a value under `Link@1` is written `{ "/Link@1": <state> }`. What follows
@@ -193,10 +194,10 @@ than magnitude: `0x80` alone decodes as `-128`, so a leading zero byte is
 required to keep the value positive. This is the same encoding the hash byte
 format uses for bigint payloads (`2-hash-byte-format.md` Section 4.5).
 
-### `EpochNsec@1` and `EpochDay@1` — epoch quantities
+### `EpochNsec@1`, `EpochDay@1`, and `DurationNsec@1` — temporal quantities
 
-Both carry a bigint, and both encode it exactly as `BigInt@1` does: base64url
-of the minimal two's-complement big-endian bytes.
+Each carries a bigint, and each encodes it exactly as `BigInt@1` does:
+base64url of the minimal two's-complement big-endian bytes.
 
 ### `SpecialNumber@1` — numbers JSON cannot represent
 
@@ -266,8 +267,9 @@ See `1-fabric-values.md` Section 3.5.
 > carries the fields the decoding reads and that they are strings, that a
 > literal is one of a fixed set. `decode()` holds a check whose only
 > implementation is the decoding itself — that a base64url string (such as
-> `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, or `Bytes@1`) is valid base64url is
-> answered by decoding it, so asking first costs that work twice.
+> `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, or `Bytes@1`) is
+> valid base64url is answered by decoding it, so asking first costs that work
+> twice.
 >
 > A codec may reject from `decode()` by throwing, or by returning a
 > `ProblematicValue` (see `1-fabric-values.md` Section 3.5); with a refusal from

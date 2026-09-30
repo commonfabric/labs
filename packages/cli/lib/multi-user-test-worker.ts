@@ -427,9 +427,13 @@ const handlers: Record<
     // `compileAndRegisterModules` seals compile + evaluate + register (see
     // test-runner.ts): map/filter/flatMap ops resolve via their content-addressed
     // canonical artifact instead of the defer-corrupted embedded graph (CT-1811).
+    // The closure is written into the shared space, for the same reason
+    // test-runner.ts writes it: a pattern instantiated with `inSpace()` is
+    // replicated from it.
     const evalResult = await runtime.patternManager.compileAndRegisterModules(
       program,
       { patternCoverage },
+      { space },
     );
     const { main } = evalResult;
     // Channel 2: snapshot logger counts AFTER compile, before the run phase.

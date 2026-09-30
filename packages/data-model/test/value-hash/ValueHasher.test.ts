@@ -25,6 +25,7 @@ import { UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -571,6 +572,31 @@ describe("ValueHasher", () => {
           const nsec = new FabricEpochNsec(100n);
           const days = new FabricEpochDay(100n);
           expect(hex(hashBytesOf(nsec))).not.toBe(hex(hashBytesOf(days)));
+        });
+      });
+      describe("FabricDurationNsec (dedicated TAG_DURATION_NSEC primitive tag)", () => {
+        it("matches a hand-computed byte stream for `FabricDurationNsec(42n)`", () => {
+          // TAG_DURATION_NSEC (0x2E) + LEB128(1) + [0x2A]. Mirrored in
+          // Section 7 of `2-hash-byte-format.md`.
+          const expected = sha256([
+            0x2e,
+            0x01,
+            0x2a,
+          ]);
+          expect(hashBytesOf(new FabricDurationNsec(42n))).toEqual(expected);
+        });
+
+        it("produces different hashes for `FabricDurationNsec` values", () => {
+          const d1 = new FabricDurationNsec(0n);
+          const d2 = new FabricDurationNsec(1_000_000_000n);
+          expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
+        });
+
+        it("produces different hashes for `FabricDurationNsec` and `FabricEpochNsec` with the same `bigint`", () => {
+          // Same underlying value, different tag -> different hash
+          const span = new FabricDurationNsec(100n);
+          const instant = new FabricEpochNsec(100n);
+          expect(hex(hashBytesOf(span))).not.toBe(hex(hashBytesOf(instant)));
         });
       });
       describe("FabricRegExp (dedicated TAG_REGEXP primitive tag)", () => {

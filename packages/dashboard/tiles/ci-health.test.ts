@@ -1076,7 +1076,7 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
     ]),
     async () => {
       const tile = createCiHealth();
-      const view = await tile.collect(ctx());
+      const view = await collectSwept(tile);
       assertEquals(view.value, "passing");
 
       const page = await (await tile.routes![0].handler(
@@ -1090,6 +1090,8 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
         page,
         `>Tests (fast)</a><a class="dot run" href="https://github.com/${LOOM_REPO}/actions/runs/${loomCiId}"`,
       );
+      // The queued run, its third, is linked from nowhere on the page.
+      assert(!page.includes(`/actions/runs/${loomCiId + 1}"`));
       // The labs job has nothing going, so only loom's carries the dot.
       assertEquals(page.match(/class="dot run"/g)?.length, 1);
     },

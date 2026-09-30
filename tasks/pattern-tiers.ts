@@ -49,6 +49,7 @@ export const TIER_DIRECTORIES: Readonly<Record<string, MarkedTier>> = {
   "collaborative-note/": "legacy",
   "factory-outputs/": "legacy",
   "gideon-tests/": "fixture",
+  "map-captured-object-spread/": "fixture",
   "plain-array-callback-locals/": "fixture",
   "scope-bug-computed-vnode-blank/": "fixture",
   "scope-bug-ct1597-forward/": "fixture",

@@ -67,6 +67,7 @@ const TAG_SYMBOL = 0x2a;
 const TAG_REGEXP = 0x2b;
 const TAG_KEY_PAIR = 0x2c;
 const TAG_UNAVAILABLE = 0x2d;
+const TAG_DURATION_NSEC = 0x2e;
 
 // Special for hashing:
 const TAG_STRING_HASH = 0xf0;
@@ -95,6 +96,7 @@ const TAG_SYMBOL_BYTES = new Uint8Array([TAG_SYMBOL]);
 const TAG_REGEXP_BYTES = new Uint8Array([TAG_REGEXP]);
 const TAG_KEY_PAIR_BYTES = new Uint8Array([TAG_KEY_PAIR]);
 const TAG_UNAVAILABLE_BYTES = new Uint8Array([TAG_UNAVAILABLE]);
+const TAG_DURATION_NSEC_BYTES = new Uint8Array([TAG_DURATION_NSEC]);
 
 //
 // Core: recursive value feeding
@@ -359,6 +361,16 @@ export class ValueHasher {
 
       case VALUE_TAGS.FabricEpochDay: {
         hasher.update(TAG_EPOCH_DAY_BYTES);
+        const bytes = bigintToMinimalTwosComplement(
+          (value as { value: bigint }).value,
+        );
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricDurationNsec: {
+        hasher.update(TAG_DURATION_NSEC_BYTES);
         const bytes = bigintToMinimalTwosComplement(
           (value as { value: bigint }).value,
         );

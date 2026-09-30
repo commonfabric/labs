@@ -518,7 +518,7 @@ export interface Folding {
  *   was written, which is the date of every other score in it.
  *
  * A unit holding one identity keeps that identity's entry. Each identity is
- * taken to be listed once, as `plan()` reduces the corpus before folding it.
+ * taken to be listed once, as `plan()` refuses a corpus listing one twice.
  */
 export function foldWholeUnits(
   manifest: Manifest,
@@ -990,17 +990,33 @@ function cheaperIn(
 }
 
 /**
- * Helper for `plan()`, which reduces an identity `entries` lists more than
- * once to the last of its rows, in the place of the first. Every pass then
- * reads the one row, so no two of them can disagree about what the
- * identity costs or scores.
+ * Helper for `plan()`, which lists the identities of `entries` in the order
+ * of their keys. What every pass reads after that, the units run whole
+ * included, is then in an order that depends on which identities there
+ * are and not on where the manifest listed them, so where two tie, their
+ * position does not decide.
+ *
+ * Throws where `entries` lists one identity twice, which a manifest may
+ * not do: two rows can disagree about what the identity costs or scores,
+ * and nothing here can say which of them is right.
  */
-function oncePerIdentity(
+function inKeyOrder(
   entries: readonly ManifestEntry[],
 ): ManifestEntry[] {
   const byKey = new Map<string, ManifestEntry>();
-  for (const entry of entries) byKey.set(testIdentityKey(entry.test), entry);
-  return [...byKey.values()];
+  for (const entry of entries) {
+    const key = testIdentityKey(entry.test);
+    if (byKey.has(key)) {
+      throw new Error(
+        `${key} is listed more than once in the corpus this was given, ` +
+          `so nothing here knows which of its rows to plan by`,
+      );
+    }
+    byKey.set(key, entry);
+  }
+  return [...byKey]
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([, entry]) => entry);
 }
 
 /**
@@ -1034,7 +1050,7 @@ export function plan(given: PlanInput): Plan {
     },
   };
   const folding = foldWholeUnits(
-    { ...input.manifest, entries: oncePerIdentity(input.manifest.entries) },
+    { ...input.manifest, entries: inKeyOrder(input.manifest.entries) },
     input.wholeUnits,
   );
   const manifest: Manifest = { ...input.manifest, entries: folding.entries };
