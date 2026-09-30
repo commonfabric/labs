@@ -81,6 +81,11 @@ export const pairingDialogStyles = css`
     padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
     max-width: 30rem;
     width: calc(100vw - 2rem);
+    /* Capped and scrolling on a short screen, so the buttons stay reachable;
+       the non-modal fallback gets no such cap from the browser. */
+    max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
     box-sizing: border-box;
   }
   dialog::backdrop {
