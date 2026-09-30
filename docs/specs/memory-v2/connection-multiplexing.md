@@ -1,20 +1,11 @@
 # Memory Connection Multiplexing
 
-Status: the direct setup of section 3 is implemented behind the
-`sharedMemoryConnection` experimental flag, which is off by default
-([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
-The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
-where the two differ, that chapter describes the system. The router (section
-5) and attestation (section 6) are proposed and not implemented.
-
-This document describes how a client reaches every space it uses over one
-memory connection per toolshed instead of one per space, and how routers that
-terminate client connections in front of several toolsheds fit on top of that.
-Authentication moves from each `session.open` to the start of the connection:
-a client authenticates each key it uses once per connection, and every later
-request names the authenticated principal it acts as. That is also how a client
-acts as a second identity for a few requests — the case that matters is
-initializing a space's ACL as the space identity.
+Status: proposed. The direct setup of section 3 is implemented, behind the
+`sharedMemoryConnection` experimental flag and off by default, in the change
+that follows this one, which also brings the wire rules of section 3.1 into
+[04-protocol.md](./04-protocol.md); until that lands, this document is the
+only description of them. The router (section 5) and attestation (section 6)
+are proposed and not implemented.
 
 ## 1. Two ways to reach a host
 
@@ -200,19 +191,38 @@ router and a toolshed is paid on the link, once, and not per client or per
 session; today that is one signature, and later it is attestation (section 6).
 
 **Client authentication through a router.** The client runs the same exchange
-it runs against a toolshed. The router issues the challenge in its `hello.ok`,
-advertises the audience of the deployment, and verifies each `connection.auth`
-itself. When the client first names a space on some toolshed, the router
-forwards the client's signed statement to that toolshed, marked as forwarded.
-The toolshed verifies the signature, the audience, and `exp`, and accepts the
-router's word for the challenge, which it did not issue. The toolshed therefore
-checks for itself that the key signed, and trusts the router that the
-signature was made for a connection that is open now.
+it runs against a toolshed. The router issues the challenge in its `hello.ok`
+and advertises its own identity as the audience, exactly as a toolshed
+advertises its own, so the statement the client signs names the peer that
+issued its challenge. The router verifies each `connection.auth` itself. When
+the client first names a space on some toolshed, the router forwards the
+client's signed statement to that toolshed, marked as forwarded. The toolshed
+verifies the signature and `exp`, requires the statement's audience to be the
+identity of the router link it arrived on, and accepts that router's word for
+the challenge, which it did not issue. The toolshed therefore checks for
+itself that the key signed and which router it signed for, and trusts only
+that router for the statement having been made on a connection that is open
+now. A statement that leaks from one router is refused on every other
+router's link.
 
-A statement is valid for 300 seconds, the validity clients stamp on a signed
-open today. When the router needs to forward a statement that has expired —
+A statement's `exp` bounds two things, and the toolshed caps both. It is the
+window in which the statement may be forwarded, and it is the lease on the
+authentication it produces: a principal a toolshed admitted from a forwarded
+statement is authenticated until that `exp`, however long the upstream
+connection or the router link lives, and the toolshed caps the lease the
+client may ask for. When the lease runs out, requests naming the principal
+are refused, sessions opened as it are sent nothing more until it is renewed,
+and renewal takes a new signature from the client's key: re-forwarding the old
+statement extends nothing. A compromised router therefore holds a client's
+authority for at most one lease past the client's last signature, whatever it
+reports about the client's connection. The direct setup applies the same
+lease, so a client renews its authentication before it runs out, over a
+challenge it asks for.
+
+When the router needs a statement it does not hold, or holds only expired —
 the client reaches a new toolshed after the connection has been open for a
-while, or a router link was re-established — it asks the client to sign again:
+while, a router link was re-established, or a lease is about to run out — it
+asks the client to sign again:
 
 ```typescript
 // Shown at module scope.
@@ -233,9 +243,19 @@ directly.
 signature, so a router can send any request as any principal whose statement
 it holds and can keep current. A compromised router can therefore act as every
 client connected to it, in every space those clients' keys can reach, for as
-long as they stay connected. It cannot act as a key whose client is not
-connected, because it cannot obtain a fresh statement for it. This exposure is
-accepted.
+long as they stay connected and sign renewals, and for one lease after the
+last signature it obtained. It cannot act as a key whose client has not signed
+within a lease. This exposure is accepted.
+
+**Parsing untrusted frames.** A router on public ingress reads what any
+client sends. Expanding and parsing a frame — JSON, and the gzip member of a
+compressed envelope — runs in a worker process with bounds on CPU, memory,
+frame size, and expansion, that holds no router key, no link credential, and
+no other client's traffic; the router treats what the worker returns as
+untrusted data and forwards nothing it did not validate. A compromise of the
+parser is then a compromise of one worker, not of the router's identity or of
+its links. The toolshed validates every frame again for itself, as it does
+today: nothing a router did is a reason for a toolshed to skip a check.
 
 **A space directory.** Today the client decides which host serves a space, from
 `spaceHostMap` seeds, hints registered at runtime, and the home-space site
@@ -247,7 +267,13 @@ Reading it from a text frame means parsing the JSON; reading it from a
 compressed frame means expanding the gzip member first. A version 2 of the
 binary envelope carries the space DID in the uncompressed header, and the
 router forwards the compressed bytes unchanged when the next hop negotiated
-compression too.
+compression too. The header is routing metadata the client wrote, and nothing
+more: the receiving toolshed expands the payload under the same bounds it
+applies today, parses it, and refuses the frame before doing any work on it
+when the space the payload names differs from the header's, when the payload
+names its space or session more than once or ambiguously, or when the space
+is one this toolshed does not currently own. A frame for space B carrying an
+A header reaches A's toolshed and is refused there.
 
 **Losing one upstream.** When one upstream connection drops, only the sessions
 it carried are affected. A new push tells the client which:
@@ -274,11 +300,21 @@ The router opens an upstream connection to a toolshed the first time the
 client names a space that toolshed owns.
 
 - `hello`: the router answers the client itself, advertising the flags that
-  every toolshed it routes to supports, and sends its own `hello` upstream.
+  every toolshed it routes to supports, and sends the client's own negotiated
+  flags upstream, unchanged, in the `hello` of each upstream connection. The
+  toolshed admits sessions by what that `hello` declares, so what it admits
+  is the client, not the router: a client without `stableExpressionResultIds`
+  is refused upstream exactly as it would be directly. A router that cannot
+  forward a client's flags exactly refuses the client.
 - An upstream connection does not authenticate the router again. The toolshed
-  issues short-lived tickets over the router link, and the router presents one
-  in the `hello` of each upstream connection, which makes that connection part
-  of the link's trust.
+  issues tickets over the router link, and the router presents one in the
+  `hello` of each upstream connection, which makes that connection part of
+  the link's trust. A ticket is not a bearer credential the link's trust
+  rides on: it is redeemed once, atomically, by the toolshed that issued it;
+  it names the router identity and the epoch of the link it was issued over,
+  and the toolshed refuses it on any other link, after that link is revoked
+  or replaced, and on any socket that is not a router's; and it is short-lived
+  besides. A copied ticket joins nothing.
 - The principals authenticated on an upstream connection are the ones its
   client authenticated, forwarded as section 5.1 describes.
 - Request ids are unique within one client connection, so they pass through
@@ -350,8 +386,11 @@ about it and how the design above leaves room for it.
 What is known:
 
 - Attestation will run between client and router, and between router and
-  toolshed. A client that has attested a router which has attested its
-  toolsheds has attested those toolsheds transitively.
+  toolshed. A client that has attested a router accepts that router's
+  reports of the toolsheds it has attested: delegated trust in the router,
+  rather than the client's own verification of each toolshed. Whether the
+  client can also bind the route it is served over, and the measurements it
+  accepts, to something it verifies itself belongs to the attestation design.
 - Attestation is expensive, and its cost between a router and a toolshed must
   be amortized across the clients the router serves.
 - The exchange at the start of a client connection will have more steps than
