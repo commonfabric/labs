@@ -356,6 +356,39 @@ const addFan = action(({ fan }: { fan: unknown }) => {
   handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
   call on a reactive value is lifted like a call to any other function.
 
+### The principal a profile or record names
+
+A profile, or a record written with `AuthoredByCurrentUser`, carries a claim in
+its label naming a principal, and `principalOf(target, kind)`, exported from
+`commonfabric`, returns that principal's DID. `kind` is `"represents-principal"`
+for whom a profile stands for, or `"authored-by"` for who wrote a record:
+
+```tsx
+// Shown at module scope.
+const inviteBaker = handler<
+  { baker: Writable<{ name: string }> },
+  { invited: Writable<DID[]> }
+>(({ baker }, { invited }) => {
+  const principal = principalOf(baker, "represents-principal");
+  if (principal === undefined || principal === currentPrincipal()) return;
+  invited.push(principal);
+});
+```
+
+- It returns `undefined` unless the label names exactly one principal, in the
+  form only the runtime writes. A pattern cannot write that form for anyone but
+  the user it runs for, so a DID it returns is one that user's runtime put
+  there. Treat `undefined` as "no one", and refuse what needs someone.
+- It reads the label and never the value. Call it in a handler, including on a
+  cell the event names, or in a `computed()` or `lift()`, where it updates when
+  the label changes. Called in a pattern body it throws.
+- The DID is data. Writing it into a label as a claim's subject is refused, like
+  any DID a pattern writes there.
+- A claim binds honest runtimes. The memory server does not check one, so it
+  does not hold against a modified client.
+
+[`principal-of.md`](../../features/principal-of.md) has the details.
+
 ### Anti-patterns (do not ship these)
 
 - A "your name" text field used as the current user's identity → resolve `#profile`.

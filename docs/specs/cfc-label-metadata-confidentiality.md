@@ -129,7 +129,9 @@ revisited when invariant 12 is implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel` is the only pattern-facing surface**, implemented per
+2. **`inspectConfLabel` and `principalOf` are the only pattern-facing
+   surfaces**, both reading inside the observing transaction and taking their
+   target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
    confidentiality + PC; `notAvailable` normalization for unobservable /
