@@ -11,6 +11,7 @@ import { pattern, popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { principalOf } from "../../src/builder/principal-of.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { UnknownCfcMetadataVersionError } from "../../src/cfc/metadata.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../../src/storage/extended-storage-transaction.ts";
@@ -367,6 +368,35 @@ describe("principalOf()", () => {
       }]);
       expect(callIn(edit(), deep, "represents-principal")).toBeUndefined();
       expect(callIn(edit(), carried, "represents-principal")).toBeUndefined();
+    });
+
+    it("throws for a label stored in a form this build cannot read", async () => {
+      // The same document reads as attesting bob until its label is replaced
+      // with one of an unknown version, so the throw is the label's doing.
+
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+
+      const tx = runtime.edit();
+      seedStoredEnvelope(
+        tx,
+        { space, scope: "space", id: idOf("profile"), path: ["cfc"] },
+        {
+          version: 999,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [claimsAt([], claim("represents-principal", bob.did()))],
+          },
+        } as never,
+      );
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(() => callIn(edit(), profile, "represents-principal")).toThrow(
+        UnknownCfcMetadataVersionError,
+      );
     });
 
     it("returns `undefined` for a `target` passed as `undefined`", () => {

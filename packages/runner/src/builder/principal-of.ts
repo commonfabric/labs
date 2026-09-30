@@ -3,16 +3,12 @@ import { debugStr } from "@commonfabric/data-model";
 
 import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
-import {
-  readStoredCfcMetadata,
-  StoredCfcMetadataError,
-} from "../cfc/metadata.ts";
+import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
   exactPrincipalAttestations,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
 } from "../cfc/represents-principal.ts";
-import type { CfcMetadata } from "../cfc/types.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
@@ -24,27 +20,31 @@ import { cellOfTarget } from "./space-access.ts";
  * mints, as `exactPrincipalAttestations()` reads it, and never from what a
  * link the value holds carries.
  *
- * Returns `undefined` when the label attests no principal of that kind, when
- * it attests more than one, when a claim there is in any form but the one a
- * runtime mints, when the label cannot be read, and for a `target` passed as
- * `undefined`. It never guesses.
+ * Returns `undefined` when the label names no verified single principal of
+ * that kind: when it attests none, when it attests more than one, when a claim
+ * there is in any form but the one a runtime mints, and for a `target` passed
+ * as `undefined`. It never guesses. A label it cannot read is not one of
+ * those: that read throws, so a labeled document never reads as unlabeled.
  *
- * The read is of `target`'s label, never of its value: the value's cell is
- * followed through any links it holds, and then only its stored label is
- * consulted, through the calling code's own transaction, so a change to the
- * label runs a reactive computation that called this again. What a claim's
- * `kind` and `subject` disclose is public by the label-metadata classification
+ * The read is of `target`'s label: the value's cell is followed through any
+ * links it holds, which reads the pointers along the way and no other value
+ * contents, and then only its stored label is consulted, through the calling
+ * code's own transaction, so a change to the label runs a reactive computation
+ * that called this again. What a claim's `kind` and `subject` disclose is
+ * public by the label-metadata classification
  * (`docs/specs/cfc-label-metadata-confidentiality.md` §2), so the observation
  * adds no confidentiality to the result. If that classification ever made the
- * subject protected, this returns `undefined`, since no label could be carried
- * for it.
+ * subject protected, this throws, since no label could be carried for it.
  *
  * The DID returned is data. Written into a label as a claim's subject, it is a
  * literal like any other, which the runtime refuses from a pattern.
  *
  * @throws If called outside a handler or a reactive computation, with a
  *   `kind` that is not a principal claim kind, or with a `target` that is
- *   neither a cell nor `undefined`.
+ *   neither a cell nor `undefined`; if the target's label cannot be read,
+ *   including one stored in a form this build cannot interpret
+ *   (`StoredCfcMetadataError`); and if the label-metadata classification
+ *   makes a claim's subject anything but public.
  */
 export function principalOf(
   // Typed `unknown` here, though the declared API types both, so that the
@@ -72,7 +72,9 @@ export function principalOf(
   }
   const claimKind = kind as PrincipalClaimKind;
   if (labelMetadataFieldIsProtected({ kind: claimKind }, "subject")) {
-    return undefined;
+    throw new Error(
+      debugStr`\`principalOf(target, kind)\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
+    );
   }
   if (target === undefined) return undefined;
 
@@ -80,19 +82,13 @@ export function principalOf(
   // value they lead to.
   const link = cellOfTarget(target, "principalOf(target, kind)").withTx(tx)
     .resolveAsCell().getAsNormalizedFullLink();
-  let metadata: CfcMetadata | undefined;
-  try {
-    // The default read policy journals the read as a dependency, so a label
-    // change runs the calling computation again.
-    metadata = readStoredCfcMetadata(tx, {
-      space: link.space,
-      id: link.id,
-      scope: link.scope,
-    });
-  } catch (error) {
-    if (error instanceof StoredCfcMetadataError) return undefined;
-    throw error;
-  }
+  // The default read policy journals the read as a dependency, so a label
+  // change runs the calling computation again.
+  const metadata = readStoredCfcMetadata(tx, {
+    space: link.space,
+    id: link.id,
+    scope: link.scope,
+  });
   const principals = exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     claimKind,
