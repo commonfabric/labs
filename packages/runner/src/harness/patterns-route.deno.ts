@@ -131,8 +131,10 @@ export class PatternsRoute {
    * a root.
    *
    * `filename` is the same root-relative path `getText` accepts, e.g.
-   * `system/default-app.tsx`. Rejects if the closure is incomplete or reaches
-   * a `cf:` fabric import, which the light path does not model.
+   * `system/default-app.tsx`. `sourceRoots` adds up to 32 distinct, canonical
+   * `/api/patterns/` pathnames to the closure. The bounded cache keys entries
+   * by filename and sorted roots. Rejects invalid roots, an incomplete closure,
+   * or a `cf:` fabric import, which the light path does not model.
    */
   identity(
     filename: string,
@@ -279,7 +281,8 @@ export function patternResponseHeaders(
  * Map a pattern-serving error to an HTTP status and body: a missing file →
  * 404; a structurally invalid entry (incomplete import closure, or a `cf:`
  * fabric import the light `?identity` path does not model) → 400 with the
- * reason; anything else → 500.
+ * reason; an invalid retained root path or excessive root count → 400;
+ * anything else → 500.
  */
 export function classifyPatternError(
   error: unknown,

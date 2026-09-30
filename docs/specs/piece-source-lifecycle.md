@@ -289,7 +289,9 @@ runtime resolves that same set before adoption. Invalid or unavailable roots
 leave the piece on its stored program. A host that advertises only the entry
 cannot authorize replacing a complete program: the resolved identity must match
 the advertised identity. A deployment that removes an attached root requires an
-explicit complete-program replacement.
+explicit complete-program replacement. If the stored program itself is missing,
+the existing origin-recovery path rebuilds the entry and records its displaced
+identity; it cannot retain roots whose verified manifest is no longer available.
 
 Opening a missing runtime-supplied piece revalidates the deployment's advertised
 identity. Resolved source may be shared within a reconciler for the same

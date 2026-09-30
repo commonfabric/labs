@@ -667,6 +667,9 @@ export class SourceReconciler {
         state.space,
       );
     signal.throwIfAborted();
+    // Missing stored source retains the existing origin-recovery policy:
+    // rebuild the entry and record the displaced identity. Retained roots
+    // can only be protected when the verified program still names them.
     const sourceRoots = stored?.sourceRoots ?? [];
     const answer = await this.#advertisedIdentity(
       target,

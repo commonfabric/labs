@@ -1,8 +1,8 @@
 import type { Context } from "@hono/hono";
 import { createPatternsRoute } from "./patterns-server.ts";
 
-// Create a single route instance to be reused across requests: it memoizes
-// each pattern's closure identity, which is fixed for the process's lifetime.
+// Reuse the route's bounded cache across requests. Each identity includes the
+// requested entry and retained roots; evicted combinations are recomputed.
 const patternsRoute = createPatternsRoute();
 
 /**
