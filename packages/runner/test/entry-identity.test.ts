@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { InMemoryProgram } from "@commonfabric/js-compiler/program";
 
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -339,6 +340,42 @@ describe("resolveEntryIdentity (closure walk via readFile)", () => {
     expect(identity.length).toBe(43);
     // The import-like text inside the data file was never followed.
     expect(new Set(reads)).toEqual(new Set(["/entry.ts", "/notes.json"]));
+  });
+
+  it("matches the engine for an entry that reads a data file", async () => {
+    // Resolving a program acts on the `dataFile()` calls in its source, and the
+    // compiler folds each file they name into the entry's hash.
+
+    const files: Record<string, string> = {
+      "/speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+        'export default () => dataFile("./words.txt");\n',
+      "/words.txt": "able\nbaker\n",
+    };
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const engine = runtime.harness as Engine;
+      const program = await engine.resolve(
+        new InMemoryProgram("/speller.tsx", files),
+      );
+      expect(program.dataFiles).toEqual(["/words.txt"]);
+      const { entryIdentity } = await engine.compileToRecordGraph(program);
+
+      const light = await resolveEntryIdentity(
+        "/speller.tsx",
+        (name) =>
+          name in files
+            ? Promise.resolve(files[name])
+            : Promise.reject(new Error(`not found: ${name}`)),
+      );
+      expect(light).toBe(entryIdentity);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
 
   it("walks a diamond closure once and skips bare imports", async () => {

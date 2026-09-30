@@ -3,9 +3,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { Identity } from "@commonfabric/identity";
+import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import type { Engine } from "../src/harness/engine.ts";
 import { resolveEntryIdentity } from "../src/harness/entry-identity.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 
+const signer = await Identity.fromPassphrase("patterns route");
 const ENTRY = "export default 1;\n";
 const IMPORTER = 'import "./leaf.ts";\nexport default 2;\n';
 
@@ -150,6 +156,46 @@ describe("PatternsRoute", () => {
         expect(identity).toBe(await route.identity("main.tsx"));
       },
     );
+  });
+
+  it("serves the identity a worker compiles for a pattern that reads a data file", async () => {
+    // The worker stores a data file byte for byte, so the byte order mark that
+    // reading the file as source would drop is part of what it hashes.
+
+    const files = {
+      "speller.tsx": 'import { dataFile } from "commonfabric";\n' +
+        'export default () => dataFile("./words.txt");\n',
+      "words.txt": "﻿able\nbaker\n",
+    };
+    await withRoute(files, async (route) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://host.invalid"),
+        storageManager,
+      });
+      try {
+        const program = await runtime.harness.resolve(
+          new HttpProgramResolver(
+            "https://host.invalid/api/patterns/speller.tsx",
+            async (input, init) =>
+              await route.serve(new Request(input, init)) ??
+                new Response(null, { status: 404 }),
+          ),
+        );
+        expect(program.dataFiles).toEqual(["/api/patterns/words.txt"]);
+        const { entryIdentity } = await (runtime.harness as Engine)
+          .compileToRecordGraph(program);
+
+        const response = await route.serve(
+          get("/api/patterns/speller.tsx?identity"),
+        );
+        expect(response?.status).toBe(200);
+        expect((await response?.text())?.trim()).toBe(entryIdentity);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   it("answers 304 when the request already holds the ETag", async () => {

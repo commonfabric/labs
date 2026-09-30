@@ -3,8 +3,10 @@
  *
  * A piece that records such an origin follows it by fetching a path under
  * {@link PATTERNS_ROUTE_PREFIX} from the host serving its space — the source
- * itself, or, with `?identity`, the content identity of that source's whole
- * authored import closure. This is what answers.
+ * itself, or, with `?identity`, the content identity of the program that
+ * source is the entry of: its authored import closure, that of each source
+ * root the request names, and the data files those closures read. This is
+ * what answers.
  *
  * Both halves of that exchange belong to the runner. The route prefix is part
  * of a pattern's content identity, because a compiled module is named by its
@@ -23,6 +25,7 @@
 
 import { toFileUrl } from "@std/path/to-file-url";
 
+import { decodeDataFile } from "@commonfabric/js-compiler/program";
 import {
   compareETags,
   createCacheHeaders,
@@ -124,17 +127,19 @@ export class PatternsRoute {
 
   /**
    * The content-addressed identity of a pattern entry — the value advertised
-   * to runtimes through `?identity`. Walks the entry's authored import closure
-   * via `getText` and hashes the pristine bytes; no compiler, runtime, or
-   * storage is involved. An updater independently compiles the downloaded
-   * closure and requires its entry ref to have this identity before replacing
-   * a root.
+   * to runtimes through `?identity`. Reads the authored import closures of the
+   * entry and of each source root, and each data file those closures read with
+   * `dataFile()`, and hashes the pristine bytes; no compiler, runtime, or
+   * storage is involved. An updater
+   * independently compiles the downloaded program and requires its entry ref
+   * to have this identity before replacing a root.
    *
    * `filename` is the same root-relative path `getText` accepts, e.g.
    * `system/default-app.tsx`. `sourceRoots` adds up to 32 distinct, canonical
    * `/api/patterns/` pathnames to the closure. The bounded cache keys entries
    * by filename and sorted roots. Rejects invalid roots, an incomplete closure,
-   * or a `cf:` fabric import, which the light path does not model.
+   * a data file this route cannot serve, or a `cf:` fabric import, which the
+   * light path does not model.
    */
   identity(
     filename: string,
@@ -148,11 +153,20 @@ export class PatternsRoute {
     let cached = this.#identityCache.get(key);
     if (!cached) {
       // Name modules by their URL pathname so the identity equals the one the
-      // worker computes when it compiles the same source over HTTP.
+      // worker computes when it compiles the same source over HTTP. A data
+      // file is decoded as a program stores one, byte order mark included,
+      // rather than as source text.
       cached = resolveEntryIdentity(
         `${PATTERNS_ROUTE_PREFIX}${filename}`,
         (name) => this.getText(name.slice(PATTERNS_ROUTE_PREFIX.length)),
-        { sourceRoots: roots },
+        {
+          sourceRoots: roots,
+          readDataFile: async (name) =>
+            decodeDataFile(
+              await this.get(name.slice(PATTERNS_ROUTE_PREFIX.length)),
+              name,
+            ),
+        },
       );
       this.#identityCache.put(key, cached);
       const pending = cached;
