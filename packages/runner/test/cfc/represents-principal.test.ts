@@ -199,7 +199,9 @@ describe("represents-principal", () => {
     });
 
     it("refuses an `authored-by` claim in any form the runtime does not mint", () => {
-      const atoms = [
+      const atoms: NonNullable<
+        CfcLabelView["entries"][number]["label"]["integrity"]
+      > = [
         `authored-by:${DID}`,
         { kind: "authored-by", subject: ` ${DID}` },
         { kind: "authored-by", subject: DID, scope: "x" },

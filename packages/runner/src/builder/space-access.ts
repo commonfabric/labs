@@ -102,15 +102,21 @@ export function spaceAccess(
  * @throws Error when `target` is not a cell.
  */
 export function spaceOfTarget(target: unknown, call: string): MemorySpace {
-  let cell: Cell<unknown>;
-  if (isCell(target)) {
-    cell = target;
-  } else if (isCellResult(target)) {
-    cell = getCellOrThrow(target);
-  } else {
-    throw new Error(`\`${call}\` takes a cell as its target.`);
-  }
-  return cell.resolveAsCell().getAsNormalizedFullLink().space;
+  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink()
+    .space;
+}
+
+/**
+ * Returns the cell `target` is, whether pattern code holds it as a cell or as
+ * the value a cell's reactive proxy reads as. `call` names the call `target`
+ * was passed to, for the error.
+ *
+ * @throws Error when `target` is not a cell.
+ */
+export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
+  if (isCell(target)) return target;
+  if (isCellResult(target)) return getCellOrThrow(target);
+  throw new Error(`\`${call}\` takes a cell as its target.`);
 }
 
 /**

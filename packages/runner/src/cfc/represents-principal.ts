@@ -8,21 +8,18 @@
  * accept only the canonical spelling: a trusted surface checking an author
  * claim asks this of the claim's label, `cf-cfc-authorship` on the main thread
  * and the HTML renderer's text integrity boundary in the worker. The module
- * depends on nothing but the label view's type, `@commonfabric/utils`, and
- * `@commonfabric/identity/did`, so that either can import it without the rest
- * of the CFC machinery.
+ * depends on nothing but types from `@commonfabric/api` and the label view,
+ * `@commonfabric/utils`, and `@commonfabric/identity/did`, so that either can
+ * import it without the rest of the CFC machinery.
  */
+import type { PrincipalClaimKind } from "@commonfabric/api";
 import { isWellFormedDID } from "@commonfabric/identity/did";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { CfcLabelView } from "./label-view-core.ts";
 
-const REPRESENTS_PRINCIPAL = "represents-principal";
+export type { PrincipalClaimKind };
 
-/**
- * A kind of principal claim: `authored-by` names who wrote a value, and
- * `represents-principal` names whom a value stands for.
- */
-export type PrincipalClaimKind = "authored-by" | typeof REPRESENTS_PRINCIPAL;
+const REPRESENTS_PRINCIPAL = "represents-principal";
 
 /**
  * The kinds of integrity atom that name a principal as their `subject`: the
@@ -30,7 +27,9 @@ export type PrincipalClaimKind = "authored-by" | typeof REPRESENTS_PRINCIPAL;
  * subject left for the runtime to resolve, which `prepare.ts` checks with
  * {@link principalClaimSpelling} and {@link subjectResemblesPrincipal}.
  */
-export const PRINCIPAL_CLAIM_KINDS: ReadonlySet<PrincipalClaimKind> = new Set([
+export const PRINCIPAL_CLAIM_KINDS: ReadonlySet<string> = new Set<
+  PrincipalClaimKind
+>([
   "authored-by",
   REPRESENTS_PRINCIPAL,
 ]);
