@@ -3,7 +3,7 @@
  */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { budgetStatus, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, STALE_RUNS_ERROR, strip, thin, usd } from "./lib.ts";
+import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, STALE_RUNS_ERROR, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
 
 Deno.test("landingHref: squash-merge trailing (#N) -> the PR", () => {
@@ -51,6 +51,15 @@ Deno.test("groupDigits: separates thousands, rounding first", () => {
   assertEquals(groupDigits(1234567), "1,234,567");
   assertEquals(groupDigits(0), "0");
   assertEquals(groupDigits(30.6), "31");
+});
+
+Deno.test("ciDurationSub: counts the runs in the time window or the most recent ones", () => {
+  assertEquals(ciDurationSub(25, 6), "median of 25 PR runs in 6h");
+  assertEquals(ciDurationSub(1, 6), "median of 1 PR run in 6h");
+  assertEquals(ciDurationSub(20), "median of last 20 PR runs");
+  assertEquals(ciDurationSub(1), "median of last 1 PR run");
+  assertEquals(ciDurationSub(0), "no passing PR runs");
+  assertEquals(ciDurationSub(0, 6), "no passing PR runs");
 });
 
 Deno.test("daysLabel: consistent 'x days' text", () => {

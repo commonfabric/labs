@@ -270,9 +270,8 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
   });
 
   it("the enabled gate cannot be disabled mid-transaction (anti-downgrade pin)", async () => {
-    // The runtime enables the gate at tx creation; handler code that can
-    // reach the transaction via `cell.tx` must not be able to dial it back
-    // off before `prepareCfc()` — that would empty triggerReadSources and
+    // The runtime enables the gate at tx creation; code holding the
+    // transaction must not be able to dial it back off before `prepareCfc()` — that would empty triggerReadSources and
     // skip both H5 gates the deployment enabled (mirrors the write-floor
     // enforce pin).
     const storageManager = StorageManager.emulate({ as: signer });
@@ -330,7 +329,7 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
 
   it("getCfcState() is a read-only view — direct state mutation cannot bypass the pin", async () => {
     // `Readonly<CfcTxState>` is compile-time only: without a runtime guard,
-    // handler code reaching the tx via `cell.tx` could skip the pinned
+    // code holding the transaction could skip the pinned
     // setter and flip the gate (or truncate the trigger set, or un-mark
     // relevance, or forge the prepare status) directly on the object
     // `getCfcState()` returns (cubic/codex review on #4517).

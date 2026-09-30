@@ -43,6 +43,8 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import { currentPrincipal } from "../src/builder/current-principal.ts";
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { awaitAdmitted } from "./support/serving-waits.ts";
@@ -1040,6 +1042,80 @@ describe("executor-trust-attribution", () => {
       } finally {
         await runtime.dispose();
         await manager.close();
+      }
+    });
+  });
+
+  describe("currentPrincipal()", () => {
+    it("returns the entry's firedAt.user in a served handler, the subject that run's authored-by claim names, whatever the payload names", async () => {
+      // The probe stands in for a pattern handler, so it pushes the handler
+      // frame the runner pushes around one.
+
+      const { engine, cancelDemand, sidecarId, streamLink, result } =
+        await warmServedStream({
+          arg: "current-principal-arg",
+          result: "current-principal-result",
+        });
+      const serving = servingRuntime!;
+      let seen: string | undefined = "not called";
+      const cancelProbe = serving.scheduler.addEventHandler(
+        (tx, _event) => {
+          const frame = pushFrame({
+            runtime: serving,
+            tx,
+            inHandler: true,
+            frameKind: "handler",
+          });
+          try {
+            seen = currentPrincipal();
+          } finally {
+            popFrame(frame);
+          }
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: TRUSTED_WRITER,
+          });
+          serving.getCell(space, "current-principal-doc", authoredDocSchema, tx)
+            .set({ body: "hello", claim: "a claim" });
+        },
+        streamLink,
+      );
+      try {
+        result.key("bump").send(trustedPayload({
+          kind: "current-principal",
+          acting: { user: bobSigner.did(), session: "bob-session" },
+          user: bobSigner.did(),
+          principal: bobSigner.did(),
+          firedAt: { user: bobSigner.did(), session: "bob-session" },
+        }));
+        await clientRuntime!.idle();
+        await clientRuntime!.storageManager.synced();
+        await awaitAdmitted(
+          server,
+          () =>
+            entryByKind(engine, sidecarId, "current-principal")
+              ?.consequenced === true,
+        );
+        const entry = entryByKind(engine, sidecarId, "current-principal")!;
+        expect(entry.error).toBeUndefined();
+        expect(entry.firedAt?.user).toBe(aliceSigner.did());
+        expect(seen).toBe(aliceSigner.did());
+
+        const docId = clientRuntime!.getCell(
+          space,
+          "current-principal-doc",
+          undefined,
+        ).getAsNormalizedFullLink().id;
+        await awaitAdmitted(
+          server,
+          () => Engine.read(engine, { id: docId })?.value !== undefined,
+        );
+        expect(
+          principalSubjects(Engine.read(engine, { id: docId }), "authored-by"),
+        ).toEqual([seen]);
+      } finally {
+        cancelProbe();
+        cancelDemand();
       }
     });
   });

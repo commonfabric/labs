@@ -32,7 +32,6 @@
 
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
-import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
 import {
   memberTasks,
   memberTestFiles,
@@ -54,7 +53,7 @@ import {
   skipListOf,
   type Suite,
   type UnitRequest,
-  writeSkipList,
+  writeBatchSkipList,
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
@@ -422,15 +421,21 @@ function unitSuite(
               batch.files[0]!,
             );
             const requests = batch.files.map((file) => byFile.get(file)!);
+            const skipList = await writeBatchSkipList(
+              context,
+              name,
+              skipListOf(requests),
+            );
             invocations.push({
               command: denoTestCommand(
                 batch.flags,
                 context,
                 junitPath,
                 batch.files,
+                skipList.path,
               ),
               cwd: memberDir,
-              env: { ...denoEnv, ...await skipEnv(context, name, requests) },
+              env: { ...denoEnv, ...skipList.env },
               process,
               junit: [{
                 path: junitPath,
@@ -453,22 +458,6 @@ function unitSuite(
       return invocations;
     },
   };
-}
-
-/**
- * Writes a batch's skip list and names it in the environment, or leaves
- * the environment alone where nothing is skipped.
- */
-async function skipEnv(
-  context: CommandContext,
-  slug: string,
-  requests: readonly UnitRequest[],
-): Promise<Record<string, string>> {
-  const skips = skipListOf(requests);
-  if (Object.keys(skips).length === 0) return {};
-  const skipListPath = path.join(context.outputDir, `${slug}.skip.json`);
-  await writeSkipList(skipListPath, skips);
-  return { [SKIP_LIST_VARIABLE]: skipListPath };
 }
 
 /**

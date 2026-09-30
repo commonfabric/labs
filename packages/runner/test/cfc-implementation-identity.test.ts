@@ -2,6 +2,7 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { cellTx } from "../src/cell.ts";
 import { raw } from "../src/module.ts";
 import { createNodeFactory } from "../src/builder/module.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -40,7 +41,7 @@ describe("CFC builtin implementation identity", () => {
     runtime.moduleRegistry.addModuleByRef(
       "test-builtin",
       raw((inputsCell) => {
-        captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
         return () => undefined;
       }),
     );
@@ -79,7 +80,7 @@ describe("CFC builtin implementation identity", () => {
     runtime.moduleRegistry.addModuleByRef(
       "scoped-test-builtin",
       raw((inputsCell) => {
-        captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+        captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
         return () => undefined;
       }),
     );
@@ -205,7 +206,7 @@ describe("CFC builtin implementation identity", () => {
 
     const captured: Array<unknown> = [];
     const module = raw((inputsCell) => {
-      captured.push(inputsCell.tx?.getCfcState().implementationIdentity);
+      captured.push(cellTx(inputsCell)?.getCfcState().implementationIdentity);
       return () => undefined;
     });
 

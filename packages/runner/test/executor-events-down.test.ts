@@ -42,7 +42,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -777,13 +777,8 @@ describe("Phase 3 events-down (serving side)", () => {
     // own, ahead of the handling: a caller that only needs its event on
     // the record waits there.
     const appends = new ArrivalLog<{ delivered: boolean }>();
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: { status(): { status: string } }) => void,
-        options?: { onAppended?: (delivery: { delivered: boolean }) => void },
-      ): unknown;
-    }).send(
+    sendEvent(
+      result.key("bump"),
       {},
       (ackTx) => acks.record(ackTx.status().status),
       { onAppended: appends.record },
@@ -1891,12 +1886,8 @@ describe("Phase 3 events-down (serving side)", () => {
     };
     try {
       const poisonAcks = new ArrivalLog<string>();
-      (result.key("bump") as unknown as {
-        send(
-          value: unknown,
-          onCommit: (tx: { status(): { status: string } }) => void,
-        ): unknown;
-      }).send(
+      sendEvent(
+        result.key("bump"),
         { kind: "poison-1" },
         (tx) => poisonAcks.record(tx.status().status),
       );
@@ -2354,13 +2345,8 @@ describe("Phase 3 events-down (serving side)", () => {
     const acks = new ArrivalLog<
       { status: string; tx: IExtendedStorageTransaction }
     >();
-    (result.key(verb) as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: IExtendedStorageTransaction) => void,
-        options?: { eventId?: string; session?: string },
-      ): unknown;
-    }).send(
+    sendEvent(
+      result.key(verb),
       payload,
       (tx) => acks.record({ status: tx.status().status, tx }),
       { eventId, session: "receipt-pin-session" },

@@ -6,8 +6,10 @@
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ./run-member-tests.ts deno-test",
+    // The Claude Code hook scripts under `.claude/scripts` belong to no
+    // workspace member, so this one runs their tests.
     // `test.ts` is the root `deno task test` runner, which Deno's discovery
     // would otherwise take for a test module by its name.
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check -A --ignore=test.ts"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check -A --ignore=test.ts . ../.claude/scripts"
   }
 }

@@ -4,6 +4,7 @@
   "frameworkValues": [
     "Cell",
     "FS",
+    "FabricDurationDay",
     "FabricDurationNsec",
     "FabricEpochDay",
     "FabricEpochNsec",
@@ -27,6 +28,7 @@
     "cfSqlite",
     "compileAndRun",
     "computed",
+    "currentPrincipal",
     "equals",
     "fetchBinary",
     "fetchJson",

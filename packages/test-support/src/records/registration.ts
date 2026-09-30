@@ -381,10 +381,21 @@ export function installRegistrationCapture(
   return built.capture;
 }
 
+/** The lifecycle hooks `Deno.test` carries beside its overloads. */
+const TEST_HOOKS = [
+  "beforeAll",
+  "beforeEach",
+  "afterEach",
+  "afterAll",
+] as const;
+
+/** Whichever of those hooks a registrar carries. */
+type TestHooks = Partial<Pick<typeof Deno.test, (typeof TEST_HOOKS)[number]>>;
+
 /** What a capture is built from, and where its map goes. */
 export interface CaptureOptions {
   /** The registrar the wrapper hands each definition on to. */
-  registrar: (definition: Deno.TestDefinition) => void;
+  registrar: ((definition: Deno.TestDefinition) => void) & TestHooks;
 
   /** The identities this invocation is not to run. */
   skips?: SkipList;
@@ -408,7 +419,10 @@ export interface CaptureOptions {
  */
 export function buildCapture(
   options: CaptureOptions,
-): { capture: RegistrationCapture; registrar: (...args: unknown[]) => void } {
+): {
+  capture: RegistrationCapture;
+  registrar: ((...args: unknown[]) => void) & TestHooks;
+} {
   const { dir, skips, spool } = options;
   const names = new Map<string, string>();
 
@@ -469,6 +483,11 @@ export function buildCapture(
   const capturingTest = register(realTest, {});
   Reflect.set(capturingTest, "ignore", register(realTest, { ignore: true }));
   Reflect.set(capturingTest, "only", register(realTest, { only: true }));
+  // A hook registers a function to run around the tests rather than a test,
+  // so there is nothing to attribute or skip, and it is the registrar's own.
+  for (const hook of TEST_HOOKS) {
+    if (realTest[hook]) Reflect.set(capturingTest, hook, realTest[hook]);
+  }
   return { capture, registrar: capturingTest };
 }
 

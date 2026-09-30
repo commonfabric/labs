@@ -7,12 +7,14 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { type Pattern, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import type { NormalizedFullLink } from "@commonfabric/runner";
+import { scopeCallerEventId } from "../../../runner/src/scheduler/event-identity.ts";
 import { PieceController } from "../../src/ops/piece-controller.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 
@@ -92,7 +94,15 @@ async function runRetryScenario(
     if (originalAbsences === undefined || originalEnqueue === undefined) {
       throw new Error("test storage does not support event reconciliation");
     }
-    const cellSet = spy(Object.getPrototypeOf(piece), "set");
+    // Every id the scenario mints, among them the caller event id the edit
+    // sends each attempt under.
+    const uuids: string[] = [];
+    const randomUUID = crypto.randomUUID.bind(crypto);
+    using _uuids = stub(crypto, "randomUUID", () => {
+      const uuid = randomUUID();
+      uuids.push(uuid);
+      return uuid;
+    });
     const initialIdentity = activeRuntime.scopeKeyIdentity;
     let currentIdentity = identityMode === "without-session"
       ? { principal: initialIdentity.principal }
@@ -136,13 +146,6 @@ async function runRetryScenario(
       await controller.result.set(7, ["event"]);
       await activeRuntime.idle();
 
-      const streamSends = cellSet.calls.flatMap(({ args }) => {
-        const options = args[2] as
-          | { eventId?: string; session?: string }
-          | undefined;
-        return options?.eventId === undefined ? [] : [options];
-      });
-
       return {
         eventIds,
         initialSessionId: initialIdentity.sessionId,
@@ -150,7 +153,8 @@ async function runRetryScenario(
         reconciliationCalls,
         runtimeId: activeRuntime.id,
         sessionId: activeRuntime.scopeKeyIdentity.sessionId,
-        streamSends,
+        stream: stream.getAsNormalizedFullLink(),
+        uuids,
       };
     } finally {
       if (identityMode !== "session") {
@@ -161,7 +165,6 @@ async function runRetryScenario(
       storageManager.pendingLoadGeneration = originalPendingLoadGeneration;
       storageManager.loadsSettled = originalLoadsSettled;
       replica.enqueueEventAppend = originalEnqueue;
-      cellSet.restore();
       removeHandler();
     }
   } finally {
@@ -173,6 +176,27 @@ async function runRetryScenario(
   }
 }
 
+/**
+ * Returns whether every event the scenario appended was sent under one caller
+ * event id it minted and `session`, which is what an event id scoped from those
+ * two and the stream shows.
+ */
+function sentUnderOneCallerId(
+  result: {
+    eventIds: string[];
+    stream: NormalizedFullLink;
+    uuids: string[];
+  },
+  session: string | undefined,
+): boolean {
+  return session !== undefined &&
+    result.uuids.some((uuid) =>
+      result.eventIds.every((id) =>
+        id === scopeCallerEventId(uuid, session, result.stream)
+      )
+    );
+}
+
 describe("piece-controller", () => {
   describe("result stream edits", () => {
     it("submits one event identity across transaction attempts", async () => {
@@ -180,13 +204,9 @@ describe("piece-controller", () => {
 
       expect(result.sessionId).toBeDefined();
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.streamSends).toHaveLength(2);
-      expect(
-        result.streamSends.every(({ session }) => session === result.sessionId),
-      ).toBe(true);
-      expect(new Set(result.streamSends.map(({ eventId }) => eventId)).size)
-        .toBe(1);
-      expect(new Set(result.eventIds).size).toBe(1);
+      expect(result.eventIds).toHaveLength(2);
+      expect(sentUnderOneCallerId(result, result.sessionId)).toBe(true);
+      expect(sentUnderOneCallerId(result, "another-session")).toBe(false);
       expect(result.received).toEqual([7]);
     });
 
@@ -195,13 +215,9 @@ describe("piece-controller", () => {
 
       expect(result.sessionId).toBeUndefined();
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.streamSends).toHaveLength(2);
-      expect(
-        result.streamSends.every(({ session }) => session === result.runtimeId),
-      ).toBe(true);
-      expect(new Set(result.streamSends.map(({ eventId }) => eventId)).size)
-        .toBe(1);
-      expect(new Set(result.eventIds).size).toBe(1);
+      expect(result.eventIds).toHaveLength(2);
+      expect(sentUnderOneCallerId(result, result.runtimeId)).toBe(true);
+      expect(sentUnderOneCallerId(result, "another-session")).toBe(false);
       expect(result.received).toEqual([7]);
     });
 
@@ -211,15 +227,9 @@ describe("piece-controller", () => {
       expect(result.initialSessionId).toBeDefined();
       expect(result.sessionId).not.toBe(result.initialSessionId);
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.streamSends).toHaveLength(2);
-      expect(
-        result.streamSends.every(({ session }) =>
-          session === result.initialSessionId
-        ),
-      ).toBe(true);
-      expect(new Set(result.streamSends.map(({ eventId }) => eventId)).size)
-        .toBe(1);
-      expect(new Set(result.eventIds).size).toBe(1);
+      expect(result.eventIds).toHaveLength(2);
+      expect(sentUnderOneCallerId(result, result.initialSessionId)).toBe(true);
+      expect(sentUnderOneCallerId(result, result.sessionId)).toBe(false);
       expect(result.received).toEqual([7]);
     });
 
@@ -227,7 +237,6 @@ describe("piece-controller", () => {
       const result = await runRetryScenario("session", false);
 
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.streamSends).toEqual([]);
       expect(result.eventIds).toEqual([]);
       expect(result.received).toEqual([7]);
     });

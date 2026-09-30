@@ -19,7 +19,7 @@ import {
   type CellSelection,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
-import { cf, relevantStderr } from "./utils.ts";
+import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 
 /**
  * `cf exec`'s read options and the shape it emits.
@@ -268,6 +268,7 @@ describe("cf exec read options", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),
@@ -306,6 +307,7 @@ describe("cf exec read options", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),

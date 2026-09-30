@@ -265,8 +265,11 @@ strings — resolve the real viewer and render people with the identity componen
 
 ### Resolve the current viewer
 
-A pattern cannot ask "what is my DID" directly. Resolve the viewer's profile with
-`wish` (it reads the active user's home space):
+A pattern body and a `computed()` cannot ask "what is my DID". Only an action or
+a handler can, with `currentPrincipal()`, and that returns the user the event
+came from ([Handling Events](../concepts/action.md#who-the-action-acts-for)).
+To show the viewer, resolve their profile with `wish` (it reads the active
+user's home space):
 
 ```tsx
 // Shown inside a pattern body.
@@ -335,7 +338,9 @@ owner-protected profile *writes* are currently constrained (see CT-1665).
 
 ### Constraints to design within (today)
 
-- No user-space "who am I" API — identity is implicit via scope + `#profile`.
+- No "who is viewing" read outside an action or handler — `currentPrincipal()`
+  names the acting user there, and elsewhere identity is implicit via scope +
+  `#profile`.
 - No list-all-profiles — build rosters by join (each viewer contributes their own cell).
 - Cross-space profile reads resolve (CT-1667/1687) — badge every participant from
   the profile cell they contributed on join. Snapshot + `cf-avatar` is the

@@ -38,6 +38,7 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   CfHarnessEngine,
   type CreateHarnessEngineOptions,
@@ -1142,7 +1143,7 @@ describe("assign-slug", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
           Promise.reject(new Error("storage unavailable"));
         return cell;
@@ -1179,7 +1180,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== slugEntity) {
           return cell;
         }
@@ -1231,7 +1232,7 @@ describe("assign-slug", () => {
       runtime.getCellFromEntityId = ((
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
-        const cell = originalGetCell(...args);
+        const cell = patchableCell(originalGetCell(...args));
         if (String(args[1]) !== counterEntity) {
           return cell;
         }

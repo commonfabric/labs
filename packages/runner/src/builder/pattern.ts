@@ -17,7 +17,12 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 
 import { type AliasBinding } from "../alias-binding.ts";
-import { isCell, schemaCellScope, setCellUnlinkedSpace } from "../cell.ts";
+import {
+  exportCell,
+  isCell,
+  schemaCellScope,
+  setCellUnlinkedSpace,
+} from "../cell.ts";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { defineAuthoredDebugAccessors } from "../harness/authored-debug-source.ts";
@@ -283,7 +288,7 @@ function factoryFromPattern<T, R>(
     traverseValue(value, (value) => {
       if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
       if (isCell(value) && !allCells.has(value)) {
-        const { frame, nodes, path, scope, name } = value.export();
+        const { frame, nodes, path, scope, name } = exportCell(value);
         if (isReactive(value) && frame !== getTopFrame()) {
           throw new Error(
             closureCaptureErrorMessage({
@@ -309,7 +314,7 @@ function factoryFromPattern<T, R>(
 
   const usedNames = new Set<string>();
   allCells.forEach((cell) => {
-    const existingName = getStableInternalPathSegment(cell.export().name);
+    const existingName = getStableInternalPathSegment(exportCell(cell).name);
     if (typeof existingName === "string") usedNames.add(existingName);
   });
 
@@ -317,7 +322,7 @@ function factoryFromPattern<T, R>(
   if (isObjectOrArray(outputs) && !isCell(outputs)) {
     Object.entries(outputs).forEach(([key, value]: [string, unknown]) => {
       if (isCell(value)) {
-        const exported = value.export();
+        const exported = exportCell(value);
         if (
           !exported.path.length &&
           !exported.name &&
@@ -332,13 +337,13 @@ function factoryFromPattern<T, R>(
 
   // Then from assignments in nodes
   allCells.forEach((cell) => {
-    if (cell.export().path.length) return;
-    cell.export().nodes.forEach((node: NodeRef) => {
+    if (exportCell(cell).path.length) return;
+    exportCell(cell).nodes.forEach((node: NodeRef) => {
       if (isObjectOrArray(node.inputs)) {
         Object.entries(node.inputs).forEach(([key, input]) => {
           if (
-            isReactive(input) && input.export().cell === cell &&
-            !cell.export().name && !usedNames.has(key)
+            isReactive(input) && Object.is(exportCell(input).cell, cell) &&
+            !exportCell(cell).name && !usedNames.has(key)
           ) {
             cell.for(key, true); // allowIfSet=true to not override existing causes
             usedNames.add(key);
@@ -354,12 +359,12 @@ function factoryFromPattern<T, R>(
 
   const inputCell = isCell(inputs) ? inputs : getCellOrThrow(inputs);
   const selfRefCell = getCellOrThrow(selfRef);
-  const inputRootCell = inputCell.export().cell;
-  const selfRefRootCell = selfRefCell.export().cell;
+  const inputRootCell = exportCell(inputCell).cell;
+  const selfRefRootCell = exportCell(selfRefCell).cell;
   const cellNameForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): "argument" | "result" | undefined => {
-    const rootCell = cell.export().cell;
+    const rootCell = exportCell(cell).cell;
     return rootCell === inputRootCell
       ? "argument"
       : rootCell === selfRefRootCell
@@ -387,7 +392,7 @@ function factoryFromPattern<T, R>(
     return isStream ? { ...generated, $kind: "stream" } : generated;
   };
   allCells.forEach((cell) => {
-    const { cell: top, path, kind, name, external } = cell.export();
+    const { cell: top, path, kind, name, external } = exportCell(cell);
     if (
       external || path.length > 0 || cellNameForCell(cell) !== undefined ||
       assignedInternalPartialCauses.has(top)
@@ -424,7 +429,9 @@ function factoryFromPattern<T, R>(
   const cellReferenceForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): AliasBinding["$alias"] | undefined => {
-    const { cell: top, path, external, scope, schema, kind } = cell.export();
+    const { cell: top, path, external, scope, schema, kind } = exportCell(
+      cell,
+    );
     // If we have an external id, don't bother with all this
     if (external) return undefined;
 
@@ -459,7 +466,7 @@ function factoryFromPattern<T, R>(
     allCells,
   );
   allCells.forEach((cell) => {
-    const { cell: top, external } = cell.export();
+    const { cell: top, external } = exportCell(cell);
     if (!external && assignedInternalPartialCauses.has(top)) {
       allCellsAndInternalRoots.add(top);
     }
@@ -472,7 +479,9 @@ function factoryFromPattern<T, R>(
   allCellsAndInternalRoots.forEach((cell) => {
     // Only process roots of extra cells:
     if (cell === (inputs as unknown)) return;
-    const { cell: top, path, schema, scope, external, kind } = cell.export();
+    const { cell: top, path, schema, scope, external, kind } = exportCell(
+      cell,
+    );
     if (path.length > 0 || external) return;
 
     const cellReference = cellReferenceForCell(cell);
@@ -500,7 +509,7 @@ function factoryFromPattern<T, R>(
     serializationPath, // path where we encountered the cell
     ignoreSelfAliases,
   ) => {
-    const { cell: top } = cell.export();
+    const { cell: top } = exportCell(cell);
     const cellReference = cellReferenceForCell(cell);
     if (cellReference === undefined) return undefined;
     if (cellReference.cell !== undefined) {
@@ -537,7 +546,7 @@ function factoryFromPattern<T, R>(
       if (!deepEqual(partialCause, cellReference.partialCause)) {
         throw new Error(
           `Inconsistent partial cause for cell. This is a bug in the pattern serializer, please report it.\n` +
-            `Cell path: ${cell.export().path.join(".")}\n` +
+            `Cell path: ${exportCell(cell).path.join(".")}\n` +
             `Existing partial cause: ${JSON.stringify(partialCause)}\n` +
             `New partial cause: ${JSON.stringify(cellReference.partialCause)}`,
         );
@@ -843,7 +852,7 @@ function assignComputedCellKinds(
     const roots = new Set<OpaqueCell<any>>();
     traverseValue(value as FactoryInput<unknown>, (item) => {
       if (isCellResultForDereferencing(item)) item = getCellOrThrow(item);
-      if (isCell(item)) roots.add(item.export().cell);
+      if (isCell(item)) roots.add(exportCell(item).cell);
       return item;
     });
     return roots;
@@ -922,7 +931,7 @@ function assignComputedCellKinds(
     if (isCell(target)) {
       // A cell bound where a deeper grant may exist: the handle the handler
       // obtains deeper in writes INTO this root.
-      out.add(target.export().cell);
+      out.add(exportCell(target).cell);
       return;
     }
     if (!isObjectOrArray(target)) return; // Primitives hold no roots.
@@ -1073,7 +1082,7 @@ function assignComputedCellKinds(
     if (writers === undefined || writers.length === 0) return;
     if (writers.some(writerDisqualifies)) return;
     if (disqualified.has(root)) return;
-    if (root.export().kind === "stream") return;
+    if (exportCell(root).kind === "stream") return;
     const descriptor = derivedInternalCells.find((candidate) =>
       deepEqual(candidate.partialCause, partialCause)
     );

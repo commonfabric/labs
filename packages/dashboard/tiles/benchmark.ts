@@ -43,7 +43,9 @@
  * it works when artifacts cannot be read. Without usable data, the dashboard
  * keeps the last completed color and values while a fetch runs, and reads
  * "benchmark data unavailable" after an empty fetch. A failed fetch keeps the
- * last-known processor lines gray and names the reason.
+ * last-known processor lines gray and names the reason. A run list whose
+ * newest run is older than the newest run already collected is a failed fetch
+ * named "run list out of date".
  *
  * Every collection pages the run list, once a minute, which is the cadence the
  * run state needs. The artifact history behind the tile moves with the runs
@@ -89,6 +91,7 @@ import {
 } from "../ci-job-history.ts";
 import {
   concDot,
+  type DatedRun,
   durationTag,
   escapeHtml,
   friendlyError,
@@ -99,9 +102,11 @@ import {
   jsonFromZip,
   multiSparkline,
   type GitHubJson,
+  isStaleRunList,
   performanceGithub,
   performanceGithubDownload,
   runArtifactId,
+  STALE_RUNS_ERROR,
 } from "../lib.ts";
 import {
   BENCH_HEADLINE_MAX_AGE_HOURS,
@@ -207,11 +212,12 @@ interface BenchmarkSeries {
 }
 
 let snapshot: BenchmarkSeries[] = [];
-// The last benchmarks.yml run list a collection paged, which the drill-down reads
-// to name the run its rerun hand-off points at. A collection replaces it only on
-// a fetch that worked, so the hand-off keeps naming the failed run while a later
-// fetch is in flight or has failed. The tile itself reads the list its own
-// collection fetched, never this one.
+// The last benchmarks.yml run list a collection paged and kept. The drill-down
+// reads it to name the run its rerun hand-off points at, and the next list
+// paged is refused when its newest run is older than this list's. Only a fetch
+// that worked and was not refused replaces it, so the hand-off keeps naming
+// the failed run while a later fetch is in flight or has failed. The tile
+// itself reads the list its own collection fetched, never this one.
 let latestBenchmarkRuns: Run[] | undefined;
 
 export type BenchmarkFetchPhase =
@@ -401,8 +407,16 @@ async function fetchZip(
 
 // The benchmarks.yml runs on main, newest first, paging back until past the
 // window (or the 12-page ceiling). The workflow runs to a four-hourly schedule
-// and on manual dispatch. Both kinds of run land on main, and the list is
-// filtered by branch alone, so it holds either.
+// and on manual dispatch. Both kinds of run land on main, so the list is read
+// unfiltered and narrowed to main here: GitHub answers a list filtered by
+// branch from an index that is often days behind, and an unfiltered one
+// current.
+//
+// A list can still come back ending days back. A list whose
+// newest run is older than the newest run already collected is refused with
+// `STALE_RUNS_ERROR`, and any other list is kept in `latestBenchmarkRuns`.
+// What was collected is the last list kept, or, before one has been kept since
+// the server started, the runs the history cache records.
 async function pageBenchmarkRuns(
   github: BenchmarkGitHub,
   token: string,
@@ -410,18 +424,29 @@ async function pageBenchmarkRuns(
 ): Promise<Run[]> {
   const runs: Run[] = [];
   for (let page = 1; page <= 12; page++) {
-    const response = await github.json<{ workflow_runs?: Run[] }>(
-      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&per_page=100&page=${page}`,
+    const response = await github.json<
+      { workflow_runs?: (Run & { head_branch: string | null })[] }
+    >(
+      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100&page=${page}`,
       token,
     );
     const batch = response.workflow_runs ?? [];
     if (!batch.length) break;
-    runs.push(...batch);
+    runs.push(...batch.filter((run) => run.head_branch === "main"));
     if (
       batch.length < 100 ||
       Date.parse(batch[batch.length - 1].created_at) < cutoff
     ) break;
   }
+  const held: readonly DatedRun[] = latestBenchmarkRuns ??
+    benchmarkStore.list().map((run) => ({
+      id: run.runId,
+      created_at: new Date(run.at).toISOString(),
+    }));
+  if (isStaleRunList(`${REPO} ${WORKFLOW} main`, runs, held)) {
+    throw new Error(STALE_RUNS_ERROR);
+  }
+  latestBenchmarkRuns = runs;
   return runs;
 }
 
@@ -1146,7 +1171,6 @@ async function collectBenchmark(
   try {
     await benchmarkStore.load();
     const runs = knownRuns ?? await pageBenchmarkRuns(github, token, cutoff);
-    latestBenchmarkRuns = runs;
 
     const chosen = sampleBenchmarkRuns(runs, cutoff);
     const priorRefresh = benchmarkStore.refresh;
@@ -1385,6 +1409,14 @@ function benchmarkLastRequestError(): string | null {
     : null;
 }
 
+/**
+ * Makes the tiles hold an empty run list, so that the next list paged is
+ * compared against nothing an earlier test listed or cached.
+ */
+export function forgetBenchmarkRunsForTest(): void {
+  latestBenchmarkRuns = [];
+}
+
 function benchmarkServerContext(): Ctx {
   return {
     runs: () => Promise.resolve([]),
@@ -1423,7 +1455,6 @@ async function collectBenchmarkTileRuns(
     listing,
   ).result;
   const runs = await listing;
-  if (runs) latestBenchmarkRuns = runs;
   await refresh;
   return {
     runs: runs ?? [],

@@ -160,7 +160,7 @@ provide, the document says so, under the heading "Prerequisites".
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
-   and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
+   and `TrustedActionWrite`. A message's sender can
    edit or delete it, each change recorded as a new version, and a message can
    be obliterated, by an OWNER curating a group room or by either person in a
    direct room for their own messages, leaving only an attested tombstone. A

@@ -211,14 +211,15 @@ identifies it. Python interpreter shebangs select Python for otherwise
 unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
 `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
 shell, which covers Git hooks and other extensionless programs. Node, Deno, and
-Bun shebangs select the TypeScript and JavaScript language family. A diff
-selects each file's language from its path alone, so a shebang selects nothing
-there. Other filename-free source and named files with unrecognized syntax are
-shown as plain text. For piped source, `--filename` selects syntax as though the
-input had that name. `--language` selects a language by its stable identifier or
-alias. Both options keep the pipe read-only and suppress unified-diff
-auto-detection. An explicit language takes priority when both options are
-present. Use `--diff` instead when the pipe is a unified diff.
+Bun shebangs select the TypeScript and JavaScript language family. A diff reads
+a shebang for a file whose path selects no language, from a hunk that starts at
+the file's first line, from the workspace file, or from the old Git blob. Other
+filename-free source and named files with unrecognized syntax are shown as plain
+text. For piped source, `--filename` selects syntax as though the input had that
+name. `--language` selects a language by its stable identifier or alias. Both
+options keep the pipe read-only and suppress unified-diff auto-detection. An
+explicit language takes priority when both options are present. Use `--diff`
+instead when the pipe is a unified diff.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with

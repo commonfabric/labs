@@ -16,10 +16,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime, UI } from "@commonfabric/runner";
 import type { Cell } from "@commonfabric/runner";
-import {
-  type CfcLabelView,
-  cfcLabelViewSymbol,
-} from "@commonfabric/runner/cfc";
+import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -102,21 +99,37 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
   class MockCell extends (CellImplConstructor as any) {
     value: any;
     #subscribers = new Set<(value: any) => void>();
+    /** A mock's read consumes no labels, which a sink may ask to be told. */
+    static readonly consumed = {
+      confidentiality: [],
+      integrity: [],
+      modulePolicySpaces: new Map(),
+      sources: [],
+    };
 
-    constructor(value: any) {
+    constructor(value: any, labelView?: CfcLabelView) {
       // Pass dummy args to super to satisfy it
-      // CellImpl(runtime, tx, link, synced, causeContainer, kind)
-      super(runtime, undefined, undefined, false, undefined, "cell");
+      // CellImpl(runtime, tx, link, synced, causeContainer, kind, labelView)
+      super(runtime, undefined, undefined, false, undefined, "cell", labelView);
       this.value = value;
     }
 
-    sink(callback: (value: any) => void) {
-      this.#subscribers.add(callback);
+    sink(
+      callback: (value: any, label?: undefined, consumed?: unknown) => void,
+      options?: { includeConsumedLabel?: boolean },
+    ) {
+      const deliver = (value: any) =>
+        callback(
+          value,
+          undefined,
+          options?.includeConsumedLabel ? MockCell.consumed : undefined,
+        );
+      this.#subscribers.add(deliver);
       // A real cell's `sink()` publishes the current value synchronously at
       // subscription, and the reconciler renders from that first delivery.
-      callback(this.value);
+      deliver(this.value);
       return () => {
-        this.#subscribers.delete(callback);
+        this.#subscribers.delete(deliver);
       };
     }
 
@@ -135,8 +148,17 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
      * Returns `undefined`: a mock carries no metadata, and the inherited read
      * throws on a link-less cell.
      */
-    getMetaRaw(): undefined {
+    getMetaRaw(_field?: string): unknown {
       return undefined;
+    }
+
+    /**
+     * Returns the inherited link. A step that needs another overrides it on
+     * the instance, which it can do because this class, and not the frozen
+     * cell prototype, defines it.
+     */
+    getAsNormalizedFullLink() {
+      return super.getAsNormalizedFullLink();
     }
 
     /**
@@ -2205,24 +2227,25 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         path: [],
         scope: "space",
       });
-      const resolvedOutputCell = {
-        getAsNormalizedFullLink: () => ({
+      // The resolved output is a cell of its own, which carries the denied
+      // label while it is the denied output.
+      outputCell.resolveAsCell = () => {
+        const resolvedOutputCell = new MockCell(
+          undefined,
+          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
+        );
+        resolvedOutputCell.getAsNormalizedFullLink = () => ({
           id: resolvedOutputId,
           space: signer.did(),
           path: [],
           scope: "space",
-        }),
-        resolveAsCell() {
-          return this;
-        },
-        getMetaRaw: (field: string) =>
+        });
+        resolvedOutputCell.getMetaRaw = (field: string) =>
           field === "patternIdentity"
             ? { identity: "nested-pattern", symbol: "default" }
-            : undefined,
-        [cfcLabelViewSymbol]: () =>
-          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
-      } as unknown as Cell<unknown>;
-      outputCell.resolveAsCell = () => resolvedOutputCell;
+            : undefined;
+        return resolvedOutputCell;
+      };
 
       const rootCell = new MockCell(
         {

@@ -66,7 +66,7 @@
     "check-baselines-append-only": "deno run --allow-read --allow-run=git ./tasks/check-baselines-append-only.ts",
     "check-bench-workflow": "deno run --allow-read ./tasks/check-bench-workflow.ts",
     "check-test-aliases": "deno run --allow-read --allow-run=git ./tasks/check-test-aliases.ts",
-    "check-test-topology": "deno run --allow-read --allow-env --allow-net ./tasks/check-test-topology.ts",
+    "check-test-topology": "deno run --allow-read --allow-env --allow-net --allow-run=git ./tasks/check-test-topology.ts",
     "check-pattern-tiers": "deno run --allow-read ./tasks/check-pattern-tiers.ts",
     // The gate above is what CI runs, and it cannot write. Applying a marker is
     // this separate task, so the permission to rewrite a pattern comes with

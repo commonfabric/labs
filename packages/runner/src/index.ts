@@ -115,11 +115,16 @@ export {
 } from "./storage/transaction-summary.ts";
 export {
   type CellLinkInput,
+  cellRuntime,
+  cellTx,
   convertCellsToLinks,
   encodeSqliteParams,
+  exportCell,
   isCell,
   isReadableCell,
   isStream,
+  sendEvent,
+  setCell,
 } from "./cell.ts";
 export {
   getCellOrThrow,

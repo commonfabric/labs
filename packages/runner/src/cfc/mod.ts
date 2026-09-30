@@ -41,7 +41,6 @@ export {
   cfcLabelViewForResolvedTarget,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
-  cfcLabelViewSymbol,
   cloneCfcLabelView,
   getCarriedCfcLabelView,
   mergeCfcLabelViews,

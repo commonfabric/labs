@@ -230,6 +230,11 @@ export class CommonIframeSandboxElement extends LitElement {
           for (const session of this.#guestSessions.offered) {
             session.acknowledgeFlush(raised.nonce);
           }
+        } else if (IPC.isGuestPortRequest(raised)) {
+          // While a document is loading, the request may come from the one
+          // being replaced, and the load report still to come hands the new
+          // one its port.
+          if (this.loadState === "loaded") this.#openGuestPort();
         } else if (IPC.isGuestAlarm(raised)) {
           this.#dispatchGuestError(raised.data);
         } else {

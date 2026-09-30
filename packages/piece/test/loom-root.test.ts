@@ -7,6 +7,7 @@ import {
   type JSONSchema,
   type MemorySpace,
   Runtime,
+  sendEvent,
   type Stream,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -225,7 +226,7 @@ const sendAndSettle = (
   eventId: string,
 ): Promise<void> =>
   new Promise<void>((resolve, reject) =>
-    stream.send(event, (tx) => {
+    sendEvent(stream, event, (tx) => {
       const status = tx.status();
       if (status.status === "error") reject(status.error);
       else resolve();
@@ -305,7 +306,7 @@ describe("loom-root", () => {
     const panels = await output.key("panels").pull();
     const duplicate = await output.key("duplicatePanel").pull();
     await new Promise<void>((resolve, reject) =>
-      duplicate.send({ panel: panels[1] }, (tx) => {
+      sendEvent(duplicate, { panel: panels[1] }, (tx) => {
         const status = tx.status();
         if (status.status === "error") reject(status.error);
         else resolve();
@@ -313,7 +314,7 @@ describe("loom-root", () => {
     );
     await runtime.idle();
     const replay = await new Promise<unknown>((resolve) =>
-      duplicate.send({ panel: panels[1] }, (tx) => {
+      sendEvent(duplicate, { panel: panels[1] }, (tx) => {
         resolve(tx.status());
       }, { eventId: "duplicate-foreign", session: signer.did() })
     );
@@ -354,7 +355,7 @@ describe("loom-root", () => {
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
     await new Promise<void>((resolve, reject) =>
-      addPiece.send({ piece: target, as: profile }, (tx) => {
+      sendEvent(addPiece, { piece: target, as: profile }, (tx) => {
         const status = tx.status();
         if (status.status === "error") reject(status.error);
         else resolve();
@@ -404,7 +405,7 @@ describe("loom-root", () => {
         const output = root.asSchema(rootSchema);
         const addPiece = await output.key("addPiece").pull();
         await new Promise<void>((resolve, reject) =>
-          addPiece.send({ piece: target, as: owned }, (tx) => {
+          sendEvent(addPiece, { piece: target, as: owned }, (tx) => {
             const status = tx.status();
             if (status.status === "error") reject(status.error);
             else resolve();

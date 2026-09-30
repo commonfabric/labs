@@ -21,6 +21,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 import type { WorkerVNode } from "../src/worker/types.ts";
@@ -3800,10 +3801,10 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     await t.step(
       "watches nothing for a cell whose label cannot be read",
       async () => {
-        const unreadable = runtime.getCell<string>(
+        const unreadable = patchableCell(runtime.getCell<string>(
           signer.did(),
           "cfc-policy-of-unreadable",
-        );
+        ));
         unreadable.resolveAsCell = () => {
           throw new Error("label resolution failed");
         };

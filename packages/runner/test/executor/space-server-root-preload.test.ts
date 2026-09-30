@@ -9,6 +9,7 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -277,7 +278,7 @@ describe("SpaceServer", () => {
           // The pull's call carries no transaction; a traversal's carries its
           // own immediate one.
           if (
-            !wrote && cell.tx === undefined &&
+            !wrote && cellTx(cell) === undefined &&
             cell.getAsNormalizedFullLink().id === rootIds[0]
           ) {
             wrote = true;

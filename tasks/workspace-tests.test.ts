@@ -606,12 +606,15 @@ Deno.test("a forwarding runner is read by the flags it hands its leaf", () => {
   );
 });
 
-Deno.test("a recording leaf is given the preload and a write it needs", async () => {
+Deno.test("a recording leaf is given the preload and the permissions it needs", async () => {
   const rootUrl = new URL("../", import.meta.url);
   const members = await readWorkspaceMembers(new URL("deno.jsonc", rootUrl));
   const recording = await memberRecordingArguments(members, "/spool", rootUrl);
 
   const preload = preloadArgument();
+  const marker = `--allow-read=${
+    path.join(await Deno.realPath(rootUrl), ".git")
+  }`;
   // A member whose task names a write list of its own, and one naming no
   // write at all, are each granted the spool on top of what they have,
   // so the preload has somewhere to leave the name map its class names
@@ -623,16 +626,43 @@ Deno.test("a recording leaf is given the preload and a write it needs", async ()
   // This one runs under `-A`, which Deno refuses to take beside an
   // `--allow-write` path list at all, ending the run before it starts.
   assertEquals(recording.get("./packages/toolshed"), [preload]);
-  // A member that cannot read the tree is granted nothing either: the
-  // write is what makes the preload take the class names, and the read
-  // is what finds the files that replace them.
-  assertEquals(recording.get("./packages/utils"), [preload]);
+  // A member that cannot read the tree is granted the repository's
+  // marker as well, since climbing to it is what names the file each
+  // test in the name map belongs to.
+  assertEquals(recording.get("./packages/utils"), [
+    preload,
+    marker,
+    "--allow-write=/spool",
+  ]);
   // A member behind the batch runner is read by the flags its leaf takes,
   // which here grant a write anywhere.
   assertEquals(recording.get("./packages/cli"), [preload]);
   assertEquals(recording.get("./packages/dashboard"), [preload]);
   // A member whose task cannot take the preload takes nothing at all.
   assertEquals(recording.get("./packages/identity"), []);
+});
+
+Deno.test("a leaf that cannot read is granted the skip list the run names", async () => {
+  const rootUrl = new URL("../", import.meta.url);
+  const members = await readWorkspaceMembers(new URL("deno.jsonc", rootUrl));
+  const recording = await memberRecordingArguments(
+    members,
+    "/spool",
+    rootUrl,
+    "/lists/skip.json",
+  );
+  const marker = path.join(await Deno.realPath(rootUrl), ".git");
+  // A member reading nothing of its own is granted the list beside the
+  // marker, and one already reading everything is granted no list.
+  assertEquals(recording.get("./packages/utils"), [
+    preloadArgument(),
+    `--allow-read=${marker},/lists/skip.json`,
+    "--allow-write=/spool",
+  ]);
+  assertEquals(recording.get("./packages/runner"), [
+    preloadArgument(),
+    "--allow-write=/spool",
+  ]);
 });
 
 //

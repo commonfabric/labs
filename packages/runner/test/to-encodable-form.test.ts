@@ -31,7 +31,7 @@ import {
 } from "../src/builder/to-encodable-form.ts";
 import type { Module } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { createCell } from "../src/cell.ts";
+import { createCell, exportCell } from "../src/cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -129,7 +129,7 @@ describe("to-encodable-form", () => {
       const result = withAliasBindings(
         cellWithFalseSchema,
         (cell) => {
-          const { schema, scope } = cell.export();
+          const { schema, scope } = exportCell(cell);
           return {
             "$alias": {
               partialCause: "placeholder", // we have no way to represent an alias binding to this fake cell

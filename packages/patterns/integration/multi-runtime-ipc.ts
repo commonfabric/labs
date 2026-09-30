@@ -30,10 +30,11 @@ export type WorkerRequest = {
  * A response from a worker realm. `ok` is the command's answer as one
  * `codec-realm` encoding, for the reason {@link WorkerRequest} gives; a
  * command that fails answers with text instead. `ready` announces that the
- * request listener is installed.
+ * request listener is installed, and names the worker's lifetime lock for
+ * `terminateWorker()` to wait on.
  */
 export type WorkerResponse =
-  | { ready: true }
+  | { ready: true; lifetimeLock: string | undefined }
   | { id: number; ok: RealmEncodedValue }
   | { id: number; error: string };
 

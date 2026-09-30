@@ -30,6 +30,7 @@ import {
   GUEST_PORT_ORDERED,
   type GuestError,
   type GuestFlush,
+  type GuestPortRequest,
   isBridgeHostMessage,
 } from "./ipc.ts";
 
@@ -504,6 +505,16 @@ export class FabricClient {
 
   constructor() {
     globalThis.addEventListener("message", this.#onHandoff);
+    // The host hands a port over once this document has loaded. Listening
+    // from before then, this client hears it. Listening from after, it may
+    // have missed it, so it asks for another; if the first is still on its
+    // way, whichever arrives first is the one it keeps.
+    if (globalThis.document?.readyState === "complete") {
+      globalThis.parent?.postMessage(
+        { type: "port-request" } satisfies GuestPortRequest,
+        "*",
+      );
+    }
   }
 
   describe(): Promise<BridgeManifest> {

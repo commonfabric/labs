@@ -34,6 +34,7 @@ const TRACED_METHODS = [
   "visitFabricArray",
   "visitFabricBytes",
   "visitFabricContainerValue",
+  "visitFabricDurationDay",
   "visitFabricDurationNsec",
   "visitFabricEpochDay",
   "visitFabricEpochNsec",

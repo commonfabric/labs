@@ -410,11 +410,12 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
 > `FabricEpochDay`, `FabricHash`, `FabricRegExp`, `FabricKeyPair`,
-> `FabricUnavailable`, and `FabricDurationNsec` are **not** hashed via
-> `TAG_INSTANCE`. Each has a dedicated type tag and is encoded directly (see
-> Sections 4.8, 4.9, 4.10, 4.11, 4.16, 4.17, 4.18 and 4.20 respectively).
-> These are all `FabricPrimitive` subclasses — at this layer they are hashed
-> from their own stored values, not via their wire codecs.
+> `FabricUnavailable`, `FabricDurationNsec`, and `FabricDurationDay` are
+> **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
+> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.16, 4.17, 4.18, 4.20
+> and 4.21 respectively). These are all `FabricPrimitive` subclasses — at this
+> layer they are hashed from their own stored values, not via their wire
+> codecs.
 
 ### 4.15 Holes (sparse array elements)
 
@@ -584,6 +585,30 @@ tag (`0x2E` instead of `0x26`), ensuring that `FabricDurationNsec(42n)` and
 `42n` produce distinct hashes. It also differs from `FabricEpochNsec` (`0x27`),
 so a span and an instant holding the same `bigint` are always distinguishable.
 See `1-fabric-values.md` Section 1.4.13.
+
+### 4.21 `FabricDurationDay`
+
+```
+Bytes: TAG_DURATION_DAY  LENGTH_LEB128  TWO_COMP_BYTES
+       0x2F              <1+ bytes>     <length bytes>
+```
+
+Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
+
+`FabricDurationDay` represents a span of time in days. It is a
+`FabricPrimitive` subclass and has a dedicated type tag.
+
+- **Length**: The number of bytes in the two's-complement representation of the
+  wrapped `bigint` value, encoded as unsigned LEB128.
+- **Payload**: The value encoded identically to `bigint` (Section 4.5): signed
+  two's-complement, big-endian, minimal bytes.
+
+The encoding is structurally identical to `TAG_BIGINT` but uses a different type
+tag (`0x2F` instead of `0x26`), ensuring that `FabricDurationDay(42n)` and `42n`
+produce distinct hashes. It also differs from `FabricEpochDay` (`0x28`), so a
+span and a day holding the same `bigint` are always distinguishable, and from
+`FabricDurationNsec` (`0x2E`), so are spans counted in the two units. See
+`1-fabric-values.md` Section 1.4.14.
 
 ---
 
@@ -952,6 +977,16 @@ Full byte stream:
 ```
 
 `TAG_DURATION_NSEC` (`0x2E`), length 1 (`0x01`), payload `0x2A`.
+
+### 7.23 `FabricDurationDay(7n)`
+
+`7n` in minimal two's-complement is `0x07` (1 byte).
+
+```
+2F  01  07
+```
+
+`TAG_DURATION_DAY` (`0x2F`), length 1 (`0x01`), payload `0x07`.
 
 ---
 

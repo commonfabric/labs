@@ -209,9 +209,11 @@ hand-built attack fixtures
 // if the verifier accepts one, that's a real gap.
 ```
 
-Enforcement is also a ratchet. Any code holding a `Cell` can reach
-`cell.tx`, so weakening the enforcement mode on a transaction throws
-rather than succeeding
+Enforcement is also a ratchet. A pattern holding a `Cell` reaches no
+transaction through it, since a cell keeps its transaction private
+(`packages/runner/test/cell-authority.test.ts`), and behind that,
+weakening the enforcement mode on a transaction throws rather than
+succeeding
 (`packages/runner/src/storage/extended-storage-transaction.ts`).
 
 The obvious objection is that none of this is new. Flow control has been

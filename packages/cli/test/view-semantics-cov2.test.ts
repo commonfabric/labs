@@ -21,6 +21,7 @@ import {
   createSemantics,
 } from "../lib/view/languages/typescript/semantics.ts";
 import type { DiffMaps } from "../lib/view/diffdoc.ts";
+import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import type { Document } from "../lib/view/model.ts";
 
 const CWD = Deno.cwd();
@@ -159,7 +160,7 @@ Deno.test("diff semantics: an un-discoverable config still runs the fallback", (
   try {
     Deno.writeTextFileSync(join(root, "m.ts"), "export const a = 1;\n");
     const maps: DiffMaps = {
-      rootFiles: [join(root, "m.ts")],
+      rootFiles: new Map([[join(root, "m.ts"), typeScriptLanguage]]),
       toFile: () => null,
       fromFile: () => null,
     };
@@ -187,7 +188,7 @@ Deno.test("diff semantics: fileLines swallows a throw from the containment check
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
     Deno.writeTextFileSync(join(root, "m.ts"), "export const a = 1;\n");
     const maps: DiffMaps = {
-      rootFiles: [join(root, "m.ts")],
+      rootFiles: new Map([[join(root, "m.ts"), typeScriptLanguage]]),
       toFile: () => null,
       fromFile: () => null,
     };

@@ -100,8 +100,9 @@ export {
 export {
   preloadArgument,
   preloadModulePath,
-  spoolWriteArgument,
+  recordingArguments,
 } from "./preload-path.ts";
+export type { RecordingPaths } from "./preload-path.ts";
 export {
   dropContainerCases,
   ingestJUnit,

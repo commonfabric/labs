@@ -71,7 +71,8 @@ every `Runtime` resolves its dials, and it throws when `cfcEnforcementMode` is
 stated and is not one of the four names above; `setCfcEnforcementMode`
 ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts))
 throws the same way for the mid-transaction lever, which is on the public
-transaction interface and so reachable from pattern code. A transaction holding
+transaction interface and so reachable from any code holding a transaction. A
+transaction holding
 any other name would be on no rung: `cfcEnforcementStrictness` has no answer for
 such a name and returns `undefined`, so every floor comparison against it reads
 false — including the audit-S3 anti-downgrade floor, which therefore never
@@ -607,9 +608,8 @@ The strict-only delta is:
   What bounds the route, and what it declares once inside:
 
   - **Who recorded the marker.** The recording method is on the public
-    transaction interface, and pattern-authored code reaches the
-    transaction its cells are bound to, so an input's own fields say only
-    what its recorder wrote. The runtime passes an authorization alongside,
+    transaction interface, so an input's own fields say only what its
+    recorder wrote. The runtime passes an authorization alongside,
     the way `setMetaRaw` marks a meta write, and a marker without it counts
     for nothing however it is addressed. This is the difference between a
     gate that ACTS on an input and one that measures it: the two sibling

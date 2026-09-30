@@ -2,16 +2,18 @@ import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  parseSkipList,
   preloadArgument,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import {
   coverageMemberDirectory,
+  denoTestCommand,
   fileSuite,
   unavailableFrom,
   unavailableLeaves,
   unavailableUnits,
-  writeSkipList,
+  writeBatchSkipList,
 } from "./suite.ts";
 
 /** A suite over two packages, one of which skips a leaf. */
@@ -180,10 +182,12 @@ describe("a suite of deno test files over several packages", () => {
     expect(blanket!.command).toContain(preloadArgument());
   });
 
-  it("grants nothing to a part that cannot read the tree", async () => {
-    // Writing the spool is what makes the preload take the class names,
-    // and reading is what finds the files that replace them, so a part
-    // holding one permission without the other records no file at all.
+  it("grants a part that cannot read the tree the marker its preload climbs to", async () => {
+    // The climb from each test file to the repository root is what names
+    // the file a name map and a skip list are keyed by, so a part
+    // reading nothing of its own is granted that one path to read, and
+    // the spool to write the name map into.
+
     const unreadable = fileSuite({
       id: "unreadable",
       needs: ["deno"],
@@ -198,8 +202,9 @@ describe("a suite of deno test files over several packages", () => {
       [{ unit: "packages/oven/a.test.ts", skip: [] }],
       context,
     );
-    expect(invocation!.command).not.toContain("--allow-write=/spool");
     expect(invocation!.command).toContain(preloadArgument());
+    expect(invocation!.command).toContain("--allow-read=/repo/.git");
+    expect(invocation!.command).toContain("--allow-write=/spool");
   });
 
   it("hands the run's seed to every `deno test` it builds", async () => {
@@ -255,9 +260,39 @@ describe("the parts of a suite that answer no", () => {
     // The absence of the file is what tells the invocation to run
     // everything, so writing an empty one would be a different
     // instruction.
-    const at = `${await Deno.makeTempDir({ prefix: "skip-" })}/skips.json`;
-    await writeSkipList(at, {});
-    await expect(Deno.readTextFile(at)).rejects.toThrow();
+
+    const outputDir = await Deno.makeTempDir({ prefix: "skip-" });
+    try {
+      const context = { root: "/repo", outputDir, spoolDir: "/spool" };
+      const skipList = await writeBatchSkipList(context, "oven", {});
+      expect(skipList).toEqual({ env: {} });
+      expect(await Array.fromAsync(Deno.readDir(outputDir))).toEqual([]);
+      expect(
+        denoTestCommand(["--allow-env"], context, "/out/r.xml", []),
+      ).toContain("--allow-read=/repo/.git");
+    } finally {
+      await Deno.remove(outputDir, { recursive: true });
+    }
+  });
+
+  it("names a skip list it writes and grants the invocation its read", async () => {
+    const outputDir = await Deno.makeTempDir({ prefix: "skip-" });
+    try {
+      const context = { root: "/repo", outputDir, spoolDir: "/spool" };
+      const skips = { "packages/oven/a.test.ts": ["bakes"] };
+      const skipList = await writeBatchSkipList(context, "oven", skips);
+      const written = `${outputDir}/oven.skip.json`;
+      expect(skipList).toEqual({
+        path: written,
+        env: { [SKIP_LIST_VARIABLE]: written },
+      });
+      expect(parseSkipList(await Deno.readTextFile(written))).toEqual(skips);
+      expect(
+        denoTestCommand(["--allow-env"], context, "/out/r.xml", [], written),
+      ).toContain(`--allow-read=/repo/.git,${written}`);
+    } finally {
+      await Deno.remove(outputDir, { recursive: true });
+    }
   });
 
   it("declines a record whose kind is not the part's own", () => {
