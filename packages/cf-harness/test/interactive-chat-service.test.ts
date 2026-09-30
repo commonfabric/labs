@@ -980,6 +980,95 @@ Deno.test("a canceled turn keeps its request and completed work for the next tur
   ]);
 });
 
+Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arrive after the cancel", async () => {
+  const declared = {
+    role: "assistant" as const,
+    content: "Reading both files.",
+    toolCalls: ["call-a", "call-b"].map(toolCall),
+  };
+  const result = (id: string) => ({
+    role: "tool" as const,
+    toolCallId: id,
+    toolName: "read_file",
+    content: `contents for ${id}`,
+  });
+  const { store, snapshots } = recordingStore();
+  const requests: (readonly HarnessTranscriptMessage[])[] = [];
+  let runCount = 0;
+  let reachMidBatch: (() => void) | undefined;
+  const reachedMidBatch = new Promise<void>((resolve) => {
+    reachMidBatch = resolve;
+  });
+  const service = new HarnessInteractiveChatService({
+    createPromptLoop: () => ({
+      runTranscript: async (options) => {
+        runCount += 1;
+        requests.push([...options.transcript]);
+        if (runCount > 1) return makeResult(options, "Both read.");
+        const transcript = [...options.transcript, declared, result("call-a")];
+        // Half a batch: a provider would refuse this history, so it is not a
+        // point the next turn can resume from.
+        await options.onCheckpoint?.({
+          transcript,
+          runState: {} as HarnessPromptLoopResult["runState"],
+        });
+        reachMidBatch?.();
+        await new Promise<void>((resolve) =>
+          options.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          })
+        );
+        // The batch completes after the person stopped the turn; work the
+        // loop reports past the cancel is not the turn's to keep.
+        transcript.push(result("call-b"));
+        await options.onCheckpoint?.({
+          transcript,
+          runState: {} as HarnessPromptLoopResult["runState"],
+        });
+        throw options.signal?.reason;
+      },
+    }),
+    now: nextIsoNow(),
+    sessionStore: store,
+  });
+
+  await service.startSession("req-1", {
+    sessionId: "session-1",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("req-2", {
+    sessionId: "session-1",
+    turnId: "turn-1",
+    input: { text: "Read both files" },
+  });
+  await reachedMidBatch;
+  await service.cancelTurn("req-3", "session-1", "turn-1", "user_requested");
+  await service.waitForTurn("session-1", "turn-1");
+  assertEquals(
+    service.listTurns({ sessionId: "session-1" }).turns[0].turn.status,
+    "canceled",
+  );
+
+  await service.startTurn("req-4", {
+    sessionId: "session-1",
+    turnId: "turn-2",
+    input: { text: "go on" },
+  });
+  await service.waitForTurn("session-1", "turn-2");
+
+  for (const snapshot of snapshots) {
+    assertEquals(inspectHarnessTranscriptPairing(snapshot).valid, true);
+  }
+  // Neither checkpoint advanced the turn past its own request.
+  expect(requests[1]).toEqual([
+    ...unattachedTurnContext(),
+    { role: "user", content: "Read both files" },
+    { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
+    ...unattachedTurnContext(),
+    { role: "user", content: "go on" },
+  ]);
+});
+
 Deno.test("interactive service aborts active turns when closing a session", async () => {
   let activeSignal: AbortSignal | undefined;
   const createPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
