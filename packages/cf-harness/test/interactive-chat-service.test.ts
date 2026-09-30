@@ -28,6 +28,7 @@ import {
 } from "../src/contracts/prompt-slot.ts";
 import { PATTERN_AUTHOR_SUBAGENT_SKILL_NAMES } from "../src/contracts/subagent.ts";
 import {
+  HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
 } from "../src/interactive-chat-service.ts";
@@ -882,6 +883,101 @@ Deno.test("interactive service aborts canceled turns without closing the session
       "turn_completed",
     ],
   );
+});
+
+Deno.test("a canceled turn keeps its request and completed work for the next turn", async () => {
+  const lookup = {
+    role: "assistant" as const,
+    content: "Looking up the forecast.",
+    toolCalls: [toolCall("call-forecast")],
+  };
+  const forecast = {
+    role: "tool" as const,
+    toolCallId: "call-forecast",
+    toolName: "read_file",
+    content: "Brisbane: 24C, sunny",
+  };
+  // Declared but never answered: the cancel lands while it is in flight.
+  const inFlight = {
+    role: "assistant" as const,
+    content: "Checking the radar too.",
+    toolCalls: [toolCall("call-radar")],
+  };
+  const { store, snapshots } = recordingStore();
+  const requests: (readonly HarnessTranscriptMessage[])[] = [];
+  let runCount = 0;
+  let reachInFlight: (() => void) | undefined;
+  const reachedInFlight = new Promise<void>((resolve) => {
+    reachInFlight = resolve;
+  });
+  const service = new HarnessInteractiveChatService({
+    createPromptLoop: () => ({
+      runTranscript: async (options) => {
+        runCount += 1;
+        requests.push([...options.transcript]);
+        if (runCount > 1) return makeResult(options, "Still sunny.");
+        const transcript = [...options.transcript, lookup];
+        await options.onTranscriptEvent?.({ message: lookup, transcript });
+        transcript.push(forecast);
+        await options.onTranscriptEvent?.({ message: forecast, transcript });
+        await options.onCheckpoint?.({
+          transcript,
+          runState: {} as HarnessPromptLoopResult["runState"],
+        });
+        transcript.push(inFlight);
+        await options.onTranscriptEvent?.({ message: inFlight, transcript });
+        reachInFlight?.();
+        return await new Promise<HarnessPromptLoopResult>((_, reject) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true },
+          );
+        });
+      },
+    }),
+    now: nextIsoNow(),
+    sessionStore: store,
+  });
+
+  await service.startSession("req-1", {
+    sessionId: "session-1",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("req-2", {
+    sessionId: "session-1",
+    turnId: "turn-1",
+    input: { text: "weather in brisbane" },
+  });
+  await reachedInFlight;
+  await service.cancelTurn("req-3", "session-1", "turn-1", "user_requested");
+  await service.waitForTurn("session-1", "turn-1");
+  assertEquals(
+    service.listTurns({ sessionId: "session-1" }).turns[0].turn.status,
+    "canceled",
+  );
+
+  await service.startTurn("req-4", {
+    sessionId: "session-1",
+    turnId: "turn-2",
+    input: { text: "go on" },
+  });
+  await service.waitForTurn("session-1", "turn-2");
+
+  for (const snapshot of snapshots) {
+    assertEquals(inspectHarnessTranscriptPairing(snapshot).valid, true);
+  }
+  // The request, the completed lookup and the notice carry over; the radar
+  // call whose result never arrived does not.
+  expect(requests[1]).toEqual([
+    ...unattachedTurnContext(),
+    { role: "user", content: "weather in brisbane" },
+    lookup,
+    forecast,
+    { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
+    ...unattachedTurnContext(),
+    { role: "user", content: "go on" },
+  ]);
 });
 
 Deno.test("interactive service aborts active turns when closing a session", async () => {
@@ -1846,6 +1942,10 @@ for (const resultsBeforeFault of FAULT_POINTS) {
       const held = new Promise<void>((resolve) => {
         release = () => resolve();
       });
+      let reachFault: (() => void) | undefined;
+      const reachedFault = new Promise<void>((resolve) => {
+        reachFault = resolve;
+      });
       const { store, snapshots } = recordingStore();
       const nextTurnTranscripts: (readonly HarnessTranscriptMessage[])[] = [];
       let turn = 0;
@@ -1853,9 +1953,10 @@ for (const resultsBeforeFault of FAULT_POINTS) {
         createPromptLoop: (options) => {
           turn += 1;
           return turn === 1
-            ? faultingToolLoop(resultsBeforeFault, fault, { release: held })(
-              options,
-            )
+            ? faultingToolLoop(resultsBeforeFault, fault, {
+              release: held,
+              onFault: () => reachFault?.(),
+            })(options)
             : {
               runTranscript: (runOptions) => {
                 nextTurnTranscripts.push([...runOptions.transcript]);
@@ -1876,6 +1977,8 @@ for (const resultsBeforeFault of FAULT_POINTS) {
         input: { text: "Read both files" },
       });
       if (fault === "cancel") {
+        // Cancel mid-tool, once the loop has reported what it ever will.
+        await reachedFault;
         await service.cancelTurn(
           "req-3",
           "session-1",
@@ -1895,9 +1998,34 @@ for (const resultsBeforeFault of FAULT_POINTS) {
           }`,
         );
       }
-      // The turn rolls back whole, user message included: its tools already ran
-      // and it is never replayed.
-      assertEquals(snapshots[snapshots.length - 1], []);
+      // A failed turn rolls back whole, user message included: its tools
+      // already ran and it is never replayed. A canceled one keeps its request
+      // and the last complete batch, then says it was stopped; a batch still
+      // missing a result is left out.
+      const request = [...unattachedTurnContext(), {
+        role: "user" as const,
+        content: "Read both files",
+      }];
+      const kept: HarnessTranscriptMessage[] = fault === "error" ? [] : [
+        ...request,
+        ...(resultsBeforeFault === 2
+          ? [
+            {
+              role: "assistant" as const,
+              content: "Reading both files.",
+              toolCalls: ["call-a", "call-b"].map(toolCall),
+            },
+            ...["call-a", "call-b"].map((id) => ({
+              role: "tool" as const,
+              toolCallId: id,
+              toolName: "read_file",
+              content: `contents for ${id}`,
+            })),
+          ]
+          : []),
+        { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
+      ];
+      expect(snapshots[snapshots.length - 1]).toEqual(kept);
       // A failed turn's own history stays on the audit trail even though its
       // model history went back. A canceled one is not checked here: cancelling
       // stops reporting the turn, so how much of it reached the log depends on
@@ -1913,18 +2041,19 @@ for (const resultsBeforeFault of FAULT_POINTS) {
         );
       }
 
-      // What the rollback is for: the turn after it starts from the checkpoint
-      // and carries no trace of the turn that died.
+      // The turn after it starts from that checkpoint: no trace of a failed
+      // turn, and a canceled one's request and completed work.
       await service.startTurn("req-4", {
         sessionId: "session-1",
         turnId: "turn-2",
         input: { text: "Try again" },
       });
       await service.waitForTurn("session-1", "turn-2");
-      expect(nextTurnTranscripts).toEqual([[...unattachedTurnContext(), {
-        role: "user",
-        content: "Try again",
-      }]]);
+      expect(nextTurnTranscripts).toEqual([[
+        ...kept,
+        ...unattachedTurnContext(),
+        { role: "user", content: "Try again" },
+      ]]);
     });
   }
 }

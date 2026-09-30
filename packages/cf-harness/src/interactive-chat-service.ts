@@ -189,6 +189,23 @@ interface HarnessInteractiveChatEmitOptions {
   assignedPieces?: readonly HarnessAssignedPiece[];
 }
 
+/**
+ * The model-visible note appended after a canceled turn's saved history, so the
+ * following turn reads the earlier request as interrupted rather than answered.
+ */
+export const HARNESS_CHAT_INTERRUPTED_TURN_NOTICE =
+  "Host turn notice: the person stopped the previous turn before it finished. Its request above was interrupted, not answered; the work shown after it is what completed before the stop.";
+
+/**
+ * The resumable history a turn reached before it stopped: the last completed
+ * tool batch or opening-research handoff, with the research and CFC context
+ * that matches it, or only the turn's own request when none completed.
+ */
+interface HarnessChatTurnCheckpoint {
+  transcript: HarnessTranscriptMessage[];
+  researchContext?: HarnessChatResearchContext;
+}
+
 const defaultPromptLoopFactory: HarnessInteractivePromptLoopFactory = (
   options,
 ) => new CfHarnessPromptLoop(options);
@@ -1412,9 +1429,16 @@ export class HarnessInteractiveChatService {
       browserAccess,
     );
     const activeTurnToken = {};
-    const finalizeTask = () =>
-      this.#finalizeTurnTask(params.sessionId, turn.turnId, activeTurnToken);
-    const task = turnTask.then(finalizeTask, finalizeTask).catch(() => {});
+    const finalizeTask = (interrupted?: HarnessChatTurnCheckpoint) =>
+      this.#finalizeTurnTask(
+        params.sessionId,
+        turn.turnId,
+        activeTurnToken,
+        interrupted,
+      );
+    const task = turnTask.then(finalizeTask, () => finalizeTask()).catch(
+      () => {},
+    );
     updatedRecord.activeTurnToken = activeTurnToken;
     updatedRecord.activeTask = task;
     updatedRecord.activeAbortController = abortController;
@@ -1453,10 +1477,17 @@ export class HarnessInteractiveChatService {
     );
   }
 
+  /**
+   * Settles a turn's task. A turn the person canceled is recorded as canceled
+   * here, and its interrupted history becomes the session's checkpoint so the
+   * next turn still sees what was asked. A session closed mid-turn saves
+   * nothing: it never runs another turn.
+   */
   async #finalizeTurnTask(
     sessionId: string,
     turnId: string,
     activeTurnToken: object,
+    interrupted?: HarnessChatTurnCheckpoint,
   ): Promise<void> {
     const latest = this.#sessions.get(sessionId);
     if (latest?.activeTurnToken !== activeTurnToken) {
@@ -1478,10 +1509,31 @@ export class HarnessInteractiveChatService {
         cancelReason: latest.status.activeTurn?.cancelReason,
       });
       const session = clearActiveTurnStatus(latest.status, updatedAt);
+      const transcript = interrupted === undefined ? undefined : [
+        ...interrupted.transcript,
+        {
+          role: "user" as const,
+          content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
+        },
+      ];
+      // Checked rather than assumed: history a provider would refuse is not
+      // saved, and the session keeps the checkpoint it already had.
+      const checkpoint = transcript !== undefined &&
+          isResumableHarnessTranscript(transcript)
+        ? {
+          transcript,
+          ...(interrupted?.researchContext === undefined
+            ? {}
+            : { researchContext: interrupted.researchContext }),
+        }
+        : {};
       await this.#emit(sessionId, undefined, {
         kind: "status_changed",
         session,
-      }, nextTurn === undefined ? {} : { turnRecord: nextTurn });
+      }, {
+        ...(nextTurn === undefined ? {} : { turnRecord: nextTurn }),
+        ...checkpoint,
+      });
     }
   }
 
@@ -1541,7 +1593,7 @@ export class HarnessInteractiveChatService {
     signal: AbortSignal,
     policy: HarnessChatPolicy,
     browserAccess: HarnessChatBrowserAccessLease | undefined,
-  ): Promise<void> {
+  ): Promise<HarnessChatTurnCheckpoint | undefined> {
     const session = record.status;
     const researchGoal = record.researchContext?.researchGoal ??
       params.input.text;
@@ -1559,10 +1611,11 @@ export class HarnessInteractiveChatService {
         ? [{ role: "system", content: this.#systemPrompt }]
         : [];
     let observedTranscriptLength = 0;
-    let completedCheckpoint: {
-      transcript: HarnessTranscriptMessage[];
-      researchContext: HarnessChatResearchContext;
-    } | undefined;
+    // The last resumable point this turn reached. It starts at the turn's own
+    // request and advances with each completed tool batch; a cancel keeps it,
+    // and a failure keeps it only once a batch completed and the host opted in.
+    let interruptedCheckpoint: HarnessChatTurnCheckpoint | undefined;
+    let completedCheckpoint: Required<HarnessChatTurnCheckpoint> | undefined;
     // The `delegate_task` children this turn has announced, keyed by the
     // parent tool call that started each one. Membership is what closes the
     // bracket: a `subagent_completed` is emitted only for a child whose
@@ -1631,6 +1684,7 @@ export class HarnessInteractiveChatService {
       // from this turn: in particular, a recovered unknown-outcome result must
       // not be re-emitted as a newly completed tool call.
       observedTranscriptLength = transcript.length;
+      interruptedCheckpoint = { transcript: [...transcript] };
       const result = await loop.runTranscript({
         transcript,
         ...(record.researchContext?.runs.length
@@ -1668,7 +1722,6 @@ export class HarnessInteractiveChatService {
         },
         onCheckpoint: (checkpoint) => {
           if (
-            !this.#basePromptLoopOptions.finalizeOnTurnLimit ||
             record.canceledTurnIds.has(turnId) ||
             !isResumableHarnessTranscript(checkpoint.transcript)
           ) return;
@@ -1689,6 +1742,7 @@ export class HarnessInteractiveChatService {
               }),
             }),
           };
+          interruptedCheckpoint = completedCheckpoint;
         },
         onTranscriptEvent: async (event) => {
           if (record.canceledTurnIds.has(turnId)) {
@@ -1725,7 +1779,7 @@ export class HarnessInteractiveChatService {
         },
       });
       if (record.canceledTurnIds.has(turnId)) {
-        return;
+        return interruptedCheckpoint;
       }
       // A loop that reports success still has to hand back history a provider
       // accepts. Checking here keeps an unpaired transcript from being promoted
@@ -1762,7 +1816,7 @@ export class HarnessInteractiveChatService {
       });
     } catch (error) {
       if (record.canceledTurnIds.has(turnId)) {
-        return;
+        return interruptedCheckpoint;
       }
       // A turn that already reached a terminal status committed its outcome
       // before this threw, which leaves delivering the event as the only thing
@@ -1772,13 +1826,21 @@ export class HarnessInteractiveChatService {
       if (isTerminalTurnStatus(record.turns.get(turnId)?.turn.status)) {
         return;
       }
-      // Promote completed evidence atomically with the failure. Unpaired
-      // activity remains solely in the audit trail and run artifacts.
-      await this.#emit(session.sessionId, turnId, {
-        kind: "turn_failed",
+      // Promote completed evidence atomically with the failure when the host
+      // opted in. Unpaired activity remains solely in the audit trail and run
+      // artifacts.
+      await this.#emit(
+        session.sessionId,
         turnId,
-        error: chatTurnError(error),
-      }, completedCheckpoint);
+        {
+          kind: "turn_failed",
+          turnId,
+          error: chatTurnError(error),
+        },
+        this.#basePromptLoopOptions.finalizeOnTurnLimit
+          ? completedCheckpoint
+          : undefined,
+      );
     } finally {
       if (record.status.status === "closed") {
         await this.#disposeFabricRuntimes(record);
