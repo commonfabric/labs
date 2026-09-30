@@ -10,6 +10,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Memory router security requirements](memory-router-security-requirements.md)
+  defines the authentication, authorization, isolation, and public-ingress
+  gates for multiplexed Memory WebSockets routed to toolsheds.
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
