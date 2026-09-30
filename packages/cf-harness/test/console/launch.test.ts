@@ -1305,6 +1305,65 @@ describe("launch", () => {
       expect(consoleArgs).toEqual(["--host-mount", "name=c"]);
     });
 
+    it("throws naming a misspelled launcher flag and the flag it meant, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [...NAMED_ARGS, "--instance", "loom", "--no-skills-registy"],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--no-skills-registy` is not a flag of `console:launch`. Did you " +
+          "mean `--no-skills-registry`?",
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("throws naming a flag after `--` the console does not take, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [
+            ...NAMED_ARGS,
+            "--instance",
+            "loom",
+            "--",
+            "--host-mounts",
+            "name=c",
+          ],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--host-mounts` is not a flag of the console. Did you mean " +
+          "`--host-mount`?",
+      );
+      expect(reads).toBe(0);
+    });
+
     it("leaves the registries out when both are waived", async () => {
       const { plan } = await prepareConsoleLaunch(
         [...NAMED_ARGS, "--no-pattern-index", "--no-skills-registry"],

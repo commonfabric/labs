@@ -2652,6 +2652,41 @@ describe("console/server", () => {
         ),
       ).rejects.toThrow("CF_HARNESS_CONSOLE_PORT must be a positive integer");
     });
+
+    it("throws naming a misspelled restriction flag and the flag it meant", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publsh",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--no-pattern-index-publsh` is not a flag of the console. Did you " +
+          "mean `--no-pattern-index-publish`?",
+      );
+    });
+
+    it("throws naming an undeclared flag without the value given with it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--api-key=sk-secret",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe("`--api-key` is not a flag of the console.");
+    });
   });
 
   describe("POST /api/index/call", () => {

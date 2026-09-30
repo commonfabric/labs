@@ -394,6 +394,11 @@ The current package provides:
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
+- refusal of any flag an entrypoint does not declare — the batch CLI and its
+  control commands, the interactive stdio entrypoint, the local Loom host's
+  modes over them, the console and `console:launch` — naming the flag and the
+  nearest declared one, so a misspelled restriction stops a run rather than
+  going unapplied;
 - persistent provider configuration and structured config/auth control, with
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;

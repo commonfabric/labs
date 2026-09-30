@@ -852,6 +852,66 @@ Deno.test("parseCfHarnessCliArgs rejects malformed max-model-turns values", asyn
   );
 });
 
+Deno.test("parseCfHarnessCliArgs refuses a misspelled restriction flag, naming the flag it meant", async () => {
+  const error = await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--allowed-tools", "read_file", "--prompt", "hi"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    HarnessControlError,
+    "`--allowed-tools` is not a flag of the batch CLI. Did you mean `--allow-tool`?",
+  );
+  assertEquals(error.code, "invalid-request");
+});
+
+Deno.test("parseCfHarnessCliArgs refuses an undeclared flag in either spelling without its value", async () => {
+  for (
+    const spelling of [["--api-key=sk-secret"], ["--api-key", "sk-secret"]]
+  ) {
+    const error = await assertRejects(
+      () =>
+        parseCfHarnessCliArgs([...spelling, "--prompt", "hi"], {
+          cwd: "/tmp/project",
+          env: {},
+        }),
+      HarnessControlError,
+      "`--api-key` is not a flag of the batch CLI.",
+    );
+    assertEquals(error.message.includes("sk-secret"), false);
+  }
+});
+
+Deno.test("parseCfHarnessCliArgs reads a flag after `--` as prompt text", async () => {
+  const parsed = await parseCfHarnessCliArgs(
+    ["--output-mode", "batch", "--", "--not-a-flag", "text"],
+    { cwd: "/tmp/project", env: {} },
+  );
+
+  if ("help" in parsed) {
+    throw new Error("expected config result");
+  }
+  assertEquals(parsed.prompt, "--not-a-flag text");
+});
+
+Deno.test("runCfHarnessCli names an undeclared flag in a host's structured failure", async () => {
+  const buffers = createIoBuffers();
+  assertEquals(
+    await runCfHarnessCli(["--allowed-tools", "read_file", "--prompt", "hi"], {
+      io: buffers.io,
+      cwd: "/tmp/project",
+      env: {},
+      structuredHostFailures: true,
+    }),
+    1,
+  );
+  assertEquals(JSON.parse(buffers.stderr.join("")).error, {
+    code: "invalid-request",
+    message:
+      "`--allowed-tools` is not a flag of the batch CLI. Did you mean `--allow-tool`?",
+  });
+});
+
 Deno.test("parseCfHarnessCliArgs supports gateway auth mode override", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--gateway-auth-mode", "none"],
@@ -6058,6 +6118,84 @@ Deno.test("structured control usage failures always return one bounded envelope"
     assertEquals(envelope.error.code, "invalid-request");
     assertEquals(buffers.stderr, []);
   }
+});
+
+Deno.test("control commands name an undeclared flag and the flag it meant", async () => {
+  const cases: [string[], string][] = [
+    [
+      ["auth", "status", "openai-codex", "--jsno"],
+      "`--jsno` is not a flag of `auth status`. Did you mean `--json`?",
+    ],
+    [
+      ["auth", "login", "openai-codex", "--devcie"],
+      "`--devcie` is not a flag of `auth login`. Did you mean `--device`?",
+    ],
+    [
+      ["config", "inspect", "--jsno"],
+      "`--jsno` is not a flag of `config inspect`. Did you mean `--json`?",
+    ],
+    [
+      ["models", "openai-codex", "--json"],
+      "`--json` is not a flag of `models`.",
+    ],
+    [
+      ["whoami", "--jsno"],
+      "`--jsno` is not a flag of `whoami`. Did you mean `--json`?",
+    ],
+  ];
+  for (const [argv, message] of cases) {
+    const buffers = createIoBuffers();
+    assertEquals(
+      await runCfHarnessCli(argv, {
+        io: buffers.io,
+        env: {},
+        credentialStore: new InMemoryHarnessCredentialStore(),
+      }),
+      1,
+    );
+    assertStringIncludes(buffers.stderr.join(""), message);
+  }
+});
+
+Deno.test("control commands name an undeclared flag without its value", async () => {
+  for (
+    const [argv, message] of [
+      [["whoami", "--token=sk-secret"], "`--token` is not a flag of `whoami`."],
+      [["whoami", "--json=sk-secret"], "`--json` takes no value."],
+    ] as const
+  ) {
+    const buffers = createIoBuffers();
+    assertEquals(
+      await runCfHarnessCli(argv, { io: buffers.io, env: {} }),
+      1,
+    );
+    assertStringIncludes(buffers.stderr.join(""), message);
+    assertEquals(buffers.stderr.join("").includes("sk-secret"), false);
+  }
+});
+
+Deno.test("a structured control failure names an undeclared flag", async () => {
+  const buffers = createIoBuffers();
+  assertEquals(
+    await runCfHarnessCli([
+      "auth",
+      "status",
+      "openai-codex",
+      "--jsno",
+      "--json",
+    ], {
+      io: buffers.io,
+      env: {},
+      credentialStore: new InMemoryHarnessCredentialStore(),
+    }),
+    1,
+  );
+  const envelope = JSON.parse(buffers.stdout[0]);
+  assertEquals(envelope.error.code, "invalid-request");
+  assertStringIncludes(
+    envelope.error.message,
+    "`--jsno` is not a flag of `auth status`. Did you mean `--json`?",
+  );
 });
 
 Deno.test("config provider validation is structured only when requested", async () => {

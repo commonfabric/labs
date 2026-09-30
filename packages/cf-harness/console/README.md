@@ -113,8 +113,12 @@ naming them. The pattern index and skills registry are this deployment's
 constants rather than any fabric's. It prints every value with the record that
 decided it, and serves on the port Weaver pairs with. Arguments after `--` reach
 this server untouched, so every flag in the tables below is reachable through
-it. [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it
-belongs to, including the tailnet topology and the pre-demo preflight.
+it. Each of the two refuses a flag it does not take, naming it and, where one is
+close, the flag it most likely meant, and `console:launch` holds the arguments
+after `--` to the server's flags before it reads anything, so a misspelled
+switch stops the launch rather than going unapplied.
+[`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it belongs
+to, including the tailnet topology and the pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:

@@ -416,6 +416,19 @@ section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
+A flag the CLI does not declare is refused, never ignored, because an ignored
+restriction is a run without it: `--allowed-tools read_file` stops before any
+model call with
+`` `--allowed-tools` is not a flag of the batch CLI. Did you mean
+`--allow-tool`? ``
+rather than running with every tool. The refusal names the flag and, where one
+is close, the declared flag it most likely meant, and never the value typed with
+it. The control commands (`config`, `auth`, `models`, `whoami`), the interactive
+stdio entrypoint, the local Loom host's `batch` and `interactive` modes over
+those two, the console and `console:launch` refuse the same way; through the
+local Loom host the refusal is an `invalid-request` host failure carrying that
+message. Text after `--` is prompt text, flags included.
+
 Standard bearer-auth mode:
 
 ```bash

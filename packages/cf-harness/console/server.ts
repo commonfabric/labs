@@ -99,6 +99,10 @@ import {
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
+  recordUndeclaredFlags,
+  refuseUndeclaredFlags,
+} from "../src/cli-flags.ts";
+import {
   checkInputCellSpec,
   parseInputCellArgument,
 } from "../src/input-cells.ts";
@@ -600,6 +604,65 @@ export const refuseBatchSandboxFlags = (
   }
 };
 
+/** The flags the console takes that carry a value. */
+const CONSOLE_STRING_FLAGS = [
+  "port",
+  "workspace",
+  "artifact-root",
+  "model",
+  "reasoning-effort",
+  "research-reasoning-effort",
+  "loom-authoring-config",
+  "fabric-api-url",
+  "fabric-identity",
+  "fabric-space",
+  "fabric-foreign-spaces",
+  "pattern-index-url",
+  "skills-registry-url",
+  "skills-root",
+  "host-mount",
+  "session-db",
+  "space-db",
+  "max-model-turns",
+  "fabric-cfc-enforcement-mode",
+  "fabric-cfc-flow-labels",
+  "fabric-cfc-posture",
+  "system-prompt-file",
+] as const;
+
+/** The console's switches. */
+const CONSOLE_BOOLEAN_FLAGS = [
+  "no-child-composition-guidance",
+  "no-pattern-index-publish",
+  "pattern-index-publish-discoverable",
+  "allow-skill-scripts",
+] as const;
+
+/**
+ * Parses the console's arguments. The batch CLI's sandbox selection flags are
+ * refused first, each naming the variable to set instead, and then any other
+ * flag the console does not take. `console:launch` checks the arguments it
+ * passes through with this before it reads anything.
+ *
+ * @throws Error naming the first flag refused.
+ */
+export const parseConsoleArgs = (args: readonly string[]) => {
+  const undeclared: string[] = [];
+  const parsed = parseArgs([...args], {
+    string: [...CONSOLE_STRING_FLAGS],
+    boolean: [...CONSOLE_BOOLEAN_FLAGS],
+    collect: ["host-mount"],
+    unknown: recordUndeclaredFlags(undeclared),
+  });
+  refuseBatchSandboxFlags(parsed);
+  refuseUndeclaredFlags(
+    undeclared,
+    [...CONSOLE_STRING_FLAGS, ...CONSOLE_BOOLEAN_FLAGS],
+    "the console",
+  );
+  return parsed;
+};
+
 /**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
@@ -611,43 +674,10 @@ export const resolveConsoleConfig = async (
   env: Record<string, string | undefined>,
   cwd: string,
 ): Promise<ConsoleConfig> => {
-  const parsed = parseArgs(args, {
-    string: [
-      "port",
-      "workspace",
-      "artifact-root",
-      "model",
-      "reasoning-effort",
-      "research-reasoning-effort",
-      "loom-authoring-config",
-      "fabric-api-url",
-      "fabric-identity",
-      "fabric-space",
-      "fabric-foreign-spaces",
-      "pattern-index-url",
-      "skills-registry-url",
-      "skills-root",
-      "host-mount",
-      "session-db",
-      "space-db",
-      "max-model-turns",
-      "fabric-cfc-enforcement-mode",
-      "fabric-cfc-flow-labels",
-      "fabric-cfc-posture",
-      "system-prompt-file",
-    ],
-    boolean: [
-      "no-child-composition-guidance",
-      "no-pattern-index-publish",
-      "pattern-index-publish-discoverable",
-      "allow-skill-scripts",
-    ],
-    collect: ["host-mount"],
-  });
+  const parsed = parseConsoleArgs(args);
   const flag = (name: string): string | undefined =>
     typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
 
-  refuseBatchSandboxFlags(parsed);
   // The one derivation every entrypoint shares, over this server's own
   // environment. Nothing beyond the runtime kind is returned unless the
   // runtime is runsc, so a console that names no runtime hands the engine no

@@ -44,6 +44,10 @@ import { parseArgs } from "@std/cli/parse-args";
 import { join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import {
+  recordUndeclaredFlags,
+  refuseUndeclaredFlags,
+} from "../src/cli-flags.ts";
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../src/config.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -71,6 +75,7 @@ import type {
   ConsoleResolvedValue,
 } from "./health.ts";
 import {
+  parseConsoleArgs,
   refuseBatchSandboxFlags,
   runscWithoutPolicyRefusesTurns,
   startConsoleServer,
@@ -874,6 +879,32 @@ const REAL_IO: ConsoleLaunchIo = {
   readDockerRuntimes: () => readDockerRuntimes(DEFAULT_DOCKER_BINARY),
 };
 
+/** The launcher's flags that carry a value. */
+const LAUNCH_STRING_FLAGS = [
+  "instance",
+  "loom-bin",
+  "port",
+  "console-dir",
+  "fabric-identity",
+  "fabric-space",
+  "fabric-api-url",
+  "store",
+  "pattern-index-url",
+  "skills-registry-url",
+  "cfc-result-dir",
+  "cfc-invocation-context-dir",
+  "fabric-cfc-posture",
+  "fabric-cfc-flow-labels",
+  "fabric-cfc-enforcement-mode",
+] as const;
+
+/** The launcher's switches. */
+const LAUNCH_BOOLEAN_FLAGS = [
+  "no-pattern-index",
+  "no-skills-registry",
+  "allow-skill-scripts",
+] as const;
+
 /**
  * Reads what the fabric records and resolves the console's environment from
  * it, stopping short of serving: the plan, and the arguments after `--` that
@@ -884,35 +915,25 @@ export const prepareConsoleLaunch = async (
   env: Record<string, string | undefined>,
   io: ConsoleLaunchIo = REAL_IO,
 ): Promise<{ plan: ConsoleLaunchPlan; consoleArgs: string[] }> => {
+  const undeclared: string[] = [];
   const parsed = parseArgs([...args], {
-    string: [
-      "instance",
-      "loom-bin",
-      "port",
-      "console-dir",
-      "fabric-identity",
-      "fabric-space",
-      "fabric-api-url",
-      "store",
-      "pattern-index-url",
-      "skills-registry-url",
-      "cfc-result-dir",
-      "cfc-invocation-context-dir",
-      "fabric-cfc-posture",
-      "fabric-cfc-flow-labels",
-      "fabric-cfc-enforcement-mode",
-    ],
-    boolean: [
-      "no-pattern-index",
-      "no-skills-registry",
-      "allow-skill-scripts",
-    ],
+    string: [...LAUNCH_STRING_FLAGS],
+    boolean: [...LAUNCH_BOOLEAN_FLAGS],
     "--": true,
+    unknown: recordUndeclaredFlags(undeclared),
   });
   // Before anything is read: the launcher selects the sandbox from the
   // environment, as the console does, and a selection flag it ignored would
-  // launch a console on a sandbox other than the one it was asked for.
+  // launch a console on a sandbox other than the one it was asked for. A
+  // flag neither the launcher nor, past `--`, the console takes is refused
+  // here too, rather than after the launch has printed what it resolved.
   refuseBatchSandboxFlags(parsed);
+  refuseUndeclaredFlags(
+    undeclared,
+    [...LAUNCH_STRING_FLAGS, ...LAUNCH_BOOLEAN_FLAGS],
+    "`console:launch`",
+  );
+  parseConsoleArgs((parsed["--"] ?? []).map(String));
   // A flag present but empty is a value someone typed that did not survive
   // parsing — `--port -1` leaves `port` empty, because `-1` reads as a flag of
   // its own — so it is refused rather than falling through to the default the

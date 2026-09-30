@@ -28,6 +28,7 @@ import {
   isSubagentOnlyToolId,
 } from "./contracts/tool-descriptor.ts";
 import type { HarnessFabricSessionConfig } from "./config.ts";
+import { refuseUndeclaredFlags } from "./cli-flags.ts";
 import {
   HARNESS_FABRIC_SESSION_OPTION_NAMES,
   resolveHarnessFabricSessionConfig,
@@ -191,6 +192,17 @@ const parsePositiveIntegerOption = (
   return parsed;
 };
 
+/** Every flag the interactive stdio entrypoint takes, without its dashes. */
+const INTERACTIVE_STDIO_FLAGS = [
+  "help",
+  ...HARNESS_FABRIC_SESSION_OPTION_NAMES,
+  "loom-authoring-config",
+  "host-mount",
+  "max-model-turns",
+  "chat-session-db",
+  "chat-max-in-memory-events",
+] as const;
+
 export const parseHarnessInteractiveChatStdioCliOptions = (
   args: readonly string[],
   env: Record<string, string | undefined> = Deno.env.toObject(),
@@ -288,6 +300,13 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
         arg.slice("--chat-max-in-memory-events=".length),
       );
       continue;
+    }
+    if (arg.startsWith("-")) {
+      refuseUndeclaredFlags(
+        [arg.split("=")[0]],
+        INTERACTIVE_STDIO_FLAGS,
+        "the interactive stdio entrypoint",
+      );
     }
     throw new Error(`unsupported interactive chat stdio argument: ${arg}`);
   }

@@ -15,6 +15,7 @@ import {
 import { HARNESS_BROWSER_ACCESS_LEASE_TYPE } from "../src/contracts/browser-access.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
+import { HarnessControlError } from "../src/control-errors.ts";
 import {
   parseHostMountSpecs,
   resolveInteractiveProvisioning,
@@ -1275,8 +1276,31 @@ Deno.test("interactive stdio CLI still rejects unknown arguments", () => {
   assertThrows(
     () => parseHarnessInteractiveChatStdioCliOptions(["--not-a-flag"], {}),
     Error,
-    "unsupported interactive chat stdio argument",
+    "`--not-a-flag` is not a flag of the interactive stdio entrypoint.",
   );
+});
+
+Deno.test("interactive stdio CLI refuses a misspelled flag, naming the flag it meant", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(
+        ["--host-mounts", "name=c,source=/tmp,target=/c"],
+        {},
+      ),
+    HarnessControlError,
+    "`--host-mounts` is not a flag of the interactive stdio entrypoint. Did you mean `--host-mount`?",
+  );
+  assertEquals(error.code, "invalid-request");
+});
+
+Deno.test("interactive stdio CLI refuses an undeclared flag without its value", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(["--api-key=sk-secret"], {}),
+    HarnessControlError,
+    "`--api-key` is not a flag of the interactive stdio entrypoint.",
+  );
+  assertEquals(error.message.includes("sk-secret"), false);
 });
 
 Deno.test("the standalone stdio entrypoint applies the flags it advertises", async () => {
