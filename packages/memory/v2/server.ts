@@ -1835,9 +1835,11 @@ export class Server {
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
-       * registration need OWNER. Enforcement is only meaningful when
-       * `authorizeSessionOpen` is configured — without it sessions carry no
-       * principal and only `"*"` grants can apply.
+       * registration need OWNER, but for a member removing its own entry
+       * from a list with no `"*"` entry, which needs only that entry.
+       * Enforcement is only meaningful when `authorizeSessionOpen` is
+       * configured — without it sessions carry no principal and only `"*"`
+       * grants can apply.
        */
       acl?: {
         mode: MemoryAclMode;
@@ -2176,9 +2178,9 @@ export class Server {
       );
     }
     // Observe mode relaxes ordinary shortfalls only. An OWNER requirement —
-    // writing a space's ACL, or registering a disk source — is enforced in
-    // every mode but `off`, so staging never lets a principal take a space
-    // over.
+    // writing a space's ACL, but for a member removing its own entry, or
+    // registering a disk source — is enforced in every mode but `off`, so
+    // staging never lets a principal take a space over.
     if (this.#aclMode() === "observe" && requirement !== "OWNER") {
       this.aclStats.wouldDeny += 1;
       console.warn(
@@ -4266,8 +4268,10 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space — OWNER only,
-          // but for a member removing its own entry, which any member may do.
+          // ACL-document writes change who may access the space, so they need
+          // OWNER, with one exception: a member removing its own entry and
+          // nothing else (`#isSelfRemoval()`, INV-12) needs only READ, which
+          // any entry grants. That holds in `observe` mode as in `enforce`.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
