@@ -1,20 +1,11 @@
 # Memory Connection Multiplexing
 
-Status: the direct setup of section 3 is implemented behind the
-`sharedMemoryConnection` experimental flag, which is off by default
-([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
-The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
-where the two differ, that chapter describes the system. The router (section
-5) and attestation (section 6) are proposed and not implemented.
-
-This document describes how a client reaches every space it uses over one
-memory connection per toolshed instead of one per space, and how routers that
-terminate client connections in front of several toolsheds fit on top of that.
-Authentication moves from each `session.open` to the start of the connection:
-a client authenticates each key it uses once per connection, and every later
-request names the authenticated principal it acts as. That is also how a client
-acts as a second identity for a few requests — the case that matters is
-initializing a space's ACL as the space identity.
+Status: proposed. The direct setup of section 3 is implemented, behind the
+`sharedMemoryConnection` experimental flag and off by default, in the change
+that follows this one, which also brings the wire rules of section 3.1 into
+[04-protocol.md](./04-protocol.md); until that lands, this document is the
+only description of them. The router (section 5) and attestation (section 6)
+are proposed and not implemented.
 
 ## 1. Two ways to reach a host
 
