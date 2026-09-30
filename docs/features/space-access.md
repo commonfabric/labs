@@ -110,9 +110,16 @@ when it is disposed, so a storage manager that outlives the runtime keeps no
 hold on it.
 
 A client does not ask the memory server again about a space it was refused on
-its own. The session opens again when something reads a document of that space
-that the replica has not asked for, and a refused principal who has since been
-granted access sees a level only from then on.
+its own, since the refusal turns on an access list it cannot read. A host with
+word that the principal has been granted access, such as a notice naming the
+space, asks again with `retrySpaceAccess(space)`, on `Runtime` or, across the
+worker boundary, on `RuntimeClient`. That opens the session once more through
+the memory server's ordinary admission, so it admits only what that admission
+would. An admission reaches the computations above through the same
+access-change observer, and a refusal leaves the answer `"none"`. It makes one
+attempt per call, and acts only on a space the runtime has opened and been
+refused. The session also opens again when something reads a document of that
+space that the replica has not asked for.
 
 ## Changing the level
 

@@ -30,6 +30,7 @@ describe("storage space access retry", () => {
   let server: Server;
   let manager: TestStorageManager;
   let guestSessions: SpaceSession[];
+  let guestMounts: number;
   let setAccess: (allowed: boolean) => Promise<void>;
   let cleanups: (() => Promise<void>)[];
   let serverCount = 0;
@@ -37,6 +38,7 @@ describe("storage space access retry", () => {
   beforeEach(async () => {
     cleanups = [];
     guestSessions = [];
+    guestMounts = 0;
     server = new Server({
       store: new URL(`memory://storage-retry-space-access-${++serverCount}`),
       sessionOpenAuth: { audience: "did:key:z6Mk-retry-access-audience" },
@@ -47,6 +49,7 @@ describe("storage space access retry", () => {
     });
     const factory: SessionFactory = {
       async create(target, signer, options) {
+        if (signer?.did() === guest.did()) guestMounts++;
         const client = await connect({ transport: loopback(server) });
         try {
           const session = await client.mount(
@@ -116,6 +119,7 @@ describe("storage space access retry", () => {
     );
     await setAccess(true);
     await manager.retrySpaceAccess(space);
+    expect(guestMounts).toBe(2);
     expect(guestSessions.length).toBe(2);
     expect(guestSessions[1].closeError).toBeUndefined();
     expect(manager.spaceAccessError(space)).toBeUndefined();
@@ -123,18 +127,18 @@ describe("storage space access retry", () => {
     expect(changes).toEqual([false]);
   });
 
-  it("leaves a session that stands to end as it would have, not remounting it after a takeover", async () => {
+  it("does not remount a standing session that a takeover later ends", async () => {
     await setAccess(true);
     expect((await manager.open(space).sync(`of:${space}`)).error)
       .toBeUndefined();
 
     await manager.retrySpaceAccess(space);
-    expect(guestSessions.length).toBe(1);
+    expect(guestMounts).toBe(1);
     // A session taken over by another mount is not the memory server's
     // verdict on this principal, and only such a verdict is remounted.
     guestSessions[0].handleRevoked("taken-over");
     const read = await manager.open(space).sync("of:retry-after-takeover");
-    expect(read.error).toBeDefined();
-    expect(guestSessions.length).toBe(1);
+    expect(read.error?.message).toContain("taken-over");
+    expect(guestMounts).toBe(1);
   });
 });
