@@ -284,9 +284,10 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, every other test file, and every iframe guest
-   * source. Those files are the ones in the pattern trees that import
-   * npm packages, which `deno compile` would otherwise embed too.
+   * compatibility baselines, Deno unit tests, and iframe guest sources.
+   * Authored `.test.tsx` patterns remain available to resolve a program's
+   * attached tests. Excluding development-only files also keeps their npm
+   * dependencies out of the binary.
    */
   excludePaths(binary: BinaryName): string[] {
     if (binary !== "toolshed") return [];
@@ -299,7 +300,7 @@ export class BuildConfig {
         walkSync(tree, { includeDirs: false }),
         (entry) => entry.path,
       ).filter((file) =>
-        (/\.test\.tsx?$/.test(file) || isIframeGuestSource(file, tree)) &&
+        (/\.test\.ts$/.test(file) || isIframeGuestSource(file, tree)) &&
         !directories.some((directory) =>
           file.startsWith(`${directory}${path.SEPARATOR}`)
         )

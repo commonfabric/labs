@@ -6,6 +6,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import { exists, walk } from "@std/fs";
 import {
   dirname,
@@ -253,14 +254,19 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const [patterns, connector] = config.patternPaths();
     const served = [
       join(patterns, "counter", "counter.tsx"),
+      join(patterns, "counter", "counter.test.tsx"),
+      join(patterns, "loom", "main.test.tsx"),
+      join(patterns, "loom", "presentation-refusals.test.tsx"),
+      join(patterns, "loom", "multi-user.test.tsx"),
+      join(patterns, "loom", "url-view.test.tsx"),
       join(patterns, "iframe-game", "main.tsx"),
       join(patterns, "iframe-game", "contract.ts"),
       join(patterns, "notebook", "guest.ts"),
       join(connector, "main.tsx"),
+      join(connector, "main.test.tsx"),
     ];
     const unserved = [
       join(patterns, "counter", "counter.test.ts"),
-      join(patterns, "counter", "counter.test.tsx"),
       join(patterns, "iframe-game", "guest.ts"),
       join(patterns, "iframe-game", "editor", "guest.tsx"),
       join(patterns, "iframe-game", "interaction.browser.test.ts"),
@@ -275,9 +281,9 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const isExcluded = (file: string) =>
       excluded.some((at) => isWithin(at, file));
 
-    assertEquals(unserved.filter((file) => !isExcluded(file)), []);
-    assertEquals(served.filter(isExcluded), []);
-    assertEquals(config.excludePaths("cf"), []);
+    expect(unserved.filter((file) => !isExcluded(file))).toEqual([]);
+    expect(served.filter(isExcluded)).toEqual([]);
+    expect(config.excludePaths("cf")).toEqual([]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
