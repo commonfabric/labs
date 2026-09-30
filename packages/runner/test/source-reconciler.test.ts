@@ -297,7 +297,7 @@ describe("piece source reconciliation", () => {
     for (const mode of ["current", "updated", "entry-only host"]) {
       it(`retains attached source roots with a ${mode} origin`, async () => {
         const root = await Deno.makeTempDir({ prefix: "complete-origin-" });
-        const attached = "/api/patterns/system/attached.ts";
+        const attached = "/api/patterns/system/attached%20root.ts";
         const attachment = "export const attached = true;\n";
         const initialProgram = parentProgram(source("v1"));
         initialProgram.sourceRoots = [attached];
@@ -312,7 +312,10 @@ describe("piece source reconciliation", () => {
             `${root}/system/reconcile-target.tsx`,
             source(mode === "updated" ? "v2" : "v1"),
           );
-          await Deno.writeTextFile(`${root}/system/attached.ts`, attachment);
+          await Deno.writeTextFile(
+            `${root}/system/attached root.ts`,
+            attachment,
+          );
           const route = new PatternsRoute(root);
           createRuntime(async (input, init) => {
             const url = new URL(
