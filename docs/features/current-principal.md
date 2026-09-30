@@ -29,8 +29,9 @@ A pattern treats `undefined` as "no one", and refuses whatever needs someone.
 
 The choice is made in one place, `Runtime.actingPrincipalFor()` in
 `packages/runner/src/runtime.ts`, and `currentPrincipal()` is a frame check in
-front of it (`packages/runner/src/builder/current-principal.ts`). Anything else
-in the runtime that needs the actor of a handler run reads it from there.
+front of it (`packages/runner/src/builder/current-principal.ts`). Runtime code
+that needs the actor of a handler run calls that method rather than choosing
+again.
 
 ## Where it does not come from
 
@@ -41,13 +42,13 @@ Three nearby sources are wrong for this, each in a different way.
   carrying `acting`, `user` or `firedAt` fields changes nothing.
 - **The CFC trust snapshot.** A serving runtime gives a run with no actor the
   ambient snapshot, whose `actingPrincipal` names the serving runtime itself,
-  and the snapshot type allows an empty `actingPrincipal`. Either would pass
-  for a principal.
-- **`Runtime.homeSpacePrincipalFor()`.** It answers a different question —
-  whose home space a run targets — and so prefers the owner of the scope
-  instance a run executes on over the run's actor. A handler on one user's
-  instance fired by another user acts for the second one. It also narrows the
-  transaction's read scope to `user`, which a handler has no need of.
+  and the memory plane represents a run with no actor as an empty
+  `actingPrincipal`. Either would pass for a principal.
+- **`Runtime.homeSpacePrincipalFor()`.** It decides a different thing — whose
+  home space a run targets — and so prefers the owner of the scope instance a
+  run executes on over the run's actor. A handler on one user's instance fired
+  by another user acts for the second one. It also narrows the transaction's
+  read scope to `user`, which a handler has no need of.
 
 ## Authority, not intent
 
@@ -115,6 +116,6 @@ Until both are settled, a pattern shows the viewer by resolving `#profile`, as
 kinds of runtime — including the run on another user's instance, the run with no
 actor, and the read scope it leaves alone — and the function in each kind of
 frame, in a compiled pattern, and against an `authored-by` claim written in the
-same handler. The case in `packages/runner/test/executor-trust-attribution.test.ts`
-drives a handler through the live serving loop, with a payload naming someone
-else.
+same handler. The `currentPrincipal()` case in
+`packages/runner/test/executor-trust-attribution.test.ts` drives a handler
+through the live serving loop, with a payload naming someone else.

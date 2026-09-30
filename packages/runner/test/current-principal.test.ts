@@ -152,7 +152,7 @@ describe("current-principal", () => {
             },
           }
           : {}),
-      } as Parameters<typeof stampWaveRunContext>[1],
+      },
     );
     return tx;
   };
@@ -237,10 +237,11 @@ describe("current-principal", () => {
   describe("currentPrincipal()", () => {
     it("returns the runtime's own user in a client handler", () => {
       const tx = edit(client);
-      expect(
-        inFrame({ runtime: client, tx, kind: "handler" }, currentPrincipal),
-      )
-        .toBe(alice.did());
+      const principal = inFrame(
+        { runtime: client, tx, kind: "handler" },
+        currentPrincipal,
+      );
+      expect(principal).toBe(alice.did());
     });
 
     it("returns the stamped actor in a served handler", () => {
