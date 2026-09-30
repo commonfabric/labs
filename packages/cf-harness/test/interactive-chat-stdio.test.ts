@@ -1303,6 +1303,32 @@ Deno.test("interactive stdio CLI refuses an undeclared flag without its value", 
   assertEquals(error.message.includes("sk-secret"), false);
 });
 
+Deno.test("interactive stdio CLI refuses a word starting with `-` without repeating it", () => {
+  const error = assertThrows(
+    () =>
+      parseHarnessInteractiveChatStdioCliOptions(
+        ["--Remember my password is hunter2"],
+        {},
+      ),
+    HarnessControlError,
+  );
+  assertEquals(
+    error.message,
+    "An argument starting with `-` is not a flag of the interactive stdio entrypoint. A value starting with `-` needs the `--<flag>=<value>` spelling.",
+  );
+});
+
+Deno.test("interactive stdio CLI refuses a positional argument without repeating it", () => {
+  const error = assertThrows(
+    () => parseHarnessInteractiveChatStdioCliOptions(["hunter2"], {}),
+    Error,
+  );
+  assertEquals(
+    error.message,
+    "unsupported interactive chat stdio argument: the entrypoint takes no positional arguments",
+  );
+});
+
 Deno.test("the standalone stdio entrypoint applies the flags it advertises", async () => {
   // The first version of this change wired only the Loom-local host, so the
   // standalone entrypoint parsed --host-mount, printed it in its usage text and

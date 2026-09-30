@@ -205,8 +205,9 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     workspace,
     "--artifact-root",
     join(runRoot, "artifacts"),
-    "--prompt",
-    record.task,
+    // One word, so that a task starting with `-` still reads as the value
+    // rather than as flags of its own.
+    `--prompt=${record.task}`,
     "--prompt-slot-role",
     "context",
     "--structured-result-path",

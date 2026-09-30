@@ -116,7 +116,12 @@ this server untouched, so every flag in the tables below is reachable through
 it. Each of the two refuses a flag it does not take, naming it and, where one is
 close, the flag it most likely meant, and `console:launch` holds the arguments
 after `--` to the server's flags before it reads anything, so a misspelled
-switch stops the launch rather than going unapplied.
+switch stops the launch rather than going unapplied. A console flag given to the
+launcher is refused with a pointer to `--`. A flag given no value is refused
+too, whether nothing follows it, the word after it starts with `-`, or its value
+is empty, rather than falling back to the default: a value starting with `-`
+needs the `--name=<value>` spelling. `--help` prints the flags each takes, the
+launcher's before `--` and the server's after it, and serves nothing.
 [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it belongs
 to, including the tailnet topology and the pre-demo preflight.
 

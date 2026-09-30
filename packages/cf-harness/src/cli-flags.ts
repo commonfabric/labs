@@ -7,7 +7,10 @@
  * where one is close, the declared flag it most likely meant.
  *
  * Only the flag's name reaches a refusal, never a value typed with it, since a
- * value can be a credential.
+ * value can be a credential or a prompt. A value that starts with `-` is where
+ * the two meet: `parseArgs()` never takes such a word as a flag's value, so it
+ * leaves the flag empty and reads the word as flags of its own. That is
+ * refused as a flag given no value, before any word of it could be named.
  */
 
 import { HarnessControlError } from "./control-errors.ts";
@@ -40,13 +43,27 @@ const editDistance = (left: string, right: string): number => {
   return rows[left.length][right.length];
 };
 
+/** What a flag's name can be, and so the only kind of word a refusal names. */
+const FLAG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Helper for `nearestDeclaredFlag()`, which returns whether `name` is negated:
+ * an odd count of leading `no-`.
+ */
+const negated = (name: string): boolean => {
+  let count = 0;
+  while (name.startsWith("no-", count * 3)) count += 1;
+  return count % 2 === 1;
+};
+
 /**
  * The declared flag `name` most likely meant, or `undefined` where none is
  * close enough to name. Both are written without their leading dashes. The
  * distance allowed grows with the length of `name`, one edit for every four
  * characters and never less than one, so a short name does not match an
  * unrelated short name merely by being short; a single-letter alias is never
- * offered, being one edit from every other single letter.
+ * offered, being one edit from every other single letter, and neither is a
+ * flag that `no-` sets the other way, which would mean the opposite.
  */
 export const nearestDeclaredFlag = (
   name: string,
@@ -55,7 +72,7 @@ export const nearestDeclaredFlag = (
   let nearest: string | undefined;
   let nearestDistance = Infinity;
   for (const candidate of declared) {
-    if (candidate.length < 2) continue;
+    if (candidate.length < 2 || negated(candidate) !== negated(name)) continue;
     const distance = editDistance(name, candidate);
     if (distance < nearestDistance) {
       nearest = candidate;
@@ -70,38 +87,97 @@ export const nearestDeclaredFlag = (
 /**
  * The sentence refusing `flag`, written with its leading dashes, as a flag
  * `surface` does not take, followed by the nearest of `declared` where one is
- * close. `declared` is written without dashes.
+ * close. `declared` is written without dashes. A declared flag here is a
+ * switch that was given a value, which is said instead. A word that could not
+ * be a flag's name, one with a space in it, say, is not repeated, since what
+ * starts with `-` and is no flag is most likely a value.
  */
 export const undeclaredFlagMessage = (
   flag: string,
   declared: Iterable<string>,
   surface: string,
 ): string => {
-  const nearest = nearestDeclaredFlag(flag.replace(/^-+/, ""), declared);
+  const name = flag.replace(/^-+/, "");
+  if (!FLAG_NAME.test(name)) {
+    return `An argument starting with \`-\` is not a flag of ${surface}. A ` +
+      "value starting with `-` needs the `--<flag>=<value>` spelling.";
+  }
+  const names = [...declared];
+  if (names.includes(name)) return `\`${flag}\` takes no value.`;
+  const nearest = nearestDeclaredFlag(name, names);
   return `\`${flag}\` is not a flag of ${surface}.` +
     (nearest === undefined ? "" : ` Did you mean \`--${nearest}\`?`);
 };
 
 /**
  * A callback for the `unknown` option of `parseArgs()` that records, in
- * `into`, each undeclared flag once, as its name with the dashes it was typed
- * with and without any value. It keeps the flag in the parsed result, so a
- * surface that refuses one particular flag with a message of its own still
- * finds it there, and it leaves positional arguments as they are.
- *
- * A negative number such as `-5` is not recorded. `parseArgs()` reads it as a
- * flag, but it is a value typed for the flag before it, which `parseArgs()`
- * then leaves empty, and it is left to that flag's own check, which can say
- * that a negative value needs the `--name=<value>` spelling.
+ * `into`, each undeclared flag once, by its name as it was typed and without
+ * any value. That is the name `parseArgs()` was handed, which is not always
+ * the one it files the flag under: `--no-x=true` goes under `x`. The callback
+ * keeps the flag in the parsed result, so a surface that refuses one
+ * particular flag with a message of its own still finds it there, and it
+ * leaves positional arguments as they are. A dotted flag, `--prompt.x`, is
+ * the exception: `parseArgs()` would write it into the flag before the dot,
+ * and throw quoting that flag's value where it is a string.
  */
 export const recordUndeclaredFlags =
   (into: string[]) => (arg: string, key?: string): boolean => {
-    if (key !== undefined && !/^-\d/.test(arg)) {
-      const flag = `${arg.startsWith("--") ? "--" : "-"}${key}`;
-      if (!into.includes(flag)) into.push(flag);
-    }
-    return true;
+    if (key === undefined) return true;
+    const flag = arg.startsWith("--") ? arg.split("=")[0] : `-${key}`;
+    if (!into.includes(flag)) into.push(flag);
+    return !key.includes(".");
   };
+
+/**
+ * Refuses the first flag named in `valued` that is written with no value:
+ * last before the end of `argv` or its first `--`, or followed by a word that
+ * starts with `-`. `parseArgs()` never takes such a word as a value, so it
+ * leaves the flag empty and reads the word as flags, and the word, which may
+ * be a whole prompt, is not repeated. A value written `--name=<value>` is not
+ * refused here, whatever it starts with or however empty it is. `valued` is
+ * written without dashes.
+ *
+ * @throws HarnessControlError `invalid-request` for the first such flag.
+ */
+export const refuseFlagsWithoutValue = (
+  argv: readonly string[],
+  valued: Iterable<string>,
+): void => {
+  const names = new Set(valued);
+  const end = argv.indexOf("--") === -1 ? argv.length : argv.indexOf("--");
+  for (let index = 0; index < end; index += 1) {
+    const argument = argv[index];
+    if (!argument.startsWith("--") || !names.has(argument.slice(2))) continue;
+    if (index + 1 === end) {
+      throw new HarnessControlError(
+        "invalid-request",
+        `\`${argument}\` was given no value`,
+      );
+    }
+    if (argv[index + 1].startsWith("-")) {
+      throw new HarnessControlError(
+        "invalid-request",
+        `\`${argument}\` was given no value; a value starting with \`-\` ` +
+          `needs the \`${argument}=<value>\` spelling`,
+      );
+    }
+  }
+};
+
+/**
+ * The flag list of a usage text: the flags taking a value, then the switches,
+ * one to a line and each with its dashes. Both are written without dashes.
+ */
+export const flagUsageLines = (
+  valued: Iterable<string>,
+  switches: Iterable<string>,
+): string[] => [
+  "Flags that take a value, written `--name <value>`, or `--name=<value>` for",
+  "a value starting with `-`:",
+  ...[...valued].map((name) => `  --${name}`),
+  "Switches:",
+  ...[...switches].map((name) => `  --${name}`),
+];
 
 /**
  * Refuses the first flag of `undeclared` as one `surface` does not take.

@@ -308,7 +308,10 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
         "the interactive stdio entrypoint",
       );
     }
-    throw new Error(`unsupported interactive chat stdio argument: ${arg}`);
+    throw new Error(
+      "unsupported interactive chat stdio argument: the entrypoint takes no " +
+        "positional arguments",
+    );
   }
   const fabricSession = help
     ? undefined

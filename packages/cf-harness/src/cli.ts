@@ -159,6 +159,7 @@ import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
 import { parseInputCellArgument } from "./input-cells.ts";
 import {
   recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
   undeclaredFlagMessage,
 } from "./cli-flags.ts";
@@ -1350,6 +1351,7 @@ export const parseCfHarnessCliArgs = async (
   if (args.help) {
     return { help: true };
   }
+  refuseFlagsWithoutValue(normalizedArgv, CLI_STRING_FLAGS);
   refuseUndeclaredFlags(
     undeclared,
     [...CLI_STRING_FLAGS, ...CLI_BOOLEAN_FLAGS],
@@ -1675,9 +1677,8 @@ export const parseCfHarnessCliArgs = async (
     }
     compactThreshold = parsedThreshold;
   } else if (args["compact-threshold"] !== undefined) {
-    // A bare flag lands here, and so does a value the parser read as another
-    // flag: `--compact-threshold -5` leaves the option set with no string.
-    // Name the requirement, and point at the form that survives parsing.
+    // An empty value lands here, `--compact-threshold=` or one of blanks.
+    // Name the requirement, and point at the form that carries a value.
     throw new Error(
       "--compact-threshold requires a non-negative integer token count; " +
         "pass values the parser would read as a flag as " +
@@ -2165,14 +2166,11 @@ const controlFlagRefusal = (
   if (argument === undefined) return undefined;
   // Only the name: a value written into the argument stays out of the
   // message, as it does for the batch CLI's flags.
-  const flag = argument.split("=")[0];
-  return allowed.includes(flag)
-    ? `\`${flag}\` takes no value.`
-    : undeclaredFlagMessage(
-      flag,
-      allowed.map((name) => name.replace(/^-+/, "")),
-      `\`${command}\``,
-    );
+  return undeclaredFlagMessage(
+    argument.split("=")[0],
+    allowed.map((name) => name.replace(/^-+/, "")),
+    `\`${command}\``,
+  );
 };
 
 /** Helper for the control commands, which leads `usage` with `refusal`. */

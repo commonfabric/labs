@@ -6,12 +6,15 @@ import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isol
 import {
   consoleDataDirectories,
   consoleHealthRows,
+  consoleHelpText,
   consoleSandboxBanner,
   ConsoleServer,
   consoleStartupBanner,
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
+  parseConsoleArgs,
   resolveConsoleConfig,
+  startConsoleServer,
 } from "../../console/server.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
 import {
@@ -2672,6 +2675,72 @@ describe("console/server", () => {
       );
     });
 
+    it("throws naming a flag given no value, and not the word after it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--workspace",
+          "--Secret prompt text",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("throws for a port or a turn budget given no value, rather than using its default", async () => {
+      for (
+        const extra of [
+          ["--port", "-1"],
+          ["--max-model-turns", "-3"],
+          ["--port="],
+          ["--max-model-turns= "],
+        ]
+      ) {
+        const flag = extra[0].split("=")[0];
+        await expect(
+          resolveConsoleConfig(
+            ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+            {},
+            "/console",
+          ),
+        ).rejects.toThrow(`\`${flag}\` was given no value`);
+      }
+    });
+
+    it("throws naming a negative number standing alone", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "-5x"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow("`-5` is not a flag of the console.");
+    });
+
+    it("throws saying a negated switch takes no value", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publish=true",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow("`--no-pattern-index-publish` takes no value.");
+    });
+
     it("throws naming an undeclared flag without the value given with it", async () => {
       const refusal = await resolveConsoleConfig(
         [
@@ -2686,6 +2755,33 @@ describe("console/server", () => {
       ).then(() => undefined, (error: Error) => error.message);
 
       expect(refusal).toBe("`--api-key` is not a flag of the console.");
+    });
+  });
+
+  describe("consoleHelpText()", () => {
+    it("returns usage naming every flag for `--help` or `-h`, whatever else is on the line", () => {
+      for (
+        const args of [["--help"], ["-h"], ["--port", "8100", "--bogus", "-h"]]
+      ) {
+        const text = consoleHelpText(args);
+
+        expect(text).toContain("--fabric-identity");
+        expect(text).toContain("--no-pattern-index-publish");
+        expect(text).toContain("README.md");
+      }
+    });
+
+    it("returns `undefined` for arguments that ask for no help", () => {
+      expect(consoleHelpText(["--fabric-identity", "k"])).toBeUndefined();
+    });
+
+    it("leaves `--help` and `-h` among the flags the console takes", () => {
+      expect(() => parseConsoleArgs(["--help", "-h"])).not.toThrow();
+    });
+
+    it("prints usage for `--help` rather than resolving a configuration", async () => {
+      // Resolving one would throw: no fabric session is named here.
+      await startConsoleServer(["--help"], {}, "/console");
     });
   });
 

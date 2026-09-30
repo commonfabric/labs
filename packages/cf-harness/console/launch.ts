@@ -45,9 +45,12 @@ import { join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
+  flagUsageLines,
   recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
 } from "../src/cli-flags.ts";
+import { HarnessControlError } from "../src/control-errors.ts";
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../src/config.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
@@ -75,6 +78,8 @@ import type {
   ConsoleResolvedValue,
 } from "./health.ts";
 import {
+  CONSOLE_FLAGS,
+  consoleHelpText,
   parseConsoleArgs,
   refuseBatchSandboxFlags,
   runscWithoutPolicyRefusesTurns,
@@ -900,10 +905,40 @@ const LAUNCH_STRING_FLAGS = [
 
 /** The launcher's switches. */
 const LAUNCH_BOOLEAN_FLAGS = [
+  "help",
   "no-pattern-index",
   "no-skills-registry",
   "allow-skill-scripts",
 ] as const;
+
+/** What `--help` before `--` prints. */
+const LAUNCH_USAGE = [
+  "Usage: deno task --cwd packages/cf-harness console:launch [flags] [-- console flags]",
+  "",
+  "Resolves what a console serves from a loom instance's records (`--instance`)",
+  "or from the flags below, prints each value beside the record that decided",
+  "it, and serves the console under them. Arguments after `--` go to the",
+  "console itself, and `console:launch -- --help` lists them.",
+  "packages/cf-harness/console/README.md describes both.",
+  "",
+  ...flagUsageLines(LAUNCH_STRING_FLAGS, LAUNCH_BOOLEAN_FLAGS),
+].join("\n");
+
+/**
+ * The usage `args` ask for with `--help` or `-h`: the launcher's own where the
+ * flag comes before `--`, the console's where it comes after, and otherwise
+ * `undefined`.
+ */
+export const consoleLaunchHelpText = (
+  args: readonly string[],
+): string | undefined => {
+  const split = args.indexOf("--");
+  const own = split === -1 ? args : args.slice(0, split);
+  if (parseArgs([...own], { boolean: ["help"], alias: { h: "help" } }).help) {
+    return LAUNCH_USAGE;
+  }
+  return split === -1 ? undefined : consoleHelpText(args.slice(split + 1));
+};
 
 /**
  * Reads what the fabric records and resolves the console's environment from
@@ -919,15 +954,26 @@ export const prepareConsoleLaunch = async (
   const parsed = parseArgs([...args], {
     string: [...LAUNCH_STRING_FLAGS],
     boolean: [...LAUNCH_BOOLEAN_FLAGS],
+    alias: { h: "help" },
     "--": true,
     unknown: recordUndeclaredFlags(undeclared),
   });
   // Before anything is read: the launcher selects the sandbox from the
   // environment, as the console does, and a selection flag it ignored would
   // launch a console on a sandbox other than the one it was asked for. A
-  // flag neither the launcher nor, past `--`, the console takes is refused
-  // here too, rather than after the launch has printed what it resolved.
+  // flag given no value, and one neither the launcher nor, past `--`, the
+  // console takes, is refused here too, rather than after the launch has
+  // printed what it resolved.
   refuseBatchSandboxFlags(parsed);
+  refuseFlagsWithoutValue(args, LAUNCH_STRING_FLAGS);
+  const [first] = undeclared;
+  if (first?.startsWith("--") && CONSOLE_FLAGS.includes(first.slice(2))) {
+    throw new HarnessControlError(
+      "invalid-request",
+      `\`${first}\` is a flag of the console rather than of ` +
+        "`console:launch`; pass it after `--`.",
+    );
+  }
   refuseUndeclaredFlags(
     undeclared,
     [...LAUNCH_STRING_FLAGS, ...LAUNCH_BOOLEAN_FLAGS],
@@ -1112,7 +1158,8 @@ export const prepareConsoleLaunch = async (
 
 /**
  * Reads what the fabric records, prints the account of what it resolved to,
- * and serves under it.
+ * and serves under it. Where `args` ask for help it prints the usage instead,
+ * and reads and serves nothing.
  */
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
@@ -1124,6 +1171,11 @@ export const launchConsole = async (
     startConsoleServer(consoleArgs, undefined, undefined, health),
   io: ConsoleLaunchIo = REAL_IO,
 ): Promise<void> => {
+  const help = consoleLaunchHelpText(args);
+  if (help !== undefined) {
+    console.log(help);
+    return;
+  }
   const { plan, consoleArgs } = await prepareConsoleLaunch(args, env, io);
   const health = { ...plan.health, checkedAt: new Date().toISOString() };
 

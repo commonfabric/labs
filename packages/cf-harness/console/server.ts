@@ -99,7 +99,9 @@ import {
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
+  flagUsageLines,
   recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
 } from "../src/cli-flags.ts";
 import {
@@ -632,17 +634,45 @@ const CONSOLE_STRING_FLAGS = [
 
 /** The console's switches. */
 const CONSOLE_BOOLEAN_FLAGS = [
+  "help",
   "no-child-composition-guidance",
   "no-pattern-index-publish",
   "pattern-index-publish-discoverable",
   "allow-skill-scripts",
 ] as const;
 
+/** Every flag the console takes, without its dashes. */
+export const CONSOLE_FLAGS: readonly string[] = [
+  ...CONSOLE_STRING_FLAGS,
+  ...CONSOLE_BOOLEAN_FLAGS,
+];
+
+/** What `--help` prints. */
+const CONSOLE_USAGE = [
+  "Usage: deno task --cwd packages/cf-harness console [flags]",
+  "",
+  "Serves the cf-harness console. Most flags have an environment variable",
+  "that sets the same thing, and packages/cf-harness/console/README.md",
+  "describes both.",
+  "",
+  ...flagUsageLines(CONSOLE_STRING_FLAGS, CONSOLE_BOOLEAN_FLAGS),
+].join("\n");
+
+/**
+ * The console's usage where `args` ask for it with `--help` or `-h`, whatever
+ * else they hold, and otherwise `undefined`.
+ */
+export const consoleHelpText = (args: readonly string[]): string | undefined =>
+  parseArgs([...args], { boolean: ["help"], alias: { h: "help" } }).help
+    ? CONSOLE_USAGE
+    : undefined;
+
 /**
  * Parses the console's arguments. The batch CLI's sandbox selection flags are
- * refused first, each naming the variable to set instead, and then any other
- * flag the console does not take. `console:launch` checks the arguments it
- * passes through with this before it reads anything.
+ * refused first, each naming the variable to set instead, then a flag given
+ * no value, and then any other flag the console does not take.
+ * `console:launch` checks the arguments it passes through with this before it
+ * reads anything.
  *
  * @throws Error naming the first flag refused.
  */
@@ -652,14 +682,12 @@ export const parseConsoleArgs = (args: readonly string[]) => {
     string: [...CONSOLE_STRING_FLAGS],
     boolean: [...CONSOLE_BOOLEAN_FLAGS],
     collect: ["host-mount"],
+    alias: { h: "help" },
     unknown: recordUndeclaredFlags(undeclared),
   });
   refuseBatchSandboxFlags(parsed);
-  refuseUndeclaredFlags(
-    undeclared,
-    [...CONSOLE_STRING_FLAGS, ...CONSOLE_BOOLEAN_FLAGS],
-    "the console",
-  );
+  refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
+  refuseUndeclaredFlags(undeclared, CONSOLE_FLAGS, "the console");
   return parsed;
 };
 
@@ -675,8 +703,17 @@ export const resolveConsoleConfig = async (
   cwd: string,
 ): Promise<ConsoleConfig> => {
   const parsed = parseConsoleArgs(args);
-  const flag = (name: string): string | undefined =>
-    typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
+  // A flag written with an empty value is refused rather than read as unset,
+  // which would put the default in place of what was typed.
+  const flag = (name: string): string | undefined => {
+    const value = parsed[name];
+    if (typeof value !== "string") return undefined;
+    const given = nonEmpty(value);
+    if (given === undefined) {
+      throw new Error(`\`--${name}\` was given no value`);
+    }
+    return given;
+  };
 
   // The one derivation every entrypoint shares, over this server's own
   // environment. Nothing beyond the runtime kind is returned unless the
@@ -2360,7 +2397,8 @@ export const consoleStartupBanner = (
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
  * which extend the config resolver's, and the interactive service spreads this
  * object into every turn — so what is set here holds for the whole session,
- * and the engine builds both lazily-cached client factories from it.
+ * and the engine builds both lazily-cached client factories from it. Where
+ * `args` ask for help it prints the usage instead, and serves nothing.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
@@ -2368,6 +2406,11 @@ export const startConsoleServer = async (
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
+  const help = consoleHelpText(args);
+  if (help !== undefined) {
+    console.log(help);
+    return;
+  }
   const config = await resolveConsoleConfig(args, env, cwd);
   for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });

@@ -398,7 +398,9 @@ The current package provides:
   control commands, the interactive stdio entrypoint, the local Loom host's
   modes over them, the console and `console:launch` — naming the flag and the
   nearest declared one, so a misspelled restriction stops a run rather than
-  going unapplied;
+  going unapplied; and, on the batch CLI and the console, of a flag given no
+  value, which is what the parser leaves of a value starting with `-` written as
+  a separate word;
 - persistent provider configuration and structured config/auth control, with
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;

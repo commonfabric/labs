@@ -894,6 +894,96 @@ Deno.test("parseCfHarnessCliArgs reads a flag after `--` as prompt text", async 
   assertEquals(parsed.prompt, "--not-a-flag text");
 });
 
+Deno.test("parseCfHarnessCliArgs refuses a prompt starting with `-` after `--prompt`, without repeating it", async () => {
+  for (
+    const prompt of [
+      "--Remember my password is hunter2",
+      "---\ntitle: notes\n---\nbody",
+      "- buy milk",
+      "-",
+    ]
+  ) {
+    const error = await assertRejects(
+      () =>
+        parseCfHarnessCliArgs(["--prompt", prompt], {
+          cwd: "/tmp/project",
+          env: {},
+        }),
+      HarnessControlError,
+    );
+    assertEquals(
+      error.message,
+      "`--prompt` was given no value; a value starting with `-` needs the `--prompt=<value>` spelling",
+    );
+  }
+});
+
+Deno.test("parseCfHarnessCliArgs takes a prompt starting with `-` written `--prompt=`", async () => {
+  const parsed = await parseCfHarnessCliArgs(["--prompt=- buy milk"], {
+    cwd: "/tmp/project",
+    env: {},
+  });
+
+  if ("help" in parsed) {
+    throw new Error("expected config result");
+  }
+  assertEquals(parsed.prompt, "- buy milk");
+});
+
+Deno.test("parseCfHarnessCliArgs refuses positional text starting with `-` without repeating it", async () => {
+  const error = await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(["- buy milk"], { cwd: "/tmp/project", env: {} }),
+    HarnessControlError,
+  );
+  assertEquals(
+    error.message,
+    "An argument starting with `-` is not a flag of the batch CLI. A value starting with `-` needs the `--<flag>=<value>` spelling.",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs returns help whatever else is on the line", async () => {
+  for (
+    const argv of [
+      ["--allowed-tools", "read_file", "--help"],
+      ["--bogus", "-h"],
+      ["--prompt", "--help"],
+    ]
+  ) {
+    assertEquals(
+      await parseCfHarnessCliArgs(argv, { cwd: "/tmp/project", env: {} }),
+      { help: true },
+    );
+  }
+});
+
+Deno.test("parseCfHarnessCliArgs refuses a negated switch given a value, by the name typed", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(["--prompt", "hi", "--no-skill-catalog=true"], {
+        cwd: "/tmp/project",
+        env: {},
+      }),
+    HarnessControlError,
+    "`--no-skill-catalog` takes no value.",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs suggests no flag of the opposite meaning", async () => {
+  const error = await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(["--prompt", "hi", "--no-print-transcript"], {
+        cwd: "/tmp/project",
+        env: {},
+      }),
+    HarnessControlError,
+  );
+  assertEquals(
+    error.message,
+    "`--no-print-transcript` is not a flag of the batch CLI.",
+  );
+});
+
 Deno.test("runCfHarnessCli names an undeclared flag in a host's structured failure", async () => {
   const buffers = createIoBuffers();
   assertEquals(
@@ -7265,15 +7355,13 @@ Deno.test("parseCfHarnessCliArgs validates --compact-threshold", async () => {
   if ("help" in fromEnv) throw new Error("expected config result");
   assertEquals(fromEnv.compactThreshold, 9_000);
 
-  // Every rejection names the requirement. `--compact-threshold -5` is the
-  // subtle one: the parser reads `-5` as a separate flag, so the option
-  // arrives with no string value and must not report merely "non-empty".
+  // Every rejection names the requirement.
   for (
     const args of [
       ["--compact-threshold", "abc", "hi"],
       ["--compact-threshold", "1.5", "hi"],
       ["--compact-threshold=-5", "hi"],
-      ["--compact-threshold", "-5", "hi"],
+      ["--compact-threshold=", "hi"],
       ["--compact-threshold", "hi"],
     ]
   ) {
@@ -7283,6 +7371,14 @@ Deno.test("parseCfHarnessCliArgs validates --compact-threshold", async () => {
       "--compact-threshold requires a non-negative integer token count",
     );
   }
+
+  // The parser reads `-5` as a flag of its own, so the option is left with
+  // no value, and the refusal points at the spelling that carries one.
+  await assertRejects(
+    () => parse(["--compact-threshold", "-5", "hi"]),
+    HarnessControlError,
+    "`--compact-threshold` was given no value; a value starting with `-` needs the `--compact-threshold=<value>` spelling",
+  );
 });
 
 Deno.test("local Loom binding conflicts become structured provider mismatches before execution", async () => {
@@ -8079,16 +8175,17 @@ Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no
       [...fabric, "--max-confidentiality", "   "],
     ]
   ) {
-    // Two refusals cover the shapes: the parser reads a bare flag as an
-    // empty string, which the JSON step refuses; a non-string value is
-    // refused before it. Either way the run never starts unbounded.
+    // Two refusals cover the shapes: a flag with no word after it, or with
+    // one that reads as a flag, is refused as given no value; an empty or
+    // blank value reaches the JSON step, which refuses it. Either way the run
+    // never starts unbounded.
     const err = await assertRejects(
       () => parseCfHarnessCliArgs(args, { cwd: "/tmp/project", env: {} }),
       Error,
     );
     assertMatch(
       err.message,
-      /--max-confidentiality (requires a JSON array|must be JSON)/,
+      /--max-confidentiality(` was given no value| requires a JSON array| must be JSON)/,
     );
   }
 });
