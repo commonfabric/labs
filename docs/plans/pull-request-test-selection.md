@@ -1117,18 +1117,20 @@ far worse failure than the workflow edit it replaced.
 three ways, and the guard answers each.
 
 The **tree half** needs no store, and is a unit of the `repo-gates` suite.
-It walks the tree for things that look like tests — `*.test.ts`,
-`*.test.tsx`, the integration directories, the shell scripts under
-`packages/cli/integration/` — and fails if any of them is claimed by no
-suite's `enumerate()`, or more than once under the same record surface and
-variant. A default suite and a non-default suite may claim the same source
-item because they are distinct execution surfaces. This is the half that
-catches a pull request adding a test surface nobody registered, and it is
-selected the way everything else is: a pull request that does not draw it
-leaves the unregistered surface to the full run on `main`, which is where
-the record of what this guard catches comes from. An entry in a
-configuration's declared skip registry accounts for its unavailable file or
-leaf without pretending it ran.
+It reads every file the repository holds, tracked or untracked but not
+ignored, for things that look like tests — `*.test.ts`, `*.test.tsx`, the
+integration directories, the shell scripts under `packages/cli/integration/`
+— and fails if any of them is claimed by no suite's `enumerate()`, or more
+than once under the same record surface and variant. A unit that is not a
+path, such as a type-check scope, claims nothing, even where its name is
+spelled like a directory. A default suite and a non-default suite may claim
+the same source item because they are distinct execution surfaces. This is
+the half that catches a pull request adding a test surface nobody
+registered, and it is selected the way everything else is: a pull request
+that does not draw it leaves the unregistered surface to the full run on
+`main`, which is where the record of what this guard catches comes from. An
+entry in a configuration's declared skip registry accounts for its
+unavailable file or leaf without pretending it ran.
 
 The **workflow half** runs beside it, on the checkout alone, over the
 step definitions under `.github` — the workflows and the composite

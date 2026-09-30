@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ACLManager } from "../src/acl-manager.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
@@ -37,41 +38,6 @@ class PrivateStorageManager extends StorageManager {
 const creator = await Identity.fromPassphrase("private-space-creator");
 
 describe("private-space", () => {
-  it("creates a random creator-only space and converges concurrent allocation attempts", async () => {
-    const server = new MemoryServer.Server({
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
-      sessionOpenAuth: { audience: "did:key:private-space-test" },
-      acl: { mode: "enforce" },
-    });
-    const storageManager = new PrivateStorageManager(server);
-    const runtime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-    });
-    try {
-      const [first, repeated] = await Promise.all([
-        runtime.resolvePrivateSpace("allocation-a", creator.did()),
-        runtime.resolvePrivateSpace("allocation-a", creator.did()),
-      ]);
-      expect(first).toBe(repeated);
-      expect(await new ACLManager(runtime, first).get()).toEqual({
-        [creator.did()]: "OWNER",
-      });
-      const second = await runtime.resolvePrivateSpace(
-        "allocation-b",
-        creator.did(),
-      );
-      expect(second).not.toBe(first);
-      expect(second).not.toBe(creator.did());
-      expect(await new ACLManager(runtime, second).get()).toEqual({
-        [creator.did()]: "OWNER",
-      });
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-      await server.close();
-    }
-  });
   it("reuses a durable private allocation across compiled pattern handler invocations", async () => {
     const server = new MemoryServer.Server({
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
@@ -89,7 +55,7 @@ describe("private-space", () => {
         files: [{
           name: "/main.tsx",
           contents: `
-          import { Cell, handler, pattern, spaceMembers, setSpaceMembers, currentPrincipal, Writable } from "commonfabric";
+          import { Cell, handler, pattern, spaceMembers, setSpaceMembers, Writable } from "commonfabric";
           const grant = handler<{ principal: string }, { revision: Writable<number> }>((event, { revision }) => {
             setSpaceMembers({ ...spaceMembers(), [event.principal]: "WRITE" });
             revision.set(revision.get() + 1);
@@ -102,12 +68,14 @@ describe("private-space", () => {
             const revision = new Writable(0);
             return { value: "private", revision, grant: grant({ revision }), unchanged: unchanged({ revision }) };
           });
-          const create = handler<void, { selected: Writable<Cell<{ value: string }> | undefined> }>((_, { selected }) => {
-            selected.set(child.inPrivateSpace("test-room")({}));
+          const create = handler<void, { selected: Writable<Cell<{ value: string }> | undefined>; created: Writable<number> }>((_, { selected, created }) => {
+            selected.set(child.inSpace("test-room")({}));
+            created.set(created.get() + 1);
           });
           export default pattern(() => {
             const selected = new Writable<Cell<{ value: string }> | undefined>();
-            return { selected, create: create({ selected }) };
+            const created = new Writable(0);
+            return { selected, created, create: create({ selected, created }) };
           });
         `,
         }],
@@ -118,6 +86,11 @@ describe("private-space", () => {
       );
       const result = await runtime.runSynced(resultCell, main!.default, {});
       await result.key("create").send(undefined);
+      await waitForCellValue(
+        runtime,
+        result.key("created"),
+        (value) => value === 1,
+      );
       await runtime.idle();
       await result.pull();
       const selected = result.key("selected").resolveAsCell();
@@ -163,7 +136,13 @@ describe("private-space", () => {
       });
       expect(emptyAclCommit.error?.name).toBe("ProtocolError");
       await result.key("create").send(undefined);
+      await waitForCellValue(
+        runtime,
+        result.key("created"),
+        (value) => value === 2,
+      );
       await runtime.idle();
+      await manager.synced();
       expect(
         result.key("selected").resolveAsCell().getAsNormalizedFullLink().space,
       ).toBe(link.space);

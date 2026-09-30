@@ -56,10 +56,13 @@ import type { JSONSchemaObj } from "../builder/types.ts";
 import { type CellScope, NAME, type Pattern } from "../builder/types.ts";
 import type { Cell, MemorySpace, Stream } from "../cell.ts";
 import {
+  cellRuntime,
+  cellTx,
   isCell,
   isStream,
   markRuntimeInjectedEventKeys,
   recordRelevantSchemaWritePolicyInput,
+  sendEvent,
 } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -1028,11 +1031,9 @@ function resolveContextCellRef(cell: unknown): Cell<any> | undefined {
 function readCellValueForObservation(
   cell: Cell<unknown>,
 ): unknown {
-  const readTx = cell.runtime.readTx(
-    (cell as unknown as { tx?: IExtendedStorageTransaction }).tx,
-  );
+  const readTx = cellRuntime(cell).readTx(cellTx(cell));
   const link = resolveLink(
-    cell.runtime,
+    cellRuntime(cell),
     readTx,
     cell.getAsNormalizedFullLink(),
     "top",
@@ -2906,7 +2907,7 @@ async function handleRead(
     // If our cell is an intermediate with a parent result, follow that
     const parentLink = getMetaLink(cell, "result");
     if (parentLink !== undefined) {
-      const parentCell = cell.runtime.getCellFromLink(parentLink);
+      const parentCell = cellRuntime(cell).getCellFromLink(parentLink);
       await parentCell.pull();
       schema = parentCell.schema ?? getCellSchema(parentCell);
       cell = schema ? parentCell.asSchema(schema) : parentCell;
@@ -3179,7 +3180,8 @@ async function handleInvoke(
       // always gets the injected cell.
       const injectResult =
         !(isObjectOrArray(input) && Object.hasOwn(input, "result"));
-      handler.withTx(tx).send(
+      sendEvent(
+        handler.withTx(tx),
         injectResult
           ? {
             ...input,

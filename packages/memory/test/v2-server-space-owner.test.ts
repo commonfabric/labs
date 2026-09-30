@@ -95,8 +95,8 @@ const connect = async (server: Server): Promise<Harness> => {
 
 let requestCounter = 0;
 
-/** Seed a space's genesis ACL through the space identity (the named-space
- * bootstrap path, same recipe as v2-server-acl.test.ts). */
+/** Seed a space's genesis ACL through the space identity, as creating a
+ * space does (same recipe as v2-server-acl.test.ts). */
 const initializeSpaceAcl = async (
   server: Server,
   space: string,

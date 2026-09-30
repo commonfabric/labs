@@ -2894,6 +2894,7 @@ type EventHandler<T> =
 type Piece = any;
 
 interface CFCellLinkElement extends CFHTMLElement {}
+interface CFSpaceCreateElement extends CFHTMLElement {}
 interface CFSpaceLinkElement extends CFHTMLElement {}
 interface CFLoaderElement extends CFHTMLElement {}
 interface CFInputElement extends CFHTMLElement {}
@@ -3401,6 +3402,11 @@ interface CFCellLinkAttributes<T> extends CFHTMLAttributes<T> {
   "$cell"?: CellLike<any>;
   "spaceName"?: string;
   "static"?: boolean;
+}
+
+interface CFSpaceCreateAttributes<T> extends CFHTMLAttributes<T> {
+  "placeholder"?: string;
+  "oncf-space-created"?: EventHandler<{ did: string; label: string }>;
 }
 
 interface CFSpaceLinkAttributes<T> extends CFHTMLAttributes<T> {
@@ -5033,6 +5039,10 @@ declare global {
       "cf-cell-link": CFDOM.DetailedHTMLProps<
         CFCellLinkAttributes<CFCellLinkElement>,
         CFCellLinkElement
+      >;
+      "cf-space-create": CFDOM.DetailedHTMLProps<
+        CFSpaceCreateAttributes<CFSpaceCreateElement>,
+        CFSpaceCreateElement
       >;
       "cf-space-link": CFDOM.DetailedHTMLProps<
         CFSpaceLinkAttributes<CFSpaceLinkElement>,

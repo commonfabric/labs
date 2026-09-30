@@ -4,6 +4,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/utils/defer";
 import { isDeno } from "@commonfabric/utils/env";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import {
   ClientTransportNotificationType,
   ErrorNotification,
@@ -107,23 +108,14 @@ export class WebWorkerRuntimeTransport
   }
 
   /**
-   * Terminates the worker, and settles once its runtime has been torn down.
-   *
-   * `terminate()` returns while the worker is still shutting down, and under
-   * Deno's coverage collection that shutdown is when the worker writes its
-   * coverage profiles. A process that exits before they are written leaves
-   * them missing or truncated, and one truncated profile makes `deno coverage`
-   * refuse the whole directory it is in. The lock named by the worker's ready
-   * notification is released only by that teardown, so waiting for it covers
-   * the write. A worker that never reported ready, or whose ready notification
-   * named no lock, is not waited for.
+   * Terminates the worker, and settles once its runtime has been torn down,
+   * as `terminateWorker()` from `@commonfabric/utils/worker-lifetime` does. A
+   * worker that never reported ready, or whose ready notification named no
+   * lock, is not waited for.
    */
   async dispose(): Promise<void> {
     this.removeAllListeners();
-    this.#worker.terminate();
-    if (this.#lifetimeLock !== undefined) {
-      await navigator.locks.request(this.#lifetimeLock, () => {});
-    }
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 
   async [Symbol.asyncDispose]() {

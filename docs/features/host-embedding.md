@@ -158,17 +158,19 @@ also guarded by `packages/shell/test/runtime-navigation.test.ts`.
 **Contract.** A right-click on a piece rendered by `cf-render` opens
 `cf-piece-menu` for that piece. **View source** shows the piece's retained
 authored files. **Origin and history** shows its active origin and recorded
-source revisions. **Clone fresh piece into new space** creates a copy with
-default input data in a unique named space owned by the current user, then
-navigates to it. **Clone piece and copy data into new space** takes detached
-snapshots of the selected piece's current input and stateful internal data.
-Computed values are recomputed in the new space. Data linked from another space
-is rejected because it cannot be captured atomically. Both actions move clone
-progress and failures from the context menu into a dialog. The copy follows
-the selected piece when that piece is detached. When the selected piece already
-follows an origin, the copy follows that same origin. A piece with an active
-origin also has **Stop following source**. That action keeps the exact current
-source and clears the active origin.
+source revisions. **Clone fresh piece into new space** creates a space with a
+random DID, owned by the current user and listed in their Home space list,
+creates a copy with default input data there, then navigates to it by the
+space's DID. A clone that fails takes the space back out of the Home space list.
+**Clone piece and copy data into new space** takes detached snapshots of the
+selected piece's current input and stateful internal data. Computed values are
+recomputed in the new space. Data linked from another space is rejected because
+it cannot be captured atomically. Both actions move clone progress and failures
+from the context menu into a dialog. The copy follows the selected piece when
+that piece is detached. When the selected piece already follows an origin, the
+copy follows that same origin. A piece with an active origin also has **Stop
+following source**. That action keeps the exact current source and clears the
+active origin.
 
 Historical entries can restore an exact retained source version or resume
 following an earlier web or fabric origin. Each entry can show its exact

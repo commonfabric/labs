@@ -1,12 +1,16 @@
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  cellRuntime,
+  cellTx,
+  getCarriedCfcLabelView,
+  isCell,
+} from "../cell.ts";
 import {
   isPrimitiveCellLink,
   type NormalizedFullLink,
   parseLink,
 } from "../link-utils.ts";
 import { resolveLink } from "../link-resolution.ts";
-import type { Runtime } from "../runtime.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import type { CfcMetadata } from "./types.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./observation.ts";
@@ -15,7 +19,6 @@ import {
   type CfcLabelViewEntry,
   cfcLabelViewFromMetadata,
   cfcLabelViewOriginSpaces,
-  getCarriedCfcLabelView,
   mergeCfcLabelViews,
   withCfcLabelViewOrigins,
 } from "./label-view-state.ts";
@@ -26,18 +29,15 @@ export {
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
   cfcLabelViewFromMetadata,
-  cfcLabelViewSymbol,
   cloneCfcLabelView,
-  getCarriedCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
 } from "./label-view-state.ts";
+export { getCarriedCfcLabelView } from "../cell.ts";
 export { redactCaveatSourcesForDisplay } from "./label-view-core.ts";
 
 type LabelQueryableCell = {
   getAsNormalizedFullLink(): NormalizedFullLink;
-  runtime?: Runtime;
-  tx?: IExtendedStorageTransaction;
 };
 
 type LinkedValueMetadata = {
@@ -79,13 +79,13 @@ const storedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
 ): StoredMetadataResult => {
-  if (!cell.runtime) {
+  if (!isCell(cell)) {
     return { metadata: undefined, readFailed: false };
   }
   try {
     return {
       metadata: readStoredCfcMetadata(
-        cell.runtime.readTx(cell.tx),
+        cellRuntime(cell).readTx(cellTx(cell)),
         {
           space: link.space,
           id: link.id,
@@ -102,11 +102,11 @@ const linkedValueMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
 ): LinkedValueMetadataResult => {
-  if (!cell.runtime || link.path.length === 0) {
+  if (!isCell(cell) || link.path.length === 0) {
     return { linkedValue: undefined, readFailed: false };
   }
   try {
-    const tx = cell.runtime.readTx(cell.tx);
+    const tx = cellRuntime(cell).readTx(cellTx(cell));
     const value = tx.readValueOrThrow(link);
     if (!isPrimitiveCellLink(value)) {
       return { linkedValue: undefined, readFailed: false };
@@ -238,18 +238,19 @@ const resolvedMetadataForCell = (
   link: NormalizedFullLink,
   options: ResolvedLabelReadOptions,
 ): ResolvedMetadataResult => {
-  if (!cell.runtime) {
+  if (!isCell(cell)) {
     return { metadata: undefined, readFailed: false, path: link.path };
   }
   try {
-    const tx = cell.runtime.readTx(cell.tx);
+    const runtime = cellRuntime(cell);
+    const tx = runtime.readTx(cellTx(cell));
     // `markIfcCrossings` is what a read entry point passes. On the CLI's path
     // it changes nothing observable: the cell carries no transaction, so
     // `readTx` mints a throwaway that is never committed and the marks die
     // with it. It is here for a caller that hands in a cell with a LIVE
     // transaction, where an ifc-bearing link crossed to reach a label counts
     // against that transaction's accounting like any other crossing.
-    const resolved = resolveLink(cell.runtime, tx, link, "value", {
+    const resolved = resolveLink(runtime, tx, link, "value", {
       markIfcCrossings: true,
       ...(options.kickCrossSpaceTargets === false
         ? { kickCrossSpaceTargets: false }

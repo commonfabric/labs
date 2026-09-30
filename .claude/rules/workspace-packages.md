@@ -77,11 +77,10 @@ Adding the directory is not enough. The package path also goes into the
 knows it exists.
 
 The third edit is a checked path in `tasks/typecheck.ts`, so `deno task check`
-opens the package at all. `tasks/typecheck.test.ts` walks the members that root
-manifest declares, so the workspace edit is also what puts the package under
-the type check's coverage claim: with no path naming it, and no
-`UNCHECKED_TREES` entry saying why it has none, that test fails and names the
-files. Most packages take a single directory entry.
+opens the package at all. `tasks/typecheck.test.ts` reads every file the
+repository holds, so with no path naming the package, and no `UNCHECKED_TREES`
+entry saying why it has none, that test fails and names the files. Most
+packages take a single directory entry.
 
 ## Declare dependencies at the narrowest scope
 

@@ -12,7 +12,11 @@ import {
   type DiffLineKind,
   parseDiff,
 } from "../lib/view/diff.ts";
-import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  diffLanguages,
+  type DiffWorkspace,
+} from "../lib/view/diffdoc.ts";
 import {
   decodeLanguageInput,
   languageForName,
@@ -189,6 +193,30 @@ describe("view language fixture corpus", () => {
           for (const shebang of selection.shebangs ?? []) {
             expect(languageForSource(undefined, `${shebang}\n${after}`).id)
               .toBe(fixture.languageId);
+          }
+        });
+
+        it("selects the language in a diff from representative filenames and shebangs", () => {
+          const diffs = [
+            ...selection.filenames.map((fileName) =>
+              wholeFileDiff(fileName, before, after)
+            ),
+            ...(selection.shebangs ?? []).map((shebang) =>
+              wholeFileDiff(
+                "script",
+                `${shebang}\n${before}`,
+                `${shebang}\n${after}`,
+              )
+            ),
+          ];
+          for (const diff of diffs) {
+            const languages = diffLanguages(diff, parseDiff(diff)!);
+            expect(
+              languages.flatMap(({ oldLanguage, newLanguage }) => [
+                oldLanguage.id,
+                newLanguage.id,
+              ]),
+            ).toEqual([fixture.languageId, fixture.languageId]);
           }
         });
       }

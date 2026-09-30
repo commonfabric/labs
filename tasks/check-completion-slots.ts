@@ -147,6 +147,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["install-id", "the caller's own installation identifier"],
   ["cause-prefix", "a prefix the caller chooses"],
   ["name", "a name the caller chooses"],
+  ["label", "a display label the caller is coining"],
   ["session", "a session id, read out of the data being inspected"],
   [
     "revision",

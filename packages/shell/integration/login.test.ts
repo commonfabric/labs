@@ -21,7 +21,7 @@ describe("shell login tests", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: "common-knowledge" },
+      view: { builtin: "home" },
     });
 
     const result = await page.evaluate(async () => {
@@ -77,7 +77,7 @@ describe("shell login tests", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: "common-knowledge" },
+      view: { builtin: "home" },
     });
 
     await page.evaluate(() => {
@@ -107,18 +107,16 @@ describe("shell login tests", () => {
 
   it("can create a new user via passphrase", async () => {
     const page = shell.page();
-    const spaceName = "common-knowledge";
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName },
+      view: { builtin: "home" },
     });
 
     const state = await shell.state();
     assert(state);
-    assert(
-      (state.view as { spaceName: string }).spaceName === "common-knowledge",
-    );
+    assertEquals(state.view, { builtin: "home" });
+    assertEquals(state.identityDid, undefined);
 
     await clickPierce(page, '[test-id="register-new-key"]');
     await pierce(page, '[test-id="use-passphrase"]');
@@ -131,13 +129,16 @@ describe("shell login tests", () => {
 
     await clickPierce(page, '[test-id="passphrase-continue"]');
 
-    await waitForCondition(
-      page,
-      (probe, name) =>
-        probe.collect(".header-space").some((el) =>
-          probe.deepText(el).trim() === name
-        ),
-      { args: [spaceName] },
-    );
+    // Registering logs the new identity in, and the home view opens that
+    // identity's own Home space, whose root pattern loads.
+    await waitForCondition(page, () => {
+      const identity = globalThis.app?.state().identity;
+      const appView = document.querySelector("x-root-view")?.shadowRoot
+        ?.querySelector("x-app-view") as
+          | { space?: string; _spaceRootPattern?: { value?: unknown } }
+          | null;
+      return !!identity && appView?.space === identity.did() &&
+        !!appView._spaceRootPattern?.value;
+    });
   });
 });

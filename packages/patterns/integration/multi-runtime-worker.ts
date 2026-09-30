@@ -35,6 +35,7 @@ import {
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { Cell } from "@commonfabric/runner";
 import {
+  cellRuntime,
   convertCellsToLinks,
   isCell,
   markUiInputBlindWriteTx,
@@ -69,6 +70,7 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
 let cc: PiecesController | undefined;
@@ -347,7 +349,7 @@ function componentBinding(
   const raw = props.getRawUntyped({ frozen: false }) as Record<string, unknown>;
   const link = parseLink(raw[name], props.getAsNormalizedFullLink());
   return link?.id && link.space
-    ? props.runtime.getCellFromLink(link)
+    ? cellRuntime(props).getCellFromLink(link)
     : prop.resolveAsCell();
 }
 
@@ -372,7 +374,7 @@ const handlers: Record<
   async init(
     {
       identity: keyPair,
-      spaceName,
+      spaceDid,
       apiUrl,
       diagnostics,
       recordRejections,
@@ -395,7 +397,7 @@ const handlers: Record<
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
-      space: spaceName as string,
+      space: spaceDid as string,
       ...(cfc as MultiRuntimeCfcOptions | undefined),
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
@@ -1153,5 +1155,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 };
 
 (self as unknown as Worker).postMessage(
-  { ready: true } satisfies WorkerResponse,
+  {
+    ready: true,
+    lifetimeLock: await holdWorkerLifetimeLock(),
+  } satisfies WorkerResponse,
 );

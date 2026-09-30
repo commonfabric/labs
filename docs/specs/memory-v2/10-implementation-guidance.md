@@ -24,11 +24,13 @@ target. In particular:
 - the memory server ACL policy gates session opens and commands when enabled;
   route-level `Origin` enforcement remains deferred
 - fresh-space writes require an ACL-only genesis by the space identity or a
-  configured service DID; storage performs named-space genesis in a temporary
-  space-authenticated session and then remounts as the active user
+  configured service DID; creating a space generates a random key and commits
+  its genesis in a session authenticated as that key, and a Home space's first
+  mount writes its genesis in a temporary session as the user; the space DID
+  holds OWNER only until genesis lands
 - populated spaces that never had an ACL are temporarily authenticated-public
-  READ/WRITE (never OWNER), except that the home identity claims its own
-  ACL-less space; malformed, ownerless, and retracted ACLs fail closed
+  READ/WRITE (never OWNER); malformed, ownerless, and retracted ACLs fail
+  closed
 - session resume still uses caller-provided `sessionId` values; principal
   binding and server-issued session ids remain deferred
 - one-shot `graph.query` now honors `branch` and `atSeq`

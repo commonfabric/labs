@@ -7,6 +7,7 @@ import {
   handler,
   NAME,
   pattern,
+  spaceAccess,
   spaceMembers,
   type TrustedActionWrite,
   UI,
@@ -15,7 +16,7 @@ import {
   Writable,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
-import { chatPolicy } from "./records.ts";
+import { CHAT_POLICY } from "./records.ts";
 import type { ChatProfile, ChatRoomAbout, ChatRoomPolicy } from "./schemas.ts";
 
 /** Immutable creation records admitted by the space conversation's start control. */
@@ -38,7 +39,7 @@ const initializeRoom = handler<unknown, {
   const acl = spaceMembers();
   const access = actor ? acl?.[actor] ?? acl?.["*"] : undefined;
   if (access !== "WRITE" && access !== "OWNER") return;
-  policy.set(chatPolicy());
+  policy.set(CHAT_POLICY);
   about.set({
     kind: "group",
     title: "Space conversation",
@@ -67,8 +68,7 @@ export default pattern(() => {
   const room = FabriChatRoom({ about, memory, myProfile: profile.result });
   const ready = computed(() => about.get() !== undefined);
   const canCreate = computed(() => {
-    const acl = spaceMembers();
-    const access = acl?.[currentPrincipal() ?? ""] ?? acl?.["*"];
+    const access = spaceAccess(about);
     return access === "WRITE" || access === "OWNER";
   });
   return {

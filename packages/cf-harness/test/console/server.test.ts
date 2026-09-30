@@ -6,12 +6,15 @@ import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isol
 import {
   consoleDataDirectories,
   consoleHealthRows,
+  consoleHelpText,
   consoleSandboxBanner,
   ConsoleServer,
   consoleStartupBanner,
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
+  parseConsoleArgs,
   resolveConsoleConfig,
+  startConsoleServer,
 } from "../../console/server.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
 import {
@@ -242,6 +245,53 @@ describe("console/server", () => {
     );
     expect(response.status).toBe(200);
     return await response.json();
+  };
+
+  /** A started turn that keeps running until `finish()` is called. */
+  interface HeldTurn {
+    server: ConsoleServer;
+    sessionId: string;
+    turnId: string;
+
+    /** Lets the turn's model loop return, and waits for the turn to end. */
+    finish(): Promise<void>;
+  }
+
+  /**
+   * Starts a task on a server of its own whose model loop does not return
+   * until the test says so, so the turn is still running when the test acts
+   * on it.
+   */
+  const startHeldTurn = async (): Promise<HeldTurn> => {
+    const gate = Promise.withResolvers<void>();
+    const held = new ConsoleServer(
+      await config(),
+      (onEvent) =>
+        new HarnessInteractiveChatService({
+          createPromptLoop: () => ({
+            runTranscript: async (options) => {
+              await gate.promise;
+              return await answeringLoop({} as never).runTranscript(options);
+            },
+          }),
+          now: advancingClock(),
+          onEvent,
+        }),
+    );
+    const response = await held.handle(
+      jsonRequest("/api/task", { text: "keep working" }),
+    );
+    expect(response.status).toBe(200);
+    const { sessionId, turnId } = await response.json();
+    return {
+      server: held,
+      sessionId,
+      turnId,
+      finish: async () => {
+        gate.resolve();
+        await held.service.waitForTurn(sessionId, turnId);
+      },
+    };
   };
 
   /** What the index client was asked for, as it composed the request. */
@@ -1887,51 +1937,113 @@ describe("console/server", () => {
     });
 
     it("answers 410 `turn_canceled` for a turn that was canceled", async () => {
-      let finish: (() => void) | undefined;
-      const gate = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      const waitingServer = new ConsoleServer(
-        await config(),
-        (onEvent) =>
-          new HarnessInteractiveChatService({
-            createPromptLoop: () => ({
-              runTranscript: async (options) => {
-                await gate;
-                return await answeringLoop({} as never).runTranscript(options);
-              },
-            }),
-            now: advancingClock(),
-            onEvent,
-          }),
-      );
-      const page = await waitingServer.handle(getRequest("/"));
-      await page.body?.cancel();
-      const startedResponse = await waitingServer.handle(
-        jsonRequest("/api/task", { text: "keep working" }, {}),
-      );
-      const started = await startedResponse.json();
-      const canceled = await waitingServer.handle(
-        jsonRequest("/api/cancel", { sessionId: started.sessionId }, {}),
+      const held = await startHeldTurn();
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
       );
       expect(canceled.status).toBe(200);
-      finish!();
-      await waitingServer.service.waitForTurn(
-        started.sessionId,
-        started.turnId,
-      );
+      await held.finish();
 
-      const response = await waitingServer.handle(getRequest(
-        `/api/turns/${started.turnId}/result`,
-        {},
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
       ));
 
       expect(response.status).toBe(410);
       expect(await response.json()).toEqual({
         code: "turn_canceled",
-        error: `turn ${started.turnId} was canceled`,
-        detail: "canceled from the console page",
+        error: `turn ${held.turnId} was canceled`,
+        detail: "stopped by the test",
       });
+    });
+  });
+
+  describe("POST /api/cancel", () => {
+    /** What the turn's result route gives as the reason it was canceled. */
+    const cancelReason = async (held: HeldTurn): Promise<unknown> => {
+      await held.finish();
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
+      ));
+      expect(response.status).toBe(410);
+      return (await response.json()).detail;
+    };
+
+    it("records the reason the caller gives for the cancel", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped from the Weaver pill",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped from the Weaver pill");
+    });
+
+    it("records only the route for a cancel that gives no reason", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", { sessionId: held.sessionId }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe(
+        "canceled by a request to the console",
+      );
+    });
+
+    it("refuses a turn id that is not a string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const turnId of [7, null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, turnId }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "turnId, when given, must be a string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
+    });
+
+    it("refuses a reason that is not a non-empty string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const reason of [42, "", "  ", null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, reason }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "reason, when given, must be a non-empty string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
     });
   });
 
@@ -2542,6 +2654,199 @@ describe("console/server", () => {
           "/console",
         ),
       ).rejects.toThrow("CF_HARNESS_CONSOLE_PORT must be a positive integer");
+    });
+
+    it("throws naming a misspelled restriction flag and the flag it meant", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publsh",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--no-pattern-index-publsh` is not a flag of the console. Did you " +
+          "mean `--no-pattern-index-publish`?",
+      );
+    });
+
+    it("throws naming a flag given no value, and not the word after it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--workspace",
+          "--Secret prompt text",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("throws for a port or a turn budget given no value, rather than using its default", async () => {
+      for (
+        const extra of [
+          ["--port", "-1"],
+          ["--max-model-turns", "-3"],
+          ["--port="],
+          ["--max-model-turns= "],
+        ]
+      ) {
+        const flag = extra[0].split("=")[0];
+        await expect(
+          resolveConsoleConfig(
+            ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+            {},
+            "/console",
+          ),
+        ).rejects.toThrow(`\`${flag}\` was given no value`);
+      }
+    });
+
+    it("throws naming no negative number standing alone", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "-5x"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "An argument starting with `-` is not a flag of the console.",
+      );
+    });
+
+    it("throws saying a negated switch takes no value", async () => {
+      await expect(
+        resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "k",
+            "--fabric-space",
+            "s",
+            "--no-pattern-index-publish=true",
+          ],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow("`--no-pattern-index-publish` takes no value.");
+    });
+
+    it("throws naming a flag written after `--`, which it does not read", async () => {
+      await expect(
+        resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", "--", "--bogus"],
+          {},
+          "/console",
+        ),
+      ).rejects.toThrow(
+        "`--bogus` follows `--`, after which the console reads no flag; it " +
+          "takes no positional arguments.",
+      );
+    });
+
+    it("throws for a positional argument without repeating it", async () => {
+      for (
+        const extra of [["hunter2"], ["--", "--Secret words"], ["--", "-15"]]
+      ) {
+        const refusal = await resolveConsoleConfig(
+          ["--fabric-identity", "k", "--fabric-space", "s", ...extra],
+          {},
+          "/console",
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(refusal).toBe(
+          "The console takes no positional arguments, and reads no flag " +
+            "after `--`.",
+        );
+      }
+    });
+
+    it("throws naming an undeclared flag without the value given with it", async () => {
+      const refusal = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "k",
+          "--fabric-space",
+          "s",
+          "--api-key=sk-secret",
+        ],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe("`--api-key` is not a flag of the console.");
+    });
+  });
+
+  describe("consoleHelpText()", () => {
+    it("returns usage naming every flag for `--help` or `-h`, whatever else is on the line", () => {
+      for (
+        const args of [["--help"], ["-h"], ["--port", "8100", "--bogus", "-h"]]
+      ) {
+        const text = consoleHelpText(args);
+
+        expect(text).toContain("--fabric-identity");
+        expect(text).toContain("--no-pattern-index-publish");
+        expect(text).toContain("README.md");
+      }
+    });
+
+    it("returns `undefined` for arguments that ask for no help", () => {
+      expect(consoleHelpText(["--fabric-identity", "k"])).toBeUndefined();
+    });
+
+    it("leaves `--help` and `-h` among the flags the console takes", () => {
+      expect(() => parseConsoleArgs(["--help", "-h"])).not.toThrow();
+    });
+
+    it("prints usage for `--help` rather than resolving a configuration", async () => {
+      // Resolving one would throw: no fabric session is named here.
+      await startConsoleServer(["--help"], {}, "/console");
+    });
+
+    it("refuses a flag whose value reads as help, rather than printing usage", async () => {
+      for (const help of ["-h", "--help"]) {
+        await expect(
+          startConsoleServer(["--port", help], {}, "/console"),
+        ).rejects.toThrow(
+          "`--port` was given no value; a value starting with `-` needs " +
+            "the `--port=<value>` spelling",
+        );
+      }
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      await expect(
+        startConsoleServer(["--workspace", "-hidden"], {}, "/console"),
+      ).rejects.toThrow(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("refuses a dotted flag without the value of the flag before the dot", async () => {
+      const refusal = await startConsoleServer(
+        ["--fabric-identity", "/secret/key.pem", "--fabric-identity.x", "y"],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--fabric-identity.x` is not a flag of the console. Did you mean " +
+          "`--fabric-identity`?",
+      );
     });
   });
 

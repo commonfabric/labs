@@ -16,7 +16,7 @@ export interface NativeUiControl {
  * checks the writer identity, surface, action, actor, and space access.
  */
 export function bindNativeUiControl<T extends Record<string, unknown>>(
-  stream: Cell<unknown>,
+  stream: Pick<Cell<unknown>, "send">,
   control: NativeUiControl,
 ): (payload: T) => ReturnType<Cell<unknown>["send"]> {
   const { surface, action } = control;

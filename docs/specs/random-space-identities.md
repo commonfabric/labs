@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed target behavior and the active deployment direction. The
-[implementation plan](../plans/random-space-identities.md) describes the code
-and data change.
+Implemented in this repository. The
+[implementation plan](../plans/random-space-identities.md) says what is built
+and the deployment steps that remain.
 
 The [Common Fabric URL](fabric-urls.md) and
 [space name registry](../plans/space-name-registry.md) designs are separate

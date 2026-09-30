@@ -9,6 +9,7 @@ import {
   type MemorySpace,
   type NormalizedFullLink,
   renderCellReference,
+  sendEvent,
 } from "@commonfabric/runner";
 import {
   cfcSchemaResolvedRoot,
@@ -203,6 +204,9 @@ export interface CallableExecutionDeps {
 
   /** @internal Seam for tests, mirroring `getCellValue`'s. */
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** @internal Seam for tests, which dispatch to a stand-in handler. */
+  sendEvent?: typeof sendEvent;
 }
 
 /** A backing-cell address published in an Invocation, written in the
@@ -1694,16 +1698,21 @@ export async function executeResolvedCallable(
             handled.resolve(committedTx);
           };
           try {
-            resolved.callableCell.send(dispatchInput, onCommit, {
-              ...(invocation === undefined ? {} : {
-                // The id and the session that chose it travel together:
-                // an id is the caller's own word, and only the pair
-                // decides which receipt this handling files under.
-                eventId: invocation.id,
-                session: invocation.session,
-              }),
-              onAppended,
-            });
+            (deps.sendEvent ?? sendEvent)(
+              resolved.callableCell,
+              dispatchInput,
+              onCommit,
+              {
+                ...(invocation === undefined ? {} : {
+                  // The id and the session that chose it travel together:
+                  // an id is the caller's own word, and only the pair
+                  // decides which receipt this handling files under.
+                  eventId: invocation.id,
+                  session: invocation.session,
+                }),
+                onAppended,
+              },
+            );
           } catch (error) {
             reject(error);
           }

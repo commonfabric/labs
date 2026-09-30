@@ -1,6 +1,3 @@
-import { aclDocId } from "@commonfabric/memory/acl";
-import type { URI } from "@commonfabric/memory/interface";
-import { invalidateSpaceMembership } from "../builder/space-members.ts";
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { ensureNotRenderThread } from "@commonfabric/utils/env";
@@ -460,6 +457,9 @@ export class Scheduler {
    */
   #executingAction: Action | null = null;
 
+  /** Called with each action {@link unsubscribe} is given. */
+  #unsubscribeObservers = new Set<(action: Action) => void>();
+
   #currentActionId?: string;
   #dependencyGraphState!: DependencyGraphState;
   #dependencyUpdateState!: DependencyUpdateState;
@@ -475,9 +475,6 @@ export class Scheduler {
   /** The storage subscriber registered in the constructor, kept so `dispose`
    * can hand it back. */
   readonly #storageSubscription: IStorageSubscription;
-
-  /** Releases access-verdict observation when this scheduler is disposed. */
-  readonly #cancelSpaceAccessChange?: Cancel;
 
   #idlePromises: (() => void)[] = [];
   #backgroundTasks = new Set<Promise<unknown>>();
@@ -574,23 +571,6 @@ export class Scheduler {
     // will ever have to hand back, and one built inline is unreachable.
     this.#storageSubscription = this.#createStorageSubscription();
     this.runtime.storageManager.subscribe(this.#storageSubscription);
-    this.#cancelSpaceAccessChange = this.runtime.storageManager
-      .subscribeSpaceAccessChange?.((space) => {
-        invalidateSpaceMembership(this.runtime, space);
-        // Access changes can leave the ACL bytes unchanged. Re-run its readers
-        // so their access classification observes the provider's new verdict.
-        for (
-          const action of this.#triggerIndex.collectReadersForWrite({
-            space,
-            id: aclDocId(space) as URI,
-            type: "application/json",
-            scope: "space",
-            path: [],
-          })
-        ) {
-          this.invalidateAction(action);
-        }
-      });
 
     // Set up harness event listeners
     this.runtime.harness.addEventListener("console", (e: Event) => {
@@ -690,6 +670,15 @@ export class Scheduler {
   /** Id of the action executing right now, if one is. */
   get currentActionId(): string | undefined {
     return this.#currentActionId;
+  }
+
+  /**
+   * The action executing right now, if one is. Code running inside an action
+   * that learns of a change from somewhere the action's reads cannot see hands
+   * this to {@link invalidateAction} to run the action again.
+   */
+  get executingAction(): Action | null {
+    return this.#executingAction;
   }
 
   /**
@@ -954,6 +943,17 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    for (const observer of [...this.#unsubscribeObservers]) observer(action);
+  }
+
+  /**
+   * Calls `observer` with each action this scheduler unsubscribes, so that
+   * something holding an action for a later purpose can let it go. Returns a
+   * cancel that stops the calls.
+   */
+  observeUnsubscribe(observer: (action: Action) => void): Cancel {
+    this.#unsubscribeObservers.add(observer);
+    return () => this.#unsubscribeObservers.delete(observer);
   }
 
   async run(action: Action): Promise<any> {
@@ -2534,7 +2534,6 @@ export class Scheduler {
     // `{ done: true }` is the only self-cancelling answer the contract has.
     // `unsubscribe` is optional on the capability, so a manager without one is
     // left as it was rather than crashing a disposal.
-    this.#cancelSpaceAccessChange?.();
     this.runtime.storageManager.unsubscribe?.(this.#storageSubscription);
     this.#headEventLoadPark = null;
     this.#headEventLoadParkHistory = null;

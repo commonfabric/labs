@@ -16,10 +16,15 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { Identity } from "@commonfabric/identity";
 import type { PiecesController } from "@commonfabric/piece/ops";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { CellImpl } from "../../runner/src/cell.ts";
 import { type PieceConfig, sinkCellValue } from "../lib/piece.ts";
+
+const signer = await Identity.fromPassphrase("cli piece sink");
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 
@@ -64,12 +69,12 @@ interface Driven {
  * Helper for the cases below, which is a controller standing in for the
  * connection, and the handles a case drives it by.
  *
- * With `handle`, the slot holds a `Cell` rather than a plain value — the
- * handle an `asCell` projection stores — whose members record what is asked
- * of it.
+ * With `handleRuntime`, the slot holds a `Cell` of that runtime rather than a
+ * plain value — the handle an `asCell` projection stores — whose members
+ * record what is asked of it.
  */
 function driving(
-  options: { handle?: boolean } = {},
+  options: { handleRuntime?: Runtime } = {},
 ): { pieces: PiecesController; driven: Driven } {
   const calls: string[] = [];
   let fire: (() => void) | undefined;
@@ -77,19 +82,28 @@ function driving(
   let settling: PromiseWithResolvers<void> | undefined;
   // A `Cell` by the runtime's own test (`isCell`), which is the question the
   // read-through asks; its members are this helper's.
-  const handle = Object.assign(Object.create(CellImpl.prototype), {
-    get: () => "behind",
-    getRaw: () => "behind",
-    pull: () => {
+  class RecordingHandle extends CellImpl<string> {
+    override get() {
+      return "behind";
+    }
+
+    override getRaw() {
+      return "behind";
+    }
+
+    override pull() {
       calls.push("pull handle");
       return Promise.resolve("behind");
-    },
-    sink: () => {
+    }
+
+    override sink() {
       calls.push("sink handle");
       return () => {};
-    },
-  });
-  let held: unknown = options.handle ? handle : "before";
+    }
+  }
+  let held: unknown = options.handleRuntime === undefined
+    ? "before"
+    : new RecordingHandle(options.handleRuntime, undefined);
   const cell = {
     key: (...path: (string | number)[]) => {
       calls.push(`key ${path.join("/")}`);
@@ -359,11 +373,21 @@ describe("sinkCellValue()", () => {
     // Kills: subscribing to the slot rather than to the handle it holds, which
     // takes the sink on the outer cell.
 
-    const { pieces, driven } = driving({ handle: true });
-    await sinkCellValue(config, ["topics", 3], () => {}, {}, {
-      loadPieces: () => Promise.resolve(pieces),
-      ...RESOLVES,
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(config.apiUrl),
+      storageManager,
     });
+    const { pieces, driven } = driving({ handleRuntime: runtime });
+    try {
+      await sinkCellValue(config, ["topics", 3], () => {}, {}, {
+        loadPieces: () => Promise.resolve(pieces),
+        ...RESOLVES,
+      });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
     expect(driven.calls).toEqual([
       `get ${config.piece} false -`,
       "result topics/3",

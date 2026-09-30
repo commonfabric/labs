@@ -13,7 +13,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
-import { createCell } from "../src/cell.ts";
+import { cellTx, createCell } from "../src/cell.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
@@ -5813,7 +5813,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       runtime.moduleRegistry.addModuleByRef(
         "trusted-handler",
         raw((inputsCell) => {
-          const tx = inputsCell.tx;
+          const tx = cellTx(inputsCell);
           if (!tx) {
             throw new Error("missing tx");
           }

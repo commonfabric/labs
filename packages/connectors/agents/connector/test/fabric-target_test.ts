@@ -845,9 +845,9 @@ Deno.test("Fabric target releases graph storage after every session", async () =
   const identity = await Identity.fromPassphrase(
     "agent graph storage release test",
   );
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `agent-graph-release-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const mainStorage = SharedServerStorageManager.connectTo(server, {
     as: session.as,
@@ -1069,9 +1069,9 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
   const otherOwner = await Identity.fromPassphrase(
     "shared agent graph other owner",
   );
-  const ownerSession = await createSession({
+  const ownerSession = createSession({
     identity: owner,
-    spaceName: `shared-agent-graph-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const ownerStorage = SharedServerStorageManager.connectTo(server, {
     as: ownerSession.as,
@@ -1151,7 +1151,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
       true,
     );
 
-    const otherSession = await createSession({
+    const otherSession = createSession({
       identity: otherOwner,
       spaceDid: ownerSession.space,
     });
@@ -1219,11 +1219,11 @@ Deno.test("stable graph checks remote children before adoption", async () => {
   const otherOwner = await Identity.fromPassphrase(
     "stable graph remote squatter",
   );
-  const ownerSession = await createSession({
+  const ownerSession = createSession({
     identity: owner,
-    spaceName: `stable-graph-remote-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
-  const otherSession = await createSession({
+  const otherSession = createSession({
     identity: otherOwner,
     spaceDid: ownerSession.space,
   });

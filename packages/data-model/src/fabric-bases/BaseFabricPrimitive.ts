@@ -9,6 +9,8 @@
  * instead of being assumed.
  */
 
+import { type Constructor } from "@commonfabric/utils/types";
+
 import { FabricPrimitive } from "@/interface.ts";
 import type { FabricPrimitiveValueTag } from "@/fabric-primitives";
 
@@ -20,18 +22,59 @@ import type { FabricPrimitiveValueTag } from "@/fabric-primitives";
 export const VALUE_TAG: unique symbol = Symbol("data-model.valueTag");
 
 /**
+ * Token a concrete primitive class hands to the base constructor, along with
+ * itself, to show that it is one of the `data-model`'s own. It reaches those
+ * classes through `blessing.ts`, which no barrel and no export-map entry names,
+ * so code outside the package has no way to hold it.
+ */
+export const BLESSING_TOKEN: unique symbol = Symbol(
+  "data-model.FabricPrimitiveBlessing",
+);
+
+/**
  * Abstract base class for `FabricPrimitive` subclasses. Concrete
  * `FabricPrimitive` classes extend this, not `FabricPrimitive` directly:
  * `FabricPrimitive` is the pure abstract contract that external code is written
  * against, while `BaseFabricPrimitive` is the designated home for shared
  * implementation. Its counterpart `BaseFabricInstance` carries the
  * `shallowClone()` template method; this class carries the construction-time
- * freeze, the static invariant guard, and the `[VALUE_TAG]` getter that each
- * subclass supplies.
+ * check and freeze, the static invariant guard, and the `[VALUE_TAG]` getter
+ * that each subclass supplies.
+ *
+ * Each concrete class calls `super(BLESSING_TOKEN, <itself>)`, and freezes its
+ * own prototype in a `static` block.
  */
 export abstract class BaseFabricPrimitive extends FabricPrimitive {
-  /** Constructs an instance. */
-  constructor() {
+  /**
+   * Brand which indicates by its presence as a `#privateProperty` that this
+   * instance was created inside the `data-model`.
+   */
+  readonly #instanceBlessed = true;
+
+  /**
+   * Constructs an instance, on behalf of the concrete class `cls`, which must
+   * be the class being constructed. Only a class holding `BLESSING_TOKEN` can
+   * succeed.
+   *
+   * The class being named is what ties the check to the constructor that is
+   * actually running: `new.target` alone can be any class a caller chooses, by
+   * way of `Reflect.construct()`, and a caller that could get the base
+   * constructor, or some other concrete class's, to run for it would get an
+   * instance missing the concrete class's private state.
+   *
+   * @throws If `token` is not `BLESSING_TOKEN`, or `cls` is not the class
+   *   being constructed.
+   */
+  constructor(
+    token: typeof BLESSING_TOKEN,
+    cls: Constructor<BaseFabricPrimitive>,
+  ) {
+    if ((token !== BLESSING_TOKEN) || (cls !== new.target)) {
+      throw new Error(
+        "Invalid attempt to construct an instance of an unblessed `FabricPrimitive` class.",
+      );
+    }
+
     super();
 
     // Freezing here rather than at the end of each concrete constructor is
@@ -62,29 +105,32 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
 
   /**
    * Type guard for `BaseFabricPrimitive`, which also enforces the invariant
-   * that every `FabricPrimitive` is in fact a `BaseFabricPrimitive`. Concrete
-   * `FabricPrimitive` classes are required to extend `BaseFabricPrimitive`
-   * (never `FabricPrimitive` directly), so a value that is a `FabricPrimitive`
-   * but not a `BaseFabricPrimitive` indicates a broken subclass. Mirrors
-   * `BaseFabricInstance.isInstance()`.
+   * that every `FabricPrimitive` is in fact a `BaseFabricPrimitive` which was
+   * minted inside the `data-model`. Concrete `FabricPrimitive` classes are
+   * required to _directly_ extend `BaseFabricPrimitive`. This function is
+   * similar to `BaseFabricInstance.isInstance()` but imposes tighter
+   * restrictions, given the fully-controlled nature of the `FabricPrimitive`
+   * hierarchy.
    *
    * Like its counterpart, this uses "death before confusion" on the mismatch:
    * it throws rather than quietly returning `false`, so a broken subclass is
    * surfaced at the point of use. The throw is intentional despite the
-   * predicate-style name.
+   * predicate-style name. In addition, because this error can be elicited by
+   * client code _not_ controlled by the system, the error message _does not_
+   * indicate that it is a "shouldn't happen."
    *
-   * @throws If `value` is a `FabricPrimitive` that is not a
-   *   `BaseFabricPrimitive` -- the "shouldn't happen" invariant violation.
+   * @throws If `value` is a `FabricPrimitive` that is not a genuine instance
+   *   minted within the `data-model`.
    */
   static isInstance(value: unknown): value is BaseFabricPrimitive {
-    if (value instanceof BaseFabricPrimitive) {
+    if ((value === null) || (typeof value !== "object")) {
+      return false;
+    } else if (#instanceBlessed in value) {
       return true;
     } else if (value instanceof FabricPrimitive) {
-      throw new Error(
-        "Shouldn't happen: `FabricPrimitive` that is not a `BaseFabricPrimitive`.",
-      );
+      throw new Error("Detected counterfeit `FabricPrimitive`.");
+    } else {
+      return false;
     }
-
-    return false;
   }
 }

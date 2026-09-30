@@ -2,7 +2,7 @@ import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
 import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
-import type { Cell, Runtime } from "@commonfabric/runner";
+import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
   agentQueueIndexCell,
@@ -282,16 +282,16 @@ export async function startAgentRunner(
     expectedRegistrationId?: string,
   ): Promise<void> =>
     new Promise<void>((resolve, reject) =>
-      homePattern.key("agentQueue").key("setAgentRunner")
-        .send(
-          entry === undefined ? { expectedRegistrationId } : { runner: entry },
-          (tx) => {
-            const status = tx.status();
-            if (status.status === "error") {
-              reject(new Error(status.error.message, { cause: status.error }));
-            } else resolve();
-          },
-        )
+      sendEvent(
+        homePattern.key("agentQueue").key("setAgentRunner"),
+        entry === undefined ? { expectedRegistrationId } : { runner: entry },
+        (tx) => {
+          const status = tx.status();
+          if (status.status === "error") {
+            reject(new Error(status.error.message, { cause: status.error }));
+          } else resolve();
+        },
+      )
     );
   let runner: AgentRunner | undefined;
   try {

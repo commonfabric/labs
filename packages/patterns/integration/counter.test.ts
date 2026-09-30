@@ -1,9 +1,9 @@
-import { env, type Page } from "@commonfabric/integration";
+import { createTestSpace, env, type Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   initializePiecesController,
@@ -13,11 +13,11 @@ import {
 import { waitForText } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 /**
- * Opens the piece `pieceId` in the shell and waits until its counter has
- * rendered, answering the page it landed on.
+ * Opens the piece `pieceId` of the space `spaceDid` in the shell and waits
+ * until its counter has rendered, answering the page it landed on.
  *
  * Every test that drives the page opens it here, which is what makes two
  * things true of each of them: no test depends on another having navigated,
@@ -29,12 +29,13 @@ const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
  */
 async function openPiece(
   shell: ShellIntegration,
+  spaceDid: DID,
   pieceId: string,
   identity: Identity,
 ): Promise<Page> {
   await shell.goto({
     frontendUrl: FRONTEND_URL,
-    view: { spaceName: SPACE_NAME, pieceId },
+    view: { spaceDid, pieceId },
     identity,
   });
   const page = shell.page();
@@ -70,7 +71,7 @@ describe("counter direct operations test", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
     });
@@ -109,7 +110,7 @@ describe("counter direct operations test", () => {
   });
 
   it("should load the counter piece and verify initial state", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     // Verify initial value is 0
     await waitForText(page, "#counter-result", "Counter is the 0th number");
@@ -118,7 +119,7 @@ describe("counter direct operations test", () => {
   });
 
   it("should update counter value via direct operation (live)", async () => {
-    const page = await openPiece(shell, piece.id, identity);
+    const page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await piece.result.set(42, ["value"]);
 
@@ -129,7 +130,7 @@ describe("counter direct operations test", () => {
   });
 
   it("should update counter value and verify after page refresh", async () => {
-    let page = await openPiece(shell, piece.id, identity);
+    let page = await openPiece(shell, cc.getSpace(), piece.id, identity);
 
     await piece.result.set(42, ["value"]);
     await awaitResultValue(42);
@@ -140,7 +141,7 @@ describe("counter direct operations test", () => {
     // the stamp to be gone, so what is read afterwards is a document built
     // from what was stored rather than the one that was already showing it.
     await page.evaluate("globalThis.__beforeReload = true");
-    page = await openPiece(shell, piece.id, identity);
+    page = await openPiece(shell, cc.getSpace(), piece.id, identity);
     assertEquals(
       await page.evaluate("globalThis.__beforeReload === true") as boolean,
       false,

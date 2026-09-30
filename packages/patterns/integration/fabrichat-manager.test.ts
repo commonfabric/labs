@@ -157,10 +157,9 @@ describe("FabriChat manager", () => {
       await send("refused", "without-profile");
       expect(result.key("rooms").get()).toHaveLength(0);
       expect(result.key("outgoingNotices").get()).toHaveLength(0);
-      const profileSpace = await runtime.resolvePrivateSpace(
-        "test-profile",
-        creator.did(),
-      );
+      const profileSpace = await manager.createSpace({
+        [creator.did()]: "OWNER",
+      });
       const profileTx = runtime.edit();
       const profile = runtime.getCell(
         profileSpace,
@@ -273,10 +272,7 @@ describe("FabriChat manager", () => {
       const placementPattern = await runtime.patternManager.compilePattern(
         placementProgram,
       );
-      const container = await runtime.resolvePrivateSpace(
-        "direct-container",
-        creator.did(),
-      );
+      const container = await manager.createSpace({ [creator.did()]: "OWNER" });
       const placement = runtime.getCell<Record<string, unknown>>(
         container,
         "placement",
@@ -416,6 +412,13 @@ describe("FabriChat manager", () => {
       await ui.pull();
       const leaveControl = findLeaveControl(ui);
       expect(leaveControl).toBeDefined();
+      const roomAcl = new ACLManager(runtime, roomSpace);
+      await roomAcl.set("*", "READ");
+      await leaveControl!.send(undefined);
+      await runtime.idle();
+      expect((await roomAcl.get())?.[creator.did()]).toBe("OWNER");
+      expect(result.key("rooms").get()).toHaveLength(2);
+      await roomAcl.remove("*");
       const replica = manager.open(roomSpace).replica as unknown as {
         commitNative: (...args: unknown[]) => unknown;
       };

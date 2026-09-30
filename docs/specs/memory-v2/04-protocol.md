@@ -1035,17 +1035,23 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | Stored ACL state | Effective access |
 | --- | --- |
 | valid ACL with a concrete OWNER | Explicit principal grant, then `"*"`; normal READ < WRITE < OWNER ordering |
-| never-created ACL, server sequence 0 | Authenticated READ only; the first write must be a valid ACL-only genesis by the space identity or a service DID |
+| never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
 
-The exact space DID and configured service DIDs retain implicit OWNER so they
-can initialize or repair ACL state. A valid ACL mutation is a whole-document,
+Configured service DIDs hold implicit OWNER on every space, so they can
+initialize or repair ACL state. The exact space DID holds OWNER only while the
+space has no ACL document and no history, which is what genesis needs and all
+it needs; after that it holds what the ACL grants it, like any other principal.
+A space DID therefore cannot repair a malformed or retracted ACL, and cannot
+claim a populated space that has none. A valid ACL mutation is a whole-document,
 space-scoped replacement on the default branch and must retain at least one
 concrete (non-`"*"`) OWNER. Patch, deletion, mixed ACL/data commits, and
 last-owner removal are rejected. These shape and genesis rules are hard
 storage invariants in both `observe` and `enforce`; `observe` relaxes only
-ordinary capability shortfalls on an already valid ACL.
+READ and WRITE shortfalls on an already valid ACL, and refuses a principal
+lacking OWNER, so no principal can write a space's ACL while a deployment
+stages its access control.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority) in
@@ -1056,25 +1062,23 @@ that writes the ACL through an ordinary value-surface `set` emits `op: "patch"`
 and is refused with "ACL mutations must replace the space-scoped ACL document";
 it must address the whole document instead.
 
-Genesis remains an explicit transaction. For a fresh named space, the storage
-manager briefly authenticates as the derived space identity, writes the genesis
-document against a confirmed absent ACL, closes that bootstrap session, and
-mounts the durable session as the active user. The document is whichever the
-caller registered beside the space key
-(`registerSpaceIdentity(identity, { genesisAcl })` — the space is then born
-with exactly that ACL, this admission check is the only validation it
-receives, and an open of a space that already exists proceeds only if it is
-owned exactly as that document says — grants below OWNER are the owner's to
-evolve — else is refused), else the fallback
-`{ [activeUser]: "OWNER", "*": "WRITE" }`. The wildcard grant is the rollout
-default until ACL management has a UI, spelled once as the runner's
-`DEFAULT_GENESIS_GRANTS`; the active user remains the concrete owner who can
-later narrow it. This preserves user/session-scoped partitioning. When the
-active identity already is
-the space DID (the home space), the same flow instead writes
-`{ [space]: "OWNER" }`; that narrow path also privatizes a populated legacy
-home with no ACL. Populated named spaces with no ACL remain public under the
-compatibility row above.
+Genesis remains an explicit transaction, and creating a space is the only
+thing that writes one. A create action generates a fresh key pair from random
+data, opens one session authenticated as that key through the same route every
+later session for the DID takes, and commits the genesis document against a
+confirmed absent ACL: the creator as OWNER, together with any grants the
+creator chose (`StorageManager.createSpace(acl, root?)`, reached as
+`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
+the commit is confirmed. The creator is the concrete owner, and can later grant
+access to other principals or to `"*"`. Opening a DID that has no history
+writes nothing: it is not a space, and stays that way.
+
+The one space born on open is a Home space, whose DID is its user's own. When
+the active identity is the space DID and the space has no ACL document and no
+history, the storage manager's first mount writes `{ [space]: "OWNER" }` in a
+temporary bootstrap session and then mounts the durable session. A populated
+Home space with no ACL document is left as it stands. Populated spaces with no
+ACL remain public under the compatibility row above.
 
 The server's unauthenticated `writeDocument` operator path cannot create a
 fresh space or mutate the ACL document while ACL policy is active. Its access

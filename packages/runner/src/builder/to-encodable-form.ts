@@ -35,7 +35,7 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
-import { isCell } from "../cell.ts";
+import { exportCell, isCell } from "../cell.ts";
 import {
   encodableFormOf,
   hasEncodableForm,
@@ -83,7 +83,7 @@ export function withAliasBindings(
   if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
 
   if (isCell(value)) {
-    const { external, frame } = value.export();
+    const { external, frame } = exportCell(value);
 
     // If this is an external reference, just copy the reference as is.
     if (external) return external as FabricExecValue;

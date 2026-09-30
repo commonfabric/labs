@@ -45,7 +45,8 @@ export const FabriChatPlacement = pattern<
 >(({ room }) => {
   const state = computed(() => {
     const access = spaceAccess(room);
-    if (access !== "member") return access;
+    if (access === undefined) return "unavailable";
+    if (access === "none") return "not-member";
     const about = room.key("about").get();
     if (!about) return "unavailable";
     if (about.kind === "direct") {

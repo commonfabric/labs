@@ -6,9 +6,9 @@ Status: normative reference (see [`README.md`](README.md)).
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
 
-The implementation lives in `packages/patterns/fabrichat/room.tsx`. The protocol
-and UI bind separate verified handlers to shared write helpers. Their stored
-policies admit those named handlers with matching reviewed actions.
+Its records and surfaces are named for the contract rather than for the
+implementation, because they are part of the contract: `ChatMessage`,
+`ChatReaction`, and the surfaces the table under [writers](#writers) names.
 
 ## State
 
@@ -172,10 +172,12 @@ the room is created from the same settings the handlers read.
 
 ## Runtime support
 
-`Factory.inPrivateSpace()` allocates random creator-only spaces.
-`currentPrincipal()`, `spaceMembers()`, `spaceAccess()`, and `setSpaceMembers()`
-provide authenticated identity, reactive membership, access status, and atomic
-membership changes. The [membership API guide](../../features/pattern-space-membership.md)
+`Factory.inSpace()` allocates random creator-only spaces.
+`currentPrincipal()` authenticates the handler actor; `viewerPrincipal()`
+reads the viewer with per-user scope and confidentiality. `spaceMembers()`,
+`spaceAccess()`, and `setSpaceMembers()` provide reactive membership, access
+status, and atomic membership changes. `eventKey()` identifies each logical
+UI event across handler retries. The [membership API guide](../../features/pattern-space-membership.md)
 describes these capabilities. Reactions have their own storage documents and
 writer policies. Session windows use scoped cells; rendered message-card
 instances explicitly use the viewer's session scope.

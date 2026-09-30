@@ -1902,9 +1902,6 @@ export class SpaceSession {
     error.name = reason === "unauthorized"
       ? "AuthorizationError"
       : "SessionRevokedError";
-    if (reason === "unauthorized") {
-      Object.assign(error, { spaceAccessDenied: true });
-    }
     this.#terminateSession(error);
   }
 

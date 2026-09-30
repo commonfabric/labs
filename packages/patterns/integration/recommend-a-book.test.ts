@@ -10,6 +10,7 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   type Cell,
+  cellRuntime,
   isCell,
   parseLink,
   PatternCoverageCollector,
@@ -80,7 +81,7 @@ function binding(props: Cell<unknown>, name: string): Cell<unknown> {
   const raw = props.getRawUntyped({ frozen: false }) as Record<string, unknown>;
   const link = parseLink(raw[name], props.getAsNormalizedFullLink());
   return link?.id && link.space
-    ? props.runtime.getCellFromLink(link)
+    ? cellRuntime(props).getCellFromLink(link)
     : prop.resolveAsCell();
 }
 

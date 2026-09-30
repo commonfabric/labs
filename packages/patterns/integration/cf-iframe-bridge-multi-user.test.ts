@@ -9,10 +9,13 @@
  */
 
 import { debugStr } from "@commonfabric/data-model";
-import { env, type Page, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { expect } from "@std/expect";
@@ -28,7 +31,7 @@ import {
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 type BridgeCommand = {
   id: string;
@@ -450,11 +453,12 @@ describe("cf-iframe bridge with multiple users", () => {
       Identity.generate({ implementation: "noble" }),
     ]);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(aliceIdentity, {
+        grants: { [bobIdentity.did()]: "WRITE" },
+      }),
       apiUrl: new URL(API_URL),
       identity: aliceIdentity,
     });
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     await cc.ensureDefaultPattern();
 
     const sourcePath = join(
@@ -479,10 +483,7 @@ describe("cf-iframe bridge with multiple users", () => {
   });
 
   it("preserves `PerSpace`, `PerUser`, `PerSession`, and SQLite data at their declared boundaries", async () => {
-    const view = {
-      spaceDid: cc.getSpace() as `did:${string}:${string}`,
-      pieceId,
-    };
+    const view = { spaceDid: cc.getSpace(), pieceId };
     const identities = [aliceIdentity, aliceIdentity, bobIdentity];
     const pages = shells.map((shell) => shell.page());
 

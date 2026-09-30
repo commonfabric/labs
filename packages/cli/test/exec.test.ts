@@ -25,7 +25,7 @@ import {
 import { writeMountState } from "../lib/fuse.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
-import { cf, relevantStderr } from "./utils.ts";
+import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 
 function makeSpec(
   callableKind: "handler" | "tool",
@@ -2630,6 +2630,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--query", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
       },
@@ -2662,6 +2663,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--query", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
@@ -2699,6 +2701,7 @@ describe("mounted callable resolution and execution", () => {
     await writeLiveMountState(stateDir, mountpoint);
 
     await executeMountedCallableFile(filePath, ["--query", "milk"], {
+      sendEvent: sendThroughStandIn,
       stateDir,
       loadPieces: () => Promise.resolve(harness.pieces),
       loadPiece: () => Promise.resolve(harness.piece),
@@ -2739,6 +2742,7 @@ describe("mounted callable resolution and execution", () => {
         filePath,
         ["--message", "milk"],
         {
+          sendEvent: sendThroughStandIn,
           stateDir,
           loadPieces: () => Promise.resolve(harness.pieces),
           loadPiece: () => Promise.resolve(harness.piece),
@@ -3204,6 +3208,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--json"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
@@ -3240,6 +3245,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       [],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),

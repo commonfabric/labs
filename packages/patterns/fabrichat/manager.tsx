@@ -6,6 +6,7 @@ import {
   computed,
   currentPrincipal,
   equals,
+  eventKey,
   FabricEpochNsec,
   handler,
   NAME,
@@ -25,7 +26,7 @@ import {
   type WritePolicyAnyOf,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
-import { chatPolicy } from "./records.ts";
+import { CHAT_POLICY } from "./records.ts";
 import type {
   ChatIndexEntry,
   ChatManagerOutput,
@@ -130,10 +131,10 @@ function advance(requestId: string, state: ManagerState): void {
   if (!intent || intent.creator !== actor) return;
   if (!intent.target) {
     const allocation = `fabrichat:${requestId}`;
-    const policy = RoomPolicy.inPrivateSpace(allocation)({
-      value: chatPolicy(),
+    const policy = RoomPolicy.inSpace(allocation)({
+      value: CHAT_POLICY,
     });
-    const target = PrivateRoom.inPrivateSpace(allocation)({
+    const target = PrivateRoom.inSpace(allocation)({
       initialMembers: [actor, ...intent.members],
       about: {
         kind: intent.kind,
@@ -259,7 +260,7 @@ const openDirectFromUi = handler<{ target?: { value?: string } }, StartState>((
   state,
 ) =>
   writeOpenDirect({
-    requestId: newRequestId(),
+    requestId: eventKey(),
     counterpart: event.target?.value?.trim() ?? "",
   }, state)
 );
@@ -320,20 +321,11 @@ const createGroupFromUi = handler<{ target?: { value?: string } }, StartState>((
   state,
 ) =>
   writeCreateGroup({
-    requestId: newRequestId(),
+    requestId: eventKey(),
     title: state.uiTitle?.get() ?? "",
     members: (event.target?.value ?? "").split(/[\s,]+/u).filter(Boolean),
   }, state)
 );
-
-/** Gives each independent UI request its own idempotency key. */
-function newRequestId(): string {
-  return Array.from(
-    { length: 4 },
-    () =>
-      Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, "0"),
-  ).join("");
-}
 
 /** Accepts a readable admitted room; the client supplies its checked creator for a direct room. */
 export const accept = handler<
@@ -605,7 +597,7 @@ export default pattern<
                 variant="ghost"
                 onClick={action(() =>
                   facts.forget.send({
-                    requestId: newRequestId(),
+                    requestId: eventKey(),
                     room: entry.room,
                   })
                 )}

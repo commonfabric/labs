@@ -49,7 +49,9 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import type {
   TestResult,
   TestRunnerOptions,
@@ -58,6 +60,7 @@ import type {
 import type {
   ParticipantInitResult,
   StepMeta,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
@@ -113,6 +116,7 @@ export function multiUserDescriptorMeta(
 class ParticipantWorker {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
   #failure?: Error;
   #pending = new Map<
@@ -126,7 +130,13 @@ class ParticipantWorker {
       new URL("./multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `cf-test:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -155,9 +165,15 @@ class ParticipantWorker {
     });
   }
 
-  terminate(error = new Error(`[${this.name}] worker terminated`)): void {
-    this.#worker.terminate();
+  /**
+   * Rejects pending and future calls with `error`, and terminates the worker,
+   * settling once it has been torn down.
+   */
+  async terminate(
+    error = new Error(`[${this.name}] worker terminated`),
+  ): Promise<void> {
     this.#fail(error);
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 
   /** Reject pending and future calls once the worker cannot answer them. */
@@ -228,7 +244,6 @@ export async function runMultiUserTestPattern(
   let runResult: TestRunResult | undefined;
 
   const server = StandaloneMemoryServer.start();
-  const spaceName = crypto.randomUUID();
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
@@ -245,6 +260,22 @@ export async function runMultiUserTestPattern(
       }
     }
 
+    // The first participant creates the shared space, and every participant
+    // may write to it.
+    const owner = identities.get(meta.participants[0].user)!;
+    const creator = StorageManager.open({ as: owner, memoryHost: server.url });
+    let spaceDid: string;
+    try {
+      spaceDid = await creator.createSpace({
+        ...Object.fromEntries(
+          [...identities.values()].map((identity) => [identity.did(), "WRITE"]),
+        ),
+        [owner.did()]: "OWNER",
+      });
+    } finally {
+      await creator.close();
+    }
+
     // Sequential init: the first worker materializes the shared setup
     // instance (and the wish("#default") seed); the rest resume it.
     for (const [index, spec] of meta.participants.entries()) {
@@ -252,7 +283,8 @@ export async function runMultiUserTestPattern(
         // The failed worker may be idle while another participant is waiting.
         // Reject every worker's requests so that failure reaches the active
         // await, including during initialization, and cleanup can proceed.
-        for (const worker of workers) worker.terminate(error);
+        // Every worker is terminated again, and waited for, on the way out.
+        for (const worker of workers) void worker.terminate(error);
       });
       workers.push(worker);
       try {
@@ -260,7 +292,7 @@ export async function runMultiUserTestPattern(
           identity: realmValueFromKeyPair(
             identities.get(spec.user)!.keyPair,
           ),
-          spaceName,
+          spaceDid,
           apiUrl: server.url.href,
           testPath,
           root: options.root,
@@ -316,7 +348,7 @@ export async function runMultiUserTestPattern(
         }
       } catch (error) {
         await worker.call("dispose").catch(() => {});
-        worker.terminate();
+        await worker.terminate();
         throw error;
       }
     }
@@ -557,7 +589,7 @@ export async function runMultiUserTestPattern(
         );
         teardownError ??= error;
       });
-      participant.worker.terminate();
+      await participant.worker.terminate();
     }
     await server.close().catch(() => {});
     if (teardownError) {

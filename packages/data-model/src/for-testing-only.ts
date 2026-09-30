@@ -36,6 +36,7 @@ import {
 } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -80,6 +81,14 @@ export const FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
     [
       () => new FabricBytes(new Uint8Array([1, 2, 3])),
       () => new FabricBytes(new Uint8Array()),
+    ] as const,
+  ),
+
+  FabricDurationDay: Object.freeze(
+    [
+      () => new FabricDurationDay(7n),
+      () => new FabricDurationDay(0n),
+      () => new FabricDurationDay(-1n),
     ] as const,
   ),
 

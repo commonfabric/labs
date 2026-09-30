@@ -265,8 +265,13 @@ strings — resolve the real viewer and render people with the identity componen
 
 ### Resolve the current viewer
 
-A pattern cannot ask "what is my DID" directly. Resolve the viewer's profile with
-`wish` (it reads the active user's home space):
+An action or handler reads its authenticated actor with `currentPrincipal()`
+([Handling Events](../concepts/action.md#who-the-action-acts-for)). A computation
+can read the demanding viewer with `viewerPrincipal()`; the result is scoped
+per user and carries `User(viewer)` confidentiality. A pattern body cannot read
+either identity. See [pattern space membership](../../features/pattern-space-membership.md).
+To show the viewer, resolve their profile with `wish` (it reads the active
+user's home space):
 
 ```tsx
 // Shown inside a pattern body.
@@ -335,7 +340,9 @@ owner-protected profile *writes* are currently constrained (see CT-1665).
 
 ### Constraints to design within (today)
 
-- No user-space "who am I" API — identity is implicit via scope + `#profile`.
+- `currentPrincipal()` names the acting user in a handler; `viewerPrincipal()`
+  names the demanding viewer in a computation. Neither is available in a
+  pattern body. Resolve `#profile` for the viewer's presentation.
 - No list-all-profiles — build rosters by join (each viewer contributes their own cell).
 - Cross-space profile reads resolve (CT-1667/1687) — badge every participant from
   the profile cell they contributed on join. Snapshot + `cf-avatar` is the
@@ -558,6 +565,36 @@ helper docs before copying from a demo:
 Shared CFC helpers provide reusable policy structure. The pattern still owns its
 domain policy: role names, integrity strings, subjects, trusted surfaces, and
 which operations require which integrity.
+
+### The viewer's own access to a space
+
+`spaceAccess(target)` returns what the current principal may do in the space
+`target`'s value lives in, as that space's access list grants it: `"OWNER"`,
+`"WRITE"`, `"READ"`, or `"none"`. It returns `undefined` when the answer is not
+known or not available: the access list has not arrived, the space has no
+access list, there is no principal to ask about, or `target` is itself
+`undefined`, as a value that cannot be read yet is. Treat `undefined` as "not
+known", neither as access nor as "no access". `target` is a cell, and it is
+required: to ask about the space the pattern runs in, pass a cell that lives
+there.
+
+```tsx
+// Shown inside a pattern body.
+const board = new Writable.perSpace<string[]>([]);
+const canManage = computed(() => spaceAccess(board) === "OWNER");
+```
+
+Call it inside `computed()`, `lift()`, or a handler. In a computation the level
+is that of whoever is viewing, and each viewer sees their own; in a handler, it
+is that of the person who sent the event. Called directly in a pattern body it
+throws, because the body builds one graph for every viewer.
+
+It decides what to offer, not what is allowed. A memory server in `enforce`
+mode, which is toolshed's default, checks every write against the access list
+regardless, and a rule a pattern enforces only by consulting
+`spaceAccess(target)` holds among honest runtimes and nowhere else. For a write
+that must be refused, use a write policy as described above.
+[`space-access.md`](../../features/space-access.md) has the details.
 
 ## Mapping Shared Lists
 

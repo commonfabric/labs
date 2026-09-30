@@ -28,8 +28,8 @@ export type CommonFabricRuntimeExportSpec =
   };
 
 export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
-  // Classifies access under the demanding principal without creating a node.
-  { exportName: "spaceAccess", category: "ignored", reactiveOrigin: false },
+  // Reads confidential viewer identity without constructing a reactive node.
+  { exportName: "viewerPrincipal", category: "ignored", reactiveOrigin: false },
   // Stages an atomic ACL companion in the executing handler transaction.
   {
     exportName: "setSpaceMembers",
@@ -39,13 +39,6 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // Reads the executing transaction's ACL without creating a reactive node.
   {
     exportName: "spaceMembers",
-    category: "ignored",
-    reactiveOrigin: false,
-  },
-  // Reads the executing transaction's principal and records user-scope demand.
-  // It returns a primitive, so it is an ordinary call inside a reactive body.
-  {
-    exportName: "currentPrincipal",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -96,6 +89,20 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   },
   {
     exportName: "byRef",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads the principal the running handler acts for, and returns a plain DID
+  // rather than a reactive value.
+  {
+    exportName: "currentPrincipal",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads the key of the event the running handler handles, and returns a
+  // plain string rather than a reactive value.
+  {
+    exportName: "eventKey",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -288,6 +295,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // CallKind, so it is "ignored" (treated as a plain call, like `byRef`).
   {
     exportName: "uiVariant",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceAccess(target?) reads the current principal's level from the space's
+  // access list and returns a string or `undefined`. It builds no graph node,
+  // so it is a plain call inside the computation or handler that makes it.
+  {
+    exportName: "spaceAccess",
     category: "ignored",
     reactiveOrigin: false,
   },

@@ -53,6 +53,7 @@ import {
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -960,6 +961,24 @@ describe("JsonCodecEngine", () => {
       const d = result.timeout as unknown as FabricDurationNsec;
       expect(d).toBeInstanceOf(FabricDurationNsec);
       expect(d.value).toBe(-1_500_000_000n);
+    });
+
+    it("round-trips `FabricDurationDay` at top level and in nested structures", () => {
+      const top = roundTrip(
+        new FabricDurationDay(9_007_199_254_740_993n),
+      ) as unknown as FabricDurationDay;
+      expect(top).toBeInstanceOf(FabricDurationDay);
+      expect(top.value).toBe(9_007_199_254_740_993n);
+
+      const obj = {
+        notice: new FabricDurationDay(-30n),
+        label: "grace",
+      };
+      const result = roundTrip(obj) as Record<string, FabricValue>;
+      expect(result.label).toBe("grace");
+      const d = result.notice as unknown as FabricDurationDay;
+      expect(d).toBeInstanceOf(FabricDurationDay);
+      expect(d.value).toBe(-30n);
     });
 
     it("round-trips `FabricEpochDay` at top level and in nested structures", () => {

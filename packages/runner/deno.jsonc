@@ -7,11 +7,12 @@
     // See that file and docs/development/waiting-in-tests.md. --no-check: the
     // global `clock` type lives in test/clock.d.ts, which `deno task check` sees
     // by type-checking the package directory as one program.
-    // --allow-run: commit-callback-release.test.ts re-invokes `deno` by name
-    // for a helper that needs --expose-gc and the real clock, and
-    // silent-backstop-guard.test.ts spawns the Deno running the task
-    // (`Deno.execPath()`, which a bare `deno` entry does not permit — Deno
-    // resolves the allowlist through PATH) to run a fixture under this preload.
+    // --allow-run: commit-callback-release.test.ts and read-release.test.ts
+    // re-invoke `deno` by name for a helper that needs --expose-gc and the
+    // real clock, and silent-backstop-guard.test.ts spawns the Deno running
+    // the task (`Deno.execPath()`, which a bare `deno` entry does not permit —
+    // Deno resolves the allowlist through PATH) to run a fixture under this
+    // preload.
     // --allow-net=127.0.0.1: serving-memory-server.test.ts listens on a
     // localhost websocket and connects a client to it.
     "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",

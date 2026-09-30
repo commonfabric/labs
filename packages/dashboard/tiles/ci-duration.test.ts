@@ -820,7 +820,7 @@ Deno.test("ci-duration: the median minutes set the status against the thresholds
   // The median, not the mean: one long run among short ones doesn't move it.
   const v = await collectFromWorkingRuns(labsCiDuration, ctx([mins(10), mins(10), mins(180)]));
   assertEquals([v.status, v.value], ["good", "10m"]);
-  assertStringIncludes(v.sub ?? "", "last 3 passing PR runs"); // under the 20-run bar -> count window
+  assertStringIncludes(v.sub ?? "", "median of last 3 PR runs"); // under the 20-run bar -> count window
 });
 
 Deno.test("ci-duration measures from creation through completion", async () => {

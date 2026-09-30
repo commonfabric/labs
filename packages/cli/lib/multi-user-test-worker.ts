@@ -39,6 +39,7 @@ import {
   Identity,
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity/did";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   type Cell,
@@ -55,6 +56,7 @@ import {
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
 import { defer } from "@commonfabric/utils/defer";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { printCfcDenials } from "./cfc-denials.ts";
@@ -79,6 +81,14 @@ export interface WorkerRequest {
 export type WorkerResponse =
   | { id: number; ok: unknown }
   | { id: number; error: string };
+
+/**
+ * The message a participant worker posts once, before any response, naming
+ * its lifetime lock for `terminateWorker()` to wait on.
+ */
+export interface WorkerLifetimeNotice {
+  lifetimeLock: string | undefined;
+}
 
 export type StepKind =
   | "action"
@@ -342,9 +352,9 @@ const handlers: Record<
         "Initialization `identity`",
       ),
     );
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: args.spaceName as string,
+      spaceDid: args.spaceDid as DID,
     });
     const space = session.space;
     // The Deno storage cache opens SQLite as it loads, so it waits for the
@@ -355,7 +365,6 @@ const handlers: Record<
     );
     storageManager = StorageManager.open({
       as: session.as,
-      spaceIdentity: session.spaceIdentity,
       // Host only — the storage path (/api/storage/memory) is joined
       // internally (see createStorageAddressResolver).
       memoryHost: new URL(args.apiUrl as string),
@@ -702,7 +711,16 @@ const handlers: Record<
   },
 };
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+// Every response follows the lifetime notice, so the orchestrator holds the
+// lock's name before any reply can lead it to terminate this worker.
+const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
+  (self as unknown as Worker).postMessage(
+    { lifetimeLock } satisfies WorkerLifetimeNotice,
+  )
+);
+
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+  await announced;
   const { id, cmd, args } = event.data;
   const handler = handlers[cmd];
   const respond = (response: WorkerResponse) =>

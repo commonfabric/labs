@@ -36,6 +36,7 @@ import {
   PendingWritesNotification,
   PresenceUpdateNotification,
   RequestType,
+  RuntimeErrorCode,
   type RuntimeSecurityContext,
   SerializedDomEvent,
   SpaceAccessLostNotification,
@@ -647,9 +648,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       const error = new Error(message.error) as Error & { code?: string };
       if (message.code) {
         error.code = message.code;
-        // A coded request failure is also a host-level lifecycle signal. The
+      }
+      if (message.code === RuntimeErrorCode.CompilerStackLoadFailed) {
+        // A compiler-stack failure is also a host-level lifecycle signal. The
         // caller still receives the rejected request, while RuntimeInternals
         // can replace a worker whose module map cannot recover in place.
+        // Every other code is the caller's to act on alone.
         this.emit("error", {
           type: NotificationType.ErrorReport,
           message: message.error,

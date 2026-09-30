@@ -4,6 +4,7 @@ import { parseDocument, SAMPLE } from "./view-helpers.ts";
 import { createSemantics } from "../lib/view/languages/typescript/semantics.ts";
 import type { Semantics } from "../lib/view/languages/language.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
+import { buildPreparedView } from "../lib/view/mod.ts";
 import type { Document } from "../lib/view/model.ts";
 
 const CWD = Deno.cwd();
@@ -317,6 +318,45 @@ const mystery = someUndeclaredThing.field;`;
   const empty = createSemantics("", { cwd: CWD });
   assert(empty, "empty input still yields a (silent) service");
   assertEquals(empty!.typeAt(0), null);
+});
+
+const SCRIPT = `#!/usr/bin/env -S deno run
+const answer = 42;
+console.log(answer);
+`;
+
+Deno.test("semantics: a script with no TypeScript extension answers like its .ts twin", () => {
+  const binding = SCRIPT.indexOf("answer");
+  const use = SCRIPT.lastIndexOf("answer");
+  const twin = createSemantics(SCRIPT, { cwd: CWD, fileName: "/tmp/tool.ts" })!;
+  assertEquals(twin.typeAt(binding), "42");
+  assertEquals(twin.definitionOf(use).map((d) => d.blobOffset), [binding]);
+  for (const fileName of ["/tmp/tool", "/tmp/deploy.prod"]) {
+    const sem = createSemantics(SCRIPT, { cwd: CWD, fileName })!;
+    assertEquals(sem.typeAt(binding), twin.typeAt(binding), fileName);
+    assertEquals(sem.definitionOf(use), twin.definitionOf(use), fileName);
+  }
+});
+
+Deno.test("semantics: an extensionless file is served only when read as TypeScript", async () => {
+  const root = Deno.makeTempDirSync();
+  try {
+    const tool = join(root, "tool");
+    const hook = join(root, "hook");
+    Deno.writeTextFileSync(tool, SCRIPT);
+    Deno.writeTextFileSync(
+      hook,
+      SCRIPT.replace("-S deno run", "bash"),
+    );
+
+    const script = await buildPreparedView(Deno.readFileSync(tool), tool);
+    assertEquals(script.semantics()?.typeAt(SCRIPT.indexOf("answer")), "42");
+
+    const shell = await buildPreparedView(Deno.readFileSync(hook), hook);
+    assertEquals(shell.semantics(), undefined);
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
 });
 
 Deno.test("semantics: resolves a real commonfabric type from a subdirectory", () => {

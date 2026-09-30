@@ -84,6 +84,7 @@ import type {
 import {
   applyPieceInput,
   checkPiecePattern,
+  createSpace,
   describePiece,
   type EntryConfig,
   executePieceCallable,
@@ -1524,13 +1525,18 @@ TIPS:
  * and the space. `piece` declares them as globals its subcommands inherit;
  * `cf cell get`, `cf cell set` and `cf piece call` have no parent globals, so each carries
  * them as its own.
+ *
+ * A command that acts on no existing space passes `space: false`, and carries
+ * neither the space nor the combined URL that can name one, so that neither
+ * is accepted and then ignored.
  */
 export function targetOptions(
   // deno-lint-ignore no-explicit-any
   cmd: Command<any>,
-  opts: { global: boolean },
+  opts: { global: boolean; space?: boolean },
   // deno-lint-ignore no-explicit-any
 ): Command<any> {
+  const space = opts.space ?? true;
   const option = (flags: string, description: string) =>
     opts.global
       ? cmd.globalOption(flags, description)
@@ -1540,13 +1546,20 @@ export function targetOptions(
       ? cmd.globalEnv(name, description, { prefix: "CF_" })
       : cmd.env(name, description, { prefix: "CF_" });
   option("-q,--quiet", "Suppress hints and next-step suggestions");
-  option("-u,--url <url:string>", "URL representing a host, space, and piece.");
+  if (space) {
+    option(
+      "-u,--url <url:string>",
+      "URL representing a host, space, and piece.",
+    );
+  }
   env("CF_API_URL=<url:string>", "URL of the fabric server instance.");
   option("-a,--api-url <url:string>", "URL of the fabric server instance.");
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
-  env("CF_SPACE=<space:string>", "The space name or DID.");
-  option("-s,--space <space:string>", "The space name or DID");
+  if (space) {
+    env("CF_SPACE=<space:string>", "The space name or DID.");
+    option("-s,--space <space:string>", "The space name or DID");
+  }
   return cmd;
 }
 
@@ -2047,6 +2060,7 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
   reset?: boolean;
+  label?: string;
 }
 
 /**
@@ -2208,6 +2222,42 @@ export function buildSetHomeCommand(
   return notice.helpPage(
     targetOptions(command.action(notice.action(act)), { global: false }),
   );
+}
+
+/**
+ * `space create`, which creates a space owned by the identity and records it
+ * in the identity's Home space list.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildCreateSpaceCommand(spelling: string): Command<any> {
+  const act = async (options: SpaceCommandCLIOptions) => {
+    refuseJsonOutput(spelling, options);
+    setQuietMode(!!options.quiet);
+    const baseConfig = parseSetHomeOptions(options);
+    const space = await createSpace(baseConfig, options.label);
+    render(space);
+    hint(cliText(`NEXT STEPS:
+  → Open space in browser: ${baseConfig.apiUrl}/${space}
+  → Create a piece in it:  cf piece new --space ${space} ...`));
+  };
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      "Create a new space owned by the identity, with a new random DID, and " +
+        "add it to the identity's Home space list. Opening a name or a DID " +
+        "never creates a space; this is how one comes into being.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} --label "Team lunch"`,
+      ),
+      'Create a space listed as "Team lunch" and print its DID.',
+    )
+    .option(
+      "--label <label:string>",
+      "What the space is called in the Home space list.",
+    );
+  return targetOptions(command.action(act), { global: false, space: false });
 }
 
 /**

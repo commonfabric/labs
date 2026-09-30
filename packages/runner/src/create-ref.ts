@@ -10,7 +10,7 @@ import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { isReactive } from "./builder/types.ts";
-import { isCell } from "./cell.ts";
+import { exportCell, isCell } from "./cell.ts";
 import { encodableFormOf } from "./encodable-form.ts";
 import {
   hasEntityUriScheme,
@@ -194,7 +194,7 @@ export function createRef(
       // and its sentinel stands in as the value the id hashes. Any other
       // reactive has no value to hash, and an id minted from one would
       // silently become non-deterministic (audit S14). Fail closed.
-      if (obj.export().kind !== "stream") {
+      if (exportCell(obj).kind !== "stream") {
         throw new Error(
           "[createRef] Reactive has no value; cannot derive a stable id",
         );

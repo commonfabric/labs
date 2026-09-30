@@ -182,6 +182,7 @@ import {
   type CellUnsubscribeRequest,
   type CfcLabelViewResponse,
   ClientNotificationType,
+  type CreateSpaceRequest,
   type CustodyAnswerPublishRequest,
   type CustodyAnswerPublishResponse,
   type CustodyAnswerReadRequest,
@@ -258,7 +259,6 @@ import {
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
-  type ResolveSpaceNameRequest,
   RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
@@ -382,9 +382,7 @@ function spaceAclResponse(
   acl: ACL | null,
 ): SpaceAclResponse {
   const principal = runtime.userIdentityDID;
-  const capability = principal === space
-    ? "OWNER"
-    : acl?.[principal] ?? acl?.["*"];
+  const capability = acl?.[principal] ?? acl?.["*"];
   return {
     access: {
       space,
@@ -566,15 +564,14 @@ export function browserWorkerParamsFromInitializationData(
  *
  * Reader membership is sourced ONLY from verified facts, never from a cell's
  * mere local residency:
- *  - the acting user's own identity space (space DID == principal DID) — a
- *    principal definitionally reads its own space;
  *  - the current session workspace (`sessionSpace` = the space the session was
  *    authorized to open), while the acting principal is the session's own key
- *    holder — with `createSession({ spaceName })` the home space is a derived
- *    `spaceIdentity` DID distinct from the principal DID, and it is the space
- *    `session.open` gated on, so an own-workspace `Space(...)` label resolves
- *    rather than over-blocking. A principal a host names in the key holder's
- *    place reaches that space through the membership lookup below.
+ *    holder: `session.open` gated on READ there, so an own-workspace
+ *    `Space(...)` label resolves rather than over-blocking. That workspace is
+ *    usually the user's Home space. Being the space's DID is not itself
+ *    evidence: a Home space's user reads it because its ACL says so. A
+ *    principal a host names in the key holder's place reaches that space
+ *    through the membership lookup below.
  *
  * Broader cross-space membership comes from the §4.9.3 membership lookup: a
  * runtime-backed `SpaceMembershipProvider` reads each other space's declared
@@ -608,11 +605,10 @@ export function renderConfidentialityResolverFor(
   // `session.open` authorizes the key holder, so the workspace it gated on is
   // a member for that principal's own renders. A host that names somebody else
   // as acting has shown nothing about what that principal reads.
-  const ownSessionWorkspace = actingPrincipal === identity.did() &&
-    sessionSpace !== undefined && sessionSpace !== actingPrincipal;
-  const memberSpaces = ownSessionWorkspace
-    ? [actingPrincipal, sessionSpace]
-    : [actingPrincipal];
+  const memberSpaces = actingPrincipal === identity.did() &&
+      sessionSpace !== undefined
+    ? [sessionSpace]
+    : [];
   return createRenderConfidentialityResolver({
     actingPrincipal,
     trustConfig: runtime.cfcTrustConfig,
@@ -927,6 +923,7 @@ export class RuntimeProcessor {
   #health: Promise<boolean> = Promise.resolve(true);
   #awaitedHealth = false;
   #identity: Identity;
+  #legacySpacesAdopted: Promise<void> | undefined;
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
 
@@ -2555,18 +2552,37 @@ export class RuntimeProcessor {
     // home root. Starting the pattern directly here would skip both, and
     // nothing else heals the root — so no fast path belongs in front of the
     // controller.
+    const homePattern = await this.#ensureHomePattern();
+    return { cell: createCellRef(homePattern) };
+  }
+
+  /**
+   * Ensures the user's Home pattern is running and returns its result cell.
+   * The first time in this worker, it also adopts the Home space list's
+   * name-only entries (see `PiecesController.adoptLegacySpaces`).
+   */
+  async #ensureHomePattern(): Promise<Cell<unknown>> {
+    const homeCC = this.#homeController();
+    await homeCC.synced();
+    const home = (await homeCC.ensureDefaultPattern()).getCell();
+    // Adoption is housekeeping over the Home pattern the user already has; a
+    // failure is reported and tried again on the next ensure, and never keeps
+    // Home from opening.
+    this.#legacySpacesAdopted ??= homeCC.adoptLegacySpaces().catch((error) => {
+      this.#legacySpacesAdopted = undefined;
+      console.warn("[RuntimeProcessor] Adopting legacy Home spaces:", error);
+    });
+    await this.#legacySpacesAdopted;
+    return home;
+  }
+
+  /** A controller over the user's Home space. */
+  #homeController(): PiecesController {
     const homeSession: Session = {
       as: this.#identity,
       space: this.#runtime.userIdentityDID,
     };
-    const homeCC = new PiecesController(homeSession, this.#runtime);
-    await homeCC.synced();
-
-    const homePattern = await homeCC.ensureDefaultPattern();
-
-    return {
-      cell: createCellRef(homePattern.getCell()),
-    };
+    return new PiecesController(homeSession, this.#runtime);
   }
 
   async handleIdle(): Promise<void> {
@@ -3193,10 +3209,11 @@ export class RuntimeProcessor {
     };
   }
 
-  async handleResolveSpaceName(
-    request: ResolveSpaceNameRequest,
+  async handleCreateSpace(
+    request: CreateSpaceRequest,
   ): Promise<SpaceResponse> {
-    return { space: await this.#runtime.resolveSpaceName(request.name) };
+    await this.#ensureHomePattern();
+    return { space: await this.#homeController().createSpace(request.label) };
   }
 
   /** Convergence across every opened space — no space named, none implied. */
@@ -3583,8 +3600,8 @@ export class RuntimeProcessor {
         return await this.handlePieceSynced(request);
       case RequestType.RuntimeSynced:
         return await this.handleRuntimeSynced();
-      case RequestType.ResolveSpaceName:
-        return await this.handleResolveSpaceName(request);
+      case RequestType.CreateSpace:
+        return await this.handleCreateSpace(request);
       case RequestType.RegisterSpaceHost:
         return this.handleRegisterSpaceHost(request);
       case RequestType.RegisterSpaceHostDetailed:
@@ -3875,11 +3892,6 @@ export class RuntimeProcessor {
     const identity = await Identity.fromKeyPair(
       data.identity,
     );
-    const spaceIdentity = data.spaceIdentity
-      ? await Identity.fromKeyPair(
-        data.spaceIdentity,
-      )
-      : undefined;
     const space = data.spaceDid;
     const telemetry = new RuntimeTelemetry();
 
@@ -3887,15 +3899,12 @@ export class RuntimeProcessor {
     setPatternEnvironment({ apiUrl: apiUrlObj });
 
     const session = {
-      spaceIdentity,
       as: identity,
       space: data.spaceDid,
-      spaceName: data.spaceName,
     };
 
     const storageManager = StorageManager.open({
       as: identity,
-      spaceIdentity: spaceIdentity,
       memoryHost: apiUrlObj,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap

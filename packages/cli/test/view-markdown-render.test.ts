@@ -1503,7 +1503,7 @@ Deno.test("diff expansion rebuilds the active rendered Markdown view", () => {
     { color: false, showLineNumbers: false },
     { width: 80, height: 10 },
     undefined,
-    diffSource(workspace, edit, cache, undefined, true),
+    diffSource(workspace, edit, cache),
   );
 
   press(session, "v");

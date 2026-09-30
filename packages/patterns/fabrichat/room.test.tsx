@@ -15,7 +15,7 @@ import {
   Writable,
 } from "commonfabric";
 import { hasText } from "../test/vnode-helpers.ts";
-import { chatPolicy } from "./records.ts";
+import { CHAT_POLICY } from "./records.ts";
 import {
   FabriChatRoom,
   type StoredMemory,
@@ -33,7 +33,7 @@ export default pattern(() => {
     name: "Alice",
   });
   const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
-    chatPolicy(),
+    CHAT_POLICY,
   );
   const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
   const version = new Writable({

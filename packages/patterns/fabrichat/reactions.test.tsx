@@ -14,7 +14,7 @@ import {
   type StoredMemory,
   type StoredMessage,
 } from "./room.tsx";
-import { chatPolicy } from "./records.ts";
+import { CHAT_POLICY } from "./records.ts";
 import type {
   ChatMessage,
   ChatProfile,
@@ -27,7 +27,7 @@ export default pattern(() => {
     name: "Alice",
   });
   const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
-    chatPolicy(),
+    CHAT_POLICY,
   );
   const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
   const records = new Writable<StoredMessage[]>([]);

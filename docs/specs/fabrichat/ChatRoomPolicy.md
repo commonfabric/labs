@@ -36,9 +36,9 @@ interface ChatRoomPolicy {
 }
 ```
 
-A plain object, with every key present. The three duration fields hold
-`FabricDurationNsec` values; their `.value` is the exact bigint count of
-nanoseconds.
+A plain object, with every key present. Each duration is a
+[`FabricDurationNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
+count of nanoseconds, held as a `bigint`.
 
 ## Stated correctly
 

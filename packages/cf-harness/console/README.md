@@ -113,8 +113,20 @@ naming them. The pattern index and skills registry are this deployment's
 constants rather than any fabric's. It prints every value with the record that
 decided it, and serves on the port Weaver pairs with. Arguments after `--` reach
 this server untouched, so every flag in the tables below is reachable through
-it. [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it
-belongs to, including the tailnet topology and the pre-demo preflight.
+it. Each of the two refuses a flag it does not take, naming it and, where one is
+close, the flag it most likely meant, and `console:launch` holds the arguments
+after `--` to the server's flags before it reads anything, so a misspelled
+switch stops the launch rather than going unapplied. A console flag given to the
+launcher is refused with a pointer to `--`. A flag given no value is refused
+too, whether nothing follows it, the word after it starts with `-`, or its value
+is empty, rather than falling back to the default: a value starting with `-`
+needs the `--name=<value>` spelling. The server takes no positional argument,
+and so nothing after a `--` of its own. `--help` or `-h`, as a word of its own,
+prints the flags each takes, the launcher's before `--` and the server's after
+it, and serves nothing, unless it is the word after a flag that takes a value,
+which is that flag given no value. [`../docs/WEAVER.md`](../docs/WEAVER.md) is
+the operator procedure it belongs to, including the tailnet topology and the
+pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:
@@ -278,7 +290,7 @@ one.
 | `GET`  | `/api/health`                | Console health, configured Fabric API URL, and honestly limited Fabric-session liveness |
 | `GET`  | `/api/health/detail`         | Cached operator observations with deciding records, times, causes, and remedies         |
 | `POST` | `/api/task`                  | Starts a session or a follow-up turn                                                    |
-| `POST` | `/api/cancel`                | Cancels the active turn                                                                 |
+| `POST` | `/api/cancel`                | Cancels the active turn, recording the reason the caller gives                          |
 | `GET`  | `/api/sessions`              | Durable session summaries                                                               |
 | `GET`  | `/api/status`                | Session status and artifact roots                                                       |
 | `GET`  | `/api/policy`                | What a new session here would run under                                                 |
@@ -673,6 +685,29 @@ top-level root as the console-wide fallback.
 Status is read directly, with no preceding request. The top-level fields are
 present even before the console has any sessions, so an unattended client can
 check the route contract before starting a model turn.
+
+### Cancel route
+
+`POST /api/cancel` cancels a session's active turn. Its body names the session,
+and optionally the turn and the reason:
+
+```json
+{
+  "sessionId": "…",
+  "turnId": "…",
+  "reason": "canceled from the console page"
+}
+```
+
+A cancel naming a turn is refused unless that turn is the one running, so it
+cannot stop a later turn in the same session. `reason` says what stopped the
+turn. It becomes the reason on the turn's `turn_canceled` event and the `detail`
+the turn's result route answers with, and the run's `cancelReason` quotes it,
+which is how a person reading the run later learns who stopped it. The console
+page sends `canceled from the console page`. A cancel without a reason is
+recorded as `canceled by a request to the console`, because nothing in the
+request says who sent it. A `turnId` that is not a string, or a `reason` that is
+not a non-empty string, is refused with `400`, and the turn keeps running.
 
 ### Policy route
 

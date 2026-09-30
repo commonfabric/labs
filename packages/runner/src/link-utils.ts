@@ -42,6 +42,8 @@ import {
 } from "./builder/types.ts";
 import {
   type Cell,
+  cellRuntime,
+  cellTx,
   isAnyCell,
   isCell,
   type MemorySpace,
@@ -937,7 +939,7 @@ export function getMetaCell(
     ...(resultCellLink.scope !== undefined && { scope: resultCellLink.scope }),
     ...(schema !== undefined && { schema }),
   };
-  return resultCell.runtime.getCellFromLink(metaLink, undefined, tx);
+  return cellRuntime(resultCell).getCellFromLink(metaLink, undefined, tx);
 }
 
 export function getDerivedInternalCellLink(
@@ -1011,7 +1013,7 @@ export function getDerivedInternalCell(
   descriptor: DerivedInternalCellDescriptor,
   tx?: IExtendedStorageTransaction,
 ): Cell {
-  return resultCell.runtime.getCellFromLink(
+  return cellRuntime(resultCell).getCellFromLink(
     getDerivedInternalCellLink(resultCell, descriptor),
     descriptor.schema,
     tx,
@@ -1061,10 +1063,10 @@ export function ownerStreamSchema(
   if (target.path.length > 0) return undefined;
   const ownerLink = getMetaLink(cell, "result");
   if (ownerLink === undefined) return undefined;
-  const owner = cell.runtime.getCellFromLink(
+  const owner = cellRuntime(cell).getCellFromLink(
     { ...ownerLink, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   const manifest = owner.getMetaRaw("internal", META_READ_OPTIONS);
   if (!Array.isArray(manifest)) return undefined;

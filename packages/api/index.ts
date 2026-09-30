@@ -1707,6 +1707,23 @@ export type NodeFactory<T, R> =
     asScope(scope: CellScope): NodeFactory<T, R>;
   };
 
+/**
+ * Access a space created by `PatternFactory.inSpace()` grants beyond its
+ * owner, by principal DID, or `"*"` for anyone. The grants
+ * apply when the space is created, and the first call to name a space in a
+ * run is the one that creates it; a space that already exists keeps its own
+ * access-control document.
+ */
+export type InSpaceGrants = Readonly<
+  { [principal in DID | "*"]?: "READ" | "WRITE" }
+>;
+
+/** Options for `PatternFactory.inSpace()`. */
+export interface InSpaceOptions {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+}
+
 export type PatternFactory<T, R> =
   & ((inputs: FactoryInput<T>) => Reactive<R>)
   & Pattern
@@ -1714,9 +1731,10 @@ export type PatternFactory<T, R> =
   & toEncodableForm
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
-    inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
-    /** Creates or reuses a creator-only space allocated by this calling space. */
-    inPrivateSpace(name: string): PatternFactory<T, R>;
+    inSpace(
+      space?: string | AnyCell<unknown>,
+      options?: InSpaceOptions,
+    ): PatternFactory<T, R>;
   };
 
 export type ModuleFactory<T, R> =
@@ -3301,17 +3319,47 @@ export type WishTag = `/${string}` | `#${string}`;
 export type DID = `did:${string}`;
 
 /**
- * Returns the authenticated actor in a handler, or the demanding principal in
- * a reactive computation. A reactive read acquires user scope. Returns
- * `undefined` for a run with no authenticated principal, and throws outside
- * execution. Event payloads cannot select the returned identity.
+ * Returns the principal the running handler acts for: the authenticated actor
+ * of the event it handles, or `undefined` for an event no principal sent.
+ * Nothing in the event's payload can choose the value.
+ *
+ * The value is _authority_, not _intent_: a handler that another pattern
+ * invokes sees the user that pattern runs as, so it does not show that the
+ * person asked for the action. A trusted gesture, or a value labeled
+ * `AuthoredByCurrentUser`, is what shows that.
+ *
+ * Available only in a handler for now, and throws anywhere else. A pattern body
+ * builds one graph for every viewer, and reading the viewer in a `computed()`
+ * or a `lift()` needs every runtime to scope the value to that user, and a
+ * label saying who may see the viewer's DID.
  */
 export declare function currentPrincipal(): DID | undefined;
 
-/** The demanding viewer's access, independent of whether a room has data. */
-export declare function spaceAccess(
-  target?: Cell<unknown>,
-): "member" | "not-member" | "unavailable";
+/**
+ * Returns the event key of the event the running handler handles: a string
+ * naming that one event, as its actor sent it to its stream. Every run of the
+ * same event returns the same key, including a retry and the serving runtime's
+ * run of a client's event, so a handler can use it as an idempotence key or as
+ * the id of what the event creates. A new gesture, a new stream or another
+ * actor gets a new key, and nothing in the event's payload can choose it.
+ *
+ * The key is distinct per durable event id, actor and stream. A stream that
+ * has handled an event can admit the same id again, which gets the same key
+ * from the same actor, so a record addressed by the key may already exist.
+ *
+ * The key is unlabeled and carries no trust: it says that one event is one
+ * event, not who sent it or that a person asked for it.
+ *
+ * Available only in a handler, and throws anywhere else.
+ */
+export declare function eventKey(): string;
+
+/**
+ * Returns the demanding viewer in a reactive computation, or `undefined` when
+ * there is no viewer. Narrows derived state to user scope and records the
+ * viewer's User confidentiality label. Throws in handlers and pattern bodies.
+ */
+export declare function viewerPrincipal(): DID | undefined;
 
 /** Reads the current space's authoritative access list, or no list when unavailable. */
 export declare function spaceMembers(
@@ -3824,6 +3872,38 @@ export type GetEntityIdFunction = (
 ) => { "/": string } | FabricHash | undefined;
 
 export declare const getEntityId: GetEntityIdFunction;
+
+/**
+ * A principal's access to a space: one of the capabilities a space's access
+ * list grants, or `"none"` when it grants that principal nothing.
+ */
+export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
+
+/**
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, as the space's access list states it: the principal's entry in
+ * the list, else the list's `"*"` entry. `target` is required, so a call about
+ * the pattern's own space passes a cell that lives there.
+ *
+ * `"none"` means the principal holds nothing there. `undefined` means the
+ * answer is not known yet: the access list has not arrived, the space has no
+ * access list, there is no principal, or `target` is `undefined`, which is what
+ * a value that cannot be read yet reads as. It is never a guess.
+ *
+ * In a reactive computation (`computed()`, `lift()`) the principal is whoever
+ * is viewing, and the result is theirs alone, so two users never see each
+ * other's answer; it updates when the access list changes. In a handler it is
+ * the event's actor. Calling it in a pattern body throws, since a pattern
+ * body builds one graph for every viewer: wrap it in `computed()` instead.
+ *
+ * It names no principal, and tells a member only what a member can already
+ * read, since any member can read the whole access list.
+ */
+export type SpaceAccessFunction = (
+  target: AnyCell<unknown> | undefined,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccess: SpaceAccessFunction;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

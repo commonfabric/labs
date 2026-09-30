@@ -1,6 +1,6 @@
 import { debugStr } from "@commonfabric/data-model";
-import { env, Page } from "@commonfabric/integration";
-import { Identity } from "@commonfabric/identity";
+import { createTestSpace, env, Page } from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -16,7 +16,7 @@ import {
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
 
 describe("shared profile integration test", () => {
@@ -26,19 +26,21 @@ describe("shared profile integration test", () => {
   let identity: Identity;
   let secondIdentity: Identity;
   let cc: PiecesController;
-  let sharedSpaceDid: string;
+  let sharedSpaceDid: DID;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
+    sharedSpaceDid = await createTestSpace(identity, {
+      grants: { [secondIdentity.did()]: "WRITE" },
+    });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: sharedSpaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
-    sharedSpaceDid = cc.getSpace();
 
     // Pre-create the space-root (default) pattern so each browser boot's
     // `pattern:getSpaceRoot` storage-RESUMEs it instead of taking the create
@@ -78,7 +80,7 @@ describe("shared profile integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceDid: sharedSpaceDid as `did:${string}:${string}`, pieceId },
+      view: { spaceDid: sharedSpaceDid, pieceId },
       identity,
     });
     await waitForText(page, "#shared-profile-name", "No profile");
@@ -94,7 +96,7 @@ describe("shared profile integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       identity: secondIdentity,
-      view: { spaceDid: sharedSpaceDid as `did:${string}:${string}`, pieceId },
+      view: { spaceDid: sharedSpaceDid, pieceId },
     });
     await waitForText(page, "#shared-profile-name", "No profile");
 

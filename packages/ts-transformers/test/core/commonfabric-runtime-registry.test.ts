@@ -10,10 +10,18 @@ const FACTORY_URL = new URL(
   import.meta.url,
 );
 
+/**
+ * The builder modules whose exports `factory.ts` injects as callables, each of
+ * which needs a registry entry. The guard sees only exports imported from these,
+ * so a module that a new callable is imported from has to be added here.
+ */
 const TRACKED_IMPORT_SOURCES = new Set([
   "./built-in.ts",
+  "./current-principal.ts",
+  "./event-key.ts",
   "./module.ts",
   "./pattern.ts",
+  "./space-access.ts",
 ]);
 
 function getPropertyNameText(name: ts.PropertyName): string | undefined {

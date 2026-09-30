@@ -50,6 +50,10 @@ a line for each new document to the index below.
 - [`committed-write-backpressure.md`](committed-write-backpressure.md) — how the
   scheduler keeps a committed write from being silently dropped when the server
   rejects it under contention
+- [`event-key.md`](event-key.md) — the key `eventKey()` returns to a handler:
+  what it is derived from, why it is the same on every run of one event and
+  different for another actor or stream, how far it can be trusted, and why it
+  is available only in a handler
 - [`authorization-failure-surfacing.md`](authorization-failure-surfacing.md) —
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
@@ -76,6 +80,14 @@ a line for each new document to the index below.
 - [`home-space-internals.md`](home-space-internals.md) — the runtime
   implementation behind home-space behavior, including how the runtime derives
   the user's identity DID
+- [`current-principal.md`](current-principal.md) — the principal a handler acts
+  for: where `currentPrincipal()` gets it on a client and on a serving runtime,
+  what cannot steer it, why it is authority rather than intent, and why it is
+  available only in a handler
+- [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
+  about the access its principal holds in a space: where the level comes from,
+  who the principal is, when the answer is `"none"` and when it is not known,
+  and how it stays current
 
 ## Talking to the outside world
 

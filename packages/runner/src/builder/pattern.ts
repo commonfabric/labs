@@ -1,4 +1,8 @@
-import type { JSONSchemaObj } from "@commonfabric/api";
+import type {
+  InSpaceGrants,
+  InSpaceOptions,
+  JSONSchemaObj,
+} from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
@@ -17,7 +21,12 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 
 import { type AliasBinding } from "../alias-binding.ts";
-import { isCell, schemaCellScope, setCellUnlinkedSpace } from "../cell.ts";
+import {
+  exportCell,
+  isCell,
+  schemaCellScope,
+  setCellUnlinkedSpace,
+} from "../cell.ts";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { defineAuthoredDebugAccessors } from "../harness/authored-debug-source.ts";
@@ -283,7 +292,7 @@ function factoryFromPattern<T, R>(
     traverseValue(value, (value) => {
       if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
       if (isCell(value) && !allCells.has(value)) {
-        const { frame, nodes, path, scope, name } = value.export();
+        const { frame, nodes, path, scope, name } = exportCell(value);
         if (isReactive(value) && frame !== getTopFrame()) {
           throw new Error(
             closureCaptureErrorMessage({
@@ -309,7 +318,7 @@ function factoryFromPattern<T, R>(
 
   const usedNames = new Set<string>();
   allCells.forEach((cell) => {
-    const existingName = getStableInternalPathSegment(cell.export().name);
+    const existingName = getStableInternalPathSegment(exportCell(cell).name);
     if (typeof existingName === "string") usedNames.add(existingName);
   });
 
@@ -317,7 +326,7 @@ function factoryFromPattern<T, R>(
   if (isObjectOrArray(outputs) && !isCell(outputs)) {
     Object.entries(outputs).forEach(([key, value]: [string, unknown]) => {
       if (isCell(value)) {
-        const exported = value.export();
+        const exported = exportCell(value);
         if (
           !exported.path.length &&
           !exported.name &&
@@ -332,13 +341,13 @@ function factoryFromPattern<T, R>(
 
   // Then from assignments in nodes
   allCells.forEach((cell) => {
-    if (cell.export().path.length) return;
-    cell.export().nodes.forEach((node: NodeRef) => {
+    if (exportCell(cell).path.length) return;
+    exportCell(cell).nodes.forEach((node: NodeRef) => {
       if (isObjectOrArray(node.inputs)) {
         Object.entries(node.inputs).forEach(([key, input]) => {
           if (
-            isReactive(input) && input.export().cell === cell &&
-            !cell.export().name && !usedNames.has(key)
+            isReactive(input) && Object.is(exportCell(input).cell, cell) &&
+            !exportCell(cell).name && !usedNames.has(key)
           ) {
             cell.for(key, true); // allowIfSet=true to not override existing causes
             usedNames.add(key);
@@ -354,12 +363,12 @@ function factoryFromPattern<T, R>(
 
   const inputCell = isCell(inputs) ? inputs : getCellOrThrow(inputs);
   const selfRefCell = getCellOrThrow(selfRef);
-  const inputRootCell = inputCell.export().cell;
-  const selfRefRootCell = selfRefCell.export().cell;
+  const inputRootCell = exportCell(inputCell).cell;
+  const selfRefRootCell = exportCell(selfRefCell).cell;
   const cellNameForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): "argument" | "result" | undefined => {
-    const rootCell = cell.export().cell;
+    const rootCell = exportCell(cell).cell;
     return rootCell === inputRootCell
       ? "argument"
       : rootCell === selfRefRootCell
@@ -387,7 +396,7 @@ function factoryFromPattern<T, R>(
     return isStream ? { ...generated, $kind: "stream" } : generated;
   };
   allCells.forEach((cell) => {
-    const { cell: top, path, kind, name, external } = cell.export();
+    const { cell: top, path, kind, name, external } = exportCell(cell);
     if (
       external || path.length > 0 || cellNameForCell(cell) !== undefined ||
       assignedInternalPartialCauses.has(top)
@@ -424,7 +433,9 @@ function factoryFromPattern<T, R>(
   const cellReferenceForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): AliasBinding["$alias"] | undefined => {
-    const { cell: top, path, external, scope, schema, kind } = cell.export();
+    const { cell: top, path, external, scope, schema, kind } = exportCell(
+      cell,
+    );
     // If we have an external id, don't bother with all this
     if (external) return undefined;
 
@@ -459,7 +470,7 @@ function factoryFromPattern<T, R>(
     allCells,
   );
   allCells.forEach((cell) => {
-    const { cell: top, external } = cell.export();
+    const { cell: top, external } = exportCell(cell);
     if (!external && assignedInternalPartialCauses.has(top)) {
       allCellsAndInternalRoots.add(top);
     }
@@ -472,7 +483,9 @@ function factoryFromPattern<T, R>(
   allCellsAndInternalRoots.forEach((cell) => {
     // Only process roots of extra cells:
     if (cell === (inputs as unknown)) return;
-    const { cell: top, path, schema, scope, external, kind } = cell.export();
+    const { cell: top, path, schema, scope, external, kind } = exportCell(
+      cell,
+    );
     if (path.length > 0 || external) return;
 
     const cellReference = cellReferenceForCell(cell);
@@ -500,7 +513,7 @@ function factoryFromPattern<T, R>(
     serializationPath, // path where we encountered the cell
     ignoreSelfAliases,
   ) => {
-    const { cell: top } = cell.export();
+    const { cell: top } = exportCell(cell);
     const cellReference = cellReferenceForCell(cell);
     if (cellReference === undefined) return undefined;
     if (cellReference.cell !== undefined) {
@@ -537,7 +550,7 @@ function factoryFromPattern<T, R>(
       if (!deepEqual(partialCause, cellReference.partialCause)) {
         throw new Error(
           `Inconsistent partial cause for cell. This is a bug in the pattern serializer, please report it.\n` +
-            `Cell path: ${cell.export().path.join(".")}\n` +
+            `Cell path: ${exportCell(cell).path.join(".")}\n` +
             `Existing partial cause: ${JSON.stringify(partialCause)}\n` +
             `New partial cause: ${JSON.stringify(cellReference.partialCause)}`,
         );
@@ -632,6 +645,7 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
+    spaceGrants?: InSpaceGrants,
   ): PatternFactory<T, R> => {
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
@@ -648,7 +662,11 @@ function factoryFromPattern<T, R>(
         const outputs = reactive<R>();
         const frame = getTopFrame();
         if (defaultSpace !== undefined) {
-          const targetSpace = resolveInSpaceTargetSpace(defaultSpace, frame);
+          const targetSpace = resolveInSpaceTargetSpace(
+            defaultSpace,
+            spaceGrants,
+            frame,
+          );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
@@ -685,22 +703,29 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace);
+      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
       noteDerivedCopy(derived, factory);
       return derived;
     };
-    factory.inSpace = (space?: string | unknown) => {
-      const derived = makePatternFactory(defaultScope, space ?? "");
-      noteDerivedCopy(derived, factory);
-      return derived;
-    };
-    factory.inPrivateSpace = (name: string) => {
-      if (typeof name !== "string" || name.length === 0) {
-        throw new Error("A private space allocation requires a nonempty name.");
+    factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
+      // Pattern code is not trusted to keep to the type: a created space's
+      // only owner is the identity the run acts for.
+      for (
+        const [principal, capability] of Object.entries(options?.grants ?? {})
+      ) {
+        if (capability !== "READ" && capability !== "WRITE") {
+          throw new Error(
+            `inSpace() grants READ or WRITE only, not ${
+              JSON.stringify(capability)
+            } to ${JSON.stringify(principal)}`,
+          );
+        }
       }
-      const target = {};
-      privateSpaceTargets.set(target, name);
-      const derived = makePatternFactory(defaultScope, target);
+      const derived = makePatternFactory(
+        defaultScope,
+        space ?? "",
+        options?.grants,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -853,7 +878,7 @@ function assignComputedCellKinds(
     const roots = new Set<OpaqueCell<any>>();
     traverseValue(value as FactoryInput<unknown>, (item) => {
       if (isCellResultForDereferencing(item)) item = getCellOrThrow(item);
-      if (isCell(item)) roots.add(item.export().cell);
+      if (isCell(item)) roots.add(exportCell(item).cell);
       return item;
     });
     return roots;
@@ -932,7 +957,7 @@ function assignComputedCellKinds(
     if (isCell(target)) {
       // A cell bound where a deeper grant may exist: the handle the handler
       // obtains deeper in writes INTO this root.
-      out.add(target.export().cell);
+      out.add(exportCell(target).cell);
       return;
     }
     if (!isObjectOrArray(target)) return; // Primitives hold no roots.
@@ -1083,7 +1108,7 @@ function assignComputedCellKinds(
     if (writers === undefined || writers.length === 0) return;
     if (writers.some(writerDisqualifies)) return;
     if (disqualified.has(root)) return;
-    if (root.export().kind === "stream") return;
+    if (exportCell(root).kind === "stream") return;
     const descriptor = derivedInternalCells.find((candidate) =>
       deepEqual(candidate.partialCause, partialCause)
     );
@@ -1091,74 +1116,30 @@ function assignComputedCellKinds(
   });
 }
 
-/** Builder-owned targets carrying creator-only allocation semantics. */
-const privateSpaceTargets = new WeakMap<object, string>();
-
 /**
  * Resolves a `PatternFactory.inSpace(...)` target to a concrete space DID at
  * graph-construction time.
  *
  * - A DID string or a cell resolves synchronously.
- * - A named string (or the anonymous case below) is resolved from the runtime's
- *   space-name cache. On a cache miss the name is recorded on the frame as
- *   pending and `undefined` is returned; the runner resolves pending names after
- *   the run and re-runs the handler/action (RetryImmediately), at which point
- *   the cache hits and the target resolves synchronously.
+ * - A named string (or the anonymous case below) names a space as the frame's
+ *   space calls it, and resolves through that space's allocation record (see
+ *   `Runtime.resolveInSpaceNameSync`). When the name has not been resolved,
+ *   it is recorded on the frame as pending, with `grants`, and `undefined` is
+ *   returned; the runner resolves pending names after the run and re-runs the
+ *   handler or action (RetryImmediately), at which point the target resolves
+ *   synchronously. The first call to name a space in a run is the one whose
+ *   grants create it: a later call naming it reads the record that call
+ *   writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
- *   call site gets its own deterministic space that survives re-runs — mirroring
- *   how cell ids are derived from causes.
+ *   call site gets its own space that survives re-runs — mirroring how cell ids
+ *   are derived from causes.
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
+  grants: InSpaceGrants | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
-  const privateName = typeof space === "object" && space !== null
-    ? privateSpaceTargets.get(space)
-    : undefined;
-  if (privateName !== undefined) {
-    if (!frame?.runtime || !frame.tx || !frame.space) {
-      throw new Error(
-        "Private space allocation requires an active transaction.",
-      );
-    }
-    const allocation = frame.runtime.getCell<string>(
-      frame.space,
-      {
-        privateSpaceAllocation: privateName,
-      },
-      { type: "string" },
-      frame.tx,
-    );
-    const existing = allocation.get();
-    if (existing !== undefined) {
-      if (!isDID(existing)) {
-        throw new Error("Invalid private space allocation.");
-      }
-      return optIntoInSpaceMultiSpaceCommit(frame, existing);
-    }
-    if (!frame.inHandler) {
-      throw new Error("A private space must be created from a handler.");
-    }
-    const owner = frame.tx.getCfcState().trustSnapshot?.actingPrincipal;
-    if (!owner) {
-      throw new Error(
-        "Private space creation requires an authenticated actor.",
-      );
-    }
-    const key = `${frame.space}/${allocation.getAsNormalizedFullLink().id}`;
-    const resolved = frame.runtime.resolvedPrivateSpace(key);
-    if (resolved !== undefined) {
-      if (!frame.tx.markCreateOnly) {
-        throw new Error("Private allocation requires create-only commits.");
-      }
-      frame.tx.markCreateOnly(allocation.getAsNormalizedFullLink());
-      allocation.set(resolved);
-      return optIntoInSpaceMultiSpaceCommit(frame, resolved);
-    }
-    (frame.pendingPrivateSpaces ??= new Map()).set(key, owner);
-    return undefined;
-  }
   if (isDID(space)) {
     return optIntoInSpaceMultiSpaceCommit(frame, space);
   }
@@ -1169,15 +1150,23 @@ function resolveInSpaceTargetSpace(
     );
   }
   const runtime = frame?.runtime;
-  if (!runtime) return undefined;
+  const callingSpace = frame?.space;
+  const tx = frame?.tx;
+  if (!runtime || !callingSpace || !tx) return undefined;
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
-  const resolved = runtime.resolveSpaceNameSync(name);
+  const resolved = runtime.resolveInSpaceNameSync(
+    callingSpace,
+    name,
+    tx,
+    grants,
+  );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
-  (frame!.pendingSpaceNames ??= new Set<string>()).add(name);
+  const pending = frame!.pendingSpaceNames ??= new Map();
+  if (!pending.has(name)) pending.set(name, grants);
   return undefined;
 }
 
@@ -1283,6 +1272,7 @@ export function pushFrameFromCause(
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
     eventTime?: number;
+    eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
     runtime?: Runtime;
     tx?: IExtendedStorageTransaction;
@@ -1295,6 +1285,7 @@ export function pushFrameFromCause(
     inHandler,
     frameKind,
     eventTime,
+    eventKey,
     runtime,
     tx,
     space,
@@ -1323,6 +1314,7 @@ export function pushFrameFromCause(
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
     ...(eventTime !== undefined && { eventTime }),
+    ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
   pushOntoFrameStack(frame);

@@ -12,19 +12,17 @@ import {
 } from "commonfabric";
 import type { ChatMessage, ChatRoomPolicy } from "./schemas.ts";
 
-/** Returns the policy used by writers and the published policy cell. */
-export function chatPolicy(): ChatRoomPolicy {
-  return {
-    ownersMayObliterate: true,
-    keepsHistory: true,
-    deletionIsObliteration: false,
-    proposedTimeMaxAgeNsec: new FabricDurationNsec(600_000_000_000n),
-    proposedTimeMaxLeadNsec: new FabricDurationNsec(10_000_000_000n),
-    recentActivityWindowNsec: new FabricDurationNsec(600_000_000_000n),
-    maxWindowCount: 100,
-    maxOpenWindows: 50,
-  };
-}
+/** The policy used by writers and the published policy cell. */
+export const CHAT_POLICY: ChatRoomPolicy = {
+  ownersMayObliterate: true,
+  keepsHistory: true,
+  deletionIsObliteration: false,
+  proposedTimeMaxAgeNsec: new FabricDurationNsec(600_000_000_000n),
+  proposedTimeMaxLeadNsec: new FabricDurationNsec(10_000_000_000n),
+  recentActivityWindowNsec: new FabricDurationNsec(600_000_000_000n),
+  maxWindowCount: 100,
+  maxOpenWindows: 50,
+};
 
 /** Returns the handler's coarse clock as epoch nanoseconds. */
 export function handlerTime(): bigint {
@@ -39,8 +37,8 @@ export function proposedTime(
   const value = proposed?.value;
   if (
     typeof value !== "bigint" ||
-    value < now - chatPolicy().proposedTimeMaxAgeNsec.value ||
-    value > now + chatPolicy().proposedTimeMaxLeadNsec.value
+    value < now - CHAT_POLICY.proposedTimeMaxAgeNsec.value ||
+    value > now + CHAT_POLICY.proposedTimeMaxLeadNsec.value
   ) return undefined;
   return value > now ? now : value;
 }

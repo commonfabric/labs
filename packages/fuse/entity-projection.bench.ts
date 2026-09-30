@@ -34,9 +34,9 @@ declare const gc: (() => void) | undefined;
 const benchmarkIdentity = await Identity.fromPassphrase(
   "fuse entity projection benchmark",
 );
-const benchmarkSession = await createSession({
+const benchmarkSession = createSession({
   identity: benchmarkIdentity,
-  spaceName: "fuse-entity-projection-benchmark",
+  spaceDid: (await Identity.generate()).did(),
 });
 const benchmarkRuntime = new Runtime({
   apiUrl: new URL(import.meta.url),

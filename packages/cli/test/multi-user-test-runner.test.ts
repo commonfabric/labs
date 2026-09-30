@@ -31,10 +31,12 @@ import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import { assertParticipantRung } from "../lib/multi-user-test-runner.ts";
 import type {
   ParticipantInitResult,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "../lib/multi-user-test-worker.ts";
@@ -59,6 +61,7 @@ function fixture(name: string): string {
 class ParticipantWorkerClient {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -71,7 +74,13 @@ class ParticipantWorkerClient {
       new URL("../lib/multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `marker-wait:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -101,7 +110,7 @@ class ParticipantWorkerClient {
 
   async close(): Promise<void> {
     await this.call("dispose").catch(() => {});
-    this.#worker.terminate();
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 }
 
@@ -166,7 +175,9 @@ describe(
       // goes out a round trip later — and alice's other marker wakes the wait
       // onto a document that still lacks the one it wants.
       const server = StandaloneMemoryServer.start();
-      const spaceName = crypto.randomUUID();
+      // This server enforces no ACL, so a DID nothing has written to is a space
+      // both participants may use.
+      const spaceDid = (await Identity.generate()).did();
       const names = ["alice", "bob"];
       const workers = new Map<string, ParticipantWorkerClient>();
       try {
@@ -179,7 +190,7 @@ describe(
           );
           await client.call("init", {
             identity: realmValueFromKeyPair(identity.keyPair),
-            spaceName,
+            spaceDid,
             apiUrl: server.url.href,
             // Any two-participant descriptor will do: the markers this test
             // announces and awaits are its own, not the fixture's steps.
@@ -239,7 +250,7 @@ describe(
         });
         return await client.call("init", {
           identity: realmValueFromKeyPair(identity.keyPair),
-          spaceName: crypto.randomUUID(),
+          spaceDid: (await Identity.generate()).did(),
           apiUrl: server.url.href,
           testPath: fixture("marker-barrier.test.tsx"),
           root: FIXTURES,

@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -14,14 +15,15 @@ import {
 } from "./cfc-seed-envelope.ts";
 import { toCell } from "../src/back-to-cell.ts";
 import { type FactoryInput, UI } from "../src/builder/types.ts";
+import { type Cell, CellImpl } from "../src/cell.ts";
 import {
+  type CfcLabelView,
   cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
-  cfcLabelViewSymbol,
   getCarriedCfcLabelView,
 } from "../src/cfc/mod.ts";
 import {
@@ -39,7 +41,56 @@ import { parseLink } from "../src/link-utils.ts";
 import { startReadStats } from "../src/read-stats.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+
+/**
+ * Runs `body` with a runtime whose storage holds one document, labeled `label`
+ * at its root when one is given, and a cell naming that document.
+ */
+async function withLabeledDocument(
+  label: CfcLabelView["entries"][number]["label"] | undefined,
+  body: (runtime: Runtime, cell: Cell<unknown>) => void,
+): Promise<void> {
+  const signer = await Identity.fromPassphrase("cfc label view document");
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  try {
+    const tx = runtime.edit();
+    const link = runtime.getCell(
+      signer.did(),
+      "cfc-label-view-document",
+      undefined,
+      tx,
+    ).getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, {
+      space: signer.did(),
+      id: link.id,
+      type: "application/json",
+      path: [],
+    }, {
+      value: { body: "labeled content" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: label === undefined ? [] : [{ path: [], label }],
+        },
+      },
+    });
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    body(runtime, runtime.getCellFromLink(link));
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+}
 
 describe("CFC label view helpers", () => {
   it("carries a view's origin spaces through clone, merge and rebase, outside its data", () => {
@@ -2486,8 +2537,23 @@ describe("CFC label view helpers", () => {
     }
   });
 
-  it("reads stored metadata directly from the queried cell", () => {
-    const cell = {
+  it("reads stored metadata directly from the queried cell", async () => {
+    await withLabeledDocument(
+      { integrity: ["trusted-source"] },
+      (_runtime, cell) => {
+        expect(cfcLabelViewForCell(cell)).toEqual({
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: ["trusted-source"] },
+          }],
+        });
+      },
+    );
+  });
+
+  it("returns `undefined` for an object that only resembles a cell", () => {
+    const lookalike = {
       getAsNormalizedFullLink: () => ({
         id: "of:labeled-cell",
         space: "did:key:test",
@@ -2496,8 +2562,6 @@ describe("CFC label view helpers", () => {
       }),
       runtime: {
         readTx: () => ({
-          // The reserved `["cfc"]` position is what the reader addresses,
-          // so the read returns the envelope itself.
           readOrThrow: () => ({
             version: 1,
             schemaHash: "test-schema",
@@ -2513,129 +2577,83 @@ describe("CFC label view helpers", () => {
       },
     };
 
-    expect(cfcLabelViewForCell(cell)).toEqual({
-      version: 1,
-      entries: [{
-        path: [],
-        label: { integrity: ["trusted-source"] },
-      }],
+    expect(cfcLabelViewForCell(lookalike)).toBeUndefined();
+  });
+
+  it("reports a successful fail-closed read through the public status wrapper", async () => {
+    const label = {
+      confidentiality: ["private-source"],
+      integrity: ["trusted-source"],
+    };
+    await withLabeledDocument(label, (_runtime, cell) => {
+      const expectedView = { version: 1, entries: [{ path: [], label }] };
+
+      expect(cfcLabelViewForCellFailClosedWithStatus(cell)).toEqual({
+        view: expectedView,
+        readFailed: false,
+      });
+      expect(cfcLabelViewForCellFailClosed(cell)).toEqual(expectedView);
     });
   });
 
-  it("reports a successful fail-closed read through the public status wrapper", () => {
-    let metadataReads = 0;
-    const cell = {
-      getAsNormalizedFullLink: () => ({
-        id: "of:labeled-cell",
-        space: "did:key:test",
-        type: "application/json",
-        path: [],
-      }),
-      runtime: {
-        readTx: () => ({
-          readOrThrow: () => {
-            metadataReads++;
-            return {
-              version: 1,
-              schemaHash: "test-schema",
-              labelMap: {
-                version: 1,
-                entries: [{
-                  path: [],
-                  label: {
-                    confidentiality: ["private-source"],
-                    integrity: ["trusted-source"],
-                  },
-                }],
-              },
-            };
-          },
-        }),
-      },
-    };
-    const expectedView = {
-      version: 1 as const,
-      entries: [{
-        path: [],
-        label: {
-          confidentiality: ["private-source"],
-          integrity: ["trusted-source"],
+  it("reports a failed read while retaining confidentiality in its fail-closed view", async () => {
+    await withLabeledDocument(undefined, (runtime, cell) => {
+      // A transaction whose every read throws, standing in for a store that
+      // cannot answer, under a cell that carries a label of its own.
+      class FailingReads extends TransactionWrapper {
+        override readOrThrow(): never {
+          throw new Error("metadata read failed");
+        }
+      }
+      const failing = new CellImpl(
+        runtime,
+        new FailingReads(runtime.edit()),
+        cell.getAsNormalizedFullLink(),
+        false,
+        undefined,
+        "cell",
+        {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { confidentiality: ["private-source"] },
+          }],
         },
-      }],
-    };
+      );
 
-    expect(cfcLabelViewForCellFailClosedWithStatus(cell)).toEqual({
-      view: expectedView,
-      readFailed: false,
+      expect(cfcLabelViewForCellFailClosedWithStatus(failing)).toEqual({
+        view: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [
+                "private-source",
+                "cfc:label-read-failed",
+              ],
+            },
+          }],
+        },
+        readFailed: true,
+      });
     });
-    expect(metadataReads).toBe(1);
-    expect(cfcLabelViewForCellFailClosed(cell)).toEqual(expectedView);
-    expect(metadataReads).toBe(2);
   });
 
-  it("reports a failed read while retaining confidentiality in its fail-closed view", () => {
-    let metadataReads = 0;
-    const cell = {
-      getAsNormalizedFullLink: () => ({
-        id: "of:labeled-cell",
-        space: "did:key:test",
-        type: "application/json",
-        path: [],
-      }),
-      runtime: {
-        readTx: () => ({
-          readOrThrow: () => {
-            metadataReads++;
-            throw new Error("metadata read failed");
-          },
-        }),
-      },
-      [cfcLabelViewSymbol]: () => ({
-        version: 1 as const,
-        entries: [{
-          path: [],
-          label: { confidentiality: ["private-source"] },
-        }],
-      }),
-    };
-
-    expect(cfcLabelViewForCellFailClosedWithStatus(cell)).toEqual({
-      view: {
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: [
-              "private-source",
-              "cfc:label-read-failed",
-            ],
-          },
-        }],
-      },
-      readFailed: true,
-    });
-    expect(metadataReads).toBe(1);
-  });
-
-  it("skips result metadata for result-cell internal paths", () => {
-    const resultCell = {
-      getAsNormalizedFullLink: () => ({
-        id: "of:result-cell",
-        space: "did:key:test",
-        type: "application/json",
+  it("skips result metadata for result-cell internal paths", async () => {
+    await withLabeledDocument(undefined, (runtime, cell) => {
+      // A cell whose result metadata throws when consulted.
+      class UnconsultedMetadata extends CellImpl<FabricValue> {
+        override getMetaRaw(): never {
+          throw new Error("result metadata should not be consulted");
+        }
+      }
+      const resultCell = new UnconsultedMetadata(runtime, undefined, {
+        ...cell.getAsNormalizedFullLink(),
         path: ["internal", "__#3"],
-      }),
-      runtime: {
-        readTx: () => ({
-          readOrThrow: () => undefined,
-        }),
-      },
-      getMetaRaw: () => {
-        throw new Error("result metadata should not be consulted");
-      },
-    };
+      });
 
-    expect(cfcLabelViewForCell(resultCell)).toBeUndefined();
+      expect(cfcLabelViewForCell(resultCell)).toBeUndefined();
+    });
   });
 
   it("re-fires an includeCfcLabel sink on a label-only write (value unchanged)", async () => {

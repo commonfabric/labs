@@ -30,26 +30,39 @@ Regression guard: "preserves an outer unlabeled-only boundary through an
 unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
 The ceiling in force at a node gates what reaches the page from that node by
-the same fit (`canRenderLabelUnderPolicy`):
+the same fit (`canRenderLabelUnderPolicy`). Each read that a value reaches the
+page through is decided on the labels of the cell the read starts from and on
+the labels the read consumed, and the ceiling has to admit each. The cell's
+labels are its own, which include a label its handle carries, and, when its
+path resolves through links to another place, the label there, which gathers
+every link the resolution followed (spec §8.2.7). A label that cannot be read
+is refused. The consumed labels are those of
+every document the read passed through, including one behind a link crossed
+part way along the path and one a link inside the value leads to, and those of
+each slot holding a link the read followed, which a dereference retains
+(spec §4.6.3).
 
-- A cell child the ceiling does not admit renders as the blocked placeholder.
+- A cell child, and a cell mounted as the root, renders as the blocked
+  placeholder while the ceiling refuses its read. A text child
+  `table.key("row").key("name")`, where `row` links to a document of its own,
+  is decided on that document's label as well as the table's. A view a child
+  reaches through a link, as a pattern's output does through `[UI]`, is part
+  of the child's read, so a refused view renders as the placeholder.
 - A property whose value is read through a link, or is an object, is read by a
-  sink of its own, and the fit is made on the labels that read consumed: every
-  document the read passed through, including one behind a link crossed part
-  way along the path and one a link inside the value leads to. A property the
-  ceiling refuses is not set, and is removed if it was. That covers a cell
-  passed as a property (`<span title={cell}>`) and, in a view read from a
-  cell, as a pattern's view is, a property that links to one and an object or
-  `style` property holding such a link. A literal property is decided with the
-  props object it sits in: it is set directly while the ceiling admits that
-  object's own label, and read by a sink of its own, like the others, while
-  it does not, as when the view or its props are linked from a document of
-  their own. An object written inline in a view built outside a cell sends a
-  cell it holds as a link, not as the cell's value.
-- A `$` binding is made only while the ceiling admits what the worker's read
-  of the bound cell, under the cell's schema, consumes. The worker keeps
-  reading the bound cell and removes the binding when a write leaves that read
-  consuming a label the ceiling refuses. The binding hands the host a live
+  sink of its own and decided on that read. A property the ceiling refuses is
+  not set, and is removed if it was. That covers a cell passed as a property
+  (`<span title={cell}>`) and, in a view read from a cell, as a pattern's view
+  is, a property that links to one and an object or `style` property holding
+  such a link. A literal property is decided with the props object it sits in:
+  it is set directly while the ceiling admits that object's own label, and
+  read by a sink of its own, like the others, while it does not, as when the
+  view or its props are linked from a document of their own. An object written
+  inline in a view built outside a cell sends a cell it holds as a link, not as
+  the cell's value.
+- A `$` binding is made only while the ceiling admits the worker's read of
+  the bound cell, under the cell's schema. The worker keeps reading the bound
+  cell and removes the binding when a write leaves that read consuming a label
+  the ceiling refuses. The binding hands the host a live
   handle, and the worker answers the host's reads through it without the
   ceiling: a read that follows a link the worker's read did not, and the
   host's own subscription to the cell, which can deliver the write that causes

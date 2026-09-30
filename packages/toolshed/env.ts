@@ -259,15 +259,11 @@ export const EnvSchema = z.object({
   //
   // Minting issues a durable, operator-backed append capability into a user's
   // space, and it is only as trustworthy as the claim "this DID owns that
-  // space". Where named-space keys derive from a public passphrase, anyone who
-  // knows a space NAME can reconstruct its key, grant themselves OWNER, and
-  // mint legitimately — and repairing the derivation later does NOT retract
-  // what was issued. Enabling this before that repair converts a temporary
-  // takeover into persistence beyond remediation.
-  //
-  // Turn it on only where space keys are not derivable from public inputs. The
-  // tripwire in packages/toolshed/routes/ingest-channels/ and
-  // `deno task check-tripwires` fire when that repair lands.
+  // space". A legacy named space's key derives from a public passphrase, so
+  // anyone who could reach a deployment could have granted themselves OWNER on
+  // one, and such a grant outlives the random keys new spaces get. On a
+  // deployment others could reach, review the space ACLs before turning this
+  // on; see docs/features/self-serve-ingest-channels.md.
   INGEST_SELF_SERVE_ENABLED: boolFlag(),
 
   // Comma-separated DIDs with implicit OWNER on every space (e.g. the

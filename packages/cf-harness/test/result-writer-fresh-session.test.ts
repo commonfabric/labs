@@ -62,9 +62,9 @@ describe("writeAgentResult() on a fresh session", () => {
   });
 
   it("writes a result observing a cell that links into a document it has not loaded", async () => {
-    const spaceName = `fresh-session-${crypto.randomUUID()}`;
+    const spaceDid = (await Identity.generate()).did();
     const seeding = connect();
-    const seedSession = await createSession({ identity: signer, spaceName });
+    const seedSession = createSession({ identity: signer, spaceDid });
     const space = seedSession.space;
     const shelf = seeding.getCell(space, "shelf");
     await seeding.editWithRetry((tx) => {
@@ -78,7 +78,7 @@ describe("writeAgentResult() on a fresh session", () => {
 
     const writing = connect();
     const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid }),
       writing,
     );
     await pieces.synced();

@@ -2700,9 +2700,9 @@ describe("cfc-custody-seal", () => {
         const prepared = await prepareCustodySeal(draft, fixture.room(alice));
         expect(prepared.actor).toBe(alice.did());
         expect(prepared.room).toBe(S);
-        // The room's key is an owner although the list does not name it.
+        // Exactly the principals the list names: the room's own key reads
+        // only what the list grants it, and this list grants it nothing.
         const expected = [
-          { principal: S, role: "owner" },
           { principal: carol.did(), role: "owner" },
           ...[alice, bob, mallory].map((member) => ({
             principal: member.did(),
@@ -2710,6 +2710,8 @@ describe("cfc-custody-seal", () => {
           })),
         ].sort((a, b) => utf8Compare(a.principal, b.principal));
         expect(prepared.readers).toEqual(expected);
+        expect(prepared.readers.some((reader) => reader.principal === S))
+          .toBe(false);
       } finally {
         await fixture.dispose();
       }

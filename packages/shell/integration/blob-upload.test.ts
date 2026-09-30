@@ -1,7 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { env, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 
 const { FRONTEND_URL } = env;
@@ -12,10 +16,10 @@ describe("shell blob upload", () => {
 
   it("uploads an image and displays it through an absolute blobs URL", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const spaceName = `blob-upload-${Date.now()}`;
+    const spaceDid = await createTestSpace(identity);
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName },
+      view: { spaceDid },
       identity,
     });
     await waitForCondition(shell.page(), () =>
@@ -50,12 +54,12 @@ describe("shell blob upload", () => {
         throw new Error("Runtime client was not exposed");
       }
       // Blob authorization is deferred, but direct writes under ACL
-      // enforcement still need an existing space. Await the normal named-space
-      // root bootstrap before exercising the upload compatibility path.
+      // enforcement still need an existing space. The space was created
+      // before the page opened it, and its root has loaded.
       const space = (document.querySelector("x-root-view") as
         | { space?: string }
         | null)?.space;
-      if (!space) throw new Error("Named space did not resolve");
+      if (!space) throw new Error("The shell opened no space");
 
       const upload = await rt.uploadBlob({
         space,

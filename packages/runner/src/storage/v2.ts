@@ -14,7 +14,8 @@ import {
   walkSchemaDocumentClosure,
 } from "@commonfabric/data-model-schema/schema-closure";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { aclDocId, sameAcl } from "@commonfabric/memory/acl";
+import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import type { ACL, Entity } from "@commonfabric/memory/interface";
 import {
   type AuthorizationError as IAuthorizationError,
@@ -233,6 +234,10 @@ const isArrayLengthChildPath = (
 
 export { watchIdForEntry } from "./v2-watch.ts";
 export type { SessionFactory } from "./v2-remote-session.ts";
+export {
+  RemoteSessionFactory,
+  storageAddressForHost,
+} from "./v2-remote-session.ts";
 
 const logger = getLogger("storage.v2", {
   enabled: true,
@@ -819,49 +824,6 @@ const dropMaterializedSuffix = (
   }
 };
 
-/**
- * The grants a fresh non-home space's genesis ACL carries BESIDE its
- * concrete OWNER when the caller supplied no document of its own: the
- * rollout default, world-writable until ACL management has a UI
- * (04-protocol.md §4.5). It is the FALLBACK, not the rule — a caller
- * holding the space key names the exact document through
- * `registerSpaceIdentity(identity, { genesisAcl })` and the fallback is
- * never consulted. Retiring the wildcard is one edit here (`{}`), and one
- * deliberate rollout decision; nothing else in the genesis path spells the
- * wildcard out.
- */
-export const DEFAULT_GENESIS_GRANTS: Readonly<ACL> = Object.freeze({
-  "*": "WRITE",
-});
-
-/** The fallback genesis document for a fresh non-home space: `owner` as
- *  OWNER plus the rollout default grants. */
-const defaultGenesisAcl = (owner: string): ACL => ({
-  [owner]: "OWNER",
-  ...DEFAULT_GENESIS_GRANTS,
-});
-
-/** The OWNER principals of a stored ACL document, the wildcard included —
- *  a space with `"*": "OWNER"` is owned by everyone, and a document that
- *  did not say so is not what stands (a non-object has none). */
-const ownersOf = (document: unknown): string[] =>
-  isObjectOrArray(document)
-    ? Object.entries(document as Record<string, unknown>)
-      .filter(([, capability]) => capability === "OWNER")
-      .map(([principal]) => principal)
-      .sort()
-    : [];
-
-/** Whether a stored ACL document is owned exactly as `expected` says: the
- *  same OWNER set, no more, no fewer. Grants below OWNER are the owner's to
- *  evolve and are not compared. */
-const sameOwners = (stored: unknown, expected: ACL): boolean => {
-  const actual = ownersOf(stored);
-  const wanted = ownersOf(expected);
-  return actual.length === wanted.length &&
-    actual.every((principal, index) => principal === wanted[index]);
-};
-
 export interface Options {
   as: Signer;
 
@@ -885,10 +847,6 @@ export interface Options {
 
   id?: string;
   settings?: IRemoteStorageProviderSettings;
-
-  /** Space authority used only for fresh named-space ACL genesis. The durable
-   *  replica session still authenticates as `as`. */
-  spaceIdentity?: Signer;
 
   /** The event-intent queue's store seam (server-execution v2 Phase 3;
    *  events.md §5; LT9 re-ruled 2026-08-15: PROCESS-LIFETIME — reload
@@ -1235,24 +1193,6 @@ export class StorageManager implements IStorageManager {
    * unbounded. */
   #sessionReadCeiling?: SessionReadCeiling;
 
-  #spaceIdentities = new Map<MemorySpace, Signer>();
-
-  /** Genesis ACL documents registered beside a space identity — the exact
-   * document a fresh space is born with. `{ owner }` (OW31: the ACTING
-   * user a serving-side provisioning run supplied) is stored here already
-   * expanded into the fallback shape, so there is one representation and
-   * one reader. Absent (every client that registered nothing), the
-   * fallback is computed at genesis from the signer, byte-identical to the
-   * pre-OW31 shape. A later registration for the same space replaces an
-   * earlier one, as re-registering an owner always did. `supplied` marks a
-   * caller's own document — the one registration whose genesis must land
-   * exactly or be reported (see the ConflictError arm of
-   * `#createInitializedSession`). */
-  #spaceGenesisAcls = new Map<
-    MemorySpace,
-    { document: ACL; supplied: boolean; root?: GenesisRoot }
-  >();
-
   /** Resume options for a space's manager-wide session that
    * `#createInitializedSession` detached ahead of a bootstrap that then
    * failed (a refused genesis, a lost route). The memory server keeps a
@@ -1268,17 +1208,6 @@ export class StorageManager implements IStorageManager {
   #detachedSessionResumes = new Map<
     MemorySpace,
     { options: MemoryV2Client.MountOptions; routeGeneration: number }
-  >();
-
-  /** Where each space's first mount stands on this manager: an attempt in
-   * flight (the registered document is being read), or a session handed to
-   * the provider (the document was consulted, or the space needed none). A
-   * genesisAcl registered in either state could never be the space's
-   * genesis, so registration refuses. A failed attempt leaves no entry — the
-   * caller may correct the document and retry — and close() clears it. */
-  #genesisPhase = new Map<
-    MemorySpace,
-    { phase: "in-flight"; attempt: symbol } | { phase: "handed-off" }
   >();
 
   /** Seed map from Options — fixed for the manager's lifetime. */
@@ -1393,9 +1322,6 @@ export class StorageManager implements IStorageManager {
       memoryEventAppendQueueStore();
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
-    if (options.spaceIdentity) {
-      this.registerSpaceIdentity(options.spaceIdentity);
-    }
     // Snapshot + freeze: the resolver snapshotted its own copy at
     // open(), so refusal logic must see the same fixed facts — a
     // caller mutating their map object must not desynchronize them.
@@ -1556,106 +1482,47 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
-  /** Releases the bootstrap signer once the creator's session has opened. */
-  forgetSpaceIdentity(space: MemorySpace): void {
-    this.#spaceIdentities.delete(space);
-  }
-
   /**
-   * Retain a derived space key solely as the authority for that space's first
-   * ACL commit. Providers continue to authenticate all ordinary replica work
-   * as `this.as`.
+   * Creates a space and returns its DID. See `IStorageManager.createSpace`.
    *
-   * `options.owner` names the genesis ACL's OWNER (OW31, RULED 2026-08-18):
-   * on a SERVING runtime the acting user of the provisioning run is
-   * threaded here, so the space's first commit — signed by the space's own
-   * keys — immediately delegates OWNER to that user and the serving
-   * identity appears nowhere in the ACL. Absent (every client), the owner
-   * is the manager's signer: the active user, the pre-OW31 shape
-   * byte-for-byte.
-   *
-   * `options.genesisAcl` names the EXACT document a fresh space is born
-   * with — its first and only genesis commit, with no intermediate
-   * default ever written — so a space is never in a world-writable state
-   * it did not ask for. It is validated by the memory server's own
-   * genesis admission (a concrete OWNER, an ACL-only commit; INV-12/13),
-   * never here: a refused document leaves the space uninitialized and
-   * the open rejects, and a corrected registration may retry. The
-   * document is a demand: the space's first open on this manager
-   * proceeds only if the space is fresh (the document becomes its only
-   * commit) or is already owned exactly as the document says — a seal
-   * asserts ownership, and grants below OWNER are the owner's to evolve
-   * afterwards, so a creator's restart survives its own grants; a space
-   * populated before genesis, a retracted ACL, or a genesis another
-   * initializer won under a different owner is refused rather than
-   * silently entered under someone else's ACL. A genesis race this
-   * attempt loses (the space was fresh when it looked) is held to the
-   * exact document: what stands was written moments ago, not evolved,
-   * and the likely winner — the same user's other runtime writing the
-   * wildcard default — is precisely what the seal refused. It never
-   * reaches the home arm. A caller that will open the
-   * space itself must grant its own signer at least READ, or every open
-   * after genesis is refused by the server. `owner` and `genesisAcl` are
-   * two descriptions of one document, so supplying both in one
-   * registration is refused rather than silently ranked; a registration
-   * after the space's first mount has begun is refused too.
+   * The space's key pair is generated here from random data. It opens one
+   * session, as the space, through the same route every later session for
+   * the DID takes, and signs one commit: `acl` as the space's access-control
+   * document, and `root` as its reserved root pattern when one is given. The
+   * commit reads the document at sequence zero, so it lands only on a space
+   * with no history. The memory client resubmits the identical commit after a
+   * lost connection until the server confirms or refuses it. The key is held
+   * by nothing but this call, and is dropped when the call returns.
    */
-  registerSpaceIdentity(
-    identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
-  ): void {
-    const space = identity.did() as MemorySpace;
-    const owner = options?.owner;
-    const genesisAcl = options?.genesisAcl;
-    if (options?.genesisRoot !== undefined && genesisAcl === undefined) {
-      throw new Error("genesisRoot requires an explicit genesisAcl");
-    }
-    if (owner !== undefined && genesisAcl !== undefined) {
-      throw new Error(
-        `registerSpaceIdentity(${space}): supply either owner or genesisAcl, ` +
-          "not both — genesisAcl is the whole genesis document, and owner " +
-          "only names the OWNER of the default one",
-      );
-    }
-    if (genesisAcl !== undefined && this.#genesisPhase.has(space)) {
-      // The document is read during the space's first mount; that mount is
-      // under way or done, without it.
-      throw new Error(
-        `registerSpaceIdentity(${space}): the space is already open on this ` +
-          "manager, so the supplied genesisAcl could never be its genesis — " +
-          "register the document before the first open",
-      );
-    }
-    if (
-      genesisAcl !== undefined &&
-      this.#sessionFactory.supportsAclBootstrap !== true
-    ) {
-      // A document nobody will write is a seal that never lands; the
-      // caller asked for a closed space and would get an ACL-less one.
-      throw new Error(
-        `registerSpaceIdentity(${space}): this manager's session factory ` +
-          "cannot bootstrap an ACL, so the supplied genesisAcl would never " +
-          "be written",
-      );
-    }
-    this.#spaceIdentities.set(space, identity);
-    if (owner !== undefined) {
-      this.#spaceGenesisAcls.set(space, {
-        document: defaultGenesisAcl(owner),
-        supplied: false,
+  async createSpace(acl: ACL, root?: GenesisRoot): Promise<MemorySpace> {
+    const key = await Identity.generate();
+    const space = key.did() as MemorySpace;
+    const aclId = aclDocId(space);
+    const { client, session } = await this.#sessionFactory.create(
+      space,
+      key,
+      {
+        sessionId: crypto.randomUUID(),
+        ...(root === undefined ? {} : { genesisRoot: root }),
+      },
+    );
+    try {
+      if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
+        throw new Error("Host does not support genesis root reservations");
+      }
+      await session.transact({
+        ...(root === undefined ? {} : { genesisRoot: root }),
+        localSeq: 1,
+        reads: {
+          confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
+          pending: [],
+        },
+        operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
       });
+    } finally {
+      await client.close();
     }
-    if (genesisAcl !== undefined) {
-      // Snapshot: what genesis writes is what was registered, not what the
-      // caller's object holds by the time the space is first opened.
-      this.#spaceGenesisAcls.set(space, {
-        document: { ...genesisAcl },
-        ...(options?.genesisRoot === undefined
-          ? {}
-          : { root: cloneIfNecessary(options.genesisRoot, { frozen: false }) }),
-        supplied: true,
-      });
-    }
+    return space;
   }
 
   /**
@@ -1681,15 +1548,11 @@ export class StorageManager implements IStorageManager {
    * its id: the serving binding and the declared read ceiling. One place,
    * so a reopen, a resume and a fresh mount all declare the same session.
    */
-  #sessionDescriptorFields(space: MemorySpace): {
-    genesisRoot?: GenesisRoot;
+  #sessionDescriptorFields(): {
     actingAs?: "space-owner";
     readCeiling?: SessionReadCeiling;
   } {
     return {
-      ...(this.#spaceGenesisAcls.get(space)?.root === undefined
-        ? {}
-        : { genesisRoot: this.#spaceGenesisAcls.get(space)!.root }),
       ...this.#servingActingAs(),
       ...(this.#sessionReadCeiling !== undefined
         ? { readCeiling: this.#sessionReadCeiling }
@@ -1725,19 +1588,6 @@ export class StorageManager implements IStorageManager {
    */
   scopeKeyIdentity(): ScopeKeyIdentity {
     return { principal: this.as.did(), sessionId: this.#sessionId };
-  }
-
-  /**
-   * Force `space`'s provider session — and with it, on a bootstrap-capable
-   * session factory, the fresh-space ACL genesis (`#createInitializedSession`)
-   * — to have completed (OW31 B4; protocol.md §2b's genesis clause). The
-   * serving loop's wave commit step calls this for every `creation`-granted
-   * foreign target BEFORE the sink applies its data batch, so the space's
-   * commit #1 is its ACL. Idempotent: an already-mounted session (or an
-   * already-initialized space) resolves immediately.
-   */
-  async ensureSpaceInitialized(space: MemorySpace): Promise<void> {
-    await this.open(space).ensureSession?.();
   }
 
   async resolveEventAttention(
@@ -1847,7 +1697,7 @@ export class StorageManager implements IStorageManager {
           : (_routeGeneration, routeSignal) =>
             this.#sessionFactory.create(space, signer, {
               sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(space),
+              ...this.#sessionDescriptorFields(),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
@@ -1899,20 +1749,13 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
-   * Mount the normal user session, but serialize fresh-space ACL genesis ahead
-   * of any replica work when this manager holds the space key. The temporary
-   * bootstrap session authenticates as the space identity; the returned
-   * durable session always authenticates as `signer`, preserving user/session
-   * scope partitioning.
-   *
-   * Named-space keys only initialize a truly fresh space: with the genesis
-   * document the caller registered beside the key, else the fallback — the
-   * active user (or the registered owner) as OWNER plus the
-   * `DEFAULT_GENESIS_GRANTS` rollout wildcard. Populated ACL-less
-   * spaces are the temporary public-compatibility case and stay public. The
-   * home identity (`signer.did() === space`) is the explicit private exception:
-   * it claims a never-created owner-only ACL even when legacy data already
-   * exists. A retracted ACL remains a tombstone and must not be recreated.
+   * Mount the normal user session, but serialize a fresh Home space's genesis
+   * ahead of any replica work. A Home space is the one space whose key the
+   * manager's signer is: its DID is the user's own. When the space has no
+   * access-control document and no history, a temporary bootstrap session
+   * writes `{ [user]: "OWNER" }` and the durable session resumes; a Home space
+   * with history, or any other space, is opened as it stands. Every other space
+   * is born through `createSpace`, and opening one creates nothing.
    */
   async #createInitializedSession(
     space: MemorySpace,
@@ -1944,13 +1787,6 @@ export class StorageManager implements IStorageManager {
     };
     routeSignal.addEventListener("abort", closeActiveClients, { once: true });
     let completed = false;
-    // Attempts can overlap across a route replacement; each marks its own
-    // in-flight entry and clears only its own on failure, so a superseded
-    // attempt's exit never unmarks its successor.
-    const attempt = Symbol("genesis attempt");
-    if (this.#genesisPhase.get(space)?.phase !== "handed-off") {
-      this.#genesisPhase.set(space, { phase: "in-flight", attempt });
-    }
 
     try {
       assertCurrentRoute();
@@ -1967,7 +1803,7 @@ export class StorageManager implements IStorageManager {
             ? detached.options
             : {
               sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(space),
+              ...this.#sessionDescriptorFields(),
             },
           routeSignal,
         ),
@@ -1985,7 +1821,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#sessionDescriptorFields(space),
+        ...this.#sessionDescriptorFields(),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,
@@ -1993,104 +1829,47 @@ export class StorageManager implements IStorageManager {
       });
       const handOff = (opened: OpenedSpaceSession): OpenedSpaceSession => {
         this.#detachedSessionResumes.delete(space);
-        this.#genesisPhase.set(space, { phase: "handed-off" });
         completed = true;
         return opened;
       };
-      if (this.#sessionFactory.supportsAclBootstrap !== true) {
-        return handOff(normal);
-      }
-      const isHomeSpace = signer.did() === space;
-      const spaceIdentity = isHomeSpace
-        ? signer
-        : this.#spaceIdentities.get(space);
-      if (spaceIdentity === undefined) {
+      if (
+        this.#sessionFactory.supportsAclBootstrap !== true ||
+        signer.did() !== space
+      ) {
         return handOff(normal);
       }
 
-      // A caller's own genesis document (never the home arm's) is a
-      // demand, not a preference. On a fresh space it is written verbatim.
-      // Otherwise the space must be OWNED exactly as the document says: a
-      // seal asserts ownership, and grants evolve afterwards under the
-      // owner's authority (a share space's owner admitting guests), so an
-      // exact-document rule would refuse the creator's own restart after
-      // the first grant. What the ownership rule still refuses — at either
-      // inspection, and after a lost genesis race in whichever window it
-      // landed — is every case where the reopen below would otherwise
-      // succeed under someone else's ACL with nothing reported: a space
-      // populated with no ACL, a retracted ACL, a genesis another
-      // initializer won with a different owner (the wildcard default names
-      // the other user). Fail closed, and say what stands.
-      const registered = this.#spaceGenesisAcls.get(space);
-      const demanded = !isHomeSpace && registered?.supplied === true
-        ? registered.document
-        : undefined;
-      // `reopen`: the space was not fresh when this attempt first looked —
-      // ownership must match, grants may have evolved. `race`: the space
-      // WAS fresh at this attempt's first inspection, so whatever stands
-      // was written moments ago by a concurrent initializer, not evolved;
-      // the exact document must stand. The likely race is one user's two
-      // runtimes — a sealer against a pattern's default — where the owner
-      // sets agree and the wildcard is exactly what the seal refused.
-      const assertDemandedOwnershipStands = (
-        snapshot:
-          | { seq?: number; document?: { value?: unknown } | null }
-          | undefined,
-        arm: "reopen" | "race",
-      ): void => {
-        if (demanded === undefined) return;
-        const stored = snapshot?.document?.value ?? null;
-        const stands = stored === null
-          ? (snapshot?.seq ?? 0) > 0
-            ? "has a retracted ACL (a tombstone)"
-            : "is populated with no ACL (the legacy-public case)"
-          : arm === "race"
-          ? sameAcl(stored, demanded)
-            ? undefined
-            : "was claimed concurrently with a different ACL"
-          : sameOwners(stored, demanded)
-          ? undefined
-          : `is owned by ${ownersOf(stored).join(", ") || "nobody"}, not ${
-            ownersOf(demanded).join(", ")
-          }`;
-        if (stands !== undefined) {
-          throw new Error(
-            `${space} ${stands}; the supplied genesis document cannot be ` +
-              "its genesis and the space is not the one the caller asked for",
-          );
-        }
-      };
-      const aclSnapshotOf = (
-        entities: Array<
-          {
-            id: string;
-            scope?: string;
-            seq?: number;
-            document?: { value?: unknown } | null;
-          }
-        >,
-      ) =>
-        entities.find((entity) =>
+      const aclId = aclDocId(space);
+      const isFresh = (
+        result: {
+          serverSeq: number;
+          entities: Array<
+            {
+              id: string;
+              scope?: string;
+              seq?: number;
+              document?: { value?: unknown } | null;
+            }
+          >;
+        },
+      ): boolean => {
+        const snapshot = result.entities.find((entity) =>
           entity.id === aclId && (entity.scope ?? "space") === "space"
         );
-
-      const openedServerSeq = normal.session.serverSeq;
-      const aclId = aclDocId(space);
-      const aclResult = await normal.session.queryGraph({
+        return result.serverSeq === 0 && snapshot?.seq === 0 &&
+          snapshot.document === null;
+      };
+      const aclQuery = {
         roots: [{ id: aclId, selector: { path: [], schema: false } }],
-      });
+      };
+      const first = await normal.session.queryGraph(aclQuery);
       assertCurrentRoute();
-      const aclSnapshot = aclSnapshotOf(aclResult.entities);
-      const aclNeverCreated = aclSnapshot?.seq === 0 &&
-        aclSnapshot.document === null;
-      if (!aclNeverCreated || (!isHomeSpace && openedServerSeq !== 0)) {
-        assertDemandedOwnershipStands(aclSnapshot, "reopen");
+      if (!isFresh(first)) {
         return handOff(normal);
       }
 
       // Do not reuse the bootstrap session for replica work: both it and the
-      // replica allocate localSeq from 1, and named spaces must switch back from
-      // the space signer to the active user before any user-scoped operation.
+      // replica allocate localSeq from 1.
       activeClients.delete(normal.client);
       await normal.client.close();
       assertCurrentRoute();
@@ -2098,132 +1877,47 @@ export class StorageManager implements IStorageManager {
       while (bootstrapSessionId === this.#sessionId) {
         bootstrapSessionId = crypto.randomUUID();
       }
-      let bootstrap: OpenedSpaceSession | undefined;
+      const bootstrap = track(
+        await this.#sessionFactory.create(
+          space,
+          signer,
+          { sessionId: bootstrapSessionId },
+          routeSignal,
+        ),
+      );
       try {
-        bootstrap = track(
-          await this.#sessionFactory.create(
-            space,
-            spaceIdentity,
-            {
-              sessionId: bootstrapSessionId,
-              ...(registered?.root === undefined
-                ? {}
-                : { genesisRoot: registered.root }),
-            },
-            routeSignal,
-          ),
-        );
+        const current = await bootstrap.session.queryGraph(aclQuery);
         assertCurrentRoute();
-        const current = await bootstrap.session.queryGraph({
-          roots: [{ id: aclId, selector: { path: [], schema: false } }],
-        });
-        assertCurrentRoute();
-        const snapshot = aclSnapshotOf(current.entities);
-        // Recheck emptiness in the authority session. In `off` mode an
-        // unrelated writer can still populate the space between the first
-        // inspection and bootstrap; that turns it into the named legacy-public
-        // case and must not be claimed. Home remains the explicit exception.
-        const aclStillNeverCreated = snapshot?.seq === 0 &&
-          snapshot.document === null;
-        if (
-          !aclStillNeverCreated ||
-          (!isHomeSpace && current.serverSeq !== 0)
-        ) {
-          // Claimed (or populated) between the first inspection and this
-          // recheck: the default path reopens as the user below; a
-          // demanded document must already be exactly what stands.
-          assertDemandedOwnershipStands(snapshot, "race");
-        } else {
+        // The same user's other runtime may have written genesis since the
+        // first inspection; the resume below then opens what it wrote.
+        if (isFresh(current)) {
           try {
-            // The HOME arm is untouched — a home space is its own
-            // identity and owner, and no registered document reaches it.
-            // Non-home: the document registered beside the space identity
-            // — a caller's own, or the fallback shape around the acting
-            // user a serving run supplied (OW31, RULED 2026-08-18) — else
-            // the fallback shape around the signer, the active user on a
-            // client.
-            const bootstrapAcl = isHomeSpace
-              ? { [signer.did()]: "OWNER" }
-              : registered?.document ?? defaultGenesisAcl(signer.did());
-            if (
-              registered?.root !== undefined &&
-              bootstrap.client.serverFlags?.genesisRoot !== true
-            ) {
-              throw new Error(
-                "Host does not support genesis root reservations",
-              );
-            }
             await bootstrap.session.transact({
-              ...(registered?.root === undefined
-                ? {}
-                : { genesisRoot: registered.root }),
               localSeq: 1,
               reads: {
-                confirmed: [{
-                  id: aclId,
-                  path: toDocumentPath([]),
-                  seq: snapshot?.seq ?? 0,
-                }],
+                confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
                 pending: [],
               },
               operations: [{
                 op: "set",
                 id: aclId,
-                value: { value: bootstrapAcl },
+                value: { value: { [space]: "OWNER" } },
               }],
             }, () => {
               assertCurrentRoute();
               routeState.writeIssuedGeneration = routeGeneration;
             });
           } catch (error) {
-            // A concurrent space-authorized initializer may win between the
-            // point read and commit. Other failures are real bootstrap errors.
+            // A concurrent genesis by the same user's other runtime wins the
+            // same document; any other failure is a real bootstrap error.
             if (!(error instanceof Error) || error.name !== "ConflictError") {
               throw error;
             }
-            // Default path: reopening as the user below is the authoritative
-            // outcome — it succeeds only if the winning ACL grants access.
-            // A demanded document: the winner's must be exactly it.
-            if (demanded !== undefined) {
-              const after = await bootstrap.session.queryGraph({
-                roots: [{ id: aclId, selector: { path: [], schema: false } }],
-              });
-              assertCurrentRoute();
-              assertDemandedOwnershipStands(
-                aclSnapshotOf(after.entities),
-                "race",
-              );
-            }
           }
         }
-      } catch (error) {
-        if (
-          registered?.root === undefined || !(error instanceof Error) ||
-          !["ConflictError", "AuthorizationError", "SessionRevokedError"]
-            .includes(error.name)
-        ) throw error;
-        // A winning genesis can remove the bootstrap key's own READ access.
-        // Verify its immutable root and exact ACL through the management
-        // principal before treating that lost authority as a completed race.
-        const winner = track(
-          await this.#sessionFactory.create(
-            space,
-            signer,
-            resumeNormal,
-            routeSignal,
-          ),
-        );
-        const current = await winner.session.queryGraph({
-          roots: [{ id: aclId, selector: { path: [], schema: false } }],
-        });
-        assertCurrentRoute();
-        assertDemandedOwnershipStands(aclSnapshotOf(current.entities), "race");
-        return handOff(winner);
       } finally {
-        if (bootstrap !== undefined) {
-          activeClients.delete(bootstrap.client);
-          await bootstrap.client.close();
-        }
+        activeClients.delete(bootstrap.client);
+        await bootstrap.client.close();
       }
 
       assertCurrentRoute();
@@ -2238,10 +1932,6 @@ export class StorageManager implements IStorageManager {
       return handOff(resumed);
     } finally {
       if (!completed) {
-        const phase = this.#genesisPhase.get(space);
-        if (phase?.phase === "in-flight" && phase.attempt === attempt) {
-          this.#genesisPhase.delete(space);
-        }
         routeSignal.removeEventListener("abort", closeActiveClients);
         await Promise.allSettled(
           [...activeClients].map((client) => client.close()),
@@ -2254,7 +1944,6 @@ export class StorageManager implements IStorageManager {
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
-    this.#genesisPhase.clear();
     // The lease releases AFTER teardown drains: a queued sync frame applied
     // during provider destruction still registers its schema documents
     // inside this session's epoch, not after the clear.
@@ -2285,7 +1974,6 @@ export class StorageManager implements IStorageManager {
 
   async closeNow(): Promise<void> {
     this.#detachedSessionResumes.clear();
-    this.#genesisPhase.clear();
     try {
       if (this.#providers.size === 0) {
         return;

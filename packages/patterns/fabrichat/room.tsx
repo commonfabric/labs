@@ -13,6 +13,7 @@ import {
   type Default,
   entityRefToString,
   equals,
+  eventKey,
   FabricEpochNsec,
   getEntityId,
   handler,
@@ -22,10 +23,12 @@ import {
   type PerSession,
   type PerSpace,
   setSpaceMembers,
+  spaceAccess,
   spaceMembers,
   type Stream,
   type TrustedActionWrite,
   UI,
+  viewerPrincipal,
   VIEWS,
   type VNode,
   wish,
@@ -34,7 +37,7 @@ import {
   type WritePolicyAnyOf,
 } from "commonfabric";
 import {
-  chatPolicy,
+  CHAT_POLICY,
   conversationView,
   handlerTime,
   isMainMessage,
@@ -345,15 +348,6 @@ interface TextGesture {
   target?: { value?: string };
 }
 
-/** Mints a request identity only while handling a fresh UI gesture. */
-function uiRequestId(): string {
-  return Array.from(
-    { length: 4 },
-    () =>
-      Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, "0"),
-  ).join("");
-}
-
 /** Captures the text and time of a reviewed submit gesture. */
 function uiVersion(
   event: TextGesture,
@@ -371,7 +365,7 @@ function messageRequest(
   return "requestId" in input
     ? input
     : state.uiMessage
-    ? { requestId: uiRequestId(), message: state.uiMessage }
+    ? { requestId: eventKey(), message: state.uiMessage }
     : undefined;
 }
 
@@ -424,7 +418,7 @@ function recordActivity(
   obliterated?: Cell<ChatMessage>,
 ): void {
   const expired = state.activity.get().filter((entry) =>
-    entry.at.value < now - chatPolicy().recentActivityWindowNsec.value
+    entry.at.value < now - CHAT_POLICY.recentActivityWindowNsec.value
   );
   const watermark = expired.reduce(
     (highest, entry) => Math.max(highest, entry.seq),
@@ -435,7 +429,7 @@ function recordActivity(
   state.memory.key("nextSeq").set(seq + 1);
   state.activity.set(
     state.activity.get().filter((entry) =>
-      entry.at.value >= now - chatPolicy().recentActivityWindowNsec.value &&
+      entry.at.value >= now - CHAT_POLICY.recentActivityWindowNsec.value &&
       (!obliterated || !equals(entry.what, obliterated))
     ),
   );
@@ -452,7 +446,7 @@ function writeSend(
   const version = "requestId" in input ? input.version : uiVersion(input);
   if (!version) return;
   const event: SendMessageRequest = "requestId" in input ? input : {
-    requestId: uiRequestId(),
+    requestId: eventKey(),
     version,
     replyTo: state.uiReply?.get() ??
       (state.uiThread?.get().root?.get() !== undefined
@@ -834,7 +828,9 @@ function writeLeave(
   const key = requestKey(event.requestId, state);
   const actor = currentPrincipal();
   const acl = spaceMembers();
-  if (!key || !actor || !hasMembership(state) || !acl?.[actor]) return false;
+  if (!key || !actor || !hasMembership(state) || !acl?.[actor] || acl["*"]) {
+    return false;
+  }
   const remaining = Object.keys(acl).filter((principal) =>
     principal !== actor && principal !== "*"
   );
@@ -924,7 +920,7 @@ export const commitAdd = handler<
 /** Applies the member choice shown by the reviewed control. */
 const addMemberFromUi = handler<TextGesture, RoomWriterState>((event, state) =>
   writeAdd({
-    requestId: uiRequestId(),
+    requestId: eventKey(),
     principal: event.target?.value ?? "",
     access: state.uiAccess?.get() ?? "WRITE",
   }, state)
@@ -967,7 +963,7 @@ const removeMemberFromUi = handler<TextGesture, RoomWriterState>((
   state,
 ) =>
   writeRemove(
-    { requestId: uiRequestId(), principal: state.uiPrincipal ?? "" },
+    { requestId: eventKey(), principal: state.uiPrincipal ?? "" },
     state,
   )
 );
@@ -1007,7 +1003,7 @@ const openWindow = handler<OpenWindowRequest, {
   const known = windows.key(event.windowId).get();
   if (known?.requestId === event.requestId) return;
   if (
-    !known && Object.keys(windows.get()).length >= chatPolicy().maxOpenWindows
+    !known && Object.keys(windows.get()).length >= CHAT_POLICY.maxOpenWindows
   ) return;
   const all = records.get();
   if (
@@ -1020,7 +1016,7 @@ const openWindow = handler<OpenWindowRequest, {
     view,
     event.from,
     event.count,
-    chatPolicy().maxWindowCount,
+    CHAT_POLICY.maxWindowCount,
   );
   if (!selection) return;
   windows.key(event.windowId).set({
@@ -1115,7 +1111,12 @@ const MessageCard = pattern<{
   const removed = computed(() =>
     message.key("authorProfile").get() === undefined
   );
-  const mine = computed(() => isSender(message, state));
+  const mine = computed(() => {
+    const viewer = viewerPrincipal();
+    const key = entityKey(message);
+    return viewer !== undefined && key !== undefined &&
+      state.memory.key("authors").key(key).get() === viewer;
+  });
   const replyCount = computed(() =>
     (state.records.get() ?? []).filter((entry) =>
       equals(threadRoot(entry), message)
@@ -1125,7 +1126,7 @@ const MessageCard = pattern<{
   const canObliterate = computed(() =>
     state.about.get()?.kind === "direct"
       ? mine
-      : spaceMembers()?.[currentPrincipal() ?? ""] === "OWNER"
+      : spaceAccess(state.about) === "OWNER"
   );
   const quotedBody = computed(() => {
     const body = message.get()?.replyTo?.message.get()?.body;
@@ -1438,7 +1439,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       return visibleConversation.filter((message) =>
         end === undefined || message.sentAt.value < end.value
       )
-        .slice(-chatPolicy().maxWindowCount);
+        .slice(-CHAT_POLICY.maxWindowCount);
     });
     const visibleMessageRefs = computed((): Cell<ChatMessage>[] => {
       const stored = records!.get();
@@ -1446,7 +1447,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       const visible = conversationView(stored, thread.get().root).filter((
         message,
       ) => end === undefined || message.sentAt.value < end.value).slice(
-        -chatPolicy().maxWindowCount,
+        -CHAT_POLICY.maxWindowCount,
       );
       return visible.map((message) =>
         records!.key(
@@ -1466,7 +1467,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     const activityRefs = computed((): Cell<ChatRoomActivity>[] =>
       activity!.get().flatMap((entry, index) =>
         entry.at.value >= (BigInt(Math.floor(clock.result ?? 0)) * 1_000_000n -
-            chatPolicy().recentActivityWindowNsec.value)
+            CHAT_POLICY.recentActivityWindowNsec.value)
           ? [activity!.key(index).resolveAsCell()]
           : []
       )
@@ -1480,7 +1481,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     );
     const managesMembers = computed(() =>
       dedicated && about.get()?.kind === "group" &&
-      spaceMembers()?.[currentPrincipal() ?? ""] === "OWNER"
+      spaceAccess(about) === "OWNER"
     );
     const selections = new Writable.perSession<Record<string, WindowSelection>>(
       {},
@@ -1514,7 +1515,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
     const all = computed(() => conversationView(records!.get()));
     const latestMessages = computed((): Cell<ChatMessage>[] => {
       const stored = records!.get();
-      return conversationView(stored).slice(-chatPolicy().maxWindowCount).map((
+      return conversationView(stored).slice(-CHAT_POLICY.maxWindowCount).map((
         message,
       ) =>
         records!.key(
@@ -1524,7 +1525,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
         ).resolveAsCell()
       );
     });
-    const hasOlder = computed(() => all.length > chatPolicy().maxWindowCount);
+    const hasOlder = computed(() => all.length > CHAT_POLICY.maxWindowCount);
     const messages = {
       count: computed(() => records!.get().length),
       oldestAt: computed(() =>
@@ -1553,10 +1554,8 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       )
     );
     const canSend = computed(() => {
-      const acl = spaceMembers();
-      const access = acl?.[currentPrincipal() ?? ""] ?? acl?.["*"];
-      return currentPrincipal() !== undefined &&
-        !memory!.key("abandoned").get() &&
+      const access = spaceAccess(about);
+      return !memory!.key("abandoned").get() &&
         myProfile?.get() !== undefined &&
         (access === "WRITE" || access === "OWNER");
     });
@@ -1605,7 +1604,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
       recentActivityExpiredThrough: computed(() =>
         activity!.get().filter((entry) =>
           entry.at.value < (BigInt(Math.floor(clock.result ?? 0)) * 1_000_000n -
-            chatPolicy().recentActivityWindowNsec.value)
+            CHAT_POLICY.recentActivityWindowNsec.value)
         )
           .reduce(
             (through, entry) => Math.max(through, entry.seq),
@@ -1673,7 +1672,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                 variant="ghost"
                 disabled={!canSend}
                 onClick={action(() =>
-                  facts.showProfile.send({ requestId: uiRequestId() })
+                  facts.showProfile.send({ requestId: eventKey() })
                 )}
               >
                 Show my profile
@@ -1684,7 +1683,7 @@ export const FabriChatRoom = pattern<RoomInput, ChatRoomOutput>(
                     variant="ghost"
                     disabled={manager.result === undefined}
                     onClick={action(() =>
-                      leaveAndForget.send({ requestId: uiRequestId() })
+                      leaveAndForget.send({ requestId: eventKey() })
                     )}
                   >
                     Leave conversation

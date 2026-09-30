@@ -1,23 +1,16 @@
+/** Reads authoritative space membership and stages atomic handler changes. */
+
+import type { Cell } from "@commonfabric/api";
 import { type ACL, aclDocId, isACL } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { topFrame } from "./frame-context.ts";
 import { stageAclChange } from "../storage/acl-change.ts";
-import type { Cell } from "@commonfabric/api";
 import { isCell } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
-import { currentPrincipal } from "./current-principal.ts";
-import { spaceReaderRole } from "../cfc/space-membership.ts";
+import { scopeRank } from "../scope.ts";
 
 /** Spaces whose authoritative ACL has completed its initial replica load. */
 const loadedMemberships = new WeakMap<Runtime, Set<MemorySpace>>();
-
-/** Rearms a membership load after the storage provider changes its access verdict. */
-export function invalidateSpaceMembership(
-  runtime: Runtime,
-  space: MemorySpace,
-): void {
-  loadedMemberships.get(runtime)?.delete(space);
-}
 
 /** Loads membership before retrying a synchronous pattern action. */
 export async function loadSpaceMembership(
@@ -52,6 +45,13 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
   const space = target && isCell(target)
     ? target.resolveAsCell().getAsNormalizedFullLink().space
     : frame.space;
+  if (!frame.runtime.servingPosture && frame.frameKind === "lift") {
+    if (scopeRank(frame.tx.getNarrowestReadScope()) < scopeRank("user")) {
+      frame.tx.resetNarrowestReadScope("user");
+    }
+    const action = frame.runtime.scheduler.executingAction;
+    if (action) frame.runtime.spaceAccessWatch.rerunOnChange(space, action);
+  }
   if (!loadedMemberships.get(frame.runtime)?.has(space)) {
     (frame.pendingMembershipSpaces ??= new Set()).add(space);
     return undefined;
@@ -66,40 +66,18 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
     frame.tx,
   );
   const value = cell.get();
+  if (!frame.runtime.servingPosture) {
+    const storage = frame.runtime.storageManager;
+    if (
+      (storage.spaceAccessError?.(space) ??
+        storage.authorizationError?.(space)) !== undefined
+    ) {
+      return undefined;
+    }
+  }
   if (value === undefined) return undefined;
   if (!isACL(value)) throw new Error("The space has an invalid access list.");
   return value;
-}
-
-/** Classifies the viewer's access without reading a room's content. */
-export function spaceAccess(
-  target?: Cell<unknown>,
-): "member" | "not-member" | "unavailable" {
-  const acl = spaceMembers(target);
-  const frame = topFrame()!;
-  const principal = currentPrincipal();
-  const space = target && isCell(target)
-    ? target.resolveAsCell().getAsNormalizedFullLink().space
-    : frame.space!;
-  const error = frame.runtime!.storageManager.spaceAccessError?.(space) ??
-    frame.runtime!.storageManager.authorizationError?.(space);
-  if (error) {
-    const evidence = error as Error & {
-      spaceAccessDenied?: boolean;
-      permanentEvidence?: boolean;
-      aclRevision?: number;
-      cause?: unknown;
-    };
-    if (
-      evidence.spaceAccessDenied === true ||
-      (evidence.name === "AuthorizationError" &&
-        evidence.permanentEvidence === true &&
-        typeof evidence.aclRevision === "number")
-    ) return "not-member";
-    return "unavailable";
-  }
-  if (!principal || acl === undefined) return "unavailable";
-  return spaceReaderRole(acl, space, principal) ? "member" : "not-member";
 }
 
 /** Atomically replaces the current space's ACL with the handler's metadata writes. */

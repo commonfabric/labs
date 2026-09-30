@@ -243,8 +243,9 @@ With a member set:
 ## Runtime capabilities and remaining client work
 
 The implementation uses random creator-only spaces through
-`Factory.inPrivateSpace()`, authenticated identity through `currentPrincipal()`,
-and reactive access lists and atomic membership changes through `spaceMembers()`,
+`Factory.inSpace()`, authenticated actors through `currentPrincipal()`,
+confidential per-user viewer identity through `viewerPrincipal()`, stable
+event identities through `eventKey()`, and reactive access lists and atomic membership changes through `spaceMembers()`,
 `spaceAccess()`, and `setSpaceMembers()`. See the
 [membership API guide](../../features/pattern-space-membership.md).
 

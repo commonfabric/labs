@@ -60,7 +60,15 @@ if [ -z "${CF_INVOCATION_SESSION:-}" ]; then
   CF_INVOCATION_SESSION=$(cf invocation-session new 2>/dev/null)
 fi
 export CF_INVOCATION_SESSION
-SPACE="${SPACE:-$(mktemp -u demoXXXXXXXX)}"
+if [ -z "${SPACE:-}" ]; then
+  # Opening a space never creates it, so the demo makes its own before the
+  # first act; `cf space create` prints the new space's DID.
+  SPACE=$(cf space create --quiet)
+  case "$SPACE" in
+    did:key:*) ;;
+    *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
+  esac
+fi
 
 B=$'\033[1m'; D=$'\033[2m'; C=$'\033[36m'; Y=$'\033[33m'; N=$'\033[0m'
 R=$'\033[31m'

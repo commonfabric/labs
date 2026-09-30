@@ -18,10 +18,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   preloadCloneValue,
   snapshotCloneValue,
 } from "../src/ops/clone-data-snapshot.ts";
+import { PieceController } from "../src/ops/piece-controller.ts";
 import {
   classifyOrigin,
   PieceOriginError,
@@ -367,9 +369,13 @@ describe("resolvePieceOriginSource", () => {
     let resolvedName = false;
     const runtime = {
       hostForSpace: () => new URL("https://toolshed.test"),
-      resolveSpaceName: () => {
+      resolveLegacySpaceName: () => {
         resolvedName = true;
         return Promise.resolve(SPACE);
+      },
+      legacySpaceDidSync: () => {
+        resolvedName = true;
+        return SPACE;
       },
     } as unknown as Runtime;
     await expect(
@@ -391,9 +397,9 @@ describe("resolvePieceOriginSource", () => {
     });
     try {
       const controller = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `same-host-origin-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );
@@ -890,9 +896,9 @@ describe("reading a piece's source state", () => {
       storageManager,
     });
     controller = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `source-state-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -905,11 +911,11 @@ describe("reading a piece's source state", () => {
     restoreFetch();
   });
 
-  async function cloneDestination(label: string): Promise<PiecesController> {
+  async function cloneDestination(): Promise<PiecesController> {
     const destination = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `${label}-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -1024,14 +1030,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     const clone = await source.cloneTo(destination);
     const sourceState = await readPieceSourceState(runtime, source.getCell());
@@ -1059,14 +1058,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "copied label" } });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-data-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     await source.result.set(7, ["count"]);
 
@@ -1096,14 +1088,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-conflict-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     const edit = runtime.edit.bind(runtime);
     let injectedChange = false;
@@ -1143,14 +1128,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-start-failure-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     const remove = destination.remove.bind(destination);
     let cleanedUp = false;
@@ -1169,7 +1147,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = await cloneDestination("source-clone-no-pattern");
+    const destination = await cloneDestination();
     await setRawMeta(source.getCell(), "patternIdentity", undefined);
 
     await expect(source.cloneTo(destination)).rejects.toThrow(
@@ -1182,8 +1160,8 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = await cloneDestination("source-clone-no-uri");
-    const cell = source.getCell();
+    const destination = await cloneDestination();
+    const cell = patchableCell(source.getCell());
     const originalLink = cell.getAsNormalizedFullLink.bind(cell);
 
     try {
@@ -1191,9 +1169,10 @@ describe("reading a piece's source state", () => {
         ...originalLink(),
         id: "not-a-fabric-uri",
       })) as unknown as typeof cell.getAsNormalizedFullLink;
-      await expect(source.cloneTo(destination)).rejects.toThrow(
-        "piece has no fabric URI",
-      );
+      await expect(new PieceController(controller, cell).cloneTo(destination))
+        .rejects.toThrow(
+          "piece has no fabric URI",
+        );
     } finally {
       cell.getAsNormalizedFullLink = originalLink;
     }
@@ -1204,7 +1183,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = await cloneDestination("source-clone-no-source");
+    const destination = await cloneDestination();
     const manager = runtime.patternManager;
     const original = manager.getPatternSourceProgramByIdentity.bind(manager);
 
@@ -1224,7 +1203,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = await cloneDestination("source-clone-bad-internal");
+    const destination = await cloneDestination();
 
     await setRawMeta(source.getCell(), "internal", "not a manifest");
     await expect(source.cloneTo(destination, { copyData: true })).rejects
@@ -1241,7 +1220,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: ARRAY_INPUT_SOURCE }],
     }, { input });
-    const destination = await cloneDestination("source-clone-array-input");
+    const destination = await cloneDestination();
 
     const clone = await source.cloneTo(destination, { copyData: true });
 
@@ -1251,10 +1230,10 @@ describe("reading a piece's source state", () => {
   });
 
   it("rejects cells that appeared after clone data was preloaded", () => {
-    const cell = runtime.getImmutableCell(
+    const cell = patchableCell(runtime.getImmutableCell(
       controller.getSpace(),
       { value: 1 },
-    );
+    ));
 
     const get = cell.get.bind(cell);
     let read = false;
@@ -1297,7 +1276,9 @@ describe("reading a piece's source state", () => {
       "piece data containing unsupported object values cannot be copied",
     );
 
-    const cell = runtime.getImmutableCell(controller.getSpace(), "safe");
+    const cell = patchableCell(
+      runtime.getImmutableCell(controller.getSpace(), "safe"),
+    );
     const getRawUntyped = cell.getRawUntyped.bind(cell);
     try {
       cell.getRawUntyped = (() =>
@@ -1315,8 +1296,8 @@ describe("reading a piece's source state", () => {
       controller.getSpace(),
       { first: 1, second: 2 },
     );
-    const first = cell.key("first");
-    const second = cell.key("second");
+    const first = patchableCell(cell.key("first"));
+    const second = patchableCell(cell.key("second"));
     const cells = new Map<string, Cell<unknown>>();
     const firstPull = first.pull.bind(first);
     const secondPull = second.pull.bind(second);
@@ -1342,7 +1323,9 @@ describe("reading a piece's source state", () => {
     expect(pulls).toBe(1);
     expect(cells.size).toBe(2);
 
-    const stream = runtime.getImmutableCell(controller.getSpace(), "event");
+    const stream = patchableCell(
+      runtime.getImmutableCell(controller.getSpace(), "event"),
+    );
     const streamShape = stream as unknown as { isStream(): boolean };
     const isStream = streamShape.isStream.bind(streamShape);
     try {
@@ -1359,7 +1342,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: DERIVED_AND_STREAM_SOURCE }],
     }, { input: { value: 4 } });
-    const destination = await cloneDestination("source-clone-derived-stream");
+    const destination = await cloneDestination();
     const create = destination.create.bind(destination);
     const startPiece = destination.startPiece.bind(destination);
     const getCellFromLink = runtime.getCellFromLink.bind(runtime);
@@ -1435,13 +1418,13 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = await cloneDestination("source-clone-tx-source-change");
-    const cell = source.getCell();
+    const destination = await cloneDestination();
+    const cell = patchableCell(source.getCell());
     const withTx = cell.withTx.bind(cell);
 
     try {
       cell.withTx = ((tx) => {
-        const txCell = withTx(tx);
+        const txCell = patchableCell(withTx(tx));
         const getMetaRaw = txCell.getMetaRaw.bind(txCell);
         txCell.getMetaRaw = ((key) =>
           key === "patternIdentity"
@@ -1449,8 +1432,11 @@ describe("reading a piece's source state", () => {
             : getMetaRaw(key)) as typeof txCell.getMetaRaw;
         return txCell;
       }) as typeof cell.withTx;
-      await expect(source.cloneTo(destination, { copyData: true })).rejects
-        .toThrow("piece source changed while it was being cloned");
+      await expect(
+        new PieceController(controller, cell).cloneTo(destination, {
+          copyData: true,
+        }),
+      ).rejects.toThrow("piece source changed while it was being cloned");
     } finally {
       cell.withTx = withTx;
     }
@@ -1461,13 +1447,13 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = await cloneDestination("source-clone-manifest-change");
-    const cell = source.getCell();
+    const destination = await cloneDestination();
+    const cell = patchableCell(source.getCell());
     const withTx = cell.withTx.bind(cell);
 
     try {
       cell.withTx = ((tx) => {
-        const txCell = withTx(tx);
+        const txCell = patchableCell(withTx(tx));
         const getMetaRaw = txCell.getMetaRaw.bind(txCell);
         txCell.getMetaRaw = ((key) =>
           key === "internal"
@@ -1475,8 +1461,11 @@ describe("reading a piece's source state", () => {
             : getMetaRaw(key)) as typeof txCell.getMetaRaw;
         return txCell;
       }) as typeof cell.withTx;
-      await expect(source.cloneTo(destination, { copyData: true })).rejects
-        .toThrow("piece data changed while it was being cloned");
+      await expect(
+        new PieceController(controller, cell).cloneTo(destination, {
+          copyData: true,
+        }),
+      ).rejects.toThrow("piece data changed while it was being cloned");
     } finally {
       cell.withTx = withTx;
     }
@@ -1487,7 +1476,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
-    const destination = await cloneDestination("source-clone-snapshot-reject");
+    const destination = await cloneDestination();
     const edit = runtime.edit.bind(runtime);
     let rejectNextCommit = true;
 
@@ -1527,7 +1516,7 @@ describe("reading a piece's source state", () => {
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
     await source.result.set(3, ["count"]);
-    const destination = await cloneDestination("source-clone-missing-internal");
+    const destination = await cloneDestination();
     const create = destination.create.bind(destination);
     destination.create = (async (...args) => {
       const clone = await create(...args);
@@ -1561,9 +1550,7 @@ describe("reading a piece's source state", () => {
         files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
       }, { input: { label: "before" } });
       await source.result.set(index + 1, ["count"]);
-      const destination = await cloneDestination(
-        `source-clone-restore-reject-${index}`,
-      );
+      const destination = await cloneDestination();
       const create = destination.create.bind(destination);
       const edit = runtime.edit.bind(runtime);
       let rejectRestore = false;
@@ -1596,7 +1583,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = await cloneDestination("source-clone-cleanup-errors");
+    const destination = await cloneDestination();
     destination.startPiece = () => Promise.reject(new Error("start failed"));
     destination.stopPiece = () => Promise.reject(new Error("stop failed"));
     destination.remove = () => Promise.reject(new Error("remove failed"));
@@ -1621,7 +1608,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = await cloneDestination("source-clone-still-registered");
+    const destination = await cloneDestination();
     const create = destination.create.bind(destination);
     let created: Awaited<ReturnType<typeof create>> | undefined;
     destination.create = (async (...args) => {
@@ -1651,14 +1638,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: CONFIDENTIAL_SOURCE }],
     }, { input: { secret: "classified" } });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-labeled-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     await expect(source.cloneTo(destination, { copyData: true })).rejects
       .toThrow(
@@ -1677,14 +1657,7 @@ describe("reading a piece's source state", () => {
     }, {
       input: { nested: { secret: secret.getCell().key("secret") } },
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-linked-label-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     await expect(source.cloneTo(destination, { copyData: true })).rejects
       .toThrow(
@@ -1693,14 +1666,7 @@ describe("reading a piece's source state", () => {
   });
 
   it("rejects data linked from another space", async () => {
-    const external = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-external-data-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await external.synced();
+    const external = await cloneDestination();
     const linked = await external.create({
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: WRITABLE_SOURCE }],
@@ -1711,14 +1677,7 @@ describe("reading a piece's source state", () => {
     }, {
       input: { nested: { secret: linked.getCell().key("value") } },
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-external-destination-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     await expect(source.cloneTo(destination, { copyData: true })).rejects
       .toThrow(
@@ -1731,14 +1690,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: UNKNOWN_INPUT_SOURCE }],
     }, { input: { value: new Error("not cloneable") } });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-instance-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     await expect(source.cloneTo(destination, { copyData: true })).rejects
       .toThrow("piece data containing FabricInstance values cannot be copied");
@@ -1749,14 +1701,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { origin: "system:system/home.tsx" });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-origin-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     const clone = await source.cloneTo(destination);
     const state = await readPieceSourceState(runtime, clone.getCell());
@@ -1772,14 +1717,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { origin: `cf:of:fid1:${HASH}` });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-relative-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
     const clone = await source.cloneTo(destination);
     const state = await readPieceSourceState(runtime, clone.getCell());
@@ -1794,14 +1732,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-race-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const manager = runtime.patternManager;
@@ -1839,14 +1770,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-update-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const clone = await source.cloneTo(destination);
     await runtime.sourceReconciler.idle();
     const updatedSource = FOLLOW_SOURCE.replace("1 + 0", "2 + 0");
@@ -1870,14 +1794,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-coalesce-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const clone = await source.cloneTo(destination);
     await runtime.sourceReconciler.idle();
 
@@ -1930,16 +1847,9 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-subscribe-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
 
-    const sourceCell = source.getCell();
+    const sourceCell = patchableCell(source.getCell());
     const sourceLink = sourceCell.getAsNormalizedFullLink();
     const runtimeWithMutableLookup = runtime as Runtime & {
       getCellFromEntityId: Runtime["getCellFromEntityId"];
@@ -1998,14 +1908,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-stop-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const clone = await source.cloneTo(destination);
     await runtime.sourceReconciler.idle();
     const stoppedPattern = getPatternIdentityRef(clone.getCell());
@@ -2029,14 +1932,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-stop-load-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const clone = await source.cloneTo(destination);
     await runtime.sourceReconciler.idle();
     const stoppedPattern = getPatternIdentityRef(clone.getCell());
@@ -2079,14 +1975,7 @@ describe("reading a piece's source state", () => {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: FOLLOW_SOURCE }],
     });
-    const destination = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `source-clone-restart-load-${crypto.randomUUID()}`,
-      }),
-      runtime,
-    );
-    await destination.synced();
+    const destination = await cloneDestination();
     const clone = await source.cloneTo(destination);
     await runtime.sourceReconciler.idle();
 
