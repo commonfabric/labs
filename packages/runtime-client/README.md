@@ -47,8 +47,9 @@ for a host with word that the runtime's principal was granted access, such as a
 notice naming the space: the runtime never asks again on its own, since the
 refusal turns on an access list it cannot read. The retry goes through the
 memory server's ordinary session admission, so it can admit only what that
-admission would. An admission clears the refusal, and the render boundaries and
-every `spaceAccess()` computation that read it are told; a refusal leaves the
-space refused. A space the runtime has not opened, or was not refused, is left
-alone. [`docs/features/space-access.md`](../../docs/features/space-access.md)
-says how the answer is kept current.
+admission would. An admission clears the refusal, the render boundaries and
+every `spaceAccess()` computation that read it are told, and what the refusal
+kept from the runtime is loaded again; a refusal leaves the space refused. A
+space the runtime has not opened, or was not refused, is left alone.
+[`docs/features/space-access.md`](../../docs/features/space-access.md) says how
+the answer is kept current.

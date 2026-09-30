@@ -156,8 +156,9 @@ Two properties follow from terminating rather than looping:
   reopen on its own. A holder that wants to pick up an ACL granted later asks
   once, on an event saying the grant may have happened:
   `StorageManager.retrySpaceAccess(space)`, which `Runtime` and `RuntimeClient`
-  pass through, opens the session again through the same admission and records
-  a refusal where the first one was recorded. Retrying a denied reopen on a
+  pass through, opens the session again through the same admission, and then
+  makes again the loads the refusal failed, or records a refusal where the
+  first one was recorded. Retrying a denied reopen on a
   schedule until an administrator acts is the retry-loop the engineering
   principles forbid; the CLI reports the error and exits. A genuinely transient
   or recoverable condition — a token-refresh window, a challenge race, every

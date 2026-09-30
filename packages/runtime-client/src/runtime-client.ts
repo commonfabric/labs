@@ -1369,7 +1369,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * Asks the memory server once more for `space`, if it refused this
    * runtime's session there, and resolves once the server has decided. An
    * admission runs again every computation whose `spaceAccess()` answer
-   * turned on the refusal, and a refusal leaves the space refused. It is for
+   * turned on the refusal, and loads again what the refusal kept from the
+   * runtime; a refusal leaves the space refused. It is for
    * a host with word that the runtime's principal was granted access, such
    * as a notice naming the space, and does nothing for a space the runtime
    * has not opened.

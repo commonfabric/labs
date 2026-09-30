@@ -116,7 +116,9 @@ space, asks again with `retrySpaceAccess(space)`, on `Runtime` or, across the
 worker boundary, on `RuntimeClient`. That opens the session once more through
 the memory server's ordinary admission, so it admits only what that admission
 would. An admission reaches the computations above through the same
-access-change observer, and a refusal leaves the answer `"none"`. It makes one
+access-change observer, and loads again every document the refusal kept from
+the replica, so a computation that read one without calling
+`spaceAccess(target)` runs again too. A refusal leaves the answer `"none"`. It makes one
 attempt per call, and acts only on a space the runtime has opened and been
 refused. The session also opens again when something reads a document of that
 space that the replica has not asked for.

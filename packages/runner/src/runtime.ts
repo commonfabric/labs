@@ -4309,7 +4309,8 @@ export class Runtime {
    * Asks the memory server once more for `space`, if it refused this
    * runtime's session there, and resolves once it has decided. An admission
    * runs again every computation whose `spaceAccess()` answer turned on the
-   * refusal; a refusal leaves the space refused. It is for a host that has
+   * refusal, and loads again what the refusal kept from the runtime; a
+   * refusal leaves the space refused. It is for a host that has
    * word the verdict may have changed, and does nothing for a space this
    * runtime has not opened. See `IStorageManager.retrySpaceAccess()`.
    */

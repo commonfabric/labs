@@ -620,9 +620,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * that the principal was granted access. It opens the session again through
    * the same `session.open` admission the first attempt went through, so it
    * can admit only what that admission would. Resolves once the server has
-   * decided: an admission clears `spaceAccessError()` and notifies
-   * `subscribeSpaceAccessChange()` observers, and a refusal leaves the space
-   * refused, as it was. Does nothing for a space this manager has not opened,
+   * decided: an admission clears `spaceAccessError()`, notifies
+   * `subscribeSpaceAccessChange()` observers, and makes again the loads the
+   * refusal failed, and a refusal leaves the space refused, as it was. Does nothing for a space this manager has not opened,
    * or whose session the server has not refused.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
