@@ -633,8 +633,8 @@ describe("health-probes", () => {
           expect(
             consoleVmStore("/r", { CFC_VM_HOME: directory }, {
               platform: "darwin",
-            })?.idleTimeoutSec,
-          ).toBe(600);
+            }),
+          ).toEqual({ directory, idleTimeoutSec: 600 });
         });
       }
     });
@@ -647,7 +647,7 @@ describe("health-probes", () => {
           { platform: "darwin" },
         );
 
-        expect(store?.imageKey).toBeUndefined();
+        expect(store).toEqual({ directory, idleTimeoutSec: 600 });
       });
     });
 
@@ -670,6 +670,33 @@ describe("health-probes", () => {
         ).toBeUndefined();
       });
     });
+
+    for (
+      const [what, write] of [
+        ["a directory", (path: string) => Deno.mkdir(path)],
+        ["not JSON", (path: string) => Deno.writeTextFile(path, "{")],
+        ["a JSON array", (path: string) => Deno.writeTextFile(path, "[]")],
+      ] as const
+    ) {
+      it(`returns the store with why its \`config.json\` could not be read where that is ${what}`, async () => {
+        // The file is there, so this is a store; what it configures, the
+        // idle timeout among it, is what could not be read.
+        await withStore(undefined, async (directory) => {
+          await write(join(directory, "config.json"));
+
+          const store = consoleVmStore("/r", { CFC_VM_HOME: directory }, {
+            platform: "darwin",
+          });
+
+          expect(store).toEqual({
+            directory,
+            unreadable: expect.stringContaining(
+              join(directory, "config.json"),
+            ),
+          });
+        });
+      });
+    }
 
     it("returns `undefined` when neither `CFC_VM_HOME` nor `HOME` is set", () => {
       expect(consoleVmStore("/r", {}, { platform: "darwin" })).toBeUndefined();
@@ -716,6 +743,31 @@ describe("health-probes", () => {
       expect(rows.map((row) => row.id)).toEqual(["sandbox.vm"]);
       return rows[0];
     };
+
+    it("returns unknown, and looks for no daemon, for a store whose `config.json` could not be read", async () => {
+      // The idle timeout that paces the questions is in that file, and a
+      // daemon started from it would not start.
+      let looked = 0;
+      const row = await readRow(
+        consoleVmHealthProbe({
+          directory: "/store",
+          unreadable: "/store/config.json is not JSON",
+        }, {
+          lstat: () => {
+            looked += 1;
+            throw new Deno.errors.NotFound("no socket");
+          },
+        }),
+      );
+
+      expect(looked).toBe(0);
+      expect(row).toMatchObject({
+        state: "unknown",
+        value: "not verified",
+        detail: "/store/daemon.sock",
+      });
+      expect(row.reason).toContain("/store/config.json is not JSON");
+    });
 
     it("returns idle without connecting when the store has no daemon socket", async () => {
       await withStore(async (directory) => {

@@ -451,12 +451,20 @@ const noPolicyRow = (
 };
 
 /**
- * A cfc-vm store as the VM row reads it: the directory holding the daemon's
- * socket, the image the configured rootfs names in it, and how long the
- * daemon waits without a client before it stops the VM.
+ * A cfc-vm store as the VM row reads it: one whose `config.json` the console
+ * read, or one holding a `config.json` it could not read.
  */
-export interface ConsoleVmStore {
-  /** The store directory, which holds `daemon.sock`. */
+export type ConsoleVmStore =
+  | ConsoleVmConfiguredStore
+  | ConsoleVmUnreadableStore;
+
+/**
+ * A cfc-vm store whose `config.json` the console read: the directory holding
+ * the daemon's socket, the image the configured rootfs names in it, and how
+ * long the daemon waits without a client before it stops the VM.
+ */
+export interface ConsoleVmConfiguredStore {
+  /** The store directory, which holds `daemon.sock` and `config.json`. */
   directory: string;
 
   /** The key of the image the rootfs names, where it is `<store>/images/<key>`. */
@@ -464,6 +472,19 @@ export interface ConsoleVmStore {
 
   /** Seconds the daemon waits without a client before it stops the VM. */
   idleTimeoutSec: number;
+}
+
+/**
+ * A cfc-vm store holding a `config.json` the console could not read as a JSON
+ * object. The VM's idle timeout is in that file, and the daemon does not start
+ * from one it cannot read either.
+ */
+export interface ConsoleVmUnreadableStore {
+  /** The store directory, which holds `daemon.sock` and `config.json`. */
+  directory: string;
+
+  /** Why `config.json` could not be read as a JSON object. */
+  unreadable: string;
 }
 
 /** The daemon's idle timeout where its `config.json` names none. */
@@ -476,10 +497,11 @@ const CFC_VM_IDLE_CHECK_SEC = 15;
  * The cfc-vm store the macOS runsc runs a console's sandbox in, named the way
  * runsc names it: by `CFC_VM_HOME`, or else as `cfc-vm` under the user's
  * Application Support. `undefined` off macOS, and where the store holds no
- * `config.json`, without which runsc cannot start a VM. `rootfs` names one of
- * the store's images when it is `<store>/images/<key>`, compared against the
- * store with its links resolved, as a resolved rootfs has them. `platform`
- * replaces `Deno.build.os`.
+ * `config.json`, without which runsc cannot start a VM; unreadable where it
+ * holds one that cannot be read as a JSON object. `rootfs` names one of the
+ * store's images when it is `<store>/images/<key>`, compared against the store
+ * with its links resolved, as a resolved rootfs has them. `platform` replaces
+ * `Deno.build.os`.
  */
 export const consoleVmStore = (
   rootfs: string,
@@ -493,17 +515,30 @@ export const consoleVmStore = (
     ? defaultDarwinCfcVmStore(env.HOME)
     : undefined;
   if (directory === undefined) return undefined;
-  let config: unknown;
+  const configPath = join(directory, "config.json");
+  let text: string;
   try {
-    config = JSON.parse(Deno.readTextFileSync(join(directory, "config.json")));
+    text = Deno.readTextFileSync(configPath);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return undefined;
-    // A store whose configuration cannot be read is still a store; its VM is
-    // what the row goes on to ask about.
+    return {
+      directory,
+      unreadable: `${configPath} could not be read: ${error}`,
+    };
   }
-  const configured = isObjectNotArray(config)
-    ? config.idleTimeoutSec
-    : undefined;
+  let config: unknown;
+  try {
+    config = JSON.parse(text);
+  } catch (error) {
+    return { directory, unreadable: `${configPath} is not JSON: ${error}` };
+  }
+  if (!isObjectNotArray(config)) {
+    return {
+      directory,
+      unreadable: `${configPath} holds JSON that is not an object`,
+    };
+  }
+  const configured = config.idleTimeoutSec;
   const idleTimeoutSec = typeof configured === "number" &&
       Number.isFinite(configured) && configured > 0
     ? configured
@@ -661,7 +696,9 @@ const closeQuietly = (connection: Deno.Conn): void => {
  * VM that nothing else uses stops before the next question, which then finds
  * no daemon. What it can do is keep a VM up for one idle timeout past its
  * last use. Another client asking in between, a second console's row among
- * them, counts as use.
+ * them, counts as use. A store whose `config.json` could not be read has no
+ * idle timeout to pace the questions by, so its row is unknown at every read
+ * and the daemon is not looked for.
  *
  * `lstat` looks at the socket, `touch` and `ask` reach the daemon, `examine`
  * looks for an image's block file, and `now` is the monotonic clock, in
@@ -685,8 +722,6 @@ export const consoleVmHealthProbe = (
   const examine = options.examine ?? readConsolePath;
   const now = options.now ?? (() => performance.now());
   const socket = join(store.directory, "daemon.sock");
-  const askIntervalMs = (store.idleTimeoutSec + 2 * CFC_VM_IDLE_CHECK_SEC) *
-    1_000;
   const fact: ConsoleHealthFact = {
     id: "sandbox.vm",
     group: "sandbox",
@@ -695,6 +730,34 @@ export const consoleVmHealthProbe = (
     source: "cfc-vm daemon",
     detail: socket,
   };
+  const unavailable = (checkedAt: string): ConsoleHealthRow[] => [{
+    ...fact,
+    state: "unknown",
+    checkedAt,
+    value: "not verified",
+    reason: "The VM daemon could not be looked for.",
+  }];
+  if ("unreadable" in store) {
+    return {
+      id: "sandbox.vm",
+      initial: [fact],
+      unavailable,
+      read: () =>
+        Promise.resolve([{
+          ...fact,
+          state: "unknown",
+          checkedAt: new Date().toISOString(),
+          value: "not verified",
+          reason:
+            `${store.unreadable}. That file holds the VM's idle timeout, which paces this row's questions, so the row asks the daemon nothing.`,
+          remedy: `Make ${
+            join(store.directory, "config.json")
+          } a readable JSON object, which the daemon needs to start a VM, then restart the console, which reads it once.`,
+        }]),
+    };
+  }
+  const askIntervalMs = (store.idleTimeoutSec + 2 * CFC_VM_IDLE_CHECK_SEC) *
+    1_000;
   const idle = (checkedAt: string, reason: string): ConsoleHealthRow => ({
     ...fact,
     state: "ok",
@@ -739,13 +802,7 @@ export const consoleVmHealthProbe = (
   return {
     id: "sandbox.vm",
     initial: [fact],
-    unavailable: (checkedAt) => [{
-      ...fact,
-      state: "unknown",
-      checkedAt,
-      value: "not verified",
-      reason: "The VM daemon could not be looked for.",
-    }],
+    unavailable,
     read: async () => {
       const checkedAt = new Date().toISOString();
       let info: Deno.FileInfo;
@@ -890,7 +947,7 @@ const readVmStatus = (
  */
 const vmStatusRow = (
   fact: ConsoleHealthFact,
-  store: ConsoleVmStore,
+  store: ConsoleVmConfiguredStore,
   status: VmStatus,
   at: {
     checkedAt: string;
