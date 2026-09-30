@@ -3822,17 +3822,15 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
 
 /**
  * Returns the current principal's own access to the space `target`'s value
- * lives in, or to the space the calling code runs in when no `target` is
- * passed. The level is the one the memory server enforces: the principal's
+ * lives in. The level is the one the memory server enforces: the principal's
  * entry in the space's access list, else the list's `"*"` entry, with the
- * space's own identity holding `OWNER` implicitly.
+ * space's own identity holding `OWNER` implicitly. `target` is required, so a
+ * call about the pattern's own space passes a cell that lives there.
  *
  * `"none"` means the principal holds nothing there. `undefined` means the
  * answer is not known yet: the access list has not arrived, the space has no
- * access list, there is no principal, or `target` was passed as `undefined`.
- * It is never a guess. So `spaceAccess()` and `spaceAccess(undefined)` differ:
- * a value that cannot be read yet reads as `undefined`, and its space is not
- * the calling code's own.
+ * access list, there is no principal, or `target` is `undefined`, which is what
+ * a value that cannot be read yet reads as. It is never a guess.
  *
  * In a reactive computation (`computed()`, `lift()`) the principal is whoever
  * is viewing, and the result is theirs alone, so two users never see each
@@ -3844,7 +3842,7 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
  * read, since any member can read the whole access list.
  */
 export type SpaceAccessFunction = (
-  target?: AnyCell<unknown>,
+  target: AnyCell<unknown> | undefined,
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;

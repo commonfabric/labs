@@ -20,8 +20,7 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
 
 /**
  * Returns the current principal's own access to the space `target`'s value
- * lives in, or to the space the calling code runs in when no `target` is
- * passed. The level is the one the memory server enforces,
+ * lives in. The level is the one the memory server enforces,
  * `acl[principal] ?? acl["*"]` over the space's access list, with the space's
  * own identity holding `OWNER` implicitly; {@link spaceReaderRole} decides it,
  * as it does for the render membership lookup.
@@ -32,11 +31,10 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * what an access list that has not arrived, a space that has no access list,
  * a run with no principal, and a `target` passed as `undefined` all return.
  *
- * So `spaceAccess()` and `spaceAccess(undefined)` differ: the first asks about
- * the calling code's own space, and the second returns `undefined`. A
- * computation's by-value input reads `undefined` while the value it names
- * cannot be read, which is when the principal may not belong to its space, and
- * reporting the calling code's own space there would be wrong.
+ * `target` is required, and names the space explicitly even when it is the
+ * calling code's own. A `target` passed as `undefined` is one not known yet:
+ * a computation's by-value input reads `undefined` while the value it names
+ * cannot be read, which is when the principal may not belong to its space.
  *
  * Who the principal is depends on where the call runs. In a reactive
  * computation it is the principal demanding the value, and the call makes the
@@ -47,10 +45,12 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * The level names no principal, and tells a member only what a member can
  * already read, since any member can read the whole access list.
  *
- * @throws If called outside a handler or a reactive computation, or with a
- *   `target` that is neither a cell nor `undefined`.
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
  */
 export function spaceAccess(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
   ...args: [target?: unknown]
 ): SpaceAccessLevel | undefined {
   const frame = topFrame();
@@ -61,10 +61,16 @@ export function spaceAccess(
         "computation, where there is one principal to ask about.",
     );
   }
-  const { runtime, tx, space } = frame!;
-  if (runtime === undefined || tx === undefined || space === undefined) {
+  const { runtime, tx } = frame!;
+  if (runtime === undefined || tx === undefined) {
     throw new Error("`spaceAccess()` requires an executing runtime.");
   }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceAccess()` requires a `target`: a cell in the space to ask about.",
+    );
+  }
+  const [target] = args;
 
   let principal: string | undefined;
   if (kind === "lift") {
@@ -79,13 +85,14 @@ export function spaceAccess(
     principal = runtime.actingPrincipalFor(tx);
   }
 
-  let targetSpace = space;
-  if (args.length > 0) {
-    const [target] = args;
-    if (target === undefined) return undefined;
-    targetSpace = spaceOfTarget(target);
-  }
-  return accessLevel(runtime, tx, targetSpace, principal, kind === "lift");
+  if (target === undefined) return undefined;
+  return accessLevel(
+    runtime,
+    tx,
+    spaceOfTarget(target),
+    principal,
+    kind === "lift",
+  );
 }
 
 /**
@@ -99,7 +106,9 @@ function spaceOfTarget(target: unknown): MemorySpace {
   } else if (isCellResult(target)) {
     cell = getCellOrThrow(target);
   } else {
-    throw new Error("`spaceAccess()` takes a cell, or nothing, as its target.");
+    throw new Error(
+      "`spaceAccess()` takes a cell, or `undefined`, as its target.",
+    );
   }
   return cell.resolveAsCell().getAsNormalizedFullLink().space;
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { SpaceAccessFunction } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -181,9 +182,15 @@ describe("spaceAccess()", () => {
     return tx;
   }
 
+  /** Returns the space a frame built from `options` runs in. */
+  function frameSpaceOf(options: { frameSpace?: MemorySpace }): MemorySpace {
+    return options.frameSpace ?? space;
+  }
+
   /**
    * Calls `spaceAccess()` as code in a `kind` frame of `frameSpace` would,
-   * through `tx`, and returns what it returns.
+   * through `tx`, and returns what it returns. The target is `target`, or a
+   * cell in `frameSpace`.
    */
   function callIn(
     runtime: Runtime,
@@ -197,13 +204,14 @@ describe("spaceAccess()", () => {
     const frame = pushFrame({
       runtime,
       tx,
-      space: options.frameSpace ?? space,
+      space: frameSpaceOf(options),
       frameKind: options.kind ?? "lift",
     });
     try {
-      return options.target === undefined
-        ? spaceAccess()
-        : spaceAccess(options.target);
+      return spaceAccess(
+        options.target ??
+          runtime.getCell<unknown>(frameSpaceOf(options), "space-access here"),
+      );
     } finally {
       popFrame(frame);
     }
@@ -336,7 +344,11 @@ describe("spaceAccess()", () => {
         frameKind: "lift",
       });
       try {
-        expect(spaceAccess()).toBe("OWNER");
+        const home = runtime.getCell<unknown>(
+          bob.did() as MemorySpace,
+          "space-access here",
+        );
+        expect(spaceAccess(home)).toBe("OWNER");
         expect(spaceAccess(undefined)).toBeUndefined();
       } finally {
         popFrame(frame);
@@ -576,12 +588,31 @@ describe("spaceAccess()", () => {
     });
   });
 
+  it("throws when called without a `target`", () => {
+    const runtime = clientRuntime(bob);
+    const frame = pushFrame({
+      runtime,
+      tx: runtime.edit(),
+      space: bob.did() as MemorySpace,
+      frameKind: "lift",
+    });
+    try {
+      // The declared type refuses this call; the runtime check is for callers
+      // the compiler never saw.
+      const declared: SpaceAccessFunction = spaceAccess;
+      // @ts-expect-error: `target` is required.
+      expect(() => declared()).toThrow("requires a `target`");
+    } finally {
+      popFrame(frame);
+    }
+  });
+
   it("throws in a pattern body", () => {
     const runtime = clientRuntime(bob);
     const { pattern } = createTrustedBuilder(runtime).commonfabric;
     expect(() =>
       pattern(() => {
-        spaceAccess();
+        spaceAccess(undefined);
         return {};
       })
     ).toThrow("can only be called from a handler or a reactive computation");

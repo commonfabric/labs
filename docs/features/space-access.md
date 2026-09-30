@@ -1,6 +1,6 @@
 # A principal's own access to a space
 
-`spaceAccess(target?)` tells pattern code what the principal it runs for may do
+`spaceAccess(target)` tells pattern code what the principal it runs for may do
 in a space: `"OWNER"`, `"WRITE"`, `"READ"`, or `"none"`, and `undefined` while
 that is not known. It is what a pattern consults to decide what to offer a
 person, such as whether to show the controls only an owner can use, or whether
@@ -20,10 +20,12 @@ entry, with the space's own identity holding `OWNER` without an entry.
 decision, and it is the same function the render membership lookup uses, so a
 pattern, the renderer and the server resolve one list the same way.
 
-`target` picks the space. Omitted, it is the space the calling code runs in. A
-cell, or a value read through one, stands for the space its value lives in,
-after following any links it holds, so a reference to a piece in another space
-returns the level in that piece's space.
+`target` picks the space, and it is required: a call about the space the
+calling code runs in passes a cell that lives there, so every call names the
+space it asks about. A cell, or a value read through one, stands for the space
+its value lives in, after following any links it holds, so a reference to a
+piece in another space returns the level in that piece's space. A call with no
+argument at all throws; the declared type refuses one as well.
 
 ## Who the principal is
 
@@ -59,14 +61,12 @@ is not membership: `spaceReaderRole()` returns no role for it, and neither does
 the render membership lookup, so `spaceAccess()` agrees with both and returns
 `undefined`.
 
-`spaceAccess()` and `spaceAccess(undefined)` are different calls. The first
-asks about the space the calling code runs in; the second asks about a target
-that is not there, and returns `undefined`. A computation that takes its target
-by value, rather than as a cell, reads `undefined` for it while the value it
-names cannot be read, which is exactly when the target's space is one the
-principal may not belong to. Taking that `undefined` as "no target" would
-report the calling code's own space instead, typically the principal's own
-space, where they hold `OWNER`.
+A `target` of `undefined` is a target not known yet, and returns `undefined`. A
+computation that takes its target by value, rather than as a cell, reads
+`undefined` for it while the value it names cannot be read, which is exactly
+when the target's space is one the principal may not belong to. Were that
+`undefined` read as "the calling code's own space", it would report a level in
+the wrong space, typically one where the principal holds `OWNER`.
 
 The refusal counts only on a client, where the session the memory server
 refused is the principal's own. A serving runtime reads every space as that
