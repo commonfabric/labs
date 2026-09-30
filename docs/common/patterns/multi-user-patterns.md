@@ -568,11 +568,13 @@ which operations require which integrity.
 
 `spaceAccess(target)` returns what the current principal may do in the space
 `target`'s value lives in, as that space's access list grants it: `"OWNER"`,
-`"WRITE"`, `"READ"`, or `"none"`. It returns `undefined` while that is not known
-yet, so treat `undefined` as "still loading" rather than as "no access".
-`target` is a cell, and it is required: to ask about the space the pattern runs
-in, pass a cell that lives there. A `target` that is itself `undefined`, as a
-value that cannot be read yet is, returns `undefined`.
+`"WRITE"`, `"READ"`, or `"none"`. It returns `undefined` when the answer is not
+known or not available: the access list has not arrived, the space has no
+access list, there is no principal to ask about, or `target` is itself
+`undefined`, as a value that cannot be read yet is. Treat `undefined` as "not
+known", neither as access nor as "no access". `target` is a cell, and it is
+required: to ask about the space the pattern runs in, pass a cell that lives
+there.
 
 ```tsx
 // Shown inside a pattern body.
@@ -585,10 +587,11 @@ is that of whoever is viewing, and each viewer sees their own; in a handler, it
 is that of the person who sent the event. Called directly in a pattern body it
 throws, because the body builds one graph for every viewer.
 
-It decides what to offer, not what is allowed. The memory server checks every
-write against the access list regardless, and a rule a pattern enforces only by
-consulting `spaceAccess()` holds among honest runtimes and nowhere else. For a
-write that must be refused, use a write policy as described above.
+It decides what to offer, not what is allowed. A memory server in `enforce`
+mode, which is toolshed's default, checks every write against the access list
+regardless, and a rule a pattern enforces only by consulting
+`spaceAccess(target)` holds among honest runtimes and nowhere else. For a write
+that must be refused, use a write policy as described above.
 [`space-access.md`](../../features/space-access.md) has the details.
 
 ## Mapping Shared Lists
