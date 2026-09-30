@@ -19,12 +19,18 @@ import type { CfcLabelView } from "./label-view-core.ts";
 const REPRESENTS_PRINCIPAL = "represents-principal";
 
 /**
+ * A kind of principal claim: `authored-by` names who wrote a value, and
+ * `represents-principal` names whom a value stands for.
+ */
+export type PrincipalClaimKind = "authored-by" | typeof REPRESENTS_PRINCIPAL;
+
+/**
  * The kinds of integrity atom that name a principal as their `subject`: the
  * current-principal claim family. A pattern may attach one only with the
  * subject left for the runtime to resolve, which `prepare.ts` checks with
  * {@link principalClaimSpelling} and {@link subjectResemblesPrincipal}.
  */
-export const PRINCIPAL_CLAIM_KINDS: ReadonlySet<string> = new Set([
+export const PRINCIPAL_CLAIM_KINDS: ReadonlySet<PrincipalClaimKind> = new Set([
   "authored-by",
   REPRESENTS_PRINCIPAL,
 ]);
@@ -151,17 +157,18 @@ export const principalClaimEntries = (
     );
 
 /**
- * The principals `view` attests in exactly the form a runtime mints, read
- * from the entries {@link principalClaimEntries} names, or `undefined` when
- * any atom there names a principal in another form. A runtime binds a
- * `{ kind, subject }` atom's subject to its acting principal and refuses a
- * literal DID only in that form, so the string form, a padded subject, or an
- * atom with another key may have been written by someone other than the
- * principal it names. A caller that must know who wrote the attestation,
- * rather than whom a claim is about, refuses those.
+ * The principals `view` attests with claims of `kind`, in exactly the form a
+ * runtime mints, read from the entries {@link principalClaimEntries} names, or
+ * `undefined` when a claim of `kind` there names a principal in another form,
+ * or any claim there is in the string form. A runtime binds a `{ kind, subject }` atom's subject to its
+ * acting principal and refuses a literal DID only in that form, so the string
+ * form, a padded subject, or an atom with another key may have been written by
+ * someone other than the principal it names. A caller that must know who wrote
+ * the attestation, rather than whom a claim is about, refuses those.
  */
 export const exactPrincipalAttestations = (
   view: CfcLabelView | undefined,
+  kind: PrincipalClaimKind,
 ): string[] | undefined => {
   const principals = new Set<string>();
   for (const entry of principalClaimEntries(view)) {
@@ -171,9 +178,11 @@ export const exactPrincipalAttestations = (
       // Any string-form claim is refused: no reader counts one, and the
       // write check refuses a pattern writing one.
       if (spelling === "string") return undefined;
-      if ((atom as { kind?: unknown }).kind !== REPRESENTS_PRINCIPAL) continue;
-      const subject = representsPrincipalSubject(atom);
-      if (subject === undefined || Object.keys(atom as object).length !== 2) {
+      if ((atom as { kind?: unknown }).kind !== kind) continue;
+      const subject = principalClaimSubject(atom, kind);
+      if (
+        !isWellFormedDID(subject) || Object.keys(atom as object).length !== 2
+      ) {
         return undefined;
       }
       principals.add(subject);

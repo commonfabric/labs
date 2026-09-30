@@ -1399,7 +1399,10 @@ const resolveSeats = async (
           debugStr`Custody terms name seat ${index} by a cell with a clause the room's readers do not hold: $quote,long${withheld}`,
         );
       }
-      const principals = exactPrincipalAttestations(view);
+      const principals = exactPrincipalAttestations(
+        view,
+        "represents-principal",
+      );
       if (
         principals === undefined || !principals.every(isWellFormedDID)
       ) {

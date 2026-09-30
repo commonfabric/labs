@@ -136,8 +136,11 @@ describe("represents-principal", () => {
         // Below the top-level fields, as authorPrincipalCandidates reads it.
         representsAt(["elements", "0"], "did:key:deeper"),
       ]);
-      expect(exactPrincipalAttestations(label)).toEqual([DID, OTHER_DID]);
-      expect(exactPrincipalAttestations(undefined)).toEqual([]);
+      expect(exactPrincipalAttestations(label, "represents-principal")).toEqual(
+        [DID, OTHER_DID],
+      );
+      expect(exactPrincipalAttestations(undefined, "represents-principal"))
+        .toEqual([]);
     });
 
     it("refuses a claim in any form the runtime does not mint", () => {
@@ -157,7 +160,8 @@ describe("represents-principal", () => {
       for (const [atom, candidates] of cases) {
         const label = view([{ path: ["name"], label: { integrity: [atom] } }]);
         expect(authorPrincipalCandidates(label)).toEqual(candidates);
-        expect(exactPrincipalAttestations(label)).toBeUndefined();
+        expect(exactPrincipalAttestations(label, "represents-principal"))
+          .toBeUndefined();
       }
     });
 
@@ -170,7 +174,50 @@ describe("represents-principal", () => {
           label: { integrity: [{ kind: "authored-by", subject: OTHER_DID }] },
         },
       ]);
-      expect(exactPrincipalAttestations(label)).toEqual([DID]);
+      expect(exactPrincipalAttestations(label, "represents-principal")).toEqual(
+        [DID],
+      );
+    });
+
+    it("returns each DID an `authored-by` claim attests when asked for that kind", () => {
+      const label = view([
+        {
+          path: [],
+          label: { integrity: [{ kind: "authored-by", subject: DID }] },
+        },
+        {
+          path: ["body"],
+          label: { integrity: [{ kind: "authored-by", subject: OTHER_DID }] },
+        },
+        // A claim of the other kind is skipped.
+        representsAt(["name"], "did:key:represented"),
+      ]);
+      expect(exactPrincipalAttestations(label, "authored-by")).toEqual([
+        DID,
+        OTHER_DID,
+      ]);
+    });
+
+    it("refuses an `authored-by` claim in any form the runtime does not mint", () => {
+      const atoms = [
+        `authored-by:${DID}`,
+        { kind: "authored-by", subject: ` ${DID}` },
+        { kind: "authored-by", subject: DID, scope: "x" },
+        { kind: "authored-by", subject: "not-a-did" },
+        // A string-form claim of the other kind refuses the label too.
+        `represents-principal:${DID}`,
+      ];
+      for (const atom of atoms) {
+        const label = view([
+          {
+            path: [],
+            label: { integrity: [{ kind: "authored-by", subject: DID }] },
+          },
+          { path: ["body"], label: { integrity: [atom] } },
+        ]);
+        expect(exactPrincipalAttestations(label, "authored-by"))
+          .toBeUndefined();
+      }
     });
   });
 });
