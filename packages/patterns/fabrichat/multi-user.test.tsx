@@ -32,7 +32,6 @@ import {
   type ChatProfile,
   type ChatReaction,
   type ChatRoomNotice,
-  type ProfileCell,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];

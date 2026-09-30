@@ -28,7 +28,6 @@ import {
   CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomNotice,
-  type ProfileCell,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];

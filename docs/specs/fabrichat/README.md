@@ -295,15 +295,18 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   passes when it creates the room, and takes the OWNER-only rules to mean the
   creator. A space's own chat knows no OWNER. `canSend` is whether the
   reader's profile resolves.
-- **Principals are profiles.** A handler can't learn the principal that sent
-  an event, so a room keys its request memory, and the members who left, by
-  the sender's profile, and `add` can't refuse a principal who left. The
-  manager takes the principals the contract names, but can't learn its own
-  user's, so `openDirect` can't refuse the user as their own counterpart, and
-  `accept` records the `counterpart` its client checked.
-- **Creation takes one transaction.** With no grants to commit apart, creating
-  a room, its notices, and its index entry happen in one commit, and a
-  request's outcome is `done` or `refused` from the start. A request already
+- **Principals from handlers only.** A handler learns the principal it acts
+  for (`currentPrincipal()`), so a room keys its request memory, and the
+  members who left, by the sender's principal, and refuses to `add` someone
+  who left; the manager refuses a direct room with the user themself and
+  leaves them out of a group's other members. A reaction's address still
+  derives from its reactor's profile, as the design says. What no pattern can
+  learn is the principal a profile represents, so a roster entry stays a
+  claim.
+- **Creation takes one transaction.** The room's space comes with its grants,
+  so writing the room, its notices, and its index entry happens in one commit,
+  rather than in the design's resumable steps, and a request's outcome is
+  `done` or `refused` from the start. A request already
   decided changes nothing when it arrives again.
 - **Placements don't know who is a member.** A placement can't read access, so
   a viewer who can't read the room sees it as `"unavailable"`, never as
@@ -341,8 +344,9 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
 - **Notices.** A room's notice id is `[principal, requestId]` as JSON, so the
   client that sent `add` can report it delivered without reading it back. A
   manager's is `[recipient, requestId]`.
-- **Request ids.** A rendered control sends no `requestId`, and the room mints
-  one for it.
+- **Request ids.** A rendered control sends no `requestId`, and the room and
+  the manager use the event's own key (`eventKey()`), which is the same on
+  every run of that event.
 
 ## Identity and presentation
 
