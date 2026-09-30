@@ -370,14 +370,18 @@ describe("executor-acl-document-write", () => {
       });
 
       it("creates a served `inSpace` target whose access list names the acting user its only OWNER", async () => {
-        const { client, engine, result } = await warmServedStream();
+        const { client, engine, argument, result } = await warmServedStream();
         const entry = await sendAndSettle(client, result, "open", "open");
 
         expect(entry.error).toBeUndefined();
-        const rooms = result.key("rooms");
-        await rooms.sync();
-        const room = rooms.key(0).resolveAsCell();
-        const roomSpace = room.getAsNormalizedFullLink().space;
+        // The stored list, rather than the client's view of it, which a
+        // flag-on client's own echo of the handler may answer.
+        const stored = Engine.read(engine, {
+          id: argument.getAsNormalizedFullLink().id,
+        })?.value as {
+          rooms: Array<{ "/": { "link@1": { space: MemorySpace } } }>;
+        };
+        const roomSpace = stored.rooms[0]["/"]["link@1"].space;
         expect(roomSpace).not.toBe(space);
         const roomEngine = await server.engineForSpace(roomSpace);
         expect(
