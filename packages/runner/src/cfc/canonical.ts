@@ -56,7 +56,9 @@ export const canonicalizeLogicalPath = (path: NonDocumentPath): ValuePath => {
  * that must keep the two apart checks the raw path first.
  */
 export const canonicalizeDocumentPath = (path: DocumentPath): ValuePath =>
-  canonicalizeLogicalPath(path[0] === "value" ? path.slice(1) : path.slice());
+  canonicalizeLogicalPath(
+    path[0] === "value" ? path.slice(1) : path as readonly string[],
+  );
 
 /**
  * WeakMap cache mapping a path-array identity to its JSON-pointer

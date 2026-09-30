@@ -9,6 +9,7 @@ import {
   decodeJsonPointer,
   encodeJsonPointer,
 } from "@commonfabric/utils/json-pointer";
+import type { NonDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { parseCellReference, renderCellReference } from "./cell-reference.ts";
 import {
@@ -81,7 +82,9 @@ export type ScopeCapAtDepth = {
  */
 export type NormalizedLink = {
   id?: URI; // URI format with "of:" prefix
-  path: readonly MemoryAddressPathComponent[];
+  // Relative to the linked document's `value`, so a path rooted at the stored
+  // document is refused.
+  path: NonDocumentPath;
   space?: MemorySpace;
   scope?: LinkScope;
   schema?: JSONSchema;

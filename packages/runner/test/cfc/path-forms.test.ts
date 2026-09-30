@@ -28,8 +28,10 @@ import {
   rebaseCfcLabelView,
 } from "../../src/cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../../src/cfc/label-view-state.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import type {
   Activity,
+  IExtendedStorageTransaction,
   IReadActivity,
   IWriteAttempt,
   TransactionWriteDetail,
@@ -82,6 +84,19 @@ export function journalPathsRetainDocumentForm(
   }
 }
 
+/** Fails to compile if a payload API accepts a journal address's path. */
+export function journalPathsAreRejectedByPayloadApis(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  read: IReadActivity,
+  detail: TransactionWriteDetail,
+): void {
+  // @ts-expect-error the payload read prepends `value` to a link's path
+  tx.readValueOrThrow({ ...link, path: read.path });
+  // @ts-expect-error the payload write prepends `value` to a link's path
+  tx.writeValueOrThrow({ ...link, path: detail.address.path }, 1);
+}
+
 describe("path-forms", () => {
   it("accepts plain and branded value paths at logical APIs", () => {
     const plain: readonly string[] = ["value", "field"];
@@ -111,5 +126,11 @@ describe("path-forms", () => {
     expect(logicalPathToPointer(canonical)).toBe("/value/field");
     expect(Object.isFrozen(logical)).toBe(true);
     expect(document).toEqual(["value", "value", "field"]);
+  });
+
+  it("returns a frozen path outside the document's `value` as it stands", () => {
+    const meta = toDocumentPath(Object.freeze(["cfc", "labels"]));
+
+    expect(canonicalizeDocumentPath(meta)).toBe(meta);
   });
 });
