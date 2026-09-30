@@ -1532,6 +1532,17 @@ Result shape:
   `test/array-method-element-schema.test.ts`)
 - computed destructuring keys are stabilized with generated key constants and
   lift-applied wrappers where needed
+- a spread of a capture, in the callback body outside any function nested in
+  it, is written out as the properties it copies when the capture is a `const`
+  declared outside module scope and initialized with an object literal whose
+  properties all have static keys (identifiers or string literals; no spread,
+  method, accessor, or computed key):
+  `{ ...records, id: item.id }` ->
+  `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
+  callback reads a capture as an opaque reference, which has no keys to spread;
+  those keys are exactly what the spread copies where `records` is declared
+  (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
+  `closures/map-captured-object-spread.expected.jsx`)
 
 ### 9.5 Lift-applied strategy
 
@@ -4042,6 +4053,11 @@ null when it does not apply. Current built-in behavior:
    unsupported — the problem is the unstorable function value, not the call
    syntax — but that classification is not yet surfaced as an authoring-time
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
+7. A spread, inside a reactive collection callback, of a capture that §9.4 does
+   not write out — a `const` initialized by a function call, say — copies
+   nothing, because the callback reads the capture as an opaque reference. No
+   diagnostic reports it unless the capture is a tracked reactive root, whose
+   spread §9.7 reports as not lowerable.
 
 ## 20. Test Coverage Snapshot
 
