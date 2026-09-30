@@ -775,6 +775,12 @@ const performMessageAct = (
 
   if (op === "send") {
     if (version === undefined || !isValidBody(version.body)) return;
+    // A send arriving again after its memo has expired finds the message it
+    // made, and changes nothing.
+    if (messages.elementById(requestKey).get() !== undefined) {
+      rememberRequest(requests, requestKey, clock);
+      return;
+    }
     const composing = composer.get();
     const composed = state.replyFrom === "thread"
       ? composing?.thread

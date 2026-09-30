@@ -89,6 +89,9 @@ export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
+  const requests = Writable.of<RequestMemo[]>([]);
+  // Forgets every request, as the room does once a request's memo expires.
+  const action_forget_requests = action(() => requests.set([]));
   // The first message's reaction list, held apart from the message, whose link
   // to it a deletion drops.
   const firstReactions = Writable.of<{ list?: Writable<ReactionList> }>({});
@@ -102,7 +105,7 @@ export default pattern(() => {
     ownSpace: false,
     messages,
     reactionLists,
-    requests: Writable.of<RequestMemo[]>([]),
+    requests,
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
@@ -214,6 +217,24 @@ export default pattern(() => {
         assertion: assert(() =>
           reactionsOn(messages, 1).length === 1 &&
           reactionsOn(messages, 0).length === 2
+        ),
+      },
+      // A send arriving again after its memo has expired changes nothing.
+      {
+        action: alice.sendMessage,
+        event: { requestId: "again", target: { value: "Again" } },
+        trustedUi: sendGesture,
+      },
+      { action: action_forget_requests },
+      {
+        action: alice.sendMessage,
+        event: { requestId: "again", target: { value: "Changed" } },
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          (messages.get() as MessageRecord[]).length === 3 &&
+          (messages.get() as MessageRecord[])[2]?.body === "Again"
         ),
       },
       // Deleting a message clears its reactions and takes them out of the

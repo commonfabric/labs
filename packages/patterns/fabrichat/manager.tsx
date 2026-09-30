@@ -357,11 +357,12 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     // `accept`.
     const kind = room.key("about").get()?.kind;
     if (
-      spaceAccess(room) === "none" || (kind !== "direct" && kind !== "group")
+      currentPrincipal() === undefined || spaceAccess(room) === "none" ||
+      (kind !== "direct" && kind !== "group")
     ) {
       recordOutcome(requests, requestId, {
         status: "refused",
-        reason: "The room can't be read.",
+        reason: "The room can't be read by this user.",
       });
       return;
     }
