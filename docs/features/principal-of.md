@@ -19,11 +19,14 @@ A principal claim is an integrity atom of the form
 | `represents-principal` | the value stands for the subject, as a profile does | `RepresentsCurrentUser`, or `ownerPrincipal` |
 | `authored-by` | the subject wrote the value | `AuthoredByCurrentUser` |
 
-A pattern never writes a claim's subject itself. It writes the runtime's
-placeholder, and the runtime replaces it with the principal the write acts for
-when it prepares the commit. A pattern-written subject that looks like a DID is
-refused there, in any spelling a reader could take for a claim, and so is a
-literal `ownerPrincipal` naming anyone but the acting principal.
+A pattern writes the runtime's placeholder as a claim's subject, and the
+runtime replaces it with the principal the write acts for when it prepares the
+commit. A pattern-written subject that looks like a DID is refused there, in
+any spelling a reader could take for a claim, with one exception: a claim may
+name, as a literal, the `ownerPrincipal` its schema declares, and a literal
+`ownerPrincipal` is itself refused unless it is the principal the write acts
+for. Either way, a claim the runtime admits names the principal the write acts
+for.
 `packages/runner/src/cfc/represents-principal.ts` is the one definition of a
 claim for both sides: the check `prepare.ts` makes on a write, and the readers.
 
@@ -46,16 +49,20 @@ link to a profile returns the profile's principal.
 | `undefined` | they name none, or more than one |
 | `undefined` | a claim of `kind` there is in any other form: extra keys, a padded subject, a subject that is not a DID |
 | `undefined` | a claim of either kind there is in the string form `<kind>:<subject>` |
-| `undefined` | the stored label cannot be read, or `target` was passed as `undefined` |
+| `undefined` | `target` was passed as `undefined` |
+| throws | the stored label cannot be read: its read fails or is refused, or it is stored in a form this build cannot interpret |
 
-It never guesses. A label that names two principals, or holds a claim some
-writer other than a runtime could have spelled, gives no answer rather than the
-first or the likeliest one. A `target` of `undefined` is one not known yet: a
-computation taking its target by value reads `undefined` while the value
-cannot be read.
+`undefined` means that the label names no verified single principal of that
+kind, and a caller refuses whatever needs one. It never guesses. A label that
+names two principals, or holds a claim some writer other than a runtime could
+have spelled, gives no answer rather than the first or the likeliest one. A
+`target` of `undefined` is one not known yet: a computation taking its target
+by value reads `undefined` while the value cannot be read.
 
+A label that cannot be read is not reported as `undefined`, since that would
+make a labeled document read as an unlabeled one; the read's error propagates.
 A `kind` other than the two above, or a `target` that is neither a cell nor
-`undefined`, throws.
+`undefined`, throws too.
 
 ## Where it can be called
 
@@ -72,9 +79,10 @@ computation's read scope as it was.
 
 ## What it reads
 
-The call reads the target's stored label and nothing of its value. Following
-the target's links probes whether its value is a link, and that probe is the
-only read of the value's document it makes outside the label. The label is read
+The call reads the target's stored label, and no contents of its value beyond
+the link pointers needed to resolve the target. Following the target's links
+probes whether its value is a link, and that probe is the only read of the
+value's document it makes outside the label. The label is read
 through `readStoredCfcMetadata()`, the runtime-internal verifier read the rest
 of the runtime uses for label metadata, in the calling code's own transaction.
 The read is a dependency like any other, so a computation that called
@@ -93,9 +101,9 @@ ones. The rest of what the calling code read labels what it writes, as it
 would without the call.
 
 The classification is consulted on every call rather than assumed. If it ever
-classed a claim's subject as anything but public, `principalOf()` would return
-`undefined` rather than an unlabeled copy of it, since nothing carries a label
-for an integrity atom's field.
+classed a claim's subject as anything but public, `principalOf()` would throw
+rather than return an unlabeled copy of it, since nothing carries a label for
+an integrity atom's field.
 
 `principalOf()` and `inspectConfLabel()` are the pattern-facing surfaces for
 label metadata. Both read inside the observing transaction and take their
@@ -105,9 +113,11 @@ target as a cell.
 
 The DID returned is data. A pattern can compare it with `currentPrincipal()`,
 check it with `isWellFormedDID()`, store it, or pass it to
-`grantSpaceAccess()`. It cannot turn it back into a claim: written into a label
-as a claim's subject, it is a literal DID like any other, and the write is
-refused. Only the runtime's placeholder becomes a subject.
+`grantSpaceAccess()`. It cannot turn it back into a claim for anyone else:
+written into a label as a claim's subject, it is a literal DID like any other,
+and the write is refused, unless the schema declares that DID as its
+`ownerPrincipal` and it is the principal the write acts for. The claim then
+names the same principal the placeholder would have.
 
 ## How far the answer can be trusted
 

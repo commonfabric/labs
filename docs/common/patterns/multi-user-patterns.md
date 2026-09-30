@@ -378,12 +378,15 @@ const inviteBaker = handler<
 - It returns `undefined` unless the label names exactly one principal, in the
   form only the runtime writes. A pattern cannot write that form for anyone but
   the user it runs for, so a DID it returns is one that user's runtime put
-  there. Treat `undefined` as "no one", and refuse what needs someone.
-- It reads the label and never the value. Call it in a handler, including on a
-  cell the event names, or in a `computed()` or `lift()`, where it updates when
-  the label changes. Called in a pattern body it throws.
+  there. `undefined` means no verified single principal: refuse whatever needs
+  one. A label that cannot be read throws rather than returning `undefined`.
+- It reads the label, and no contents of the value beyond the link pointers
+  needed to reach it. Call it in a handler, including on a cell the event
+  names, or in a `computed()` or `lift()`, where it updates when the label
+  changes. Called in a pattern body it throws.
 - The DID is data. Writing it into a label as a claim's subject is refused, like
-  any DID a pattern writes there.
+  any DID a pattern writes there, unless the schema declares it as the
+  `ownerPrincipal` and it is the user the pattern runs for.
 - A claim binds honest runtimes. The memory server does not check one, so it
   does not hold against a modified client.
 

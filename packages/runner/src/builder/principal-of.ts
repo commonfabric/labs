@@ -37,7 +37,9 @@ import { cellOfTarget } from "./space-access.ts";
  * subject protected, this throws, since no label could be carried for it.
  *
  * The DID returned is data. Written into a label as a claim's subject, it is a
- * literal like any other, which the runtime refuses from a pattern.
+ * literal like any other, which the runtime refuses from a pattern unless the
+ * schema declares it as the `ownerPrincipal` and it is the principal the write
+ * acts for.
  *
  * @throws If called outside a handler or a reactive computation, with a
  *   `kind` that is not a principal claim kind, or with a `target` that is

@@ -4210,12 +4210,14 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
  * for anyone but the principal it runs for.
  *
- * `undefined` means the label attests no single principal of that kind: none,
- * more than one, or a claim in some other form. It also means the label cannot
- * be read, or that `target` is `undefined`, which is what a value that cannot
- * be read yet reads as. It is never a guess.
+ * `undefined` means the label names no verified single principal of that kind:
+ * none, more than one, or a claim in some other form. It also means that
+ * `target` is `undefined`, which is what a value that cannot be read yet reads
+ * as. It is never a guess, and a caller refuses whatever needs a principal. A
+ * label that cannot be read throws instead.
  *
- * It reads the label and never the value. In a reactive computation
+ * It reads the label, and no contents of the value beyond the link pointers
+ * needed to reach it. In a reactive computation
  * (`computed()`, `lift()`) the result updates when the label changes. It can
  * also be called in a handler, on a cell an event names. Calling it in a
  * pattern body throws: wrap it in `computed()` instead.
@@ -4223,7 +4225,9 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * What a principal claim names is public to anyone who holds the value, so the
  * result carries no label of its own. Compare it with `currentPrincipal()`, or
  * check it with `isWellFormedDID()`; writing it into a label as a claim's
- * subject is refused, like any other literal DID a pattern writes there.
+ * subject is refused, like any other literal DID a pattern writes there,
+ * unless the schema declares it as the `ownerPrincipal` and it is the
+ * principal the write acts for.
  */
 export declare function principalOf(
   target: AnyCell<unknown> | undefined,
