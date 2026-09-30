@@ -2011,9 +2011,15 @@ export class StorageManager implements IStorageManager {
 
   async pullOpenSpacesToHead(): Promise<void> {
     await Promise.all(
-      [...this.#providers.values()].map((provider) =>
-        provider.pullToServerHead()
-      ),
+      [...this.#providers.values()].map(async (provider) => {
+        try {
+          await provider.pullToServerHead();
+        } catch (error) {
+          // The server fans nothing out on a space it refuses this session,
+          // so a denied space has nothing to catch up on.
+          if (provider.authorizationError() === undefined) throw error;
+        }
+      }),
     );
   }
 

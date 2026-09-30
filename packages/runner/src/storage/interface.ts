@@ -416,7 +416,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * connection cannot resolve ahead of fan-out the server sent earlier on it.
    * Multi-runtime test harnesses use it to make one runtime observe another's
    * committed state deterministically; a manager with no open remote
-   * connection resolves immediately.
+   * connection resolves immediately. A space under a permanent authorization
+   * denial (see `authorizationError()`) is passed over rather than failing
+   * the whole call: the server sends nothing on a session it refuses.
    */
   pullOpenSpacesToHead(): Promise<void>;
 

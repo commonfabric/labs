@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import type { URI } from "@commonfabric/memory/interface";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_SESSION_OPEN_AUDIENCE,
+} from "./memory-v2-test-utils.ts";
 
 // `pullOpenSpacesToHead()` is the client half of the multi-runtime settle
 // barrier: it issues an unconditional `graph.query` round trip on every open
@@ -81,6 +86,42 @@ describe("StorageManager.pullOpenSpacesToHead", () => {
     } finally {
       await rt1.dispose();
       await rt2.dispose();
+    }
+  });
+
+  it("resolves with a space open that refuses its identity", async () => {
+    // The server sends nothing on a session it refuses, so the space holds no
+    // fan-out to wait for, and a barrier over every open space still has the
+    // others to carry.
+
+    const enforcing = new MemoryV2Server.Server({
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
+      acl: { mode: "enforce" },
+    });
+    const outsider = await Identity.fromPassphrase(
+      "storage-pull-open-spaces outsider",
+    );
+    const ownerStorage = EmulatedStorageManager.connectTo(enforcing, {
+      as: signer,
+    });
+    const outsiderStorage = EmulatedStorageManager.connectTo(enforcing, {
+      as: outsider,
+    });
+    try {
+      const closed = await ownerStorage.createSpace({
+        [signer.did()]: "OWNER",
+      });
+      await outsiderStorage.open(closed).sync("of:closed-probe" as URI);
+      expect(outsiderStorage.authorizationError(closed)?.name).toBe(
+        "AuthorizationError",
+      );
+
+      await outsiderStorage.pullOpenSpacesToHead();
+    } finally {
+      await ownerStorage.close();
+      await outsiderStorage.close();
+      await enforcing.close();
     }
   });
 });

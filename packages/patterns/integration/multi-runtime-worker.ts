@@ -33,7 +33,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
-import type { Cell } from "@commonfabric/runner";
+import type { Cell, MemorySpace } from "@commonfabric/runner";
 import {
   cellRuntime,
   convertCellsToLinks,
@@ -62,6 +62,7 @@ import {
 } from "./pieces-controller.ts";
 import {
   type CommitRejection,
+  type PieceAddress,
   type RuntimeDiagnosticsSnapshot,
   type TrustedUiDescriptor,
   type WorkerRequest,
@@ -79,6 +80,14 @@ let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
+
+/**
+ * The result cells of the pieces other than the attached one that a command
+ * has addressed, keyed by {@link addressKey}. A piece enters on the first
+ * command to reach it, once it has opened, so one that could not be opened is
+ * opened afresh by the next command naming it.
+ */
+const addressedResults = new Map<string, Cell<any>>();
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -131,6 +140,43 @@ function currentPiece(): PieceController {
 function result(): Cell<any> {
   const raw = controller().getResult(currentPiece().getCell());
   return resultSchema !== undefined ? raw.asSchema(resultSchema as never) : raw;
+}
+
+/** The key {@link addressedResults} holds the piece at `address` under. */
+function addressKey(address: PieceAddress): string {
+  return `${address.space} ${address.id}`;
+}
+
+/**
+ * The result cell of the piece at `address`, or of the attached piece when
+ * `address` is absent, read through its pattern's result schema either way.
+ * Opening a piece other than the attached one starts it in this runtime, as
+ * the attached piece was started, and syncs it from the space it lives in.
+ * Throws the server's refusal when this runtime's identity may not read that
+ * space.
+ */
+async function resultAt(address: unknown): Promise<Cell<any>> {
+  if (address === undefined) return result();
+  const { id, space } = address as PieceAddress;
+  const key = addressKey({ id, space });
+  const known = addressedResults.get(key);
+  if (known) return known;
+  const pieces = controller();
+  const { runtime } = pieces;
+  let opened: Cell<any>;
+  try {
+    opened = await pieces.getPieceCell(
+      runtime.getCellFromEntityId(space as MemorySpace, id),
+      true,
+    );
+  } catch (error) {
+    // A space that refuses this session syncs as one holding no data, and
+    // the refusal is what says why.
+    throw runtime.storageManager.authorizationError?.(space as MemorySpace) ??
+      error;
+  }
+  addressedResults.set(key, opened);
+  return opened;
 }
 
 async function idle(): Promise<void> {
@@ -444,7 +490,9 @@ const handlers: Record<
     return {};
   },
 
-  async send({ handler, event, trustedUi, idle: doIdle, thenHoldInbound }) {
+  async send(
+    { handler, event, trustedUi, idle: doIdle, thenHoldInbound, piece },
+  ) {
     // Refused before the event goes out, rather than after it has committed.
     // A send waits on the store confirming the event's commit, which a
     // runtime holding its inbound frames never hears.
@@ -486,7 +534,7 @@ const handlers: Record<
       };
       markRendererTrustedEvent(eventValue);
     }
-    const target = result();
+    const target = await resultAt(piece);
     const { error } = await controller().runtime.editWithRetry(
       (tx) => {
         target.key(handler as never).withTx(tx).send(eventValue as never);
@@ -518,10 +566,10 @@ const handlers: Record<
   // (last-write-wins), whatever the value's shape. Pass `idle: false` to leave
   // this runtime un-settled, so its local replica stays stale
   // (own-write-race repro).
-  async set({ path, value, idle: doIdle }) {
+  async set({ path, value, idle: doIdle, piece }) {
     const runtime = controller().runtime;
     const tx = runtime.edit();
-    let cell = result();
+    let cell = await resultAt(piece);
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never) as Cell<any>;
     }
@@ -559,9 +607,9 @@ const handlers: Record<
   // through `Cell.push()`'s mergeable operation.
   // TODO(danfuzz): Append through `Cell.push()` as the runtime does, once the
   // tests that pin this compare-and-set are reworked to that path.
-  async push({ path, value, idle: doIdle }) {
+  async push({ path, value, idle: doIdle, piece }) {
     const runtime = controller().runtime;
-    let cell = result();
+    let cell = await resultAt(piece);
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never) as Cell<any>;
     }
@@ -792,8 +840,8 @@ const handlers: Record<
    * it came from, and that annotation is machinery rather than content: the
    * container's own entries are what the reader asked for.
    */
-  async read({ path }) {
-    const target = result();
+  async read({ path, piece }) {
+    const target = await resultAt(piece);
     if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
@@ -810,8 +858,8 @@ const handlers: Record<
    * for state the declared schema does not carry, e.g. a query result's
    * `requestHash`. Nested links in the raw value stay sigils.
    */
-  async readRaw({ path }) {
-    const target = result();
+  async readRaw({ path, piece }) {
+    const target = await resultAt(piece);
     if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
@@ -905,8 +953,8 @@ const handlers: Record<
    * the piece result by `path`, resolving links along the way. Lets tests
    * assert the storage addressing (e.g. scope) of pattern state.
    */
-  async link({ path }) {
-    const target = result();
+  async link({ path, piece }) {
+    const target = await resultAt(piece);
     if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
@@ -1101,6 +1149,7 @@ const handlers: Record<
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;
+    addressedResults.clear();
     if (cc) {
       await cc.dispose();
       cc = undefined;
