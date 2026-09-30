@@ -458,6 +458,7 @@ describe("cf-iframe bridge with multiple users", () => {
       }),
       apiUrl: new URL(API_URL),
       identity: aliceIdentity,
+      cfcFlowLabels: "persist",
     });
     await cc.ensureDefaultPattern();
 

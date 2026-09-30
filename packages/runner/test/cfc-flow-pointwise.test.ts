@@ -1,5 +1,6 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -9,6 +10,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type FactoryInput } from "../src/builder/types.ts";
 
@@ -25,10 +27,10 @@ type StoredEntry = {
 describe("CFC flow labels: pointwise structure (phase B)", () => {
   // S16 phase B: pointwise label precision is a structural fact of the
   // per-element transaction decomposition (design D4), not a trusted claim.
-  // These tests pin the split: element results carry only their element's
-  // taint; the result container carries only structure-level taint — and for
-  // filter, the membership decision's taint (§8.5.6.1) arrives via the
-  // predicate outputs the coordinator consumes.
+  // These tests distinguish element content from coordinator observations.
+  // Result references retain acquisition and reselection history; for filter,
+  // membership taint (§8.5.6.1) also includes the predicate outputs the
+  // coordinator consumes.
 
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
   let runtime: Runtime | undefined;
@@ -91,15 +93,12 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
       .filter((e) => e.origin === "structure" && e.path.length === 0)
       .flatMap((e) => e.label.confidentiality ?? []);
 
-  it("map: incrementally added elements get pointwise derived labels", async () => {
-    // Element ops run in their own transactions reading only their element,
-    // so per-element precision is structural — for elements that arrive in
-    // separate reconciles. A batch first-instantiation evaluates all new
-    // element ops inline in ONE pattern-run transaction, whose J is then the
-    // join of every new element (coarse but sound; it refines as elements
-    // are touched individually). This test exercises the incremental path:
-    // el0 instantiates first, el1 arrives later, and each element's result
-    // carries exactly its own taint.
+  it("map: reconciled references retain coordinator selection confidentiality", async () => {
+    // Element ops read their own elements, while their result references
+    // retain the confidentiality of each selection. Here el0 instantiates
+    // first and el1 arrives later. Reconciliation consumes el0's acquired
+    // result reference as well as Bob's new result, so both references it
+    // writes carry the two selection dependencies.
 
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -168,9 +167,17 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     await result.pull();
     await runtime.idle();
 
+    const mappedId = result.key("mapped").resolveAsCell()
+      .getAsNormalizedFullLink().id;
+    expect(
+      entriesOf(mappedId).find((entry) =>
+        entry.origin === "link" && entry.path.join("/") === "0"
+      )?.label.confidentiality,
+    ).toEqual(["alice-secret"]);
+
     // Second element arrives in its own reconcile: the update transaction
     // only shuffles links (no content reads), and el1's op instantiates in
-    // a transaction that never read el0.
+    // a transaction that never read el0's content.
     const grow = runtime.edit();
     const el0Again = runtime.getCell(space, "pointwise-el-0", undefined, grow);
     const el1 = runtime.getCell(space, "pointwise-el-1", undefined, grow);
@@ -188,20 +195,25 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     >;
     expect(mapped.map((m) => m?.doubled)).toEqual([2, 4]);
 
-    // Reader-visible pointwise check: a consumer of mapped[i] picks up
-    // exactly element i's taint. (Asserting on specific internal docs is
-    // brittle — content lands in different docs on the inline-first-run vs
-    // steady-state paths; what matters is what a reader's derivation
-    // joins.) Three parts of the blind-passing split keep the coordinator's
-    // scaffolding from smearing one element's taint onto the other:
-    // link-covered writes aren't stamped, so the per-slot link labels the
-    // link write mints from each source's own label are the pointwise
-    // answer; pure-link-structure writes get exact-path `structure` stamps
-    // that slot reads below them never join; and the `*`-path membership
-    // templates beside those stamps are not consumed by the coordinator's
-    // own scaffolding reads, which carry `machineryRead`. This test also
-    // pins that the batch first-run's coarse J landing on the container as
-    // shape taint does NOT leak back into later per-element results.
+    // Reference slots retain the selection confidentiality of every write.
+    // Reconciliation consumes the first result reference's Alice history
+    // before writing either output slot. The forwarded input references stay
+    // public: reading their identities never copies their target content labels.
+    const inputId = listCell.getAsNormalizedFullLink().id;
+    const inputReferences = entriesOf(inputId).filter((entry) =>
+      entry.origin === "link"
+    );
+    expect(inputReferences.map((entry) => entry.path)).toEqual([["0"], ["1"]]);
+    expect(
+      inputReferences.flatMap((entry) => entry.label.confidentiality ?? []),
+    ).toEqual([]);
+    expect(
+      entriesOf(mappedId).filter((entry) => entry.origin === "link")
+        .map((entry) => entry.label.confidentiality),
+    ).toEqual([
+      ["alice-secret", "bob-secret"],
+      ["alice-secret", "bob-secret"],
+    ]);
     const probe = async (index: number, cause: string): Promise<string[]> => {
       const ptx = runtime!.edit();
       const value = (result.key("mapped") as any).key(index).withTx(ptx)
@@ -216,9 +228,9 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     const conf0 = await probe(0, "pointwise-probe-0");
     const conf1 = await probe(1, "pointwise-probe-1");
     expect(conf0).toContainEqual("alice-secret");
-    expect(conf0).not.toContainEqual("bob-secret");
+    expect(conf0).toContainEqual("bob-secret");
     expect(conf1).toContainEqual("bob-secret");
-    expect(conf1).not.toContainEqual("alice-secret");
+    expect(conf1).toContainEqual("alice-secret");
   });
 
   //
@@ -587,14 +599,30 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     await runtime.idle();
 
     const containerId = resolvedContainerId(result.key("kept"));
-    // The kept element's own entry carries alice-secret, so the structure
-    // label below is read from a container that holds a label map.
-    expect(
-      entriesOf(containerId).flatMap((e) => e.label.confidentiality ?? []),
-    ).toContainEqual("alice-secret");
+    const selectedEntry = entriesOf(containerId).find((entry) =>
+      entry.origin === "link" && entry.observes === "followRef" &&
+      entry.path.join("/") === "0"
+    );
+    expect(selectedEntry).toBeDefined();
+    expect(selectedEntry!.label.integrity).toContainEqual(
+      expect.objectContaining({ type: CFC_ATOM_TYPE.LinkReference }),
+    );
+    expect(selectedEntry!.label.confidentiality ?? []).toEqual([]);
     const sc = structureConfidentiality(containerId);
     expect(sc).not.toContainEqual("alice-secret");
     expect(sc).not.toContainEqual("bob-secret");
+
+    // The selected identity stays public; consuming its payload acquires only
+    // that member's confidentiality.
+    const probe = runtime.edit();
+    const selected = result.key("kept").withTx(probe).key(0).resolveAsCell();
+    expect(selected.getAsNormalizedFullLink().id).toBe(
+      el0.getAsNormalizedFullLink().id,
+    );
+    expect(deriveFlowJoin(probe).confidentiality).toEqual([]);
+    expect(selected.key("n").get()).toBe(1);
+    expect(deriveFlowJoin(probe).confidentiality).toEqual(["alice-secret"]);
+    probe.abort();
   });
 
   it("filter: structure label re-stamps from J when the list grows", async () => {
@@ -608,6 +636,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's structure
       // entry in the document. `before`, `after` and `membershipEntries`
       // read that entry back.
@@ -708,6 +737,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's structure
       // entry in the document, and `sc` reads that entry back.
       cfcFlowLabels: "persist",
@@ -780,6 +810,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's membership
       // and existence entries in the document. The assertions below read
       // both back.

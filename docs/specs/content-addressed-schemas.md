@@ -146,11 +146,12 @@ content the `cid:` namespace holds, and the larger.
 - **No envelope**: a code document carries no `cfc` metadata. It is a
   runtime surface outside labeling, like a schema document: immutable,
   named by its content, and excluded from schema write policy and the flow
-  join. A link written into a labeled record that names a `cid:` document
-  records no link-write policy input, since the document can carry nothing
-  a label would describe. Provenance stays on the record: the compile
-  cache's runtime-minted integrity atom labels the record, whose link and
-  map it covers, while the hash covers the bytes.
+  join. Under precise reference semantics, a link to that document still
+  carries its own acquisition confidentiality and scope restrictions. The
+  receiving record stores that reference provenance without reading labels
+  from the CID target. The compile cache acquires its code references through
+  the Runtime; its runtime-minted integrity atom labels the record, whose
+  link and map it covers, while the hash covers the bytes.
 - **Retention**: permanent, as for every `cid:` document. Every code
   version ever compiled into a space stays there.
 

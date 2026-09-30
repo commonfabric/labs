@@ -270,6 +270,7 @@ export async function seedTopicBoard(
   });
   const cc = await initializePiecesController({
     space: spaceDid,
+    cfcFlowLabels: "persist",
     apiUrl: options.apiUrl,
     identity: options.identity,
   });

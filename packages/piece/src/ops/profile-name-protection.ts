@@ -224,7 +224,11 @@ async function loadProfilePattern(
       getDerivedInternalCellLink(profile, descriptor),
     );
     await named.sync();
-    const value = named.getRawUntyped();
+    // Inspect the legacy slot for prefetch; readPlan validates its layout and
+    // policy before adoption, without treating these bytes as an acquisition.
+    const value = runtime.readTx().readValueOrThrow(
+      named.getAsNormalizedFullLink(),
+    );
     if (isLink(value)) {
       await runtime.getCellFromLink(
         parseLink(value, named.getAsNormalizedFullLink()),

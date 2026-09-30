@@ -151,6 +151,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
       space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
     controllers.push(controller);
     return controller;

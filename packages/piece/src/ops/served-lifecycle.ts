@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/memory/v2";
 import {
   type Cell,
+  type CellLinkInput,
   compileAndSavePattern,
   entityIdFrom,
   getPatternIdentityRef,
@@ -38,6 +39,7 @@ import {
   sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
+import { serializeRuntimeEvent } from "@commonfabric/runner/cfc";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
@@ -356,9 +358,15 @@ export async function servedInstantiatePiece(
     );
     const retained = requestRecord.withTx(tx).get();
     if (retained !== undefined) return retained;
+    // The authenticated host request independently chooses these references.
+    // Acquire them before setup; target content is labeled when it is read.
+    const argument = request.argument ?? {};
+    const acquiredArgument = runtime.cfcFlowLabels === "persist"
+      ? runtime.acquireExternalInput(space, argument as CellLinkInput)
+      : argument;
     // With a transaction supplied, setup runs to completion before it
     // returns and leaves the commit to this transaction.
-    void runtime.setup(tx, pattern, request.argument ?? {}, piece, {
+    void runtime.setup(tx, pattern, acquiredArgument, piece, {
       ...(request.repository === undefined
         ? {}
         : { patternRepository: request.repository }),
@@ -396,7 +404,7 @@ export async function servedInstantiatePiece(
   return outcome.ok!;
 }
 
-/** The address-only delivery plan retained after a registration preparation wave. */
+/** The acquired event delivery retained after a registration preparation wave. */
 export interface ServedRegistrationPreparation {
   receipt: ServedInstantiateReceipt;
   delivery?: {
@@ -405,6 +413,8 @@ export interface ServedRegistrationPreparation {
     piece: ReturnType<Cell<unknown>["getAsLink"]>;
     eventId: string;
     deliveryKey: string;
+    payload: ReturnType<typeof serializeRuntimeEvent>["payload"];
+    runtimeReferenceContext?: string;
   };
   error?: string;
 }
@@ -515,16 +525,33 @@ export async function prepareServedRegistration(
       actingUser,
       stream,
     );
-    return {
-      receipt,
-      delivery: {
-        root: root.getAsNormalizedFullLink(),
+    const dispatchTx = runtime.edit();
+    try {
+      // Trusted ingress carries the exact acquired payload and stream through
+      // durable encoding; the transport does not reconstruct their history.
+      const { payload, runtimeReferenceContext } = serializeRuntimeEvent(
+        { piece },
+        dispatchTx,
+        stream.space,
         stream,
-        piece: piece.getAsLink(),
-        eventId,
-        deliveryKey,
-      },
-    };
+      );
+      return {
+        receipt,
+        delivery: {
+          root: root.getAsNormalizedFullLink(),
+          stream,
+          piece: piece.getAsLink(),
+          eventId,
+          deliveryKey,
+          payload,
+          ...(runtimeReferenceContext === undefined
+            ? {}
+            : { runtimeReferenceContext }),
+        },
+      };
+    } finally {
+      dispatchTx.abort();
+    }
   } catch (error) {
     return { receipt, error: messageOf(error) };
   }

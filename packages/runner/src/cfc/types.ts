@@ -14,6 +14,11 @@ import type {
   LabelObservationClass,
 } from "./label-view-core.ts";
 import type { PolicySnapshot } from "./policy.ts";
+import type {
+  CfcReferenceBinding,
+  CfcReferenceObservation,
+  CfcReferenceProvenance,
+} from "./reference-provenance.ts";
 import type { CfcRefusalDetail } from "./refusal-detail.ts";
 import type { SinkMaxConfidentiality } from "./sink-inventory.ts";
 import type { CfcTrustConfig } from "./trust.ts";
@@ -27,6 +32,13 @@ export type {
 
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
+
+// Trusted constructor initialization covers the cell's new document and an
+// action's new root reference to it. Each keeps its own declared policy. The
+// prepare gate requires runtimeWritePolicyAuthorization and creation of the
+// value root before exempting a covered write from writeAuthorizedBy.
+export const CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION =
+  "runtime.setup.seed-materialization";
 
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
@@ -340,6 +352,14 @@ export type LabelEntryOrigin =
  * graph — and is re-exported above; label views carry the same axis, C4.)
  */
 export type LabelMapEntry = {
+  /**
+   * Runtime-attested accounting for this exact reference slot's acquisition.
+   * An unavailable acquisition carries the read-failed confidentiality atom.
+   * Valid only on version-3 link entries observing followRef. Absence keeps
+   * a carried legacy entry incomplete when another slot upgrades the envelope.
+   */
+  referenceAcquisition?: "complete";
+
   path: readonly string[];
   label: IFCLabel;
   origin?: LabelEntryOrigin;
@@ -357,14 +377,24 @@ export type LabelMapEntry = {
  * A stored envelope's `version`: the format gate every reader checks
  * first. Version 1 holds every label inline; version 2 may hold a label as
  * a reference to a content-addressed label document
- * (`docs/specs/content-addressed-cfc-labels.md`). A value outside this
+ * (`docs/specs/content-addressed-cfc-labels.md`). Version 3 additionally
+ * records acquisition-aware reference labels and accepts either label encoding.
+ * A value outside this
  * union is an envelope the build cannot interpret, and every reader fails
  * closed on it rather than treating the document as unlabeled.
  */
-export type CfcMetadataVersion = 1 | 2;
+export type CfcMetadataVersion = 1 | 2 | 3;
+
+/** Whether this stored entry attests complete history for its reference slot. */
+export const isCompleteCfcReferenceEntry = (
+  version: CfcMetadataVersion,
+  entry: Pick<LabelMapEntry, "origin" | "observes" | "referenceAcquisition">,
+): boolean =>
+  version === 3 && entry.origin === "link" &&
+  entry.observes === "followRef" && entry.referenceAcquisition === "complete";
 
 /**
- * A label held by reference in a stored version-2 envelope: a single-member
+ * A label held by reference in a version-2 or version-3 envelope: a single-member
  * record naming the `cid:` label document whose value is the label. An
  * inline label never carries `$ref`, so the key alone tells the two apart.
  */
@@ -372,7 +402,7 @@ export type CfcLabelReference = { readonly $ref: string };
 
 /**
  * A `labelMap` entry as it is stored: {@link LabelMapEntry}, except that in
- * a version-2 envelope the label may be a {@link CfcLabelReference}.
+ * a version-2 or version-3 envelope the label may be a {@link CfcLabelReference}.
  */
 export type StoredLabelMapEntry = Omit<LabelMapEntry, "label"> & {
   label: IFCLabel | CfcLabelReference;
@@ -382,7 +412,8 @@ export type StoredLabelMapEntry = Omit<LabelMapEntry, "label"> & {
  * A CFC envelope as it is stored at a document's reserved `cfc` member,
  * discriminated by version: version 1 holds every label inline, and a
  * reference in one is a spelling it does not define; version 2 may hold a
- * label by reference. Readers resolve either to a {@link CfcMetadata} —
+ * label by reference. Version 3 adds complete reference acquisition records.
+ * Readers resolve every supported version to a {@link CfcMetadata} —
  * every label inline — before any consumer walks it; the stored spelling
  * is visible only to the persist path, which needs to know which version
  * a document holds.
@@ -394,7 +425,7 @@ export type StoredCfcMetadata =
     labelMap: { version: 1; entries: Array<LabelMapEntry> };
   }
   | {
-    version: 2;
+    version: 2 | 3;
     schemaHash: string;
     labelMap: { version: 1; entries: Array<StoredLabelMapEntry> };
   };
@@ -635,6 +666,13 @@ export type WritePolicyInput =
     readonly schemaRole?: "output";
   }
   | {
+    /** A trusted runtime output comparison that retained its stored reference. */
+    readonly kind: "output-reissue";
+    readonly target: CfcAddress;
+    readonly readStart: number;
+    readonly readEnd: number;
+  }
+  | {
     readonly kind: "structural-provenance";
     readonly target: CfcAddress;
     readonly claim: string;
@@ -649,9 +687,10 @@ export type WritePolicyInput =
   | {
     readonly kind: "link-write";
     readonly target: CfcAddress;
-    readonly source: CfcAddress;
+    readonly source: CfcReferenceBinding;
     readonly linkSchema?: JSONSchema;
     readonly cfcLabelView?: CfcLabelView;
+    readonly reference?: CfcReferenceProvenance;
   }
   | {
     readonly kind: "sink-request";
@@ -738,6 +777,7 @@ export type PreparedDigestInput = {
   // discipline as writePolicyInputs. Absent when none were recorded, so
   // pre-Stage-2 digests are unchanged; canonicalized address-sorted.
   readonly labelMetadataObservations?: readonly CfcLabelMetadataObservation[];
+  readonly referenceObservations?: readonly CfcReferenceObservation[];
 
   /**
    * Host-observed content admitted through opaque runtime receipts. Absent
@@ -891,13 +931,12 @@ export type CfcDecomposedEnvelopes = boolean;
 export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
 
 /**
- * Whether the envelope persist path stores version-2 envelopes, whose
- * labels above the inline limit are references to content-addressed label
- * documents (`docs/specs/content-addressed-cfc-labels.md`). Off stores
- * version 1, every label inline. Reading resolves either version. Ships
- * behind a flag because a reader that predates version 2 fails closed on
- * it, which is correct and also unusable: every deployed reader must
- * interpret version 2 before any space sees one.
+ * Whether labels above the inline limit are stored in content-addressed
+ * label documents (`docs/specs/content-addressed-cfc-labels.md`). The legacy
+ * profile writes version 2 when enabled; the precise reference profile uses
+ * version 3 with either inline or referenced labels. Reading resolves both
+ * representations. Every deployed reader must support its envelope version
+ * before a space stores that format.
  */
 export type CfcContentAddressedLabels = boolean;
 
@@ -1118,6 +1157,7 @@ export type CfcTxState = {
   // PreparedDigestInput. Only labeled observations are recorded (empty =
   // public = nothing to derive, gate, or bind).
   labelMetadataObservations: CfcLabelMetadataObservation[];
+  referenceObservations: CfcReferenceObservation[];
   // Host-only observations admitted through an opaque runtime receipt. These
   // are CONTENT inputs: they participate in flow derivation, read-side gates,
   // egress, and the prepared digest exactly like durable content reads.

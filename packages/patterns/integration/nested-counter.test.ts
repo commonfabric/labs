@@ -73,6 +73,7 @@ describe("nested counter integration test", () => {
       space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: identity,
+      cfcFlowLabels: "persist",
     });
     const sourcePath = join(
       import.meta.dirname!,

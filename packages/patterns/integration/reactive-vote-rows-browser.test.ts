@@ -81,6 +81,7 @@ describe("rendered vote rows across replicas", () => {
         space: spaceDid,
         apiUrl: new URL(env.API_URL),
         identity,
+        cfcFlowLabels: "persist",
       });
       let browser: Awaited<ReturnType<typeof Browser.launch>> | undefined;
       try {

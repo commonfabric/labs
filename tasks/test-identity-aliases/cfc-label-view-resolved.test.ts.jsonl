@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"cfcLabelViewForResolvedCellWithStatus > treats a link getter that throws as no link, not a failed read"},"to":{"k":"unit","s":"runner","n":"cfcLabelViewForResolvedCellWithStatus > fails closed when a link getter throws"}}

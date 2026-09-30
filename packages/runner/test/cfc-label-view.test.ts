@@ -10,7 +10,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { toCell } from "../src/back-to-cell.ts";
@@ -67,7 +67,7 @@ async function withLabeledDocument(
       tx,
     ).getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: link.id,
       type: "application/json",
@@ -339,7 +339,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -365,7 +365,7 @@ describe("CFC label view helpers", () => {
         tx,
       );
       const targetLink = parseLink(target.getAsLink());
-      tx.writeOrThrow({
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -400,7 +400,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -434,7 +434,7 @@ describe("CFC label view helpers", () => {
       );
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -472,6 +472,10 @@ describe("CFC label view helpers", () => {
               "selected-detail",
             ]),
           },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-detail"] },
         }],
       });
     } finally {
@@ -504,7 +508,7 @@ describe("CFC label view helpers", () => {
         const tx = runtime.edit();
         const cell = runtime.getCell(space, id, undefined, tx);
         writeSeedEnvelopeDoc(tx, space);
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space,
           id: parseLink(cell.getAsLink()).id!,
           type: "application/json",
@@ -583,6 +587,60 @@ describe("CFC label view helpers", () => {
     }
   });
 
+  it("takes content integrity from the terminal target of a reference chain", async () => {
+    const signer = await Identity.fromPassphrase("cfc terminal content labels");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const space = signer.did();
+      const target = runtime.getCell(space, "terminal-target");
+      const intermediate = runtime.getCell(space, "terminal-intermediate");
+      const source = runtime.getCell(space, "terminal-source");
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      const write = (
+        cell: Cell<unknown>,
+        value: FabricValue,
+        entries: CfcMetadata["labelMap"]["entries"],
+      ) =>
+        seedStoredReferenceEnvelope(seed, {
+          ...cell.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value,
+          cfc: {
+            version: 3,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries },
+          },
+        });
+      write(target, { field: "value" }, [{
+        path: ["field"],
+        label: { integrity: ["terminal-content"] },
+      }]);
+      write(intermediate, target.getAsLink(), [
+        { path: [], label: { confidentiality: ["selected-reference"] } },
+        { path: ["field"], label: { integrity: ["projected-content"] } },
+      ]);
+      write(source, intermediate.key("field").getAsLink(), []);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const resolved = source.resolveAsCell();
+      expect(resolved.get()).toBe("value");
+      const entries = cfcLabelViewForCell(resolved)?.entries ?? [];
+      expect(entries.flatMap((entry) => entry.label.integrity ?? []))
+        .toEqual(["terminal-content"]);
+      expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+        .toEqual(["selected-reference"]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("carries the link slot's label on a second resolution of the same link", async () => {
     // Every caller that derives a hop's label view brackets the resolution
     // with the trace-array length and slices off what it appended
@@ -620,7 +678,7 @@ describe("CFC label view helpers", () => {
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
       // The link and its label map are seeded in one whole-envelope write.
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -656,6 +714,7 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
+          observes: "followRef",
           label: {
             confidentiality: expect.arrayContaining(["link-slot-only"]),
           },
@@ -719,7 +778,7 @@ describe("CFC label view helpers", () => {
         },
       };
       writeSeedEnvelopeDoc(tx, space);
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space,
         id,
         type: "application/json",
@@ -804,7 +863,7 @@ describe("CFC label view helpers", () => {
             const tx = runtime.edit();
             const cell = runtime.getCell(space, id, undefined, tx);
             writeSeedEnvelopeDoc(tx, space);
-            seedStoredEnvelope(tx, {
+            seedStoredReferenceEnvelope(tx, {
               space,
               id: parseLink(cell.getAsLink()).id!,
               type: "application/json",
@@ -902,6 +961,84 @@ describe("CFC label view helpers", () => {
       );
     });
 
+    it("carries the consumed target's content label on a materialized value", async () => {
+      await withRuntime(
+        "cfc consumed target content",
+        async ({ seed, home }) => {
+          const target = await seed(home, "content-target", { text: "hello" }, [
+            {
+              path: [],
+              label: {
+                confidentiality: ["target-content"],
+                integrity: ["target-author"],
+              },
+            },
+          ]);
+          const holder = await seed(home, "content-holder", {
+            ref: target.getAsLink(),
+          }, []);
+          const value = holder.asSchema({
+            type: "object",
+            properties: {
+              ref: { type: "object", properties: { text: { type: "string" } } },
+            },
+          }).get() as any;
+          expect(getCarriedCfcLabelView(value.ref[toCell]())?.entries).toEqual([
+            {
+              path: [],
+              label: {
+                confidentiality: ["target-content"],
+                integrity: ["target-author"],
+              },
+            },
+          ]);
+        },
+      );
+    });
+
+    it("takes materialized content integrity from the terminal target of a link chain", async () => {
+      await withRuntime(
+        "cfc materialized terminal content",
+        async ({ seed, home }) => {
+          const target = await seed(home, "terminal-content-target", {
+            field: { text: "hello" },
+          }, [{
+            path: ["field"],
+            label: { integrity: ["terminal-author"] },
+          }]);
+          const middle = await seed(
+            home,
+            "terminal-content-middle",
+            target.getAsLink(),
+            [{
+              path: ["field"],
+              label: { integrity: ["projected-author"] },
+            }],
+          );
+          const holder = await seed(home, "terminal-content-holder", {
+            ref: middle.key("field").getAsLink(),
+          }, [{
+            path: ["ref"],
+            label: { confidentiality: ["selected-reference"] },
+          }]);
+          const value = holder.asSchema({
+            type: "object",
+            properties: {
+              ref: { type: "object", properties: { text: { type: "string" } } },
+            },
+          }).get() as any;
+          expect(getCarriedCfcLabelView(value.ref[toCell]())?.entries).toEqual([
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["selected-reference"] },
+            },
+            { path: [], label: { integrity: ["terminal-author"] } },
+          ]);
+        },
+      );
+    });
+
     it("carries the label of every slot on a chain of links", async () => {
       await withRuntime("cfc handle chain label", async ({ seed, home }) => {
         const note = await seed(home, "chain-note", "hello", []);
@@ -922,12 +1059,12 @@ describe("CFC label view helpers", () => {
           },
         }).get() as any;
 
-        const [entry, ...rest] = confidentialityOf(read.first.next) ?? [];
-        expect(rest).toEqual([]);
-        expect(entry.path).toEqual([]);
-        expect([...entry.confidentiality ?? []].sort()).toEqual([
-          "holder-slot",
-          "middle-slot",
+        expect(getCarriedCfcLabelView(read.first.next)?.entries).toEqual([
+          {
+            path: [],
+            observes: "followRef",
+            label: { confidentiality: ["holder-slot", "middle-slot"] },
+          },
         ]);
       });
     });
@@ -1009,9 +1146,8 @@ describe("CFC label view helpers", () => {
     it("labels a value at a link's own slot by the route that reached the slot", async () => {
       // `plain` and `labeled` both link to `middle`, whose `ref` slot links
       // to `note`. Both slots carry `slot`, so the view below `note` is the
-      // same either way. The value read at `middle.ref` is annotated with a
-      // handle to the slot itself, whose view differs: only `labeled` passed
-      // through a labeled slot to reach it.
+      // same either way. Reading the value consumes `middle.ref`, so its
+      // backpointer retains that slot's confidentiality on both routes.
 
       await withRuntime("cfc handle own slot route", async ({ seed, home }) => {
         const note = await seed(home, "own-slot-note", { text: "a" }, []);
@@ -1034,10 +1170,16 @@ describe("CFC label view helpers", () => {
           properties: { plain: middleSchema, labeled: middleSchema },
         }).get() as any;
 
-        expect(confidentialityOf(read.plain.ref[toCell]())).toBeUndefined();
-        expect(confidentialityOf(read.labeled.ref[toCell]())).toEqual([
-          { path: [], confidentiality: ["slot"] },
+        const plainView = getCarriedCfcLabelView(read.plain.ref[toCell]());
+        expect(plainView?.entries).toEqual([
+          {
+            path: [],
+            observes: "followRef",
+            label: { confidentiality: ["slot"] },
+          },
         ]);
+        expect(getCarriedCfcLabelView(read.labeled.ref[toCell]())?.entries)
+          .toEqual(plainView?.entries);
       });
     });
 
@@ -1064,8 +1206,12 @@ describe("CFC label view helpers", () => {
             },
           }).get() as any;
 
-          expect(confidentialityOf(read.list[0])).toEqual([
-            { path: [], confidentiality: ["self"] },
+          expect(getCarriedCfcLabelView(read.list[0])?.entries).toEqual([
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["self"] },
+            },
           ]);
           expect(confidentialityOf(read.list[1])).toBeUndefined();
         },
@@ -1107,12 +1253,13 @@ describe("CFC label view helpers", () => {
           expect(confidentialityOf(read.target.deep)).toEqual([
             { path: [], confidentiality: ["carried"] },
           ]);
-          const [entry, ...rest] = confidentialityOf(read.alias.deep) ?? [];
-          expect(rest).toEqual([]);
-          expect(entry.path).toEqual([]);
-          expect([...entry.confidentiality ?? []].sort()).toEqual([
-            "alias-slot",
-            "carried",
+          expect(getCarriedCfcLabelView(read.alias.deep)?.entries).toEqual([
+            { path: [], label: { confidentiality: ["carried"] } },
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["alias-slot"] },
+            },
           ]);
         },
       );
@@ -1281,9 +1428,9 @@ describe("CFC label view helpers", () => {
     it("labels a value at a slot inside a chain of links by the route that reached it, in either order", async () => {
       // `plain` and `labeled` both link to `middle`, whose `ref` slot links
       // through `relay.x` to `note`, both hops resolved in one step. Only
-      // `labeled` is labeled, with the label `middle.ref` also stores, so the
-      // views below `middle.ref` are the same either way while the value at
-      // `middle.ref` differs. Each order of the two properties is read.
+      // `labeled` is labeled, with the label `middle.ref` also stores, so
+      // consuming `middle.ref` retains the same label on both backpointers.
+      // Each order of the two properties is read.
 
       await withRuntime("cfc handle chain route", async ({ seed, home }) => {
         const note = await seed(home, "chain-route-note", { text: "a" }, []);
@@ -1315,10 +1462,16 @@ describe("CFC label view helpers", () => {
             properties: { plain: middleSchema, labeled: middleSchema },
           }).get() as any;
 
-          expect(confidentialityOf(read.plain.ref[toCell]())).toBeUndefined();
-          expect(confidentialityOf(read.labeled.ref[toCell]())).toEqual([
-            { path: [], confidentiality: ["slot"] },
+          const plainView = getCarriedCfcLabelView(read.plain.ref[toCell]());
+          expect(plainView?.entries).toEqual([
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["slot"] },
+            },
           ]);
+          expect(getCarriedCfcLabelView(read.labeled.ref[toCell]())?.entries)
+            .toEqual(plainView?.entries);
         }
       });
     });
@@ -1440,14 +1593,15 @@ describe("CFC label view helpers", () => {
           type: "object",
           properties: { labeled: items },
         }).get() as any;
-        const [entry, ...rest] =
-          confidentialityOf(linked.labeled.items[0].text) ?? [];
-        expect(rest).toEqual([]);
-        expect(entry.path).toEqual([]);
-        expect([...entry.confidentiality ?? []].sort()).toEqual([
-          "item",
-          "slot",
-        ]);
+        expect(getCarriedCfcLabelView(linked.labeled.items[0].text)?.entries)
+          .toEqual([
+            { path: [], label: { confidentiality: ["item"] } },
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["slot"] },
+            },
+          ]);
       });
     });
 
@@ -1483,10 +1637,15 @@ describe("CFC label view helpers", () => {
           }).get() as any;
 
           expect(read.node).toEqual({ a: 1, b: 2 });
-          // The value's handle addresses the slot itself, where the label is
-          // stored, rather than carrying it.
+          // The backpointer retains both the slot's content label and the
+          // reference observation consumed while reading its value.
           expect(cfcLabelViewForCell(read.node[toCell]())?.entries).toEqual([
             { path: [], label: { confidentiality: ["union-slot"] } },
+            {
+              path: [],
+              observes: "followRef",
+              label: { confidentiality: ["union-slot"] },
+            },
           ]);
         },
       );
@@ -1598,7 +1757,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -1632,7 +1791,7 @@ describe("CFC label view helpers", () => {
       );
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -1702,14 +1861,15 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            confidentiality: expect.arrayContaining([
-              "personal-space",
-              "shared-space",
-            ]),
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            confidentiality: ["shared-space"],
+            integrity: ["authored-by-bob"],
+          },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: {
+            confidentiality: ["personal-space"],
+            integrity: ["selected-by-alice"],
           },
         }, {
           path: ["details"],
@@ -1732,14 +1892,16 @@ describe("CFC label view helpers", () => {
           path: [],
           label: {
             confidentiality: expect.arrayContaining([
-              "personal-space",
               "shared-space",
               "target-detail",
             ]),
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            integrity: ["authored-by-bob"],
+          },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: {
+            confidentiality: ["personal-space"],
           },
         }],
       });
@@ -1768,7 +1930,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -1796,7 +1958,7 @@ describe("CFC label view helpers", () => {
       );
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -1824,12 +1986,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
-          },
+          label: { integrity: ["authored-by-bob"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-by-alice"] },
         }],
       });
     } finally {
@@ -1857,7 +2018,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -1889,7 +2050,7 @@ describe("CFC label view helpers", () => {
       );
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -1916,12 +2077,11 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
-          },
+          label: { integrity: ["authored-by-bob"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-by-alice"] },
         }],
       });
     } finally {
@@ -1949,7 +2109,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -1985,14 +2145,14 @@ describe("CFC label view helpers", () => {
         tx,
       );
       const targetLink = parseLink(target.getAsLink());
-      tx.writeOrThrow({
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
         path: [],
       }, { value: source.getAsLink() });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      expect((await tx.commit()).ok).toBeDefined();
 
       const recovered = target.get() as { a: unknown; b: unknown };
       expect(cfcLabelViewForCell(recovered.a)).toEqual({
@@ -2034,7 +2194,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -2072,7 +2232,7 @@ describe("CFC label view helpers", () => {
       );
       const targetLink = parseLink(target.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: targetLink.id!,
         type: "application/json",
@@ -2099,12 +2259,7 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
-          },
+          label: { integrity: ["authored-by-bob"] },
         }],
       });
     } finally {
@@ -2145,7 +2300,7 @@ describe("CFC label view helpers", () => {
         ] as const
       ) {
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id: link.id!,
           type: "application/json",
@@ -2174,7 +2329,7 @@ describe("CFC label view helpers", () => {
       );
       const listLink = parseLink(list.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: listLink.id!,
         type: "application/json",
@@ -2206,24 +2361,22 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-first",
-              "authored-first",
-            ]),
-          },
+          label: { integrity: ["authored-first"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-first"] },
         }],
       });
       expect(cfcLabelViewForCell(recovered[1])).toEqual({
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-second",
-              "authored-second",
-            ]),
-          },
+          label: { integrity: ["authored-second"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-second"] },
         }],
       });
     } finally {
@@ -2251,7 +2404,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -2279,7 +2432,7 @@ describe("CFC label view helpers", () => {
       );
       const listLink = parseLink(list.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: listLink.id!,
         type: "application/json",
@@ -2311,24 +2464,22 @@ describe("CFC label view helpers", () => {
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-first",
-              "authored-shared",
-            ]),
-          },
+          label: { integrity: ["authored-shared"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-first"] },
         }],
       });
       expect(cfcLabelViewForCell(recovered[1])).toEqual({
         version: 1,
         entries: [{
           path: [],
-          label: {
-            integrity: expect.arrayContaining([
-              "selected-second",
-              "authored-shared",
-            ]),
-          },
+          label: { integrity: ["authored-shared"] },
+        }, {
+          path: [],
+          observes: "followRef",
+          label: { integrity: ["selected-second"] },
         }],
       });
       expect(
@@ -2373,7 +2524,7 @@ describe("CFC label view helpers", () => {
       ) {
         const link = parseLink(cell.getAsLink());
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: link.id!,
           type: "application/json",
@@ -2490,7 +2641,7 @@ describe("CFC label view helpers", () => {
       );
       const sourceLink = parseLink(source.getAsLink());
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: sourceLink.id!,
         type: "application/json",
@@ -2515,9 +2666,12 @@ describe("CFC label view helpers", () => {
         { type: "array", items: true },
         tx,
       );
-      target.setRawUntyped([source.getAsLink()]);
+      seedStoredReferenceEnvelope(tx, {
+        ...target.getAsNormalizedFullLink(),
+        path: [],
+      }, { value: [source.getAsLink()] });
       runtime.prepareTxForCommit(tx);
-      await tx.commit();
+      expect((await tx.commit()).ok).toBeDefined();
 
       const schemaLessEntry = runtime.getCellFromLink({
         ...target.key(0).getAsNormalizedFullLink(),
@@ -2674,7 +2828,7 @@ describe("CFC label view helpers", () => {
       const writeDoc = (integrityAtom: string) => {
         const tx = runtime.edit();
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id,
           type: "application/json",
@@ -2742,7 +2896,7 @@ describe("CFC label view helpers", () => {
       const writeTarget = (atom: string) => {
         const tx = runtime.edit();
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id: parseLink(target.getAsLink()).id!,
           type: "application/json",
@@ -2837,7 +2991,7 @@ describe("CFC label view helpers", () => {
             entries: [{ path: [], label: { integrity: [integrityAtom] } }],
           },
         },
-      });
+      } satisfies { value: unknown; cfc: CfcMetadata });
       const list = runtime.getCell(
         signer.did(),
         "cfc-label-sink-mid-path-list",
@@ -2845,12 +2999,12 @@ describe("CFC label view helpers", () => {
         tx,
       );
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(
+      seedStoredReferenceEnvelope(
         tx,
         assertionAddress,
         assertionEnvelope("verified-source"),
       );
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: parseLink(list.getAsLink()).id!,
         type: "application/json",
@@ -2884,7 +3038,7 @@ describe("CFC label view helpers", () => {
       // A label-only write to the linked document: same value, new atom.
       const relabelTx = runtime.edit();
       writeSeedEnvelopeDoc(relabelTx, signer.did());
-      seedStoredEnvelope(
+      seedStoredReferenceEnvelope(
         relabelTx,
         assertionAddress,
         assertionEnvelope("reverified-source"),

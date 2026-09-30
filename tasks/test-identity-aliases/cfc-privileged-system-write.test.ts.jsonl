@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"CFC privileged system write (S18) > does not reach a writer whose transaction never loaded the document"},"to":{"k":"unit","s":"runner","n":"CFC privileged system write (S18) > refuses metadata erasure by a writer whose transaction never loaded the document"}}

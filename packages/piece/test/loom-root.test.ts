@@ -436,11 +436,9 @@ describe("loom-root", () => {
         expect(declared.flatMap(representations)).toEqual([
           ownerRepresentation(signer.did()),
         ]);
-        // The linked profile's owner arrives only as a copy of its label.
-        expect(copied.flatMap(representations)).toEqual([
-          ownerRepresentation(profileOwner.did()),
-        ]);
-        // A merged label view does not say which is which.
+        // The reference records the relationship without copying target claims.
+        expect(copied.flatMap(representations)).toEqual([]);
+        // A display label view also reads the target's current content label.
         const merged = cfcLabelViewForCell(panel.key("addedByProfile"))
           ?.entries.flatMap(representations) ?? [];
         expect(merged).toEqual(
@@ -491,6 +489,7 @@ describe("loom-root", () => {
     const tx = runtime.edit();
     const profile = runtime.getCell(pieces.getSpace(), id, profileSchema, tx);
     profile.set({ name: "Plain" });
+    runtime.prepareTxForCommit(tx);
     const result = await tx.commit();
     if (result.error) throw result.error;
     return profile;
@@ -575,6 +574,7 @@ describe("loom-root", () => {
     (borrowed as Cell<unknown>).setRaw({
       name: nameCell.getAsWriteRedirectLink(),
     });
+    runtime.prepareTxForCommit(tx);
     const written = await tx.commit();
     if (written.error) throw written.error;
 
@@ -627,10 +627,7 @@ describe("loom-root", () => {
     const panelsNow = async () =>
       (await output.key("panels").pull()).map((panel) => panel.resolveAsCell());
     const [first, second, third] = await panelsNow();
-    // Stage all three, so the presentation holds link copies of their labels
-    // too. Then remove the first panel, so the others each move up one
-    // position in both lists, and move the last one to the front of the
-    // panels.
+    // Both lists retain the same panel references as their positions change.
     await sendAndSettle(
       await output.key("setPresentation").pull(),
       { stagedPanels: [first, second, third] },
@@ -664,8 +661,8 @@ describe("loom-root", () => {
     const storedEntries = (link: { id: string; path: readonly string[] }) =>
       (readStoredCfcMetadata(read, link as never)?.labelMap.entries ??
         []) as readonly LabelEntry[];
-    // Each panel's own document: the actor is the one declared entry at
-    // exactly the field, and the copied label is its own profile's owner.
+    // The actor belongs to the panel's relationship declaration. The profile
+    // owner remains a claim on the target document.
     const thirdEntries = storedEntries(third.getAsNormalizedFullLink());
     expect(
       representedSubjects(
@@ -681,12 +678,17 @@ describe("loom-root", () => {
           entry.origin === "link" && entry.path[0] === "addedByProfile"
         ),
       ),
-    ).toEqual([thirdOwner.did()]);
+    ).toEqual([]);
+    const profile = third.key("addedByProfile").resolveAsCell();
+    expect(profile.equals(profiles[2]!)).toBe(true);
+    expect(
+      representedSubjects(storedEntries(profile.getAsNormalizedFullLink())),
+    )
+      .toContain(thirdOwner.did());
     expect(representedSubjects(storedEntries(second.getAsNormalizedFullLink())))
       .toEqual([]);
 
-    // A list holds its elements' labels as link copies, under each element's
-    // current position.
+    // List slots retain references without copying panel or profile claims.
     const atPosition = (
       list: { id: string; path: readonly string[] },
       index: number,
@@ -700,16 +702,15 @@ describe("loom-root", () => {
       );
     const panelsList = output.key("panels").resolveAsCell()
       .getAsNormalizedFullLink();
-    expect(atPosition(panelsList, 0).sort()).toEqual(
-      [signer.did(), thirdOwner.did()].sort(),
-    );
+    expect(atPosition(panelsList, 0)).toEqual([]);
     expect(atPosition(panelsList, 1)).toEqual([]);
     const stagedList = output.key("presentation").key("stagedPanels")
       .resolveAsCell().getAsNormalizedFullLink();
     expect(atPosition(stagedList, 0)).toEqual([]);
-    expect(atPosition(stagedList, 1).sort()).toEqual(
-      [signer.did(), thirdOwner.did()].sort(),
-    );
+    expect(atPosition(stagedList, 1)).toEqual([]);
+    expect(declaredAdders(staged[1])).toEqual([signer.did()]);
+    expect(staged[1].key("addedByProfile").resolveAsCell().equals(profiles[2]!))
+      .toBe(true);
     read.abort();
   });
 });

@@ -37,6 +37,20 @@ const capAt = (schema: JSONSchema, key: string): string | undefined =>
 
 describe("scope-cap-through-refs", () => {
   describe("getSchemaScopeCap()", () => {
+    it("observes edits to an unfrozen definition after reading its scope", () => {
+      const definition = cloneSchemaMutable({
+        type: "string",
+        scope: "user",
+      } as JSONSchemaObj);
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/Value",
+        $defs: { Value: definition },
+      };
+      expect(ContextualFlowControl.getSchemaScopeCap(schema)).toBe("user");
+      definition.scope = "session";
+      expect(ContextualFlowControl.getSchemaScopeCap(schema)).toBe("session");
+    });
+
     it("returns the scope declared by the definition a slot names", () => {
       const schema: JSONSchemaObj = {
         type: "object",

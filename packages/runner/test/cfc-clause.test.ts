@@ -220,6 +220,22 @@ describe("CFC clause kernel", () => {
       },
     });
 
+    it("preserves a payload field named value in an acquired binding", () => {
+      const canonical = canonicalizeWritePolicyInput({
+        kind: "link-write",
+        target: address("of:target"),
+        source: { ...address("of:source"), path: ["value", "field"] },
+        reference: {
+          binding: { ...address("of:source"), path: ["value", "field"] },
+          confidentiality: [],
+        },
+      });
+      expect(canonical).toMatchObject({
+        source: { path: ["value", "field"] },
+        reference: { binding: { path: ["value", "field"] } },
+      });
+    });
+
     it("digests link-write label views identically across alternative order", () => {
       const forward = canonicalizeWritePolicyInput(
         linkWriteWith([{ anyOf: [userA, userB] }, userC]),

@@ -67,6 +67,17 @@ Take `Cell.increment(2)`:
    matches its base, or a `remove-by-value` whose removals applied to the base do
    not reproduce the working array — both meaning the transaction also changed
    that array outside the op, before it or at a parent path.
+   Enclosing object writes split into sibling patches around surviving
+   mergeable targets. Those sibling patches carry fields such as metadata even
+   when the mergeable operation creates the document. This preserves concurrent
+   changes at the mergeable target without dropping the transaction's other
+   writes. A generated array replacement or tail splice carries its nested
+   mutations as values; nested intents in that payload are abandoned before
+   commit-read filtering so the payload applies once. An object branch that
+   adds or removes numeric keys also remains a covering write: an indexed
+   structural patch could shift an array if its durable base changed type.
+   Its contained intents are abandoned, restoring their read dependencies,
+   while unrelated branches retain their mergeable operations.
 4. **Apply** — the durable store applies the op against live state
    (`packages/memory/v2/patch.ts`, `patchOpDescriptors[op].apply`).
 5. **React** — the store computes which paths the op touched so stale reads
@@ -108,9 +119,24 @@ re-enumerating the ops:
 - `engine.ts` `touchedPathsForPatch` — leaf paths plus the parent path for
   structural ops, for shape-only (nonRecursive) readers.
 
-The client's optimistic pending replay derives no paths: it applies a pending
-layer's ops to the delivered base through the shared `applyPatchToDocument`
+The client's optimistic pending replay uses the shared `applyPatchToDocument`
 (`memory/v2/patch.ts`), skipping the whole layer when its ops cannot apply.
+Semantic operations such as append retain their deltas. A generated array diff
+that changes length carries separate local replay patches replacing that array
+with its authored value. This keeps its slots aligned with companion metadata
+when a competing update reaches the replica. Admission still sends the compact
+tail splice, and confirmation folds those wire operations over confirmed state.
+If the admitted result differs from the optimistic view, readers are notified in
+both execution profiles. Unrelated document fields remain outside the array
+replacement.
+The local array snapshot records the pending layers it contains. If one is
+withdrawn, the complete local replay layer is hidden, including its companion
+fields, until its own verdict. This prevents a surviving write from restoring a
+withdrawn prefix. It adds no read or precondition to admission: an independent
+write can still be accepted and applied through its original wire operations.
+Accepted sources are recognized for both socket commits and directly confirmed
+seals. An old source missing from the bounded acknowledgment cache also withholds
+the optimistic snapshot until its own verdict; it does not change admission.
 
 ### 2. Mergeable-op descriptors — `packages/runner/src/storage/mergeable-ops.ts`
 

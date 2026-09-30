@@ -1,0 +1,68 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ProfileReferenceValue": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "$NAME"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "defaultProfile": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/ProfileReferenceValue"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ]
+      },
+      "mru": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/ProfileReferenceValue"
+        },
+        "type": "array"
+      },
+      "profiles": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/ProfileReferenceValue"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "profiles",
+      "defaultProfile",
+      "mru"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/profile-picker.tsx",
+  "resultSchema": {
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

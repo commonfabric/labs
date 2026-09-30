@@ -115,7 +115,8 @@ async function callVerb(
       verb,
       rawArgs,
       {
-        loadPieces: () => Promise.resolve({ getSpace: () => space } as never),
+        loadPieces: () =>
+          Promise.resolve({ getSpace: () => space, runtime } as never),
         loadPiece: () => Promise.resolve(piece as never),
       },
     );

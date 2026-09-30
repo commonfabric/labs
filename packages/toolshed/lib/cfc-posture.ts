@@ -15,8 +15,9 @@
  *
  * The base webhook Runtime is the one reported. The per-space serving
  * runtimes the executor host builds hand-roll their options deliberately and
- * carry the same CFC dials from the same code path, so a separate override
- * channel would report nothing the base does not.
+ * select persistent flow labels alongside the production preset. Both resolve the
+ * same enforcement mode and constructor defaults for the other dials, so a
+ * separate override channel would report nothing the base does not.
  */
 
 import {

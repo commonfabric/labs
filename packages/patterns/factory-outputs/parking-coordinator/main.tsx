@@ -1459,6 +1459,21 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
       (people.get() ?? []).map((p) => ({ label: p.name, value: p.name }))
     );
 
+    const activeSpotOpts = computed(() =>
+      (spots.get() ?? [])
+        .filter((s) => s.active)
+        .map((s) => ({
+          label: `#${s.spotNumber}${s.label ? " — " + s.label : ""}`,
+          value: s.spotNumber,
+        }))
+    );
+    const editSpotItems = computed(
+      () => [
+        { label: "None", value: "" },
+        ...activeSpotOpts,
+      ],
+    );
+
     const requestDisabled = computed(() =>
       !selectedPersonName.get() ||
       activeRequestDate < todayStr || (people.get() ?? []).length === 0
@@ -2136,12 +2151,7 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
                                 >
                                   <cf-select
                                     $value={overridePersonName}
-                                    items={computed(() =>
-                                      (people.get() ?? []).map((p) => ({
-                                        label: p.name,
-                                        value: p.name,
-                                      }))
-                                    )}
+                                    items={personSelectItems}
                                     style="font-size: 0.6875rem;"
                                   />
                                   {gridConflictName
@@ -2300,22 +2310,6 @@ export default pattern<ParkingCoordinatorInput, ParkingCoordinatorOutput>(
                         // target cells does not re-render.
                         const isEditing = person.isEditing;
                         const isRemoveConfirm = person.isRemoveConfirm;
-                        const activeSpotOpts = computed(() =>
-                          (spots.get() ?? [])
-                            .filter((s) => s.active)
-                            .map((s) => ({
-                              label: `#${s.spotNumber}${
-                                s.label ? " — " + s.label : ""
-                              }`,
-                              value: s.spotNumber,
-                            }))
-                        );
-                        const editSpotItems = computed(
-                          () => [
-                            { label: "None", value: "" },
-                            ...activeSpotOpts,
-                          ],
-                        );
 
                         return (
                           <cf-card

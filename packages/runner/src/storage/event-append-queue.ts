@@ -78,6 +78,7 @@ export type QueuedEventAppend = {
   clientSeq: number;
 
   runtimeInjectedEventKeys?: string[];
+  runtimeReferenceContext?: string;
 
   /** See StreamEventEntry.rendererTrusted (fan-out stage B). */
   rendererTrusted?: true;
@@ -590,6 +591,9 @@ export class EventAppendQueue {
       eventId: append.eventId,
       stream: append.stream,
       payload: append.payload,
+      ...(append.runtimeReferenceContext === undefined ? {} : {
+        runtimeReferenceContext: append.runtimeReferenceContext,
+      }),
       firedAt: { clientSeq: append.clientSeq } as never,
       ...(append.runtimeInjectedEventKeys !== undefined
         ? { runtimeInjectedEventKeys: append.runtimeInjectedEventKeys }

@@ -5,6 +5,9 @@
  * stay apart — including a pair whose paths differ only by a leading `value`,
  * which names a payload field of that name.
  *
+ * Reference observations retain their journal positions while their container
+ * order is canonical. The write-attempt log is covered separately in
+ * `cfc-write-prefix-provenance.test.ts`.
  * Policy inputs retain their structural hash tiebreak order and bind mutable
  * values independently on each call. Other digest fields are covered beside
  * their gates, including temporal writes in cfc-write-prefix-provenance.test.ts.
@@ -56,6 +59,47 @@ describe("canonical", () => {
 
   const digestOf = (traces: CfcDereferenceTrace[]) =>
     preparedDigestFor(baseInput({ dereferenceTraces: traces }));
+
+  it("orders reference observations by journal position and deterministic ties", () => {
+    const observations = [
+      {
+        target: address("second"),
+        confidentiality: ["private"],
+        purpose: "identity" as const,
+        journalIndex: 2,
+      },
+      {
+        target: address("first"),
+        confidentiality: [],
+        purpose: "dereference" as const,
+        journalIndex: 1,
+      },
+      {
+        target: address("tied"),
+        confidentiality: [],
+        purpose: "identity" as const,
+        journalIndex: 2,
+      },
+    ];
+    const digest = preparedDigestFor(
+      baseInput({ referenceObservations: observations }),
+    );
+    expect(
+      preparedDigestFor(
+        baseInput({ referenceObservations: [...observations].reverse() }),
+      ),
+    ).toBe(digest);
+    expect(
+      preparedDigestFor(
+        baseInput({
+          referenceObservations: observations.map((entry) => ({
+            ...entry,
+            journalIndex: 3 - entry.journalIndex,
+          })),
+        }),
+      ),
+    ).not.toBe(digest);
+  });
 
   it("preserves literal value field paths in initialization permissions", () => {
     const inputAt = (path: string[]) =>

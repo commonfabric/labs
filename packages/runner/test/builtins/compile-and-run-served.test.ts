@@ -7,7 +7,10 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import { compileAndRun } from "../../src/builtins/compile-and-run.ts";
-import { enrollRuntimeOwnedStore } from "../../src/builtins/runtime-owned-store.ts";
+import {
+  enrollRuntimeOwnedStore,
+  recordRuntimeOwnedStore,
+} from "../../src/builtins/runtime-owned-store.ts";
 import type { Cell } from "../../src/cell.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import type { CfcEnforcementMode } from "../../src/cfc/types.ts";
@@ -100,6 +103,9 @@ async function fixture(
     inputs,
     (tx, result) => {
       outputs = result;
+      // This publication stands in for the node's runtime-owned output
+      // binding, declared in the transaction's acting-user scope.
+      recordRuntimeOwnedStore(tx, parent, publication.withTx(tx));
       publication.withTx(tx).set(result);
     },
     (cancel) => cancels.push(cancel),
@@ -845,6 +851,7 @@ describe("compile-and-run-served", () => {
         const metadata = readStoredCfcMetadata(tx, {
           space: link.space,
           id: link.id,
+          scope: link.scope,
         });
         return (metadata?.labelMap.entries ?? []).flatMap((entry) =>
           entry.label.confidentiality ?? []
@@ -858,6 +865,7 @@ describe("compile-and-run-served", () => {
       await writeSourceLabels(["initial-source-label"]);
       expect(await f.run(PROGRAM)).toBe(true);
       expect(confidentiality(f.memo)).toContain("initial-source-label");
+      expect(confidentiality(f.publication)).toContain("initial-source-label");
       await writeSourceLabels(["initial-source-label", "late-source-label"]);
       compilation.reject(new Error("labeled compiler failure"));
       await f.runtime.settled();

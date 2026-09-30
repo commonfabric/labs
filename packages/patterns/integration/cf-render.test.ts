@@ -82,6 +82,7 @@ describe("cf-render integration test", () => {
       space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
+      cfcFlowLabels: "persist",
     });
     piece = await cc.create(
       await Deno.readTextFile(
@@ -230,6 +231,7 @@ describe("cf-render subpath handling", () => {
       space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
+      cfcFlowLabels: "persist",
     });
     piece = await cc.create(
       await Deno.readTextFile(

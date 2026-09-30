@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type MemorySpace, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { CallableResolution } from "../lib/callable.ts";
 import { executeResolvedCallable } from "../lib/callable.ts";
 import { sendThroughStandIn } from "./utils.ts";
@@ -84,7 +84,12 @@ describe("piece-call-instance-result-live", () => {
         runtime,
         space,
         "instance-receipt",
-        new FabricLink({ id: "of:fid1:target", path: [] }),
+        new FabricError({
+          type: "Error",
+          message: "stored instance",
+          stack: undefined,
+          cause: undefined,
+        }),
       );
       expect(executed.invocation?.status).toBe("settled");
       expect(executed.invocation?.result).not.toBe(undefined);

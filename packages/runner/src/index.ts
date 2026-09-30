@@ -117,12 +117,15 @@ export {
   type CellLinkInput,
   cellRuntime,
   cellTx,
+  cellWriteSchema,
   convertCellsToLinks,
   encodeSqliteParams,
   exportCell,
+  getCarriedCfcLabelView,
   isCell,
   isReadableCell,
   isStream,
+  markCellDocumentSynced,
   sendEvent,
   setCell,
 } from "./cell.ts";
@@ -396,7 +399,7 @@ export {
   parseFabricRef,
 } from "./sandbox/fabric-import-specifier.ts";
 export { type PinRewrite, rewriteFabricPins } from "./fabric-pin-rewrite.ts";
-export { DEFAULT_CELL_SCOPE } from "./scope.ts";
+export { DEFAULT_CELL_SCOPE, narrowerScopeCap } from "./scope.ts";
 export {
   isPieceDocument,
   isPieceRoot,

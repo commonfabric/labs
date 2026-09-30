@@ -11,6 +11,7 @@ import {
   storedSchemaCoversCandidateEnvelope,
 } from "../src/cfc/prepare.ts";
 import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 describe("mergeCfcSchemaEnvelopes", () => {
@@ -880,6 +881,56 @@ describe("mergeCfcSchemaEnvelopes", () => {
     } as const;
     expect(() => mergeCfcSchemaEnvelopes(twoCarriers, twoCarriers))
       .toThrow(/divergent oneOf branches/);
+  });
+
+  describe("value evidence in union branches", () => {
+    it("merges runtime value stamps with a sibling field", () => {
+      const result = {
+        anyOf: [
+          { type: "string", ifc: { addIntegrity: [cfcAtom.llmDerived()] } },
+          {
+            type: "number",
+            ifc: {
+              addIntegrity: [cfcAtom.llmDerived(), cfcAtom.injectionSafe()],
+            },
+          },
+        ],
+      } as const;
+      const merged = mergeCfcSchemaEnvelopes({
+        type: "object",
+        properties: { result },
+      }, {
+        type: "object",
+        properties: { messages: { type: "array" } },
+      }) as JSONSchemaObj;
+      expect(merged.properties?.result).toEqual(result);
+      expect(merged.properties?.messages).toEqual({ type: "array" });
+    });
+
+    it("keeps divergent store policies and ordinary endorsements guarded beside evidence", () => {
+      for (
+        const policy of [
+          { confidentiality: ["secret"] },
+          { integrity: [cfcAtom.injectionSafe()] },
+          { requiredIntegrity: [cfcAtom.injectionSafe()] },
+          { addIntegrity: ["author-asserted"] },
+          { addIntegrity: [cfcAtom.llmDerived(), "author-asserted"] },
+        ]
+      ) {
+        const schema = {
+          anyOf: [
+            {
+              type: "object",
+              ifc: { addIntegrity: [cfcAtom.llmDerived()], ...policy },
+            },
+            { type: "object", ifc: { addIntegrity: [cfcAtom.llmDerived()] } },
+          ],
+        } as const;
+        expect(() => mergeCfcSchemaEnvelopes(schema, schema)).toThrow(
+          /divergent anyOf branches/,
+        );
+      }
+    });
   });
 
   describe("RULING 5: a single ifc-carrying branch with type-disjoint siblings", () => {
@@ -1967,6 +2018,34 @@ describe("storedCfcEnvelopeMergeIssue", () => {
       type: "object",
       properties: { a: { type: "string" } },
     })).toBe(undefined);
+  });
+
+  it("adopts a first declaration over an empty reference-history schema", () => {
+    const declared = {
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        secret: { type: "string", ifc: { confidentiality: ["private"] } },
+      },
+      required: ["value", "secret"],
+    } as const;
+    for (const empty of [true, {}] as const) {
+      expect(mergeCfcSchemaEnvelopes(empty, declared)).toEqual(declared);
+      expect(storedCfcEnvelopeMergeIssue(empty, declared)).toBeUndefined();
+      expect(() => mergeCfcSchemaEnvelopes(empty, false)).toThrow(
+        "unsupported schema form",
+      );
+      expect(() =>
+        mergeCfcSchemaEnvelopes(empty, {
+          anyOf: [
+            { type: "string", ifc: { confidentiality: ["private"] } },
+            { type: "string" },
+          ],
+        })
+      ).toThrow("divergent anyOf branches");
+    }
+    expect(storedCfcEnvelopeMergeIssue({ type: "object" }, declared)?.migration)
+      .toBe(true);
   });
 
   it("reports a newly required field without a default as the migration class", () => {

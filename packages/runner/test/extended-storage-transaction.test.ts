@@ -22,6 +22,14 @@ import type {
   IExtendedStorageTransaction,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+import { isAuthorizationRead } from "../src/storage/reactivity-log.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
@@ -47,7 +55,7 @@ describe("extended-storage-transaction", () => {
     runtime = new Runtime({ apiUrl: new URL(import.meta.url), storageManager });
   });
   afterEach(async () => {
-    await runtime?.dispose();
+    await runtime?.dispose({ closeStorage: false });
     await storageManager?.close();
   });
 
@@ -59,6 +67,101 @@ describe("extended-storage-transaction", () => {
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
   };
+
+  describe("verifier read scope", () => {
+    const source = () =>
+      runtime.getCell(
+        space,
+        "user-verifier-source",
+        undefined,
+        undefined,
+        "user",
+      ).getAsNormalizedFullLink();
+
+    const seedSource = async (confidentiality: string[]) => {
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, { ...source(), path: [] }, {
+        value: "private payload",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality } }],
+          },
+        },
+      });
+      expect((await tx.commit()).ok).toBeDefined();
+    };
+
+    it("keeps verifier metadata outside input scope while payload reads narrow it", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      expect(
+        readStoredCfcMetadata(tx, source())?.labelMap.entries[0].label
+          .confidentiality,
+      )
+        .toEqual(["secret"]);
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(tx.readValueOrThrow({ ...source(), path: [] })).toBe(
+        "private payload",
+      );
+      expect(tx.getNarrowestReadScope()).toBe("user");
+      tx.abort();
+    });
+
+    it("retains a user metadata read as a commit authorization dependency", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      readStoredCfcMetadata(tx, source());
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(
+        [...(tx.getReadActivities?.() ?? [])].some((read) =>
+          read.id === source().id && read.scope === "user" &&
+          read.path.length === 1 && read.path[0] === "cfc" &&
+          isAuthorizationRead(read.meta)
+        ),
+      ).toBe(true);
+      runtime.getCell(space, "verifier-scope-output", undefined, tx).set(
+        "output",
+      );
+      tx.prepareCfc();
+      await seedSource(["secret", "added"]);
+      const result = await tx.commit();
+      expect(result.error).toMatchObject({
+        name: "StorageTransactionInconsistent",
+        address: { id: source().id, scope: "user" },
+      });
+      expect(result.error?.message).toContain("hash changed");
+    });
+
+    it("retains user trigger confidentiality without counting verifier replay as an input read", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      tx.setCfcTriggerReadGating(true);
+      tx.addCfcTriggerReads([{
+        ...source(),
+        path: ["value"],
+        type: "application/json",
+      }]);
+      expect(deriveFlowJoin(tx).confidentiality).toEqual(["secret"]);
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      tx.abort();
+    });
+  });
+
+  for (const method of ["write", "writeOrThrow"] as const) {
+    it(`${method} does not attribute deletion of an absent payload slot`, async () => {
+      const { tx, cell } = await seeded(`absent-delete-${method}`);
+      const link = { ...cell.getAsNormalizedFullLink(), path: ["absent"] };
+      tx[method]({ ...link, path: ["value", "absent"] }, undefined, {
+        delete: true,
+      });
+      expect(tx.getCfcValueWriteAuthor(link)).toBeUndefined();
+      tx.abort();
+    });
+  }
 
   describe("content-addressed document staging", () => {
     const code = "export const staged = 1;";
@@ -239,7 +342,7 @@ describe("extended-storage-transaction", () => {
       // rebuild the action's dependencies, so the probe has work to walk
       // there; a settled one does not.
       beforeEach(async () => {
-        await runtime.dispose();
+        await runtime.dispose({ closeStorage: false });
         await storageManager.close();
         storageManager = StorageManager.emulate({ as: signer });
         runtime = new Runtime({

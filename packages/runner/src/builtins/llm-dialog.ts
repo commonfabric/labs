@@ -74,10 +74,12 @@ import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,
+  cfcLabelViewForCellWithStatus,
 } from "../cfc/label-view.ts";
 import {
   cfcConfidentialityForObservationNode,
   type CfcFloorTrustContext,
+  cfcIntegrityForObservationNode,
   cfcIntegritySatisfiesFloor,
   cfcObservationFitsCeiling,
   type CfcObservationResult,
@@ -2298,8 +2300,10 @@ function toolInputValueIntegrity(
   if (!isCell(cellified)) {
     return [];
   }
-  const view = cfcLabelViewForCellFailClosed(cellified);
-  return (view?.entries ?? []).flatMap((entry) => entry.label.integrity ?? []);
+  const { view, readFailed } = cfcLabelViewForCellWithStatus(
+    cellified.resolveAsCell(),
+  );
+  return readFailed ? [] : [...cfcIntegrityForObservationNode(view)];
 }
 
 // Walk a tool's `inputSchema` for fields declaring `ifc.requiredIntegrity` and
@@ -4121,77 +4125,82 @@ async function startRequest(
     tx: IExtendedStorageTransaction,
     messages: Schema<typeof LLMMessageSchema>[],
   ) => {
-    const startIndex = (messagesCell.withTx(tx).get() as
-      | readonly CfcConfClause[]
-      | undefined)?.length ?? 0;
-    // Each message becomes its own document, which the stamping below reads
-    // back. Pushing plain messages would also produce them, since `Cell.push`
-    // anchors objects in arrays; they are made explicitly to control their
-    // identity -- a deliberate cause rather than a frame-relative counter.
-    // TODO(seefeld): Once we have event ids, the cause should be that.
-    //
-    // Space, scope and schema follow the user-message push: resolved link,
-    // schema-less document.
-    const base = resolveLink(
-      runtime,
-      tx,
-      messagesCell.getAsNormalizedFullLink(),
-    );
-    messagesCell.withTx(tx).push(
-      ...messages.map((message) => {
-        const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
-          base.space,
-          { llmDialog: { message: cause, id: crypto.randomUUID() } },
-          undefined,
-          tx,
-          base.scope,
-        );
-        // Per-message store: named for this transaction, not enrolled. See
-        // the sibling in `addMessage` and `runtime-owned-store.ts`.
-        recordRuntimeOwnedStore(tx, result, messageCell);
-        messageCell.withTx(tx).set(message);
-        return messageCell;
-      }),
-    );
-    if (runtime.cfcEnforcementMode === "disabled") {
-      return;
+    const previousIdentity = tx.getCfcState().implementationIdentity;
+    if (runtime.cfcEnforcementMode !== "disabled") {
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "llmDialog",
+      });
     }
-    // Attribute the writes to the builtin: `LlmDerived` is a runtime-minted
-    // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
-    // audit S4) admits it only from builtin authors — the same gating that
-    // stops pattern code from forging the stamp.
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: "llmDialog",
-    });
-    // Record the stamping schema for each pushed message's own entity doc
-    // (every message is appended as a link to a document of its own, so each
-    // one is separately addressable). The messages link carries its own schema, which wins over
-    // an `asSchema` handle inside `push()` (`resolvedLink.schema ?? ...`), so
-    // the stamp cannot ride the array handle — instead this mirrors the
-    // split-entity idiom in data-updating.ts (`recordRelevantSchemaWrite-
-    // PolicyInput` on the child doc), which also marks the transaction
-    // CFC-relevant so `prepareTxForCommit` runs the persist pass that mints
-    // the labelMap entry.
-    for (let index = 0; index < messages.length; index++) {
-      const raw = messagesCell.withTx(tx).key(startIndex + index).getRaw();
-      const link = parseLink(raw);
-      const id = link?.id;
-      if (link === undefined || id === undefined) {
-        logger.warn(
-          "llm",
-          "model message did not split into its own doc; LlmDerived stamp skipped",
-        );
-        continue;
+    try {
+      const startIndex = (messagesCell.withTx(tx).get() as
+        | readonly CfcConfClause[]
+        | undefined)?.length ?? 0;
+      // Each message becomes its own document, which the stamping below reads
+      // back. Pushing plain messages would also produce them, since `Cell.push`
+      // anchors objects in arrays; they are made explicitly to control their
+      // identity -- a deliberate cause rather than a frame-relative counter.
+      // TODO(seefeld): Once we have event ids, the cause should be that.
+      //
+      // Space, scope and schema follow the user-message push: resolved link,
+      // schema-less document.
+      const base = resolveLink(
+        runtime,
+        tx,
+        messagesCell.getAsNormalizedFullLink(),
+      );
+      messagesCell.withTx(tx).push(
+        ...messages.map((message) => {
+          const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
+            base.space,
+            { llmDialog: { message: cause, id: crypto.randomUUID() } },
+            undefined,
+            tx,
+            base.scope,
+          );
+          // Per-message store: named for this transaction, not enrolled. See
+          // the sibling in `addMessage` and `runtime-owned-store.ts`.
+          recordRuntimeOwnedStore(tx, result, messageCell);
+          messageCell.withTx(tx).set(message);
+          return messageCell;
+        }),
+      );
+      if (runtime.cfcEnforcementMode === "disabled") {
+        return;
       }
-      recordRelevantSchemaWritePolicyInput(tx, {
-        ...link,
-        id,
-        space: link.space ?? base.space ?? space,
-        scope: resolveLinkScope(link.scope, base.scope),
-        path: [],
-        schema: LLM_DERIVED_MESSAGE_SCHEMA,
-      }, LLM_DERIVED_MESSAGE_SCHEMA);
+      // Record the stamping schema for each pushed message's own entity doc
+      // (every message is appended as a link to a document of its own, so each
+      // one is separately addressable). The messages link carries its own schema, which wins over
+      // an `asSchema` handle inside `push()` (`resolvedLink.schema ?? ...`), so
+      // the stamp cannot ride the array handle — instead this mirrors the
+      // split-entity idiom in data-updating.ts (`recordRelevantSchemaWrite-
+      // PolicyInput` on the child doc), which also marks the transaction
+      // CFC-relevant so `prepareTxForCommit` runs the persist pass that mints
+      // the labelMap entry.
+      for (let index = 0; index < messages.length; index++) {
+        const raw = messagesCell.withTx(tx).key(startIndex + index).getRaw();
+        const link = parseLink(raw);
+        const id = link?.id;
+        if (link === undefined || id === undefined) {
+          logger.warn(
+            "llm",
+            "model message did not split into its own doc; LlmDerived stamp skipped",
+          );
+          continue;
+        }
+        recordRelevantSchemaWritePolicyInput(tx, {
+          ...link,
+          id,
+          space: link.space ?? base.space ?? space,
+          scope: resolveLinkScope(link.scope, base.scope),
+          path: [],
+          schema: LLM_DERIVED_MESSAGE_SCHEMA,
+        }, LLM_DERIVED_MESSAGE_SCHEMA);
+      }
+    } finally {
+      if (runtime.cfcEnforcementMode !== "disabled") {
+        setCfcImplementationIdentity(tx, previousIdentity);
+      }
     }
   };
 

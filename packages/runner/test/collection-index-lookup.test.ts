@@ -404,87 +404,100 @@ describe("collection index lookup", () => {
     expect(proxy.keyEntries()).toEqual([]);
     tx.abort();
   });
-  it("ignores unrelated buckets and key enumeration while following its selected bucket", async () => {
-    const compiled = await runtime.patternManager.compilePattern({
-      main: "/main.tsx",
-      files: [{
-        name: "/main.tsx",
-        contents: `
+  for (const cfcFlowLabels of ["off", "persist"] as const) {
+    const description = cfcFlowLabels === "off"
+      ? "ignores unrelated buckets and key enumeration while following its selected bucket"
+      : "rechecks an absent bucket when unrelated references change its authorization metadata";
+    it(description, async () => {
+      await runtime.dispose({ closeStorage: false });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        cfcFlowLabels,
+      });
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
         import { pattern, KeyIndex } from "commonfabric";
         export default pattern<{index: KeyIndex<string, number | null>}>(
           ({index}) => ({ value: index.lookup("a") })
         );
       `,
-      }],
+        }],
+      });
+      let tx = runtime.edit();
+      const index = runtime.getCell<CollectionIndexData<string, number | null>>(
+        space,
+        "isolated-index",
+        undefined,
+        tx,
+      );
+      const a = collectionKeyBucket({ kind: "string", value: "a" });
+      const b = collectionKeyBucket({ kind: "string", value: "b" });
+      index.set({
+        kind: "collection-index",
+        mode: "key",
+        keys: ["b"],
+        keyEntries: [{ kind: "value", value: "b" }],
+        buckets: { [b]: 2 },
+      });
+      const output = runtime.getCell<{ value: number | null | undefined }>(
+        space,
+        "isolated-output",
+        compiled.resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, compiled, { index }, output);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      const cancel = result.sink(() => {});
+      let runs = 0;
+      const collect = (event: Event) => {
+        if (
+          (event as RuntimeTelemetryEvent).marker.type ===
+            "scheduler.run.complete"
+        ) runs++;
+      };
+      try {
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeUndefined();
+        runtime.telemetry.addEventListener("telemetry", collect);
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(b).set(20);
+        index.withTx(tx).key("keys").set(["b", "c"]);
+        index.withTx(tx).key("keyEntries").set([
+          { kind: "value", value: "b" },
+          { kind: "value", value: "c" },
+        ]);
+        await tx.commit();
+        await runtime.idle();
+        if (cfcFlowLabels === "persist") expect(runs).toBeGreaterThan(0);
+        else expect(runs).toBe(0);
+        runs = 0;
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).set(10);
+        await tx.commit();
+        await runtime.idle();
+        expect(runs).toBeGreaterThan(0);
+        expect(await result.key("value").pull()).toBe(10);
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).set(null);
+        await tx.commit();
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeNull();
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).asSchema(true).set(undefined);
+        await tx.commit();
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeUndefined();
+      } finally {
+        runtime.telemetry.removeEventListener("telemetry", collect);
+        cancel();
+      }
     });
-    let tx = runtime.edit();
-    const index = runtime.getCell<CollectionIndexData<string, number | null>>(
-      space,
-      "isolated-index",
-      undefined,
-      tx,
-    );
-    const a = collectionKeyBucket({ kind: "string", value: "a" });
-    const b = collectionKeyBucket({ kind: "string", value: "b" });
-    index.set({
-      kind: "collection-index",
-      mode: "key",
-      keys: ["b"],
-      keyEntries: [{ kind: "value", value: "b" }],
-      buckets: { [b]: 2 },
-    });
-    const output = runtime.getCell<{ value: number | null | undefined }>(
-      space,
-      "isolated-output",
-      compiled.resultSchema,
-      tx,
-    );
-    const result = runtime.run(tx, compiled, { index }, output);
-    runtime.prepareTxForCommit(tx);
-    await tx.commit();
-    const cancel = result.sink(() => {});
-    let runs = 0;
-    const collect = (event: Event) => {
-      if (
-        (event as RuntimeTelemetryEvent).marker.type ===
-          "scheduler.run.complete"
-      ) runs++;
-    };
-    try {
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeUndefined();
-      runtime.telemetry.addEventListener("telemetry", collect);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(b).set(20);
-      index.withTx(tx).key("keys").set(["b", "c"]);
-      index.withTx(tx).key("keyEntries").set([
-        { kind: "value", value: "b" },
-        { kind: "value", value: "c" },
-      ]);
-      await tx.commit();
-      await runtime.idle();
-      expect(runs).toBe(0);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).set(10);
-      await tx.commit();
-      await runtime.idle();
-      expect(runs).toBeGreaterThan(0);
-      expect(await result.key("value").pull()).toBe(10);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).set(null);
-      await tx.commit();
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeNull();
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).asSchema(true).set(undefined);
-      await tx.commit();
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeUndefined();
-    } finally {
-      runtime.telemetry.removeEventListener("telemetry", collect);
-      cancel();
-    }
-  });
+  }
   it("preserves Cell key identity through compilation and reacts to alias retargeting", async () => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",

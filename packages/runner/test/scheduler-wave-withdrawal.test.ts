@@ -157,9 +157,23 @@ describe("reactive wave withdrawal", () => {
         "does not transfer an unfinished run to a new registration of the same action",
       ],
       ["newer", "does not rearm an obsolete run after a newer accepted result"],
+      [
+        "newer-cfc",
+        "rearms a newer result whose policy read depends on a withdrawn run",
+      ],
     ] as const
   ) {
     it(description, async () => {
+      if (boundary === "newer") {
+        await runtime.dispose({ closeStorage: false });
+        runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+          experimental: { serverExecution: true },
+          cfcFlowLabels: "off",
+        });
+      }
+      const newerResult = boundary === "newer" || boundary === "newer-cfc";
       const bindingOutput = boundary === "replacement-binding";
       const replacesOutput = boundary === "replacement-output" || bindingOutput;
       const input = runtime.getCell<{ draft: string; note?: string }>(
@@ -303,7 +317,7 @@ describe("reactive wave withdrawal", () => {
         expect(runs).toBe(2);
       }
       if (boundary === "unsubscribed") runtime.scheduler.unsubscribe(derive);
-      if (boundary === "newer") {
+      if (newerResult) {
         override = "newer";
         await runtime.scheduler.run(derive);
         await runtime.scheduler.idleWithPendingCommits();
@@ -320,7 +334,8 @@ describe("reactive wave withdrawal", () => {
           boundary === "accepted"
             ? [{ kind: "committed" }, { kind: "committed" }]
             : boundary === "partial" || boundary === "local-acceptance" ||
-                boundary === "repeated" || replacesOutput
+                boundary === "repeated" || boundary === "newer-cfc" ||
+                replacesOutput
             ? [{ kind: "dropped" }, { kind: "dropped" }, { kind: "dropped" }]
             : boundary === "newer"
             ? [{ kind: "dropped" }, { kind: "dropped" }, { kind: "committed" }]
@@ -345,7 +360,7 @@ describe("reactive wave withdrawal", () => {
       if (
         boundary === "withdrawn" || boundary === "repeated" ||
         boundary === "partial" || boundary === "local-acceptance" ||
-        boundary === "settled" || replacesOutput
+        boundary === "settled" || boundary === "newer-cfc" || replacesOutput
       ) {
         expect(runs).toBe(
           boundary === "withdrawn" || boundary === "settled" ? 2 : 3,
@@ -369,7 +384,7 @@ describe("reactive wave withdrawal", () => {
           boundary === "local-acceptance" || boundary === "settled" ||
           replacesOutput
           ? { value: "b0" }
-          : boundary === "newer"
+          : newerResult
           ? { value: "newer" }
           : undefined,
       );
@@ -420,10 +435,9 @@ describe("reactive wave withdrawal", () => {
       const storageLink = indirect ? targetLink : outputLink;
       const storageAddress = toMemorySpaceAddress(storageLink);
       const referent = runtime.getCell(space, "normalized-referent", undefined);
-      const reference = createSigilLinkFromParsedLink(
-        referent.getAsNormalizedFullLink(),
-        mode === "write redirect" ? { overwrite: "redirect" } : undefined,
-      );
+      const reference = mode === "write redirect"
+        ? referent.getAsWriteRedirectLink()
+        : referent.getAsLink();
       const value = mode === "object"
         ? { selected: "pending" }
         : mode === "array"

@@ -407,7 +407,7 @@ describe("CFC flow labels (default transition)", () => {
         path: ["value"],
       }, { note: "fresh public text" });
       clean.prepareCfc();
-      expect((await clean.commit()).ok).toBeDefined();
+      expect(await clean.commit()).toMatchObject({ ok: expect.anything() });
 
       const entriesAfter = replicaEntries(storageManager, targetId);
       const derivedAfter = entriesAfter.filter((e) => e.origin === "derived");
@@ -645,9 +645,9 @@ describe("CFC flow labels (default transition)", () => {
           };
         };
       };
-      // Two written paths (a, b), each carrying a `value` + a `shape`
-      // (existence) derived entry since C3 — four entries total.
-      expect(stored.cfc.labelMap.entries.length).toBe(4);
+      // Each path carries value and existence labels plus a metadata shape
+      // template protecting queries about those derived labels.
+      expect(stored.cfc.labelMap.entries.length).toBe(6);
 
       // Re-serialize the stored envelope into a canonically-equal but
       // byte-DIFFERENT form by reversing the ENTRY LIST ORDER (across paths).

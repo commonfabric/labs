@@ -17,7 +17,6 @@ import { toCell } from "../src/back-to-cell.ts";
 import { type JSONSchema } from "../src/builder/types.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
-import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
 import {
   areLinksSame,
   parseLink,
@@ -151,15 +150,18 @@ describe("Schema - Link Resolution", () => {
     it("logs at warn level when a narrower-scope link follow is blocked", () => {
       // Same setup as above: a session-scoped cell read through a user-scoped
       // schema. The follow is blocked (-> undefined), and the drop is logged at
-      // `warn` level, which is the level the traverse logger lets through.
-      const traverseLogger = (globalThis as {
+      // `warn` level at the resolution or traversal seam.
+      const loggers = (globalThis as {
         commonfabric?: {
           logger?: Record<string, {
             counts: { warn: number; info: number };
           }>;
         };
-      }).commonfabric?.logger?.["traverse"];
-      expect(traverseLogger).toBeDefined();
+      }).commonfabric?.logger;
+      const warningCount = () =>
+        (loggers?.["traverse"]?.counts.warn ?? 0) +
+        (loggers?.["link-resolution"]?.counts.warn ?? 0);
+      expect(loggers?.["traverse"]).toBeDefined();
 
       const sessionCell = createCell<string>(
         runtime,
@@ -198,18 +200,18 @@ describe("Schema - Link Resolution", () => {
       } as const satisfies JSONSchema;
 
       // Unrestricted read: follow succeeds, no blocked-follow warning.
-      const warnBeforeAllowed = traverseLogger!.counts.warn;
+      const warnBeforeAllowed = warningCount();
       expect(source.asSchema(unrestrictedSchema).get()).toEqual({
         current: "session private",
       });
-      expect(traverseLogger!.counts.warn).toBe(warnBeforeAllowed);
+      expect(warningCount()).toBe(warnBeforeAllowed);
 
       // Capped read: follow is blocked -> undefined AND a warning is emitted.
-      const warnBeforeBlocked = traverseLogger!.counts.warn;
+      const warnBeforeBlocked = warningCount();
       expect(source.asSchema(cappedSchema).get()).toEqual({
         current: undefined,
       });
-      expect(traverseLogger!.counts.warn).toBeGreaterThan(warnBeforeBlocked);
+      expect(warningCount()).toBeGreaterThan(warnBeforeBlocked);
     });
 
     it("should resolve array element links to the actual nested documents", () => {
@@ -1854,18 +1856,15 @@ describe("Schema - Link Resolution", () => {
       });
 
       // data cell's system points to cellB's argument.system
-      const dataCellURI = dataUriFromValueWithResolvedLinks({
-        "system": cellB.key("argument").key("system").getAsWriteRedirectLink({
-          includeSchema: true,
-        }),
-      });
-      const cellA = runtime.getCellFromLink(
+      const cellA = runtime.getImmutableCell(
+        space,
         {
-          id: dataCellURI,
-          path: [],
-          space,
+          system: cellB.key("argument").key("system").getAsWriteRedirectLink({
+            includeSchema: true,
+          }),
         },
         cellASchema,
+        tx,
       );
 
       await tx.commit();

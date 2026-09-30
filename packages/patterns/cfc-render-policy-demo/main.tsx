@@ -1,5 +1,4 @@
 import {
-  Cell,
   computed,
   type Confidential,
   handler,
@@ -23,22 +22,27 @@ const HEALTH_RECORD_CONFIDENTIALITY = {
   subject: "did:example:patient",
 } as const;
 
+// Routing references are public. The target Cell's schema supplies its
+// confidentiality when a surface reads the health text.
 type TrustedHealthDisclosureInput = {
-  content: Writable<
-    Confidential<string, readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]>
-  >;
+  content: Writable<string>;
   revealSensitive: Writable<boolean>;
 };
 
 type DirectHealthRenderInput = {
-  content: Writable<
-    Confidential<string, readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]>
-  >;
+  content: Writable<string>;
 };
 
 type LabelledContentArgument = {
   id: string;
   content: string;
+};
+
+type HealthRecord = {
+  content: Confidential<
+    string,
+    readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]
+  >;
 };
 
 export type TrustedHealthDisclosureOutput = {
@@ -76,23 +80,22 @@ export const setRevealSensitive = handler<
 
 const makeConfidentialHealthText = lift<
   LabelledContentArgument,
-  Writable<
-    Confidential<string, readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]>
-  >
+  Writable<{ content: string }>
 >((input) =>
-  Cell.for<
-    Confidential<string, readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]>
-  >(input.id).set(
-    input.content as Confidential<
+  new Writable<HealthRecord>({
+    content: input.content as Confidential<
       string,
       readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]
     >,
-  )
+  }).for(input.id)
 );
 
 export const UntrustedDirectHealthRender = pattern<
   DirectHealthRenderInput,
-  { [NAME]: string; [UI]: VNode }
+  {
+    [NAME]: string;
+    [UI]: VNode;
+  }
 >(({ content }) => ({
   [NAME]: "Untrusted direct health render",
   [UI]: (
@@ -212,9 +215,7 @@ export default pattern<unknown, RenderPolicyDemoOutput>(() => {
     content:
       "Sensitive health data: migraine treatment plan includes medication review.",
   });
-  const healthContentRender: Writable<
-    Confidential<string, readonly [typeof HEALTH_RECORD_CONFIDENTIALITY]>
-  > = healthContent as never;
+  const healthContentRender = healthContent.key("content");
   const revealSensitive = new Writable(false);
   const trustedDisclosure = TrustedHealthDisclosureSurface({
     content: healthContentRender,
@@ -246,7 +247,7 @@ export default pattern<unknown, RenderPolicyDemoOutput>(() => {
         </cf-vstack>
       </cf-screen>
     ),
-    revealSensitive: trustedDisclosure.revealSensitive,
+    revealSensitive,
     reveal: trustedDisclosure.reveal,
     conceal: trustedDisclosure.conceal,
   };

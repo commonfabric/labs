@@ -20,15 +20,11 @@ import {
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
-// An append commits as a tail-relative operation, and the server puts it at
-// the list's live tail, while the label envelope the appending transaction
-// computed describes the list as it saw it. Two appends from sessions that
-// saw the same list land at two positions, and the envelope written last
-// describes one of them at the position the other took. The endorsed step's
-// stamp at a slot then sits beside another writer's reference. A slot's
-// stamp counts toward a follower's input witness only where the slot's link
-// entry names the reference the slot holds, so a stamp describing another
-// reference witnesses nothing.
+// A stale append must conflict when its reference authorization basis changed.
+// Reissuing it against fresh state still cannot turn another writer's selected
+// reference into the submit step's work. Handcrafted slot stamps separately
+// model an envelope whose endorsement describes a different reference, including
+// an untagged stamp: complete acquisition history alone endorses no selection.
 
 const signer = await Identity.fromPassphrase("cfc-witness-concurrent-append");
 const space = signer.did();
@@ -91,6 +87,7 @@ const push = async (
   runtime: Runtime,
   identity: ImplementationIdentity,
   vote: string,
+  conflictServer?: MemoryV2Server.Server,
 ): Promise<void> => {
   const tx = runtime.edit();
   setCfcImplementationIdentity(tx, identity);
@@ -106,7 +103,19 @@ const push = async (
     popFrame(frame);
   }
   tx.prepareCfc();
-  expect((await tx.commit({ resolveAt: "verdict" })).error).toBeUndefined();
+  const result = await tx.commit({ resolveAt: "verdict" });
+  if (conflictServer !== undefined) {
+    expect(result.error).toMatchObject({
+      name: "ConflictError",
+      conflict: {
+        of: runtime.getCell(space, "briefs").getAsNormalizedFullLink().id,
+      },
+    });
+    await conflictServer.flushSessions([space]);
+    await clock.settle();
+  } else {
+    expect(result.error).toBeUndefined();
+  }
   await runtime.storageManager.synced();
 };
 
@@ -143,6 +152,7 @@ const commitWitnessesSubmit = async (
   const runtime = runtimeOver(storageManager);
   try {
     await load(runtime);
+    await runtime.getCell(space, "committed").sync();
     const tx = runtime.edit();
     setCfcImplementationIdentity(tx, COMMIT);
     const briefs = runtime.getCell<{ vote: string }[]>(
@@ -236,11 +246,18 @@ const seedListOfBriefs = async (
   seedStoredEnvelope(tx, { space, scope: "space", id: briefsId, path: [] }, {
     value: [link(briefs.first), link(briefs[held])],
     cfc: {
-      version: 1,
+      version: 3,
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
       labelMap: {
         version: 1,
         entries: [
+          ...["0", "1"].map((index) => ({
+            path: [index],
+            origin: "link",
+            observes: "followRef",
+            referenceAcquisition: "complete",
+            label: { confidentiality: [ROOM] },
+          })),
           {
             path: ["0"],
             label: stamp(briefs.first),
@@ -298,11 +315,10 @@ describe("input witnesses over appends made concurrently", () => {
     );
   });
 
-  it("withholds the witness where an append's stamp sits beside a copied reference", async () => {
-    // The attacker appends a copy of the submitted brief's reference while the
-    // submit step appends from the list as it was, then removes the submit
-    // step's brief. The slot holding the copy is left with the stamp the
-    // submit step's envelope wrote for its own brief, naming its writer.
+  it("refuses a stale append after a copied reference and withholds its witness after retry", async () => {
+    // The attacker copies a submitted reference after the other session loaded
+    // its basis. That session's stale append is refused. A fresh submit and its
+    // later removal leave the attacker's copy, which carries no submit witness.
     const attacker = session();
     const stale = session();
     await seed(attacker);
@@ -312,7 +328,13 @@ describe("input witnesses over appends made concurrently", () => {
       const stored = briefs.getRaw() as unknown[];
       briefs.push(stored[0] as never);
     });
-    await push(stale, SUBMIT, "approve");
+    await push(stale, SUBMIT, "approve", server);
+    expect(await commitWitnessesSubmit(server, ["reject", "reject"])).toBe(
+      false,
+    );
+    const retry = session();
+    await load(retry);
+    await push(retry, SUBMIT, "approve");
     // The attacker's later code, in a session that sees both appends.
     const later = session();
     await load(later);
@@ -355,7 +377,7 @@ describe("input witnesses over appends made concurrently", () => {
     );
   });
 
-  it("withholds the witness where an append's stamp describes another writer's reference", async () => {
+  it("refuses a stale append and withholds the witness after another writer's append", async () => {
     const attacker = session();
     const stale = session();
     await seed(attacker);
@@ -363,7 +385,11 @@ describe("input witnesses over appends made concurrently", () => {
     // so its append is made against the list as it was.
     await load(stale);
     await push(attacker, ATTACKER, "approve");
-    await push(stale, SUBMIT, "reject");
+    await push(stale, SUBMIT, "reject", server);
+    expect(await commitWitnessesSubmit(server, ["approve"])).toBe(false);
+    const retry = session();
+    await load(retry);
+    await push(retry, SUBMIT, "reject");
     expect(await commitWitnessesSubmit(server, ["approve", "reject"])).toBe(
       false,
     );

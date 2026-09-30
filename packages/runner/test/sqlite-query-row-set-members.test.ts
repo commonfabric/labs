@@ -37,6 +37,8 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { encodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";
 import type { Cell } from "../src/cell.ts";
+import { type CfcConfClause, clauseAlternatives } from "../src/cfc/clause.ts";
+import { getCfcReferenceProvenance } from "../src/cfc/reference-provenance.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
@@ -977,6 +979,335 @@ describe("sqlite-query-row-set-members", () => {
       });
     });
   }
+
+  const referenceQueryFixture = async (cause: string) => {
+    const db = {
+      id: `of:link-acquisition-${crypto.randomUUID()}`,
+      owner: space,
+      tables: {
+        messages: table({
+          container_id: "text",
+          to_addr: "text",
+          note: "text",
+          other_cf_link: {
+            type: "string",
+            sqlType: "text",
+            ifc: { confidentiality: ["other-link-column"] },
+          },
+          target_cf_link: {
+            type: "string",
+            sqlType: "text",
+            ifc: { confidentiality: ["sql-link-column"] },
+          },
+        }, (fields) => ({
+          confidentiality: all(
+            dbOwner(),
+            principal(
+              "mailto",
+              match(fields.to_addr, /[^\s<>,;"]+@[^\s<>,;"]+/g),
+            ),
+          ),
+        })),
+      },
+    } as unknown as SqliteDbRef;
+    const seedTx = runtime.edit();
+    const target = runtime.getCell(space, `${cause}-target`, {
+      type: "object",
+      ifc: {
+        confidentiality: ["target-content"],
+        integrity: ["target-approved"],
+      },
+    }, seedTx);
+    target.set({ name: "Ada" });
+    runtime.prepareTxForCommit(seedTx);
+    expect((await seedTx.commit()).error).toBeUndefined();
+    await seed(
+      db,
+      "INSERT INTO messages (container_id, to_addr, note, target_cf_link, other_cf_link) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+      [
+        "c-link",
+        "bob@example.test",
+        "first",
+        encodeCfLinkValue(target),
+        encodeCfLinkValue(target),
+        "c-link",
+        "alice@example.test",
+        "second",
+        encodeCfLinkValue(target),
+        encodeCfLinkValue(target),
+      ],
+    );
+    const source = await parameterSource(cause);
+    await selectLabeledContainer(source, "c-link");
+    const options = {
+      cause,
+      db,
+      sql:
+        "SELECT to_addr, note, target_cf_link, other_cf_link FROM messages WHERE container_id = ?1 ORDER BY note",
+      source,
+      scope: "space" as const,
+      direct: true,
+      rowSchema: {
+        type: "object",
+        properties: {
+          ...TARGETS_ROW_SCHEMA.properties,
+          other_cf_link: { asCell: ["cell"], type: "object" },
+        },
+      },
+    };
+    return { options, source, target };
+  };
+
+  it("retains row, column, and selection confidentiality when decoding a link", async () => {
+    const { options, source, target } = await referenceQueryFixture(
+      "labeled-link-acquisition",
+    );
+    const rows = await runQuery(options);
+    await settled(rows, 2);
+    const row = rowLinks(rows)[0];
+    const secondRow = rowLinks(rows)[1];
+    const plain = joinOf((tx) => {
+      runtime.getCellFromLink(row, undefined, tx).asSchema({
+        type: "object",
+        properties: { note: { type: "string" } },
+      }).get();
+    }).flatMap((clause) => clauseAlternatives(clause as CfcConfClause));
+    expect(plain).toContain(BOB);
+    expect(plain).not.toContain("did:mailto:alice@example.test");
+    expect(plain).not.toContain("sql-link-column");
+    expect(plain).not.toContain("other-link-column");
+    const second = joinOf((tx) => {
+      runtime.getCellFromLink(secondRow, undefined, tx).asSchema({
+        type: "object",
+        properties: { note: { type: "string" } },
+      }).get();
+    }).flatMap((clause) => clauseAlternatives(clause as CfcConfClause));
+    expect(second).toContain("did:mailto:alice@example.test");
+    expect(second).not.toContain(BOB);
+    expect(second).not.toContain("sql-link-column");
+    const check = runtime.edit();
+    try {
+      const metadata = readStoredCfcMetadata(check, row);
+      const reference = metadata?.labelMap.entries.find((entry) =>
+        entry.origin === "link" && entry.path.join("/") === "target_cf_link"
+      );
+      expect(metadata?.version).toBe(3);
+      expect(reference?.referenceAcquisition).toBe("complete");
+      const stored =
+        reference?.label.confidentiality?.flatMap(clauseAlternatives) ?? [];
+      expect(stored).toContain("sql-link-column");
+      expect(stored).toContain(BOB);
+      expect(stored).not.toContain("target-content");
+      expect(stored).not.toContain("other-link-column");
+      expect(stored).not.toContain("did:mailto:alice@example.test");
+      expect(hasClause(stored, PICKED_CLAUSE)).toBe(false);
+      expect(reference?.label.integrity).not.toContain("target-approved");
+    } finally {
+      check.abort("reference metadata checked");
+    }
+    const read = runtime.edit();
+    try {
+      const value = rows.resolveAsCell().withTx(read).asSchema({
+        type: "object",
+        properties: { result: { type: "array", items: TARGETS_ROW_SCHEMA } },
+      }).get() as { result: { target_cf_link: Cell<unknown> }[] };
+      const held = value.result[0].target_cf_link;
+      const acquired =
+        getCfcReferenceProvenance(held.getAsLink())?.confidentiality.flatMap(
+          clauseAlternatives,
+        ) ?? [];
+      expect(acquired).toContain("sql-link-column");
+      expect(acquired).toContain(BOB);
+      expect(hasClause(acquired, PICKED_CLAUSE)).toBe(true);
+      expect(acquired).not.toContain("target-content");
+      expect(deriveFlowJoin(read).confidentiality).not.toContain(
+        "target-content",
+      );
+      expect(held.get()).toEqual({ name: "Ada" });
+      expect(deriveFlowJoin(read).confidentiality).toContain("target-content");
+    } finally {
+      read.abort("link acquisition checked");
+    }
+    const originalRow = runtime.getCellFromLink(row).getRaw();
+    await selectLabeledContainer(source, "c-none");
+    await settled(rows, 0);
+    expect(runtime.getCellFromLink(row).getRaw()).toEqual(originalRow);
+    await selectLabeledContainer(source, "c-link");
+    await settled(rows, 2);
+    expect(rowLinks(rows)[0].id).toBe(row.id);
+    expect(target.withTx(undefined).get()).toEqual({ name: "Ada" });
+  });
+
+  it("publishes no partial rows when confidential link materialization fails", async () => {
+    const { options, source } = await referenceQueryFixture(
+      "failed-link-materialization",
+    );
+    const editWithRetry = runtime.editWithRetry.bind(runtime);
+    let refused = false;
+    let stagedRowId: string | undefined;
+    let firstField: string | undefined;
+    runtime.editWithRetry = (fn, retries, options) =>
+      editWithRetry(
+        (tx) => {
+          const value = fn(tx);
+          const staged = tx.getCfcState().writePolicyInputs.find((input) =>
+            input.kind === "link-write" &&
+            ["target_cf_link", "other_cf_link"].includes(
+              input.target.path.at(-1) ?? "",
+            )
+          );
+          if (staged?.kind === "link-write") {
+            stagedRowId ??= staged.target.id;
+            firstField ??= staged.target.path.at(-1);
+          }
+          if (
+            !refused && staged?.kind === "link-write" &&
+            staged.target.path.at(-1) !== firstField
+          ) {
+            refused = true;
+            throw new Error("injected link materialization failure");
+          }
+          return value;
+        },
+        retries,
+        options,
+      );
+    try {
+      const rows = await runQuery(options);
+      const state = await waitForCellValue<QueryState>(
+        runtime,
+        rows,
+        (value) => value?.pending === false && value.error !== undefined,
+      );
+      expect(refused).toBe(true);
+      expect(state.result).toBeUndefined();
+      expect(String(state.error)).toContain(
+        "injected link materialization failure",
+      );
+      expect(stagedRowId).toBeDefined();
+      await selectLabeledContainer(source, "c-none");
+      await settled(rows, 0);
+      await selectLabeledContainer(source, "c-link");
+      await settled(rows, 2);
+      expect(rowLinks(rows)[0].id).toBe(stagedRowId);
+    } finally {
+      runtime.editWithRetry = editWithRetry;
+    }
+  });
+
+  it("keeps a superseding result when an older row is only partly materialized", async () => {
+    const { options, source } = await referenceQueryFixture(
+      "superseded-link-materialization",
+    );
+    const editWithRetry = runtime.editWithRetry.bind(runtime);
+    const materialized = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let held = false;
+    runtime.editWithRetry = (fn, retries, options) => {
+      let linkWrite = false;
+      const committed = editWithRetry(
+        (tx) => {
+          const value = fn(tx);
+          linkWrite = tx.getCfcState().writePolicyInputs.some((input) =>
+            input.kind === "link-write" &&
+            input.target.path.at(-1) === "target_cf_link"
+          );
+          return value;
+        },
+        retries,
+        options,
+      );
+      return committed.then(async (outcome) => {
+        if (!outcome.error && linkWrite && !held) {
+          held = true;
+          materialized.resolve();
+          await release.promise;
+        }
+        return outcome;
+      });
+    };
+    try {
+      const rows = await runQuery(options);
+      const cancel = rows.sink(() => {});
+      try {
+        await materialized.promise;
+        await selectLabeledContainer(source, "c-none");
+        const newer = await settled(rows, 0);
+        release.resolve();
+        await runtime.settled();
+        const final = rows.get() as QueryState;
+        expect(final.requestHash).toBe(newer.requestHash);
+        expect(final.pending).toBe(false);
+        expect(final.result).toEqual([]);
+        expect(final.error).toBeUndefined();
+      } finally {
+        cancel();
+      }
+    } finally {
+      release.resolve();
+      runtime.editWithRetry = editWithRetry;
+    }
+  });
+
+  it("materializes a confidential link beside an entry-list column alias", async () => {
+    const { options } = await referenceQueryFixture("entry-list-reference");
+    const rows = await runQuery({
+      ...options,
+      sql:
+        "SELECT to_addr, note AS constructor, target_cf_link, other_cf_link FROM messages WHERE container_id = ?1 ORDER BY note",
+      rowSchema: {
+        type: "object",
+        properties: {
+          target_cf_link: { asCell: ["cell"], type: "object" },
+          other_cf_link: { asCell: ["cell"], type: "object" },
+        },
+      },
+    });
+    await settled(rows, 2);
+    const tx = runtime.edit();
+    try {
+      const row = rowLinks(rows)[0];
+      const value = runtime.getCellFromLink(row, undefined, tx)
+        .getRaw() as unknown as [string, unknown][];
+      const index = value.findIndex(([key]) => key === "target_cf_link");
+      expect(index).toBeGreaterThanOrEqual(0);
+      const metadata = readStoredCfcMetadata(tx, row);
+      const entry = metadata?.labelMap.entries.find((entry) =>
+        entry.referenceAcquisition === "complete" &&
+        entry.path.join("/") === `${index}/1`
+      );
+      expect(entry?.label.confidentiality?.flatMap(clauseAlternatives))
+        .toContain("sql-link-column");
+      expect(entry?.label.confidentiality?.flatMap(clauseAlternatives))
+        .toContain(BOB);
+      expect(entry?.label.confidentiality?.flatMap(clauseAlternatives)).not
+        .toContain("target-content");
+      expect(entry?.label.confidentiality?.flatMap(clauseAlternatives)).not
+        .toContain("other-link-column");
+    } finally {
+      tx.abort("entry-list reference checked");
+    }
+  });
+
+  it("completes a labeled link query with enforcement disabled", async () => {
+    await runtime.dispose({ closeStorage: false });
+    await storageManager.close();
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
+    });
+    const { options } = await referenceQueryFixture("disabled-reference-query");
+    const rows = await runQuery(options);
+    await settled(rows, 2);
+    const value = rows.resolveAsCell().asSchema({
+      type: "object",
+      properties: { result: { type: "array", items: TARGETS_ROW_SCHEMA } },
+    }).get() as { result: { target_cf_link: Cell<unknown> }[] };
+    expect(value.result[0].target_cf_link.get()).toEqual({ name: "Ada" });
+  });
 
   describe("a row document under a labeled parameter", () => {
     it("carries the row's label and nothing of `S` on the row's existence", async () => {

@@ -609,9 +609,9 @@ export function agent(
     // anything is staged, over the label this transaction has consumed so
     // far — the same set the commit boundary measures — and on the raw
     // label, with no exchange rule run. The deployment's ceiling for the
-    // `agent` sink is the commit boundary's to apply. A reference to a
-    // labeled cell is a read of the pointer's label, which the runtime sets
-    // to the target's, so inputs count here as much as the task text does.
+    // `agent` sink is the commit boundary's to apply. An input reference
+    // contributes its acquisition and selection confidentiality; observing
+    // its payload additionally contributes the target content's labels.
     if (maxConfidentiality !== undefined) {
       const outside = atomsOutsideCeiling(
         collectConsumedLabel(tx).confidentiality,

@@ -1181,6 +1181,10 @@ describe("pattern-binding", () => {
       const binding = testCell.key("p").getAsWriteRedirectLink({
         base: testCell,
       });
+      const declaredLinks = findAllWriteRedirectCells(binding, testCell, {
+        followRedirectChains: false,
+      });
+      expect(declaredLinks.map((l) => l.path)).toEqual([["p"]]);
       const links = findAllWriteRedirectCells(binding, testCell);
       expect(links.map((l) => l.path)).toEqual([["p"], ["q"], ["r"]]);
     });

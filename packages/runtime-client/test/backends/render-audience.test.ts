@@ -552,9 +552,18 @@ describe("render-audience", () => {
       }, {
         value: { note: note.getAsLink() },
         cfc: {
-          version: 1,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: { version: 1, entries: [] },
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["note"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: {},
+            }],
+          },
         },
       } as never);
       expect((await seedHolder.commit()).error).toBeUndefined();
@@ -692,11 +701,17 @@ describe("render-audience", () => {
       }, {
         value: { note: stored.getAsLink() },
         cfc: {
-          version: 1,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: {
             version: 1,
             entries: [{
+              path: ["note"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: {},
+            }, {
               path: ["note"],
               label: {
                 confidentiality: [cfcAtom.modulePolicyRef(

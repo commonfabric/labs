@@ -6,6 +6,10 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import {
+  fabricFromJsonValue,
+  jsonFromFabricValue,
+} from "@commonfabric/data-model/codecs";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
@@ -25,6 +29,7 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { serializeRuntimeEvent } from "../../runner/src/cfc/event-reference-context.ts";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { pieceId } from "../src/piece-id.ts";
@@ -53,6 +58,26 @@ const aliceSigner = await Identity.fromPassphrase("served lifecycle alice");
 
 function programOf(contents: string): RuntimeProgram {
   return { main: "/main.tsx", files: [{ name: "/main.tsx", contents }] };
+}
+
+/** Captures the acquisitions a trusted delegated registration forwards. */
+function registrationEvent(
+  runtime: Runtime,
+  stream: NormalizedFullLink,
+  piece: Cell<unknown>,
+) {
+  const tx = runtime.edit();
+  try {
+    const { payload, runtimeReferenceContext } = serializeRuntimeEvent(
+      { piece },
+      tx,
+      stream.space,
+      runtime.getCellFromLink(stream).getAsNormalizedFullLink(),
+    );
+    return { payload, runtimeReferenceContext };
+  } finally {
+    tx.abort();
+  }
 }
 
 /** One optional input, one output. */
@@ -223,6 +248,28 @@ describe("served lifecycle verbs", () => {
   };
 
   describe("instantiate", () => {
+    it("acquires an explicit linked argument on a precise serving runtime", async () => {
+      const client = await clientPieces();
+      const tx = client.runtime.edit();
+      const seed = client.runtime.getCell<string>(
+        space,
+        "served-lifecycle-linked-seed",
+        undefined,
+        tx,
+      );
+      seed.set("linked seed");
+      expect((await tx.commit()).error).toBeUndefined();
+      const input = fabricFromJsonValue(jsonFromFabricValue(seed.getAsLink()));
+      const receipt = await instantiate({ program: BASE_PROGRAM }, {
+        seed: input,
+      });
+      const later = await clientPieces();
+      const piece = await later.get(receipt.pieceId);
+      const argument = later.getArgument<{ seed: string }>(piece.getCell());
+      await argument.sync();
+      expect(argument.get()).toEqual({ seed: "linked seed" });
+    });
+
     it("refuses registration without a matching durable creation record", async () => {
       const created = await instantiate({ program: BASE_PROGRAM }, undefined, {
         register: true,
@@ -382,7 +429,7 @@ export default pattern(() => {
             targetStream: streamEntriesDocId(stream),
             targetStreamLink: stream,
             eventId,
-            payload: { piece: piece.getAsLink() },
+            ...registrationEvent(pieces.runtime, stream, piece),
             actingPrincipal: aliceSigner.did(),
             actingSession: aliceSigner.did(),
             capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
@@ -455,7 +502,7 @@ export default pattern(() => {
             targetStream: streamEntriesDocId(stream),
             targetStreamLink: stream,
             eventId,
-            payload: { piece: piece.getAsLink() },
+            ...registrationEvent(pieces.runtime, stream, piece),
             actingPrincipal: aliceSigner.did(),
             actingSession: aliceSigner.did(),
             capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
@@ -564,7 +611,7 @@ export default pattern(() => {
                 targetStream: streamEntriesDocId(stream),
                 targetStreamLink: stream,
                 eventId,
-                payload: { piece: piece.getAsLink() },
+                ...registrationEvent(pieces.runtime, stream, piece),
                 actingPrincipal: aliceSigner.did(),
                 actingSession: aliceSigner.did(),
                 capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,

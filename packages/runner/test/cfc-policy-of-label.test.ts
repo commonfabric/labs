@@ -7,6 +7,7 @@ import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import { recordRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
 import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
@@ -523,16 +524,17 @@ describe("PolicyOf label-time binding", () => {
       undefined,
       copyTx,
     );
-    const sourceLink = source.getAsNormalizedFullLink();
     const targetLink = target.getAsNormalizedFullLink();
-    copyTx.writeValueOrThrow({ ...targetLink, path: [] }, "copied secret");
-    copyTx.recordCfcWritePolicyInput({
-      kind: "link-write",
-      target: { ...targetLink, path: [] },
-      source: { ...sourceLink, path: [] },
-    });
+    const owner = runtime.getCell(
+      destinationSpace,
+      "policy-copy-builtin",
+      undefined,
+      copyTx,
+    );
+    recordRuntimeOwnedStore(copyTx, owner, target);
+    target.set(source.withTx(copyTx).get());
     copyTx.prepareCfc();
-    expect((await copyTx.commit()).ok).toBeDefined();
+    expect((await copyTx.commit()).error).toBeUndefined();
 
     const coldRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),

@@ -571,6 +571,58 @@ Deno.test("event-append admission: declarations and the sidecar write guard", as
     );
 
     await t.step(
+      "requires an opaque string for Runtime reference carriage",
+      () => {
+        for (const [index, malformed] of [1, false, {}, []].entries()) {
+          assertThrows(
+            () =>
+              authored(
+                9000 + index,
+                appendCommit(9000 + index, [
+                  entryOf(`evt-malformed-reference-${index}`, {
+                    runtimeReferenceContext: malformed as never,
+                  }),
+                ]),
+              ),
+            ProtocolError,
+            "runtimeReferenceContext",
+          );
+        }
+        const referenceStream = {
+          id: "of:reference-carriage",
+          path: [] as string[],
+        };
+        const referenceSidecar = streamEntriesDocId(referenceStream);
+        authored(9010, {
+          operations: [{
+            op: "patch",
+            id: referenceSidecar,
+            patches: [{
+              op: "append",
+              path: "/value/entries",
+              values: [{
+                eventId: "evt-reference-carriage",
+                stream: referenceStream,
+                payload: { value: 1 },
+                runtimeReferenceContext: "opaque-runtime-context",
+              }] as never[],
+            }],
+          }],
+          eventAppends: [{
+            id: referenceSidecar,
+            eventId: "evt-reference-carriage",
+          }],
+        });
+        assertEquals(
+          (read(engine, { id: referenceSidecar })
+            ?.value as StreamEventsDocValue)
+            .entries?.[0].runtimeReferenceContext,
+          "opaque-runtime-context",
+        );
+      },
+    );
+
+    await t.step(
       "an entry whose stream link does not derive the sidecar being written is refused — a fresh sidecar id cannot smuggle another stream's handler dispatch past that stream's event-id horizon (verdict blocker, 2026-08-12)",
       () => {
         // The attack: append into a FRESH sidecar doc (empty horizon)

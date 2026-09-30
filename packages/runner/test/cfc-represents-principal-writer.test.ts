@@ -385,6 +385,10 @@ describe("represents-principal writer check", () => {
             runtime,
             target.getAsNormalizedFullLink(),
           ),
+          sourceSubjects: storedClaimSubjects(
+            runtime,
+            source.getAsNormalizedFullLink(),
+          ),
         };
       } finally {
         await runtime.dispose();
@@ -530,6 +534,10 @@ describe("represents-principal writer check", () => {
             runtime,
             target.getAsNormalizedFullLink(),
           ),
+          sourceSubjects: storedClaimSubjects(
+            runtime,
+            source.getAsNormalizedFullLink(),
+          ),
         };
       } finally {
         await runtime.dispose();
@@ -586,36 +594,34 @@ describe("represents-principal writer check", () => {
         expect(subjects).not.toContain(bob.did());
       });
 
-      // Source first, the link reads the source's label as this transaction
-      // stages it; link first, the source is not staged yet and the claim
-      // comes from `checkedSchemaPrincipalClaims`, which only the link-first
-      // case exercises.
-      it(`carries a same-transaction source's checked self-attestation, ${order}`, async () => {
-        const { error, subjects } = await linkSameTransactionAsAlice(
-          "represents-principal-link-pending-genuine",
-          (tx, runtime) => {
-            const source = runtime.getCell(
-              alice.did(),
-              "represents-principal-link-pending-genuine-source",
-              claimSchema([{
-                kind: "represents-principal",
-                subject: CURRENT_PRINCIPAL,
-              }], { ownerPrincipal: CURRENT_PRINCIPAL }),
-              tx,
-            );
-            return {
-              source,
-              write: () => {
-                source.set({ name: "Ada" });
-                recordTrustedEdit(tx, source.getAsNormalizedFullLink());
-              },
-            };
-          },
-          "name",
-          order,
-        );
+      it(`keeps a same-transaction source's checked self-attestation on its contents, ${order}`, async () => {
+        const { error, subjects, sourceSubjects } =
+          await linkSameTransactionAsAlice(
+            "represents-principal-link-pending-genuine",
+            (tx, runtime) => {
+              const source = runtime.getCell(
+                alice.did(),
+                "represents-principal-link-pending-genuine-source",
+                claimSchema([{
+                  kind: "represents-principal",
+                  subject: CURRENT_PRINCIPAL,
+                }], { ownerPrincipal: CURRENT_PRINCIPAL }),
+                tx,
+              );
+              return {
+                source,
+                write: () => {
+                  source.set({ name: "Ada" });
+                  recordTrustedEdit(tx, source.getAsNormalizedFullLink());
+                },
+              };
+            },
+            "name",
+            order,
+          );
         expect(error).toBeUndefined();
-        expect(subjects).toContain(alice.did());
+        expect(sourceSubjects).toContain(alice.did());
+        expect(subjects).not.toContain(alice.did());
         expect(subjects).not.toContain(bob.did());
       });
 
@@ -666,9 +672,7 @@ describe("represents-principal writer check", () => {
       });
     }
 
-    it("refuses a link to an unlabeled source whose carried view holds only claims", async () => {
-      // With the claims gone the view carries nothing, so the link must meet
-      // the same refusal as one that carries no view.
+    it("stores no claim from a link's display view when its target is unlabeled", async () => {
       const { error, subjects } = await linkAsAlice(
         "represents-principal-link-view-only-claims",
         undefined,
@@ -692,11 +696,11 @@ describe("represents-principal writer check", () => {
         },
       );
       expect(subjects).not.toContain(bob.did());
-      expect(error).toContain("missing link source metadata");
+      expect(error).toBeUndefined();
     });
 
-    it("carries the claim the source's own stored label holds", async () => {
-      const { error, subjects } = await linkAsAlice(
+    it("keeps the source's stored claim on its contents", async () => {
+      const { error, subjects, sourceSubjects } = await linkAsAlice(
         "represents-principal-link-genuine",
         claimSchema([{
           kind: "represents-principal",
@@ -705,7 +709,8 @@ describe("represents-principal writer check", () => {
         (source) => source.key("name"),
       );
       expect(error).toBeUndefined();
-      expect(subjects).toEqual([alice.did()]);
+      expect(sourceSubjects).toEqual([alice.did()]);
+      expect(subjects).toEqual([]);
     });
   });
 });

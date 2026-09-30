@@ -46,6 +46,9 @@ async function setupSendMail(
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcEnforcementMode,
+    // Disabled enforcement omits CFC persistence, so this legacy bypass
+    // profile also disables precise reference acquisition.
+    cfcFlowLabels: cfcEnforcementMode === "disabled" ? "off" : "persist",
   });
   const tx = runtime.edit();
   const { commonfabric } = createTrustedBuilder(runtime);

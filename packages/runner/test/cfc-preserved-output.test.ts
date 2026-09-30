@@ -26,10 +26,11 @@ describe("protected runtime output preservation", () => {
   let runtime: Runtime;
   let output: NormalizedFullLink;
 
-  beforeEach(async () => {
+  async function initialize(flow: "persist" | "off" = "persist") {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: StorageManager.emulate({ as: owner }),
+      cfcFlowLabels: flow,
       trustSnapshotProvider: () => ({
         id: "owner",
         actingPrincipal: owner.did(),
@@ -41,11 +42,26 @@ describe("protected runtime output preservation", () => {
       default: "saved name",
     }, setup);
     const result = runtime.getCell(owner.did(), "output", schema, setup);
-    result.set(backing);
+    setup.recordCfcWritePolicyInput({
+      kind: "schema",
+      target: result.getAsNormalizedFullLink(),
+      schema,
+      schemaRole: "output",
+    });
+    diffAndUpdate(
+      runtime,
+      setup,
+      result.getAsNormalizedFullLink(),
+      backing,
+      undefined,
+      { schemaRole: "output" },
+    );
     output = result.getAsNormalizedFullLink();
     runtime.prepareTxForCommit(setup);
     expect((await setup.commit()).error).toBeUndefined();
-  });
+  }
+
+  beforeEach(() => initialize());
 
   afterEach(async () => {
     await runtime.dispose();
@@ -156,6 +172,8 @@ describe("protected runtime output preservation", () => {
   // authorized write. Refusing instead would refuse every re-run of the
   // initializer, since a refused commit never migrates the envelope.
   it("preserves an output whose envelope only differs in version", async () => {
+    await runtime.dispose();
+    await initialize("off");
     const tx = runtime.edit();
     const stored = readStoredCfcMetadata(tx, output);
     expect(stored?.version).toBe(1);

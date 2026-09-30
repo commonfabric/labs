@@ -308,6 +308,8 @@ describe(
         for (const rung of CFC_ENFORCEMENT_MODES) {
           const init = await initParticipant(server, {
             cfcEnforcementMode: rung,
+            // Disabled preparation emits no reference acquisition records.
+            cfcFlowLabels: rung === "disabled" ? "off" : "persist",
           });
           expect(init.cfcEnforcementMode).toBe(rung);
         }

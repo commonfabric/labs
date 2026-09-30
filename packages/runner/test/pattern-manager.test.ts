@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -244,7 +244,7 @@ describe("PatternManager program persistence", () => {
       seed,
     );
     writeSeedEnvelopeDoc(seed, space);
-    seedStoredEnvelope(seed, {
+    seedStoredReferenceEnvelope(seed, {
       space,
       id: sourceCell.getAsNormalizedFullLink().id,
       type: "application/json",
@@ -271,7 +271,10 @@ describe("PatternManager program persistence", () => {
       space,
       id: sourceCell.getAsNormalizedFullLink().id,
     });
-    expect(storedMetadata?.labelMap.entries).toHaveLength(1);
+    expect(storedMetadata?.labelMap.entries).toContainEqual({
+      path: ["code"],
+      label: { confidentiality: ["private-source"] },
+    });
     expect(sourceCfcMetadataProhibitsCrossSpaceCopy(storedMetadata)).toBe(true);
     await inspect.commit();
 

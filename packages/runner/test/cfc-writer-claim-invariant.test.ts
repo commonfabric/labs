@@ -604,7 +604,7 @@ describe("writer claims: no weaker than the base", () => {
       outcomeOf(
         await asMember(bareSet(t2, ["members", "0"], { isAdmin: true })),
       ),
-      "committed",
+      "refused",
     );
     row(
       "T2 (follow-up): member appends {isAdmin:true}",
@@ -612,7 +612,7 @@ describe("writer claims: no weaker than the base", () => {
       outcomeOf(
         await asMember(bareSet(t2, ["members", "1"], { isAdmin: true })),
       ),
-      "committed",
+      "refused",
     );
 
     const t5schema = {

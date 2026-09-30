@@ -2,6 +2,7 @@ import type { CellScope, JSONSchema, Pattern } from "@commonfabric/api";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import {
   type Cell,
+  type CellLinkInput,
   encodeJsonPointer,
   type EventAppendDeliveryOutcome,
   type IExtendedStorageTransaction,
@@ -1646,12 +1647,19 @@ export async function executeResolvedCallable(
     // is what the gate judged. A resolution carrying a richer published
     // schema than its dispatch cell (the forced-stream fallback) is judged
     // against that one.
-    const dispatchInput = await assertVerbInputSatisfiesSchema(
+    const validatedInput = await assertVerbInputSatisfiesSchema(
       resolved.cellKey,
       input,
       resolved.inputSchema ?? resolved.callableCell.schema,
       resolved.declaredEvent,
     );
+    const runtime = resolved.pieces.runtime;
+    const dispatchInput = runtime.cfcFlowLabels === "persist"
+      ? runtime.acquireExternalInput(
+        resolved.space,
+        validatedInput as CellLinkInput,
+      )
+      : validatedInput;
     const runtimeErrors = runtimeErrorLog(resolved.pieces.runtime);
     const errorCountBefore = runtimeErrors.length;
     const invocation = deps.invocation;
@@ -1890,6 +1898,14 @@ export async function executeResolvedCallable(
           resolved.space,
         );
       }
+      // Receipt readback drives local handlers, including nested sends. Their
+      // writes may still await confirmation after the reactive read completes;
+      // exiting this process would abandon those issued commits. Confirm the
+      // current batch without waiting for further downstream recomputation.
+      await timeCliPhase(
+        "executeCallable.readback.confirmWrites",
+        () => resolved.pieces.runtime.storageManager.pendingCommitsSettled(),
+      );
     }
 
     return {
@@ -1922,6 +1938,9 @@ export async function executeResolvedCallable(
     resolved.callableCell.key("extraParams").get(),
   );
   const runtime = resolved.pieces.runtime;
+  const acquiredInput = runtime.cfcFlowLabels === "persist"
+    ? runtime.acquireExternalInput(resolved.space, input as CellLinkInput)
+    : input;
   const runtimeErrors = runtimeErrorLog(runtime);
   const errorCountBefore = runtimeErrors.length;
   const tx = runtime.edit();
@@ -1936,7 +1955,7 @@ export async function executeResolvedCallable(
   const running = runtime.run(
     tx,
     pattern,
-    mergeToolInput(input, extraParams),
+    mergeToolInput(acquiredInput, extraParams),
     resultCell,
   );
   // Capture the tool's result off its cell's sink. sink() fires immediately with

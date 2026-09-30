@@ -94,6 +94,9 @@ These are not new policy decisions by themselves, but they preserve type informa
 - `src/transformers/builtins/lift-applied.ts`
   - `replaceReactivesWithParams(...)`
   Registers synthetic lift-applied parameters with unwrapped types for the same reason.
+  - `buildResultTypeNode(...)`
+  Preserves explicit Cell-constructor value type nodes in synthesized result types,
+  retaining authored writer-binding queries for schema injection.
 
 - `src/transformers/pattern-body-reactive-root-lowering.ts`
   - `registerReplacement(...)`

@@ -16,6 +16,7 @@ import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { withCfcReferenceConfidentiality } from "../../src/cfc/reference-provenance.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import { stampWaveRunContext } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -230,6 +231,46 @@ describe("spaceAccess()", () => {
       popFrame(frame);
     }
   }
+
+  it("records retained target confidentiality in the active transaction", async () => {
+    const setAcl = await aclWriter();
+    await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+    const storageManager = EmulatedStorageManager.connectTo(server, {
+      as: bob,
+    });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    cleanups.push(async () => {
+      await runtime.dispose();
+      await storageManager.close();
+    });
+    await syncAcl(runtime);
+    const secret = {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "secret",
+    };
+    const target = runtime.getCellFromLink(
+      { space, id: "of:retained-target", path: [] },
+      undefined,
+      undefined,
+      withCfcReferenceConfidentiality(undefined, [secret]),
+    );
+    const tx = runtime.edit();
+    try {
+      expect(callIn(runtime, tx, { target })).toBe("WRITE");
+      expect(
+        tx.getCfcState().referenceObservations.flatMap((observation) =>
+          observation.confidentiality
+        ),
+      ).toContainEqual(secret);
+    } finally {
+      tx.abort();
+    }
+  });
 
   describe("on a client", () => {
     it("returns each member's level from the access list", async () => {

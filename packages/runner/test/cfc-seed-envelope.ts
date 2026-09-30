@@ -8,6 +8,8 @@ import type {
 } from "../src/storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import { convertCellsToLinks } from "../src/cell.ts";
+import type { CfcMetadata, LabelMapEntry } from "../src/cfc/types.ts";
 
 /**
  * The schema document CFC-metadata SEEDS reference. The commit boundary
@@ -58,4 +60,48 @@ export const seedStoredEnvelope = (
 ): void => {
   (tx as ExtendedStorageTransaction).accessForTestingOnly
     .privilegedSystemWrite(address, value, options);
+};
+
+/**
+ * Seeds a current reference fixture with public acquisition history at each
+ * supplied link. Explicit labels still govern its slots and their contents.
+ * Legacy and malformed-envelope tests use `seedStoredEnvelope` directly.
+ */
+export const seedStoredReferenceEnvelope = (
+  tx: IExtendedStorageTransaction,
+  address: IMemorySpaceAddress,
+  envelope: { value: FabricValue; cfc?: CfcMetadata },
+): void => {
+  seedStoredEnvelope(tx, address, storedReferenceEnvelope(envelope));
+};
+
+/** Builds a current reference fixture for an injected read-through store. */
+export const storedReferenceEnvelope = (
+  envelope: { value: FabricValue; cfc?: CfcMetadata },
+): { value: FabricValue; cfc: CfcMetadata } => {
+  const references: LabelMapEntry[] = [];
+  const value = convertCellsToLinks(envelope.value, {
+    transformLink: (_cell, link, path) => {
+      references.push({
+        path,
+        origin: "link",
+        observes: "followRef",
+        referenceAcquisition: "complete",
+        label: {},
+      });
+      return link;
+    },
+  });
+  return {
+    ...envelope,
+    value,
+    cfc: {
+      version: 3,
+      schemaHash: envelope.cfc?.schemaHash ?? SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [...(envelope.cfc?.labelMap.entries ?? []), ...references],
+      },
+    },
+  };
 };

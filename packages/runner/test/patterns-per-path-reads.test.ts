@@ -5,7 +5,8 @@
 //
 // The scenario: multiple consumers (via asSchema) read the SAME mutable cell
 // with DIFFERENT schemas. Changing a field covered by one schema should NOT
-// trigger the sink of the other schema.
+// trigger the sink of the other schema. These scheduling cases disable CFC
+// persistence; the precise case below separately pins authorization invalidation.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -30,6 +31,7 @@ describe("Per-path reads - schema-selective sinks", () => {
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
+      cfcFlowLabels: "off",
     });
     tx = runtime.edit();
   });
@@ -537,5 +539,41 @@ describe("Per-path reads - schema-selective sinks", () => {
     await runtime.idle();
 
     expect(themes).toEqual(["dark", "dark"]);
+  });
+
+  it("reruns an unchanged length observer when replacing a reference changes its authorization metadata", async () => {
+    tx.abort();
+    await runtime.dispose({ closeStorage: false });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+    });
+    const cell = runtime.getCell<{ items: Array<{ name: string }> }>(
+      space,
+      "per-path-length-reference-authorization",
+    );
+    tx = runtime.edit();
+    cell.withTx(tx).set({ items: [{ name: "a" }, { name: "b" }] });
+    expect((await tx.commit()).error).toBeUndefined();
+    tx = runtime.edit();
+    const address = { ...cell.getAsNormalizedFullLink(), path: ["cfc"] };
+    const originalMetadata = tx.readOrThrow(address);
+    const lengths: number[] = [];
+    const cancel = cell.key("items").key("length").sink((length) => {
+      lengths.push(length as number);
+    });
+    try {
+      await runtime.idle();
+      expect(lengths).toEqual([2]);
+      cell.withTx(tx).key("items").key(0).set({ name: "x" });
+      expect((await tx.commit()).error).toBeUndefined();
+      tx = runtime.edit();
+      await runtime.idle();
+      expect(tx.readOrThrow(address)).not.toEqual(originalMetadata);
+      expect(lengths).toEqual([2, 2]);
+    } finally {
+      cancel();
+    }
   });
 });

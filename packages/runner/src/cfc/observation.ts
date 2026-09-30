@@ -18,6 +18,7 @@ import {
   conceptGuard,
   matchAtomPattern,
 } from "./atom-pattern.ts";
+import { cfcReferenceConfidentialityForView } from "./reference-provenance.ts";
 import type { TrustResolver } from "./trust.ts";
 import { uniqueCfcAtoms } from "./atoms.ts";
 import {
@@ -83,6 +84,20 @@ export const joinCfcObservedConfidentiality = (
   return uniqueCfcAtoms(joined);
 };
 
+/** Content evidence applicable to an addressed observation, excluding references. */
+export const cfcIntegrityForObservationNode = (
+  labelView: CfcLabelView | undefined,
+  logicalPath: readonly string[] = [],
+): readonly CfcAtom[] =>
+  uniqueCfcAtoms(
+    (labelView?.entries ?? []).flatMap((entry) =>
+      (entry.observes === undefined || entry.observes === "value") &&
+        cfcLabelPathPrefixMatches(entry.path, logicalPath)
+        ? entry.label.integrity ?? []
+        : []
+    ),
+  );
+
 // Per-class node consumption (C4, C0 §4/§7). What an observation of the
 // node at `logicalPath` consumes from a class-carrying label view:
 //
@@ -92,7 +107,9 @@ export const joinCfcObservedConfidentiality = (
 //   AT the node itself: enumerating the node's own members reveals its
 //   membership, but an ADDRESSED child does not inherit the container's
 //   membership label (the C4 precision win — the caller named the path).
-//   `followRef` entries are never content.
+//   Runtime-retained acquisition restrictions accompany every observation
+//   through the acquired reference; other `followRef` entries describe only
+//   the reference at their own node.
 // - a `followRef` observation (rendering an opaque link handle: WHICH
 //   reference sits here, without following it) consumes followRef-class
 //   entries at-or-above the node and nothing else — the pointer's label,
@@ -108,7 +125,9 @@ export const cfcConfidentialityForObservationNode = (
     observes?: "value" | "followRef";
   },
 ): CfcObservedConfidentiality => {
-  const joined: unknown[] = [];
+  const joined: unknown[] = [
+    ...cfcReferenceConfidentialityForView(options.labelView),
+  ];
   const logicalPath = options.logicalPath ?? [];
   const observes = options.observes ?? "value";
 

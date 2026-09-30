@@ -77,6 +77,7 @@ describe("topic-board-child-contract", () => {
     const identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
       space: await createTestSpace(identity),
+      cfcFlowLabels: "persist",
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -187,6 +188,7 @@ describe("topic-board-pivot-contract", () => {
     const identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
       space: await createTestSpace(identity),
+      cfcFlowLabels: "persist",
       apiUrl: new URL(API_URL),
       identity,
     });

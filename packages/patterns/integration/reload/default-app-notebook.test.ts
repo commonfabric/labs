@@ -55,7 +55,11 @@ describe("default-app notebook reload integration test", () => {
     await clickButtonWithText(page, "New Notebook");
     const notebookId = await waitForCondition(page, async () => {
       const commonfabric = globalThis.commonfabric as
-        | { readCell?: (options: { id: string }) => Promise<unknown> }
+        | {
+          readCell?: (
+            options: { id: string; path: string[] },
+          ) => Promise<unknown>;
+        }
         | undefined;
       const view = globalThis.app?.serialize?.()?.view;
       const pieceId = view && typeof view === "object" && "pieceId" in view &&
@@ -67,14 +71,14 @@ describe("default-app notebook reload integration test", () => {
       const originalLog = console.log;
       try {
         console.log = () => {};
-        current = await commonfabric.readCell({ id: pieceId });
+        current = await commonfabric.readCell({
+          id: pieceId,
+          path: ["isNotebook"],
+        });
       } finally {
         console.log = originalLog;
       }
-      return (current as { isNotebook?: unknown } | undefined)
-          ?.isNotebook === true
-        ? pieceId
-        : false;
+      return current === true ? pieceId : false;
     });
 
     assert(
@@ -288,8 +292,8 @@ async function collectBrowserLoadMetrics(page: Page): Promise<{
 }
 
 // Serialized into the page by waitForCondition: drain the worker, read the
-// captured notebook's argument and internal cells, and report whether all
-// `expectedCount` notes have landed, the new-note prompt is closed, and the
+// captured notebook's argument length and internal scalars, and report whether
+// all `expectedCount` notes have landed, the new-note prompt is closed, and the
 // "create another" flag is cleared. The selection can independently show a note.
 const notebookSourceStateMatches = async (
   _probe: ProbeApi,
@@ -322,7 +326,12 @@ const notebookSourceStateMatches = async (
       const key = typeof partialCause === "string"
         ? partialCause
         : JSON.stringify(partialCause) ?? String(partialCause);
-      if (link && typeof link.sync === "function") {
+      if (
+        ["noteCount", "showNewNotePrompt", "usedCreateAnotherNote"].includes(
+          key,
+        ) &&
+        link && typeof link.sync === "function"
+      ) {
         resolved[key] = await link.sync();
       }
     }
@@ -349,16 +358,15 @@ const notebookSourceStateMatches = async (
     notebookInternalManifest,
   );
 
-  const argumentNotes = (notebookArgument as { notes?: unknown } | undefined)
-    ?.notes;
-  const resolvedArgumentNotes = Array.isArray(argumentNotes)
-    ? argumentNotes
-    : argumentNotes !== null && typeof argumentNotes === "object" &&
-        typeof (argumentNotes as { sync?: unknown }).sync === "function"
-    ? await (argumentNotes as { sync: () => Promise<unknown> }).sync()
-    : undefined;
-  const argumentNotesLength = Array.isArray(resolvedArgumentNotes)
-    ? resolvedArgumentNotes.length
+  const notes = (notebookArgument as { notes?: unknown } | undefined)?.notes;
+  const argumentNotesLength = Array.isArray(notes)
+    ? notes.length
+    : notes !== null && typeof notes === "object" &&
+        typeof (notes as { key?: unknown }).key === "function"
+    ? await (notes as {
+      key: (key: string) => { sync: () => Promise<unknown> };
+    })
+      .key("length").sync()
     : undefined;
   const internal = notebookInternal as {
     noteCount?: unknown;
@@ -372,8 +380,8 @@ const notebookSourceStateMatches = async (
 };
 
 // Serialized into the page by waitForCondition: report whether the reloaded
-// notebook has rehydrated to `expectedCount` notes — the piece cell reads back
-// as a notebook with that noteCount, and that many "📝 New Note" chips are
+// notebook has rehydrated to `expectedCount` notes — its scalar fields identify
+// a notebook with that noteCount, and that many "📝 New Note" chips are
 // rendered across the document and every shadow root. Inlines the readCell and
 // cf-chip collection that collectNotebookRenderState performs.
 const notebookReloadRendered = async (
@@ -382,7 +390,9 @@ const notebookReloadRendered = async (
   expectedId: string,
 ): Promise<boolean> => {
   const commonfabric = globalThis.commonfabric as
-    | { readCell?: (options: { id: string }) => Promise<unknown> }
+    | {
+      readCell?: (options: { id: string; path: string[] }) => Promise<unknown>;
+    }
     | undefined;
   const view = globalThis.app?.serialize?.()?.view;
   const pieceId = view && typeof view === "object" && "pieceId" in view &&
@@ -390,15 +400,19 @@ const notebookReloadRendered = async (
     ? view.pieceId
     : undefined;
   if (pieceId !== expectedId || !commonfabric?.readCell) return false;
-  let current: { isNotebook?: unknown; noteCount?: unknown } | undefined;
+  let isNotebook: unknown;
+  let noteCount: unknown;
   const originalLog = console.log;
   try {
     console.log = () => {};
-    current = await commonfabric.readCell({ id: pieceId }) as typeof current;
+    [isNotebook, noteCount] = await Promise.all([
+      commonfabric.readCell({ id: pieceId, path: ["isNotebook"] }),
+      commonfabric.readCell({ id: pieceId, path: ["noteCount"] }),
+    ]);
   } finally {
     console.log = originalLog;
   }
-  if (current?.isNotebook !== true || current.noteCount !== expectedCount) {
+  if (isNotebook !== true || noteCount !== expectedCount) {
     return false;
   }
   const renderedNoteChips = probe.collect("cf-chip").filter((element) => {
@@ -412,111 +426,44 @@ const notebookReloadRendered = async (
 };
 
 async function collectNotebookRenderState(page: Page): Promise<{
-  isNotebook: boolean;
-  noteCount: number;
-  notesLength: number;
-  mentionableLength: number;
-  showNewNotePrompt?: boolean;
-  usedCreateAnotherNote?: boolean;
-  storedUiNoteChips: number;
-  storedUiNoteLabels: string[];
+  noteCount: unknown;
   renderedNoteChips: number;
-  renderedNoteLabels: string[];
 }> {
   return await page.evaluate(async () => {
-    const commonfabric = globalThis.commonfabric as any;
-    const appState = globalThis.app?.serialize?.();
-    const view = appState?.view;
+    const commonfabric = globalThis.commonfabric as {
+      readCell?: (options: { id: string; path: string[] }) => Promise<unknown>;
+    } | undefined;
+    const view = globalThis.app?.serialize?.()?.view;
     const pieceId = view && typeof view === "object" && "pieceId" in view &&
         typeof view.pieceId === "string"
       ? view.pieceId
       : undefined;
-    let current: any;
+    let noteCount: unknown;
     if (pieceId) {
       const originalLog = console.log;
       try {
         console.log = () => {};
-        current = await commonfabric?.readCell?.({ id: pieceId });
+        noteCount = await commonfabric?.readCell?.({
+          id: pieceId,
+          path: ["noteCount"],
+        });
       } finally {
         console.log = originalLog;
       }
     }
-    const notes = Array.isArray(current?.notes) ? current.notes : [];
-    const mentionable = Array.isArray(current?.mentionable)
-      ? current.mentionable
-      : [];
-    const collectStoredNoteLabels = (value: unknown) => {
-      const labels: string[] = [];
-      const seen = new WeakSet<object>();
-
-      function visit(currentValue: unknown): void {
-        if (currentValue === null || currentValue === undefined) return;
-        if (typeof currentValue !== "object") return;
-        if (seen.has(currentValue)) return;
-        seen.add(currentValue);
-
-        const record = currentValue as Record<string, unknown>;
-        const label = typeof record.label === "string"
-          ? record.label
-          : typeof (record.props as { label?: unknown } | undefined)?.label ===
-              "string"
-          ? (record.props as { label: string }).label
-          : undefined;
-        if (label?.trim().startsWith("📝 New Note")) {
-          labels.push(label.trim());
+    let renderedNoteChips = 0;
+    function collect(root: Document | ShadowRoot): void {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.localName === "cf-chip") {
+          const label = String(
+            (el as { label?: unknown }).label ?? el.getAttribute("label") ?? "",
+          ).trim();
+          if (label.startsWith("📝 New Note")) renderedNoteChips++;
         }
-
-        if (Array.isArray(currentValue)) {
-          for (const item of currentValue) visit(item);
-          return;
-        }
-        for (const item of Object.values(record)) visit(item);
+        if (el.shadowRoot) collect(el.shadowRoot);
       }
-
-      visit(value);
-      return labels;
-    };
-    const collectRenderedNoteLabels = (root: Document | ShadowRoot) => {
-      const labels: string[] = [];
-
-      function collect(currentRoot: Document | ShadowRoot): void {
-        for (const el of currentRoot.querySelectorAll("*")) {
-          if (el.localName === "cf-chip") {
-            const label = ((el as any).label ?? el.getAttribute("label") ?? "")
-              .trim();
-            if (label.startsWith("📝 New Note")) {
-              labels.push(label);
-            }
-          }
-          if ((el as HTMLElement).shadowRoot) {
-            collect((el as HTMLElement).shadowRoot!);
-          }
-        }
-      }
-
-      collect(root);
-      return labels;
-    };
-    const noteLabels = collectRenderedNoteLabels(document);
-    const storedUiNoteLabels = collectStoredNoteLabels(current?.["$UI"]);
-
-    return {
-      isNotebook: current?.isNotebook === true,
-      noteCount: typeof current?.noteCount === "number"
-        ? current.noteCount
-        : -1,
-      notesLength: notes.length,
-      mentionableLength: mentionable.length,
-      showNewNotePrompt: typeof current?.showNewNotePrompt === "boolean"
-        ? current.showNewNotePrompt
-        : undefined,
-      usedCreateAnotherNote: typeof current?.usedCreateAnotherNote === "boolean"
-        ? current.usedCreateAnotherNote
-        : undefined,
-      storedUiNoteChips: storedUiNoteLabels.length,
-      storedUiNoteLabels,
-      renderedNoteChips: noteLabels.length,
-      renderedNoteLabels: noteLabels,
-    };
+    }
+    collect(document);
+    return { noteCount, renderedNoteChips };
   });
 }

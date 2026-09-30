@@ -3112,16 +3112,17 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         tx.prepareCfc();
         expect((await tx.commit()).ok).toBeDefined();
 
-        // The parent's own write is all links, so it takes shape-only stamps
-        // and is never measured; the content — and the declaration — lands on
-        // the document the write anchored.
+        // Both the parent's membership and the child's content depend on the
+        // secret. Runtime ownership supplies a declaration for each store.
         const declaredOn = writerFitDiagnostics(tx)
           .filter((flag) =>
             flag.includes("writer-fit(runtime-owned-store-declared)")
           );
-        expect(declaredOn.length).toBe(1);
-        expect(declaredOn[0]).not.toContain(storeId);
-        expect(declaredOn[0]).toContain('"secret"');
+        expect(declaredOn.length).toBe(2);
+        expect(declaredOn.some((flag) => flag.includes(storeId))).toBe(true);
+        expect(declaredOn.every((flag) => flag.includes('"secret"'))).toBe(
+          true,
+        );
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -3129,10 +3130,8 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     });
 
     it("rejects a document anchored inside an ordinary one", async () => {
-      // The negative twin: the same anchored write under a parent the runtime
-      // does not own. The parent's own write is all links, so it is never
-      // measured; the anchored child is, and it is refused, because the
-      // child's ownership comes from the parent's and there is none.
+      // Both the selected membership and anchored content require a fitting
+      // policy. This ordinary store supplies neither declaration.
 
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = newRuntime(storageManager);
@@ -3162,7 +3161,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           "writer-fit confidentiality misfit",
         );
         expect(committed.error?.message).toContain('"secret"');
-        expect(committed.error?.message).not.toContain(`for ${storeId} at /`);
+        expect(committed.error?.message).toContain(`for ${storeId} at /`);
       } finally {
         await runtime.dispose();
         await storageManager.close();

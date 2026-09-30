@@ -21,7 +21,10 @@ import type {
   MediaType,
   MemorySpace,
 } from "../storage/interface.ts";
-import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  authorizationRead,
+  internalVerifierRead,
+} from "../storage/reactivity-log.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import {
@@ -34,6 +37,7 @@ import {
   registerCfcLabelDocument,
 } from "./label-documents.ts";
 import type { IFCLabel } from "./label-view-core.ts";
+import { isCompleteCfcReferenceEntry } from "./types.ts";
 import type {
   CfcMetadata,
   LabelMapEntry,
@@ -58,7 +62,9 @@ export type StoredCfcReadPolicy = Parameters<
  * marked as a verifier read, and visible to reactivity, so a writer
  * re-runs when the envelope it read changes.
  */
-const DEPENDENT_READ: StoredCfcReadPolicy = { meta: internalVerifierRead };
+const DEPENDENT_READ: StoredCfcReadPolicy = {
+  meta: { ...internalVerifierRead, ...authorizationRead },
+};
 
 /** A document whose reserved `["cfc"]` position a reader below reaches. */
 export type StoredCfcTarget = {
@@ -110,6 +116,7 @@ export class UnknownCfcMetadataVersionError extends StoredCfcMetadataError {
 const KNOWN_CFC_METADATA_VERSIONS: readonly StoredCfcMetadata["version"][] = [
   1,
   2,
+  3,
 ];
 
 /** Whether `value` is an envelope `version` this build interprets. */
@@ -181,7 +188,9 @@ const isReadableStoredEntry = (
   entry: unknown,
 ): boolean =>
   isStoredLabelMapEntry(entry) &&
-  (version === 2 || !isCfcLabelReference(entry.label));
+  (version !== 1 || !isCfcLabelReference(entry.label)) &&
+  (entry.referenceAcquisition === undefined ||
+    isCompleteCfcReferenceEntry(version, entry));
 
 /**
  * Whether `value` is a stored envelope this build can produce labels from:
@@ -405,7 +414,8 @@ const readStoredCfcLabelPaths = (
   tx: IExtendedStorageTransaction,
   target: StoredCfcTarget,
 ): readonly Pick<StoredLabelMapEntry, "path" | "origin">[] | undefined =>
-  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries;
+  readStoredEnvelope(tx, target, { meta: internalVerifierRead })?.labelMap
+    .entries;
 
 /**
  * The resolved envelope stored for `target`, or `undefined` when the

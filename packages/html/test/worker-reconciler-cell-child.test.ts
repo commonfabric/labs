@@ -95,6 +95,8 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
   const dummyCell = runtime.getCell(signer.did(), "dummy", undefined, dummyTx);
   const CellImplConstructor = dummyCell.constructor;
 
+  let mockCellId = 0;
+
   // Define MockCell extending CellImpl
   class MockCell extends (CellImplConstructor as any) {
     value: any;
@@ -110,7 +112,16 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
     constructor(value: any, labelView?: CfcLabelView) {
       // Pass dummy args to super to satisfy it
       // CellImpl(runtime, tx, link, synced, causeContainer, kind, labelView)
-      super(runtime, undefined, undefined, false, undefined, "cell", labelView);
+      super(
+        runtime,
+        undefined,
+        runtime.getCell(signer.did(), { mockCell: mockCellId++ })
+          .getAsNormalizedFullLink(),
+        false,
+        undefined,
+        "cell",
+        labelView,
+      );
       this.value = value;
     }
 
@@ -150,6 +161,10 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
      */
     getMetaRaw(_field?: string): unknown {
       return undefined;
+    }
+
+    getRawUntyped() {
+      return this.value;
     }
 
     /**

@@ -40,6 +40,7 @@ describe("parking coordinator admin view integration test", () => {
       space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
 
     const sourcePath = join(

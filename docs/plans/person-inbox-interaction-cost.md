@@ -3,7 +3,11 @@
 The measurements behind every claim here are in
 [the investigation record](../history/development/performance/2026-09-11-person-inbox-click-cost.md).
 This plan turns them into work. It is ordered by what a person feels, and each
-stage names the measurement that would show it landed.
+stage names the measurement that would show it landed. Before using its latency
+figures as a release gate, repeat the measurements on the exact candidate build
+and resolved CFC posture. The reference profile's observation accounting is
+specified in stage 2; its acceptance evidence belongs in the
+[reference rollout](cfc-precise-reference-rollout.md).
 
 ## What the measurements settled
 
@@ -182,92 +186,43 @@ harness that can reproduce a cross-session write refusal (stage 4a). Stage 7's
 pull half is closed: the start pull is removed, so nothing at start decides
 what a result demands.
 
-## Stage 1 — Stop the dereference-trace set from growing — **not built**
+## Stage 1 — Bound retained dereference traces
 
-**Where.** `ExtendedStorageTransaction.recordCfcDereferenceTrace`
-(`packages/runner/src/storage/extended-storage-transaction.ts`).
+`ExtendedStorageTransaction.recordCfcDereferenceTrace` appends each trace and
+uses a separate equality check to decide whether it invalidates the CFC digest.
+Measure duplicate retention through `dereferenceTracesRecorded` and
+`dereferenceTracesMax` before changing that representation. Any deduplication
+must preserve the traces a resolution returns, the acquisition history carried
+by references, and digest invalidation.
 
-**What this stage asked first.** Whether the scanned set grows. It does not.
-`dereferenceTracesRecorded` and `dereferenceTracesMax` were added to
-`getCfcStats()` and carried to a page through the existing logger-counts
-response, and across the healthy → eager → degraded sequence the per-click
-figure is **flat at ~750 traces recorded, with the largest set any one
-transaction held at 249**. The flow-label probe counters are flat too: ~11
-evaluated and ~11 memoized per click, in both states.
+## Stage 2 — Preserve reference observation accounting
 
-So the stage is rescoped rather than built, which is what putting the
-measurement first was for. The trace set is not a leak; it is simply large, and
-what made it expensive was the scan over it. That is stage 2, and stage 2 alone
-turned out to carry the whole symptom.
+`forEachFlowObservation` in `packages/runner/src/cfc/prepare.ts` classifies
+link-resolution probes as `followRef` from their read metadata. Such a read
+consumes the reference binding's confidentiality; target content contributes
+through the reads that consume it. A recorded dereference does not exempt a
+probe from its binding's label. The pass therefore needs no trace-membership
+scan or index. `PathPrefixIndex` remains available as a tested path utility,
+and `isPrefix` supplies wildcard-aware path comparisons.
 
-The unconditional append in `recordCfcDereferenceTrace` — the equality scan
-beside the push decides only whether the digest is invalidated, not whether the
-trace is stored — is still a duplicate store, and the list is still cleared in
-`abort()` and nowhere else. With the scan indexed it costs memory rather than
-time, so it is worth tidying but is no longer a performance item.
+Re-measure the inbox with the independently labeled reference profile before
+attributing latency to this pass. The investigation record linked above is
+measurement evidence for its recorded build, not an acceptance result for the
+[reference rollout](cfc-precise-reference-rollout.md).
 
-## Stage 2 — Make the per-read scan not linear — **landed**
+## Stage 3 — Avoid redundant flow-relevance probes
 
-**Where.** `probeBelongsToDereference` inside `forEachFlowObservation`
-(`packages/runner/src/cfc/prepare.ts`), reached from `prepareForCommit` →
-`probeFlowLabelWork` → `flowLabelWorkExists`.
+`flowLabelWorkExists` shares the observation walk with `deriveFlowJoin` and
+memoizes negative verdicts against the transaction's activity epoch. Measure
+`flowLabelProbesComputed` and `flowLabelProbeMemoHits` alongside CFC-relevant
+transaction counts to determine whether narrowing that epoch would help.
 
-**What was wrong.** For each of the transaction's read activities, the probe
-asked whether a recorded dereference covers that read by scanning every trace
-source recorded for that document — up to 249 of them, once per read, with a
-closure allocated per comparison.
-
-**What landed.** `PathPrefixIndex`
-(`packages/runner/src/cfc/path-prefix-index.ts`) indexes those sources by path
-segment, so the query costs the read path's length rather than the set's size.
-`isPrefix` treats `"*"` as matching any segment on either side, so the walk
-carries a frontier rather than a single node; a test compares the index against
-a copy of `isPrefix` across a generated corpus of 2,000-plus cases, which is
-the only thing that makes the substitution safe.
-
-**Measured**, same rig, same 39-row list, same counters either side
-(750 traces, 11 probes, 798 logged operations per click):
-
-| | before | after | |
-| --- | ---: | ---: | --- |
-| paced click, median | 1482 ms | 387 ms | **3.8× faster** |
-| after eager clicking, median | 1711 ms | 392 ms | **4.4× faster** |
-
-It also pushes back the symptom stage 1 was named for: a paced round after an
-eager one used to stay degraded at ~920 ms against a ~124 ms first round, and
-across three rounds now returns to the band — 431 ms, then eager, then 400 ms.
-Across sixty it does not, and stage 8 is where that is measured: the
-degradation is delayed to about click 18-24 rather than removed. `isPrefix` no
-longer appears in the profile's top ten at all; what is left of a healthy round
-is flat, with no frame above 8%.
-
-## Stage 3 — Do not run the pass at all when there is nothing to find — **part landed**
-
-**What landed.** `coveredByTrace` is computed on demand rather than for every
-read. Only a link-resolution probe needs it inside the walk, and of the two
-consumers only `deriveFlowJoin` reads it off the observation; the hot caller,
-`flowLabelWorkExists`, never does. An interleaved A/B put it about a tenth
-ahead in both pairs, with counted work per click at 766 logged operations
-against 798.
-
-**Where that leaves the pass.** `flowLabelWorkExists` is now **7.1% of wall**
-(232 ms of a four-click round), against 13.4 seconds before stage 2. It is no
-longer the place to look.
-
-**What is still unexplained, and is the interesting number.** The counters say
-~11 probes evaluated and ~11 memoized per click, against **2 CFC-relevant
-transactions in an entire session**. So eleven full evaluations per click
-conclude, every time, that there is no flow work to do.
-
-The memo that would fix that is keyed on an activity epoch every journaled read
-advances. Narrowing it is not simply "invalidate on a new document": the
-verdict depends on the read's CLASS as well as its document — a document
-holding only link-origin entries is relevant to a probe read and not to a value
-read — so two reads of one document can disagree. The invalidation key would
-have to be the (document, read shape) pair, which the transaction does not
-compute at journal time. That is a CFC design decision rather than a
-performance edit, and it wants the owner of
-`docs/specs/cfc-commit-preparation.md` rather than a measurement.
+A narrower memo key must include read shape as well as document identity. A
+document holding only link-origin entries can contribute to `followRef` while
+contributing nothing to a content read. Two reads of that document can therefore
+disagree. Any change must also invalidate on writes and CFC metadata changes;
+it needs the semantics in `docs/specs/cfc-commit-preparation.md` and regression
+coverage for both observation classes.
 
 ## Stage 4 — Two write refusals that stop a host driving the pattern
 

@@ -13,6 +13,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { normalize } from "@std/path/posix";
 import { join } from "@std/path";
@@ -899,6 +900,13 @@ describe("describe_handle", () => {
       return output.resultRef;
     };
 
+    const spendingReferenceLabels = ["remaining", "topCategory", "totalSpent"]
+      .map((name) => ({
+        path: [name],
+        confidentiality: [],
+        integrity: ["https://commonfabric.org/cfc/atom/LinkReference"],
+      }));
+
     /** Instruments the CFC metadata read made by one handle description. */
     const withCfcMetadataRead = (onRead: () => void): () => void => {
       const instrumented = runtime as Runtime & {
@@ -1127,9 +1135,19 @@ describe("describe_handle", () => {
 
       expect(metadataReads).toBe(1);
       expect(researchDescription.output.hasSchema).toBe(true);
-      expect(researchDescription.output.labels).toEqual([]);
+      expect(researchDescription.output.labels).toEqual(
+        spendingReferenceLabels,
+      );
       expect(researchDescription.cfcLabelAvailable).toBe(true);
-      expect(researchDescription.cfcLabel).toEqual({});
+      expect(researchDescription.cfcLabel?.confidentiality ?? []).toEqual([]);
+      expect(researchDescription.cfcLabel?.integrity).toHaveLength(3);
+      expect(
+        researchDescription.cfcLabel?.integrity?.every((atom) =>
+          typeof atom === "object" && atom !== null &&
+          "type" in atom &&
+          atom.type === "https://commonfabric.org/cfc/atom/LinkReference"
+        ),
+      ).toBe(true);
     });
 
     it("keeps the fail-closed label when its single metadata read fails", async () => {
@@ -1183,7 +1201,19 @@ describe("describe_handle", () => {
       // list, while a run that never reached a space answers with no list at
       // all. Collapsing the two would let a handle a run could not read about
       // pass for one carrying nothing.
-      const resultRef = await createPiece();
+      const tx = runtime.edit();
+      const plain = runtime.getCell(
+        session.pieces.getSpace(),
+        "unlabeled-description",
+        undefined,
+        tx,
+      );
+      plain.set({ value: "unlabeled" });
+      expect((await tx.commit()).error).toBeUndefined();
+      const resultRef = createLLMFriendlyLink(
+        plain.getAsNormalizedFullLink(),
+        session.pieces.getSpace(),
+      );
       const minted = await mintAddressHandle(
         createHarnessHandleTable("run-describe"),
         resultRef,
@@ -1260,7 +1290,7 @@ describe("describe_handle", () => {
       expect(output.known).toBe(true);
       expect(output.hasSchema).toBe(true);
       expect(output.schema).toBeDefined();
-      expect(output.labels).toEqual([]);
+      expect(output.labels).toEqual(spendingReferenceLabels);
     });
 
     it("reports an entry whose reference does not parse from the recorded schema instead", async () => {

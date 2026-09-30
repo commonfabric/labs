@@ -111,13 +111,10 @@ for already-persisted data. The coordinator-write taint is implemented as the
 `structure` labelMap component: container nodes of pure-link-structure writes
 carry the writing tx's J as exact-path shape labels — joined by reads at the
 container path and by recursive ancestor reads, never by reads strictly below —
-so the §8.5.6.1 membership/length channel is labeled while per-slot pointer
-handling stays clean. Pointer identity at a slot, i.e. WHICH element sits
-there observed without dereferencing, was an SC-4/SC-8 residual until
-template-population Stage A: a standalone slot observation now consumes the
-assignment `J` through the `*`-path `followRef` template — on declared
-list-coordinator containers since Stage A, and on ALL pure-link containers
-since the machinery-read marker landed (#4674; see the SC-8 note below).)
+so the §8.5.6.1 membership/length channel is labeled. Both semantic pointer
+identity observations and reference traversal consume assignment `J` through
+slot `followRef` templates. Trusted coordinator bookkeeping can exclude its own
+machinery observations; a generic pass-through cannot.)
 
 **SC-8 [normative] Read-API → observation-class mapping — §4.6.3.** The
 primitive read profile defines `shape`/`value`/`enumerate`/`count`/ `followRef`,
@@ -611,27 +608,48 @@ is a **requirement**, and tightening it is the restrictive (allowed)
 direction — the two must not be conflated. Write-side floor checking needs a
 home in §8.10 (today §8.10.3 is input/consume-side only).
 
-The **integrity-direction code home is now landed (Epic D3, `verifyWriteFloor`
-in `prepare.ts`)** behind the `cfcWriteFloor: off | observe | enforce` dial
-(default `off`, orthogonal to the enforcement and flow dials). It tests the
-**written value's** integrity — the schema-derived label (`addIntegrity` mints
-+ `exactCopyOf` carry, evidence-gated by `gateRuntimeMintedIntegrity` so a
-pattern cannot forge runtime-minted atoms to pass its own floor), each link
-written at/under the path (the linked source's own label — the D2 by-reference
-contract on the write side, one contribution per link so no laundering across
-siblings), and the flow hereditary meet when flow labels persist — against the
-floor with **exact-match** membership via the single shared predicate
-`cfcIntegritySatisfiesFloor` (observation.ts), which the read-side gate and the
-D2 tool-input floor now also call so D5's pattern/concept upgrade lands in one
-place. SC-18's own semantics are honored: floor-is-a-minimum, overwrite checked
-against the declared floor only (no meet across successive writes, no prior-
-value consultation), and empty integrity on a floor-declaring path fails (a
-stamped-`LlmDerived`-only value fails any floor by construction — closing the
-write-side half of the vacuous pass). Wildcard (`*`) floor entries and
-pattern-setup/seed initialization stay exempt (v1 scope); (a) the standard-
-profile default and (c) the §8.10 spec home remain open — (b),
-`enforce-strict` making writer-fit itself reject, landed with the H4 code
-step (see the confidentiality paragraph above).
+The **write-side integrity floor** is implemented by `verifyWriteFloor` in
+`prepare.ts`, behind `cfcWriteFloor: off | observe | enforce` (default `off`,
+orthogonal to the enforcement and flow dials). For an inline value, it checks
+the authorized schema-derived integrity, including `addIntegrity` and verified
+copy/projection claims, plus the hereditary flow meet when flow labels persist.
+For a reference-valued contribution, it resolves the current target contents
+through the Runtime's scoped link resolver and checks that subject's stored or
+authorized pending integrity. A receiving slot's mint, a relationship
+endorsement, or a label/schema carried by the handle cannot satisfy a target
+content floor. Each linked contribution must satisfy the floor independently.
+
+Concrete wildcard slots are expanded against the current written contents,
+including arrays or objects reached through ancestor links. Unresolved evidence
+rejects the write; a link or wildcard cannot cause the floor to be skipped.
+Setup and seed writes have the same value requirement. A pure deletion writes
+no value and is outside the floor. The comparison uses the shared
+`cfcIntegritySatisfiesFloor` predicate, including its trust-aware concept matching.
+A floor is a minimum, and an overwrite is measured against its declared floor,
+not against the prior value's integrity.
+
+**Copy claims have explicit subjects.** `exactCopyOf` and `projection` follow
+ancestor references to the claimed fields in the transaction's current
+snapshot. Missing fields on both sides are unresolved evidence, not an equal
+pair of `undefined` values. Inline fields compare by Fabric value equality.
+When both fields hold references, the comparison covers their normalized space,
+identity, scope, path, and overwrite mode; reader schemas do not alter that
+binding. Mixed inline/reference subjects and wildcard copy claims fail closed.
+The Runtime verifies these claims before storage submission; carried reader
+schemas remain views, not general payload-validation certificates.
+
+Content verification records authorization dependencies for traversed bindings,
+values, and metadata. Storage binds them to the same-space commit's revision
+basis. Content assertions that traverse another space fail closed because the
+storage protocol cannot atomically bind those revisions to the destination
+write. Reference-only forwarding and identity-copy checks can still name another
+space without reading its target contents. Focused behavior is covered by
+`cfc-linked-content-floor.test.ts`, `cfc-write-floor.test.ts`,
+`cfc-exact-copy.test.ts`, and `cfc-projection.test.ts`.
+
+The standard-profile floor default and the §8.10 spec home remain open. The
+`enforce-strict` writer-fit rejection is described in the confidentiality
+paragraph above.
 
 **SC-19 [clarify] Blanket "confidentiality always joins" dependency.**
 Verified open (the rule is stated as fact in §15.1 and §3.1.2, nowhere
@@ -653,10 +671,11 @@ content-addressed schema docs), state the default (everything else is
 consumed), and flag the invariant-12 revisit; §4.6.3 has the
 reference-without-dereference mapping and §8.9.2 makes trigger reads
 normatively INCLUDED. Remaining delta: (a) the implementation's
-`linkResolutionProbe` (coordinator link/slot scaffolding) and
-`schedulerDependencyRead` (dependency seeding) are machinery but not
-"verification machinery" — either generalize class 1 to runtime-internal
-machinery reads or add them as named classes; (b) state explicitly that
+`schedulerDependencyRead` (dependency seeding) and trusted coordinator
+bookkeeping are machinery but not "verification machinery" — either generalize
+class 1 to runtime-internal machinery reads or add them as named classes. A
+`linkResolutionProbe` alone is a consumed `followRef` observation; excluding
+bookkeeping requires a separate runtime-owned marker. (b) State explicitly that
 markers are attachable only by runtime code, never pattern-controlled; (c)
 state the asymmetry: over-exclusion is unsound (leak), under-exclusion merely
 coarsens J.

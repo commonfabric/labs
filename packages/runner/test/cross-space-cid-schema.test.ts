@@ -11,6 +11,11 @@ import { Identity } from "@commonfabric/identity";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 
 import type { Cell } from "../src/cell.ts";
+import {
+  SEED_ENVELOPE_SCHEMA,
+  SEED_ENVELOPE_SCHEMA_HASH,
+  storedReferenceEnvelope,
+} from "./cfc-seed-envelope.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { Runtime } from "../src/runtime.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
@@ -157,13 +162,25 @@ describe("cross-space-cid-schema", () => {
           [finalSpace, finalDocs],
         ] as const
       ) {
+        if (docs.size > 0) {
+          docs.set(`cid:${SEED_ENVELOPE_SCHEMA_HASH}`, {
+            value: SEED_ENVELOPE_SCHEMA,
+          });
+        }
         for (const id of docs.keys()) {
-          if (id.startsWith("cid:")) expectedSchemaReads.push(`${space}/${id}`);
+          if (
+            id.startsWith("cid:") && id !== `cid:${SEED_ENVELOPE_SCHEMA_HASH}`
+          ) expectedSchemaReads.push(`${space}/${id}`);
         }
         if (docs.size === 0) continue;
         manager.installStoreReadThrough(space, ({ id, scopeKey }) => {
-          if (id.startsWith("cid:")) schemaReads.push(`${space}/${id}`);
-          const doc = docs.get(id);
+          if (
+            id.startsWith("cid:") && id !== `cid:${SEED_ENVELOPE_SCHEMA_HASH}`
+          ) schemaReads.push(`${space}/${id}`);
+          const stored = docs.get(id);
+          const doc = stored !== undefined && !id.startsWith("cid:")
+            ? storedReferenceEnvelope({ value: stored.value })
+            : stored;
           return {
             branch: "",
             id,
@@ -287,8 +304,14 @@ describe("cross-space-cid-schema", () => {
       }],
       [targetId, { value: { lateName: "Ada", extra: "outside the schema" } }],
     ]);
+    docs.set(`cid:${SEED_ENVELOPE_SCHEMA_HASH}`, {
+      value: SEED_ENVELOPE_SCHEMA,
+    });
     manager.installStoreReadThrough(space, ({ id, scopeKey }) => {
-      const doc = docs.get(id);
+      const stored = docs.get(id);
+      const doc = stored !== undefined && !id.startsWith("cid:")
+        ? storedReferenceEnvelope({ value: stored.value })
+        : stored;
       return {
         branch: "",
         id,

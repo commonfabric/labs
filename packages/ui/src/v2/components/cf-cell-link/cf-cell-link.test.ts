@@ -331,6 +331,34 @@ describe("CFCellLink disposal handling", () => {
     };
   }
 
+  it("acquires a string address before resolving its cell", async () => {
+    const acquired: unknown[] = [];
+    const resolved = { token: "issued" };
+    const rendered: unknown[] = [];
+    const runtime = {
+      signal: { aborted: false },
+      acquireCell: (address: unknown) => {
+        acquired.push(address);
+        return Promise.resolve({
+          resolveAsCell: () => Promise.resolve(resolved),
+        });
+      },
+    };
+    await resolveCellOn({
+      ...baseThis(),
+      link: "/of:fid1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      runtime,
+      _setResolvedCell: (cell: unknown) => rendered.push(cell),
+    });
+    expect(acquired).toEqual([{
+      id: "of:fid1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      space: "did:key:test-space",
+      scope: "space",
+      path: [],
+    }]);
+    expect(rendered).toEqual([resolved]);
+  });
+
   it("suppresses the resolve-cell log when the cell's runtime is disposed", async () => {
     const fakeThis = {
       ...baseThis(),
@@ -367,20 +395,21 @@ describe("CFCellLink disposal handling", () => {
     // would log anyway.
     const runtime = {
       signal: { aborted: true },
-      getCellFromRef: () => ({
-        ref: () => ({
-          id: "of:abc123",
-          space: "did:key:test-space",
-          scope: "space",
-          path: [],
+      acquireCell: () =>
+        Promise.resolve({
+          ref: () => ({
+            id: "of:fid1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            space: "did:key:test-space",
+            scope: "space",
+            path: [],
+          }),
+          resolveAsCell: () =>
+            Promise.reject(new DOMException("aborted", "AbortError")),
         }),
-        resolveAsCell: () =>
-          Promise.reject(new DOMException("aborted", "AbortError")),
-      }),
     };
     const fakeThis: Record<string, unknown> = {
       ...baseThis(),
-      link: "/of:abc123",
+      link: "/of:fid1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       runtime,
     };
     const spy = captureConsoleError();

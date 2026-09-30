@@ -19,13 +19,28 @@ const setOp = (id: string, value: unknown) =>
 const patchOp = (id: string, patches: unknown[]) =>
   ({ op: "patch", id, patches }) as never;
 
-const commit = (localSeq: number, extra: Record<string, unknown>) =>
-  ({
+/** Creates a document-only commit whose reads permit identity elision. */
+const commit = (localSeq: number, extra: Record<string, unknown>) => {
+  const reads = extra.reads as {
+    confirmed: Record<string, unknown>[];
+    pending: Record<string, unknown>[];
+  } | undefined;
+  return {
     localSeq,
-    reads: { confirmed: [], pending: [] },
     operations: [],
     ...extra,
-  }) as never;
+    reads: {
+      confirmed: (reads?.confirmed ?? []).map((read) => ({
+        validation: "elidable",
+        ...read,
+      })),
+      pending: (reads?.pending ?? []).map((read) => ({
+        validation: "elidable",
+        ...read,
+      })),
+    },
+  } as never;
+};
 
 const headSeqOf = (engine: Engine, id: string): number | undefined =>
   engine.database.prepare(`SELECT seq FROM head WHERE id = ?`).get<
@@ -57,6 +72,186 @@ describe("applyCommit() with an identity commit", () => {
       commit: commit(1, { operations: [setOp("of:doc", { n: 2 })] }),
     });
     return install.seq;
+  }
+
+  for (const validation of [undefined, "required"] as const) {
+    it(`refuses an identity with a stale ${validation ?? "unclassified"} dependency`, () => {
+      const installSeq = installThenRewrite();
+      expect(() =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(2, {
+            reads: {
+              confirmed: [{
+                id: "of:doc",
+                path: [],
+                seq: installSeq,
+                validation,
+              }],
+              pending: [],
+            },
+            operations: [setOp("of:doc", { n: 2 })],
+          }),
+        })
+      ).toThrow(ConflictError);
+    });
+  }
+
+  it("checks required evidence on an unwritten document after an elidable conflict", () => {
+    const installSeq = installThenRewrite();
+    const evidence = applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(2, { operations: [setOp("of:evidence", "old")] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(3, { operations: [setOp("of:evidence", "new")] }),
+    });
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(2, {
+          reads: {
+            confirmed: [
+              {
+                id: "of:doc",
+                path: [],
+                seq: installSeq,
+                validation: "elidable",
+              },
+              {
+                id: "of:evidence",
+                path: [],
+                seq: evidence.seq,
+                validation: "required",
+              },
+            ],
+            pending: [],
+          },
+          operations: [setOp("of:doc", { n: 2 })],
+        }),
+      })
+    ).toThrow("of:evidence");
+  });
+
+  it("refuses stale required pending evidence after an elidable confirmed conflict", () => {
+    const installSeq = installThenRewrite();
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(2, { operations: [setOp("of:evidence", "old")] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(2, { operations: [setOp("of:evidence", "new")] }),
+    });
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(3, {
+          reads: {
+            confirmed: [{ id: "of:doc", path: [], seq: installSeq }],
+            pending: [{
+              id: "of:evidence",
+              path: [],
+              localSeq: [2],
+              basisSeq: 0,
+              validation: "required",
+            }],
+          },
+          operations: [setOp("of:doc", { n: 2 })],
+        }),
+      })
+    ).toThrow("stale pending read: of:evidence");
+  });
+
+  it("accepts an identity with fresh required evidence and stale elidable reads", () => {
+    const installSeq = installThenRewrite();
+    const evidence = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(2, { operations: [setOp("of:evidence", "current")] }),
+    });
+    const verdict = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(3, {
+        reads: {
+          confirmed: [
+            { id: "of:doc", path: [], seq: installSeq },
+            {
+              id: "of:evidence",
+              path: [],
+              seq: evidence.seq,
+              validation: "required",
+            },
+          ],
+          pending: [{
+            id: "of:evidence",
+            path: [],
+            localSeq: [2],
+            basisSeq: installSeq,
+            validation: "required",
+          }],
+        },
+        operations: [setOp("of:doc", { n: 2 })],
+      }),
+    });
+    expect(verdict.elidedOpIndexes).toEqual([0]);
+  });
+
+  it("refuses required evidence changed and restored to the observed value", () => {
+    const installSeq = installThenRewrite();
+    const evidence = applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(2, { operations: [setOp("of:evidence", "original")] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(3, { operations: [setOp("of:evidence", "changed")] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(4, { operations: [setOp("of:evidence", "original")] }),
+    });
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(2, {
+          reads: {
+            confirmed: [
+              { id: "of:doc", path: [], seq: installSeq },
+              {
+                id: "of:evidence",
+                path: [],
+                seq: evidence.seq,
+                validation: "required",
+              },
+            ],
+            pending: [],
+          },
+          operations: [setOp("of:doc", { n: 2 })],
+        }),
+      })
+    ).toThrow("of:evidence");
+  });
+
+  for (const pending of [false, true]) {
+    it(`refuses an invalid ${pending ? "pending" : "confirmed"} validation class`, () => {
+      const installSeq = installThenRewrite();
+      const malformed = { id: "of:doc", path: [], validation: "unknown" };
+      expect(() =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(2, {
+            reads: {
+              confirmed: pending ? [] : [{ ...malformed, seq: installSeq }],
+              pending: pending
+                ? [{ ...malformed, localSeq: [1], basisSeq: 0 }]
+                : [],
+            },
+            operations: [setOp("of:doc", { n: 2 })],
+          }),
+        })
+      ).toThrow(ProtocolError);
+    });
   }
 
   it("accepts a set of the stored content over a stale confirmed read, eliding the operation", () => {

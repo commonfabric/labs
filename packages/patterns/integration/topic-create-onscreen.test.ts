@@ -118,6 +118,7 @@ describe("Topics create, on screen against off screen", () => {
       space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
     await cc.ensureDefaultPattern();
 

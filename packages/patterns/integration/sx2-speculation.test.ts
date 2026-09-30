@@ -60,6 +60,7 @@ describe("sx2 speculation (Phase 2 gates)", () => {
       space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
     const sourcePath = join(
       import.meta.dirname!,

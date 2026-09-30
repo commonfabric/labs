@@ -7,6 +7,11 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
 import { recordReplayedArgumentSlots } from "../src/cfc/reference-initialization.ts";
+import { withCfcLabelViewOrigins } from "../src/cfc/label-view-core.ts";
+import {
+  getCfcReferenceProvenance,
+  withCfcReferenceConfidentiality,
+} from "../src/cfc/reference-provenance.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { recomposeSchema } from "../src/schema-decompose.ts";
@@ -334,6 +339,47 @@ describe("writer-policied inputs of a sub-piece", () => {
         );
         await runtime.idle();
         expect(argument.get().frozen.digest).toBe("first");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("refuses an unchanged pointer replay with weaker selection evidence", async () => {
+      const runtime = newRuntime();
+      try {
+        const { argument, tx } = await replayingTx(
+          runtime,
+          "writer-policy-replay-weaker-selection",
+        );
+        const original = argument.withTx(tx).key("entries").key(0)
+          .resolveAsCell().getAsNormalizedFullLink();
+        const provenance = getCfcReferenceProvenance(original)!;
+        expect(provenance.selectionWitnesses?.length).toBeGreaterThan(0);
+        const selected = runtime.getCellFromLink(
+          {
+            space: original.space,
+            id: original.id,
+            scope: original.scope,
+            path: [...original.path],
+          },
+          undefined,
+          tx,
+          withCfcLabelViewOrigins(
+            withCfcReferenceConfidentiality(
+              undefined,
+              provenance.confidentiality,
+            ),
+            provenance.originSpaces ?? [],
+          ),
+        );
+        expect(
+          getCfcReferenceProvenance(selected.getAsNormalizedFullLink())
+            ?.selectionWitnesses ?? [],
+        ).toEqual([]);
+        argument.withTx(tx).key("entries").key(0).set(selected as never);
+        expect((await tx.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
       } finally {
         await runtime.dispose();
       }

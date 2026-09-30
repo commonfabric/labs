@@ -179,8 +179,8 @@ describe("CFC prepare reproduction", () => {
         3 * stats.flowTemplateContainers,
       );
       expect(stats.flowTemplateContainers).toBe(251);
-      // All fifty instances reuse one source-container template query.
-      expect(stats.overlapWildcardQueries).toBe(1);
+      // Pointwise reference acquisition needs no overlapping target-label query.
+      expect(stats.overlapWildcardQueries).toBe(0);
       for (let index = 0; index < 50; index++) {
         const cell = result.key("rendered").key(String(index)).resolveAsCell();
         const status = cfcLabelViewForResolvedCellWithStatus(cell);
@@ -190,7 +190,7 @@ describe("CFC prepare reproduction", () => {
           expect(entry.label.confidentiality).toEqual(["secret"]);
         }
       }
-      expect(stats.authoritativeCoverCalls).toBeGreaterThan(0);
+      expect(stats.authoritativeCoverCalls).toBe(0);
       expect(stats.consumedLabelWalks).toBe(0);
     } finally {
       await runtime.dispose();

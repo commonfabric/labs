@@ -12,7 +12,7 @@ const INJECTION_SAFE_ATOM = {
 };
 
 describe("CFC link-write integrity gate", () => {
-  // Regression guard for runtime-evidence atoms on the link-write path (audit
+  // Legacy link-label derivation gates runtime-evidence atoms (audit
   // S4 review follow-up). The integrity mint gate originally covered only
   // schema-derived labels; an author could persist a forged InjectionSafe
   // through a link's carried label view (or embedded link schema) and later
@@ -24,6 +24,7 @@ describe("CFC link-write integrity gate", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
     });
     try {
       const tx = runtime.edit();
@@ -117,6 +118,7 @@ describe("CFC link-write integrity gate", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
       cfcEnforcementMode: "enforce-strict",
     });
     try {
@@ -177,6 +179,7 @@ describe("CFC link-write integrity gate", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
       cfcEnforcementMode: "enforce-strict",
     });
     try {

@@ -587,26 +587,23 @@ describe("data URI inlining", () => {
       expect(rawValue).toBe("test");
     });
 
-    it("should surface the storage error for a foreign-media-type data URI", () => {
-      // Such a link is not inlined, so the write treats it as an ordinary
-      // link and reads through it to diff against what it names. That read
-      // reports the media type, as the storage layer's typed error. Landing
-      // on that error is also what pins the inlining re-entry as unreached;
-      // the re-entry recurs on a value the inlining call leaves alone.
+    it("stores a foreign-media-type reference and reports its media error on dereference", async () => {
       const targetCell = runtime.getCell(space, "target", undefined, tx);
-
-      const link = {
-        "/": {
-          [LINK_V1_TAG]: {
-            id: "data:image/png;base64,iVBORw0KGgo",
-            path: [],
-          },
+      const image = runtime.getCellFromLink(
+        {
+          space,
+          id: "data:image/png;base64,iVBORw0KGgo",
+          path: [],
         },
-      };
-
+        undefined,
+        tx,
+      );
+      targetCell.set(image.getAsLink());
+      expect((await tx.commit()).error).toBeUndefined();
+      tx = runtime.edit();
       let error: { name?: string } | undefined;
       try {
-        targetCell.set(link);
+        targetCell.withTx(tx).resolveAsCell().get();
       } catch (caught) {
         error = caught as { name?: string };
       }

@@ -21,6 +21,7 @@ import { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
   JSONSchema,
+  NormalizedFullLink,
   PatternCoverageData,
   RuntimeTelemetryMarkerResult,
   SchedulerDiagnosisResult,
@@ -877,6 +878,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     ref: CellRef,
   ): CellHandle<T> {
     return new CellHandle<T>(this, ref);
+  }
+
+  /** Acquires an independently selected address through the trusted host. */
+  async acquireCell<T>(address: NormalizedFullLink): Promise<CellHandle<T>> {
+    const response = await this.#conn.request<RequestType.AcquireCell>({
+      type: RequestType.AcquireCell,
+      address,
+    });
+    return new CellHandle<T>(this, response.cell);
   }
 
   // TODO(unused)

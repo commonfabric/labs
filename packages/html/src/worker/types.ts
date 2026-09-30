@@ -6,7 +6,7 @@
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import type { Cancel, Cell, JSONSchema } from "@commonfabric/runner";
+import type { Cancel, Cell, JSONSchema, SigilLink } from "@commonfabric/runner";
 import type {
   CfcConfClause,
   CfcModulePolicySource,
@@ -372,6 +372,15 @@ export interface SpaceAccessProvider {
 
 /** Options for a worker-side renderer and its host authority boundaries. */
 export interface WorkerReconcilerOptions {
+  /** Preserves host-owned acquisition authority on an exported binding. */
+  exportCellRef?: (cell: Cell<unknown>, ref: CellRef) => CellRef;
+
+  /** Transforms links through the runtime's canonical value converter. */
+  transformLink?: (
+    cell: Cell<unknown> | undefined,
+    link: SigilLink,
+  ) => SigilLink;
+
   /** Callback when operations are ready to send to main thread */
   onOps: (
     ops: VDomOp[],

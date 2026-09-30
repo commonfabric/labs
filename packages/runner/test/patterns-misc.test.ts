@@ -10,6 +10,7 @@ import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isCell } from "../src/cell.ts";
+import { getCellOrThrow } from "../src/query-result-proxy.ts";
 import { isModule } from "../src/builder/types.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
@@ -151,8 +152,12 @@ describe("Pattern Runner - Miscellaneous", () => {
     expect(value.items).toHaveLength(1);
     expect(value.items[0].title).toBe("First Item");
 
-    // Test reuse of proxy for array items
-    expect(value.items[0].items).toBe(value.items);
+    // Distinct acquisition paths retain their own proof while naming one array.
+    expect(
+      getCellOrThrow(value.items[0].items).equals(getCellOrThrow(value.items)),
+    ).toBe(
+      true,
+    );
 
     // Add second item
     result.key("stream").send({ detail: { message: "Second Item" } });
@@ -161,8 +166,16 @@ describe("Pattern Runner - Miscellaneous", () => {
     expect(value.items[1].title).toBe("Second Item");
 
     // All three should point to the same array
-    expect(value.items[0].items).toBe(value.items);
-    expect(value.items[1].items).toBe(value.items);
+    expect(
+      getCellOrThrow(value.items[0].items).equals(getCellOrThrow(value.items)),
+    ).toBe(
+      true,
+    );
+    expect(
+      getCellOrThrow(value.items[1].items).equals(getCellOrThrow(value.items)),
+    ).toBe(
+      true,
+    );
 
     // And triple check that it actually refers to the same underlying array
     expect(value.items[0].items[1].title).toBe("Second Item");

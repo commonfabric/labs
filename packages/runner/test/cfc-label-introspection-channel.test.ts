@@ -464,16 +464,20 @@ describe("CFC label-metadata observation channel (inv-12 Stage 2)", () => {
       );
       expect(outcome.status).toBe("ok");
       const observations = tx.getCfcState().labelMetadataObservations;
-      // The seeded label holds two clauses ("secret" — a public type-only
-      // string atom, nothing recorded — and the source-bearing caveat): one
-      // protected whole-atom projection.
-      expect(observations).toHaveLength(1);
+      // The query observes metadata shape and a source-bearing projection.
+      expect(observations).toHaveLength(2);
+      expect([...observations[0].target.path]).toEqual([
+        "cfc",
+        "labels",
+        "value",
+        "body",
+      ]);
       expect(observations[0].observes).toBe("labelMetadata");
       // The record addresses the CONCRETE first-layer metadata path the
       // projection consulted (§4.6.4.1 addressing; template-population
       // Stage B upgraded the record from the subtree root to the
       // clause/alternative-indexed path) — never a payload path.
-      expect([...observations[0].target.path]).toEqual([
+      expect([...observations[1].target.path]).toEqual([
         "cfc",
         "labels",
         "value",

@@ -235,6 +235,28 @@ advertises the capability.
 an older server may make the historical unpaginated list request, but must not
 send continuation fields or an existence request.
 
+`readValidation` advertises that identity admission preserves all required read
+dependencies (`03-commit-model.md` §3.6.1). It is build-inherent and defaults to
+`false` when absent. A client MUST refuse to issue a commit with any read whose
+`validation` is absent or `required` unless the server advertises this
+capability. The check applies at initial submission and immediately before every
+outstanding commit is sent after reconnecting; a cached decision from another
+connection is insufficient. Explicitly elidable-only commits need no stronger
+capability. Servers treat absent validation as required, preserving strict read
+validation for clients that do not classify dependencies.
+
+`eventContext` advertises preservation of the opaque `runtimeReferenceContext`
+on durable event entries, including retry entries. It is build-inherent and
+defaults to `false` when absent. A client MUST refuse a commit declaring any
+event append unless the server advertises this capability. This applies even
+when an individual entry has no context: the transport does not decide which
+events need Runtime evidence. Retry requests also require this capability because they
+append a successor carrying the original context; Dismiss requests do not.
+The check runs at initial submission and again
+immediately before each send, including reconnect replay. Memory transports the
+string without interpreting its Runtime version or CFC policy; compatible
+Runtime readers and writers remain a separate admission requirement.
+
 `verdictCatchUpMarkers` advertises that the server stages a `caughtUpLocalSeq`
 catch-up obligation for accepts and conflict rejections, delivered on the
 batched fan-out (section 4.11.2). It is build-inherent (always advertised by

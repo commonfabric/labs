@@ -44,8 +44,9 @@ import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-p
 import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
+  cfcIntegrityForObservationNode,
   type CfcLabelView,
-  cfcLabelViewForCell,
+  cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
@@ -53,7 +54,6 @@ import {
   markRendererTrustedEvent,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
-  readConsumesEntry,
   type RenderConfidentialityResolver,
   reportCfcDenial,
   type SpaceMembershipProvider,
@@ -265,6 +265,8 @@ export class WorkerReconciler {
   #rootCancel: Cancel | null = null;
 
   readonly #onOps: (ops: VDomOp[]) => number | void;
+  readonly #exportCellRef: WorkerReconcilerOptions["exportCellRef"];
+  readonly #transformLink: WorkerReconcilerOptions["transformLink"];
   readonly #onError?: (error: Error) => void;
   readonly #renderDeclassificationPolicy: RenderDeclassificationPolicy;
 
@@ -303,6 +305,8 @@ export class WorkerReconciler {
 
   constructor(options: WorkerReconcilerOptions) {
     this.#onOps = options.onOps;
+    this.#exportCellRef = options.exportCellRef;
+    this.#transformLink = options.transformLink;
     this.#onError = options.onError;
     this.#resolveRenderConfidentiality = options.resolveRenderConfidentiality;
     this.#membershipProvider = options.membershipProvider;
@@ -1180,14 +1184,11 @@ export class WorkerReconciler {
     const link = cell.getAsNormalizedFullLink();
     let labelView: CfcLabelView | undefined;
     try {
-      labelView = cfcLabelViewForCell(cell);
-      if (labelView === undefined) {
-        labelView = cfcLabelViewForCell(cell.resolveAsCell());
-      }
+      labelView = this.#resolveCellLabelView(cell);
     } catch {
       labelView = undefined;
     }
-    return {
+    const ref: CellRef = {
       id: link.id,
       space: link.space,
       scope: link.scope,
@@ -1196,6 +1197,7 @@ export class WorkerReconciler {
       ...(link.overwrite !== undefined && { overwrite: link.overwrite }),
       ...(labelView !== undefined && { cfcLabelView: labelView }),
     };
+    return this.#exportCellRef?.(cell, ref) ?? ref;
   }
 
   #bindingSchema(schema: CellRef["schema"] | undefined): CellRef[
@@ -1234,13 +1236,15 @@ export class WorkerReconciler {
   }
 
   /**
-   * The cell's own CFC label view, or — when it has none — the view of the
-   * place its path resolves to, which a text-integrity denial reports. May
-   * throw.
+   * The held reference and resolved content labels reported by a text-integrity
+   * denial. Throws when acquisition or label evidence is unavailable.
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
-    return cfcLabelViewSourceForCell(cell).view ??
-      cfcLabelViewSourceForCell(cell.resolveAsCell()).view;
+    const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+    if (readFailed) {
+      throw new Error("Render label evidence is unavailable");
+    }
+    return view;
   }
 
   /**
@@ -2001,7 +2005,7 @@ export class WorkerReconciler {
       return false;
     }
 
-    const integrity = this.#integrityLabels(labelView);
+    const integrity = cfcIntegrityForObservationNode(labelView);
     return textIntegrity.requiredIntegrity.every((required) =>
       integrity.some((atom) => deepEqual(atom, required))
     );
@@ -2013,13 +2017,7 @@ export class WorkerReconciler {
    * the value, contributes none.
    */
   #integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
-    return ContextualFlowControl.uniqueAtoms(
-      labelView.entries.flatMap((entry) =>
-        entry.path.length === 0 && readConsumesEntry("value", entry)
-          ? [...(entry.label.integrity ?? [])]
-          : []
-      ),
-    );
+    return cfcIntegrityForObservationNode(labelView);
   }
 
   #readCellValue(cell: Cell<unknown>): unknown {
@@ -3171,6 +3169,9 @@ export class WorkerReconciler {
     value: unknown,
   ): Cell<unknown> {
     const propCell = propsCell.key(key).asSchema(true);
+    if (cellRuntime(propsCell).cfcFlowLabels === "persist") {
+      return propCell.resolveAsCell();
+    }
     const rawValue = this.#readRawBindingPropValue(propsCell, propCell, key);
     let base:
       | ReturnType<Cell<WorkerProps>["getAsNormalizedFullLink"]>
@@ -3885,6 +3886,7 @@ export class WorkerReconciler {
       doNotConvertCellResults: true,
       includeSchema: true,
       keepAsCell: KeepAsCell.OnlyStream,
+      transformLink: this.#transformLink,
     });
   }
 

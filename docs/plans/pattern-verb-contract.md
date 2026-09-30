@@ -539,16 +539,14 @@ transaction committed: `return` settles, `throw` fails. Effects that propagate
 downstream are not part of settlement, which keeps the term bounded for verbs
 with fan-out.
 
-This is not a new semantic — it is when the receipt commits today. But the CLI
-waits for far more than that: the handler branch awaits `runtime.idle()` and
-`manager.synced()` — the whole reactive graph quiescing, then full sync — so
-acknowledgment of an already-committed write is held hostage to every derived
-recomputation it triggered. On the live topics board that is the board's own
-index re-deriving over every topic; mutations were observed taking 60–80 s. The
-work is exposure *and narrowing*: await this handling's commit, sync the
-receipt, return — never the graph going quiet. An acceptance test must prove a
-slow derived recomputation cannot delay acknowledgment (implementation plan,
-WS-D).
+Commit acknowledgment waits for this handling's own transaction. Receipt
+readback is a separate phase: it drives the receipt's value through the runtime
+read path, which can share a reactive wait with active work in that runtime.
+Before returning from readback, the CLI confirms storage commits already issued
+there, including nested handler writes, so process exit cannot abandon them.
+That confirmation barrier does not run or await further downstream
+recomputation. `--no-wait` returns at the transaction-local acknowledgment and
+skips both readback and its confirmation barrier.
 
 Waiting is a caller-side choice — whether to wait at all, and for how long. The
 tool path already observes settlement rather than polling for it —

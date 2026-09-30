@@ -62,7 +62,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      const id = await seedWithVersion(runtime, "version-guard-throw", 3);
+      const id = await seedWithVersion(runtime, "version-guard-throw", 4);
       const tx = runtime.edit();
       expect(() => readStoredCfcMetadata(tx, { space, id })).toThrow(
         UnknownCfcMetadataVersionError,
@@ -81,7 +81,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      const id = await seedWithVersion(runtime, "version-guard-applies", 3);
+      const id = await seedWithVersion(runtime, "version-guard-applies", 4);
       const tx = runtime.edit();
       expect(
         storedCfcMetadataAppliesToPath(tx, {
@@ -105,7 +105,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      await seedWithVersion(runtime, "version-guard-write", 3);
+      await seedWithVersion(runtime, "version-guard-write", 4);
       const tx = runtime.edit();
       const cell = runtime.getCell(space, "version-guard-write", {
         type: "object",
@@ -278,7 +278,7 @@ describe("CFC envelope version guard", () => {
       // and no maxConfidentiality. The write-side input gate is what resolves
       // a read's stored envelope, and the reason it must resolve every read's
       // rather than only the ones a requirement quantifies over.
-      const sourceId = await seedWithVersion(runtime, "version-guard-src", 3);
+      const sourceId = await seedWithVersion(runtime, "version-guard-src", 4);
       const tx = runtime.edit();
       tx.readOrThrow({
         space,
@@ -322,7 +322,7 @@ describe("CFC envelope version guard", () => {
       const seed = runtime.edit();
       seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
         value: { secret: "sealed" },
-        cfc: { version: 3, payload: { labels: [] } },
+        cfc: { version: 4, payload: { labels: [] } },
       });
       expect((await seed.commit()).ok).toBeDefined();
 
@@ -392,7 +392,7 @@ describe("CFC envelope version guard", () => {
       // under a version this build postdates must never come back as "no
       // stored labels" — that view feeds the flow join deciding what a
       // write may carry.
-      const id = await seedWithVersion(runtime, "version-guard-deref", 3);
+      const id = await seedWithVersion(runtime, "version-guard-deref", 4);
       const tx = runtime.edit();
       expect(() =>
         cfcLabelViewForDereference(
@@ -413,9 +413,12 @@ describe("CFC envelope version guard", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
+      // Legacy link persistence derives the target's labels.
+      cfcFlowLabels: "off",
+      cfcEnforcementMode: "enforce-explicit",
     });
     try {
-      await seedWithVersion(runtime, "version-guard-link-source", 3);
+      await seedWithVersion(runtime, "version-guard-link-source", 4);
       const tx = runtime.edit();
       const source = runtime.getCell(
         space,
@@ -436,6 +439,46 @@ describe("CFC envelope version guard", () => {
       tx.prepareCfc();
       const result = await tx.commit();
       expect(result.error?.message).toContain("not one this build interprets");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("acquires a known target address without admitting its uninterpretable contents", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    try {
+      await seedWithVersion(runtime, "version-guard-precise-source", 4);
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        space,
+        "version-guard-precise-source",
+        undefined,
+        tx,
+      );
+      const holder = runtime.getCell(
+        space,
+        "version-guard-precise-holder",
+        undefined,
+        tx,
+      );
+      holder.key("ref").set(source.getAsLink() as never);
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+      const read = runtime.edit();
+      try {
+        expect(() => holder.withTx(read).key("ref").get()).toThrow(
+          "not one this build interprets",
+        );
+      } finally {
+        read.abort();
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -526,7 +569,7 @@ describe("CFC envelope version guard", () => {
 
     const uninterpretable: Record<string, unknown> = {
       "a version this build does not know": {
-        version: 3,
+        version: 4,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries: [] },
       },

@@ -356,7 +356,7 @@ async function observeRegistrationDelivery(
   callerDid: string,
   delivery: NonNullable<ServedRegistrationPreparation["delivery"]>,
 ): Promise<ServedRegistrationOutcome> {
-  const { stream, eventId, piece } = delivery;
+  const { stream, eventId, payload, runtimeReferenceContext } = delivery;
   const authority = await authorizeSpaceWriter(
     deps.authority,
     stream.space,
@@ -406,7 +406,10 @@ async function observeRegistrationDelivery(
         targetStream,
         targetStreamLink: stream,
         eventId,
-        payload: { piece },
+        payload,
+        ...(runtimeReferenceContext === undefined
+          ? {}
+          : { runtimeReferenceContext }),
         actingPrincipal: callerDid,
         actingSession: callerDid,
         capabilityRef: `stream-append:${targetStream}`,

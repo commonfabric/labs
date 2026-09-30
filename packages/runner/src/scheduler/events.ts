@@ -9,6 +9,10 @@ import {
   recordTrustedEventPolicyInputs,
   type StoredSchemaResolver,
 } from "../cfc/ui-contract.ts";
+import {
+  getCfcReferenceProvenance,
+  recordCfcReferenceObservation,
+} from "../cfc/reference-provenance.ts";
 import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
@@ -714,6 +718,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // into a log-flood amplifier; any telemetry added later must be
         // rate-limited.
         lastSameOrigin.event = args.event;
+        lastSameOrigin.eventLink = args.eventLink;
         lastSameOrigin.action = (tx) => handler(tx, args.event);
         // Last-wins takes the newest event's injection provenance with its
         // payload — the marker must describe the payload that dispatches.
@@ -1669,6 +1674,11 @@ export async function dispatchQueuedEvent(state: {
   try {
     tx.dispatchedEventId = queuedEvent.id;
     state.runtime.scheduler.beginReadAttempt(tx, "event", handlerId);
+    recordCfcReferenceObservation(
+      tx,
+      getCfcReferenceProvenance(queuedEvent.eventLink),
+      "dereference",
+    );
     tx.dispatchedEventTime = queuedEvent.time;
     tx.dispatchedRuntimeInjectedEventKeys =
       queuedEvent.runtimeInjectedEventKeys;

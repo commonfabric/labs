@@ -4,6 +4,7 @@ import {
   cellWithScopedLinkRequiredsRelaxed,
   compileAndSavePattern,
   getPatternIdentityRef,
+  type IExtendedStorageTransaction,
   PatternManager,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -553,6 +554,10 @@ const pathsComparable = (
 
 const inputAddressKey = (address: RunPatternInputAddress): string =>
   JSON.stringify([address.key, address.hash, address.path]);
+
+/** Exact address identity for observations made while reading one input. */
+const observedInputAddressKey = (address: CfcAddress): string =>
+  JSON.stringify([address.space, address.scope, address.id, address.path]);
 
 /**
  * The addresses an input's value reaches, given the dereferences a read of
@@ -1451,13 +1456,17 @@ export const runPatternTool: HarnessToolDefinition<
       const reached = inputAddressesReached(inputAddresses, attributionTraces);
       return foldPolicyRefusals(
         details,
-        (read) =>
-          refusalReadInputKeys(
-            read,
-            reached,
-            argumentHash,
-            suppliedInputKeys,
-          ),
+        (read) => [
+          ...new Set([
+            ...refusalReadInputKeys(
+              read,
+              reached,
+              argumentHash,
+              suppliedInputKeys,
+            ),
+            ...(inputObservationKeys.get(observedInputAddressKey(read)) ?? []),
+          ]),
+        ],
       );
     };
 
@@ -1515,12 +1524,12 @@ export const runPatternTool: HarnessToolDefinition<
     // either way: it names the result without carrying it, and a name is not
     // a release (AH-CFC-18). Nothing is committed.
     //
-    // A second transaction reads the piece's argument document and the
-    // caller's own live inputs, and only that transaction does. Every input
-    // reaches the pattern through that document under its own key, so a
+    // Each supplied input is read in its own transaction, used for both the
+    // input-key map and refusal evidence. Every input reaches the pattern
+    // through its argument document under its own key, so a
     // clause it carries names an input the caller can drop; a clause
     // reaching the answer by another route is reported as unattributed. The
-    // dereferences that transaction records on the way are kept with it:
+    // dereferences those transactions record on the way are kept with them:
     // they are what place a read of a document the caller's link reaches
     // through a link rather than names. Whether a refusal comes from this
     // measurement or from the commit boundary, the attribution read is the
@@ -1535,10 +1544,34 @@ export const runPatternTool: HarnessToolDefinition<
       pieces.runtime.cfcEnforcementMode !== "observe";
     let releaseRefusal: CfcRefusalDetail | undefined;
     let attributionTraces: readonly CfcDereferenceTrace[] = [];
+    const inputObservationKeys = new Map<string, Set<string>>();
     let rawValue: unknown;
     const measureRelease = async () => {
       const releaseTx = pieces.runtime.edit();
-      const inputsTx = pieces.runtime.edit();
+      const inputTransactions: IExtendedStorageTransaction[] = [];
+      const readInput = async (key: string, cell: Cell<unknown>) => {
+        const observedTx = pieces.runtime.edit();
+        inputTransactions.push(observedTx);
+        try {
+          const measuredInput = cell.withTx(observedTx);
+          await measuredInput.pull();
+          asSerializableValue(measuredInput.get());
+        } catch {
+          // Attribution can retain partial observations from an unavailable
+          // input. A failed key must not prevent reading the remaining keys.
+        }
+        // The key map and refusal evidence use the same per-input snapshot.
+        // Separate transactions also prevent one input's flow label from
+        // contaminating another input's immutable array acquisition.
+        for (
+          const observation of observedTx.getCfcState().referenceObservations
+        ) {
+          const address = observedInputAddressKey(observation.target);
+          const keys = inputObservationKeys.get(address) ?? new Set<string>();
+          keys.add(key);
+          inputObservationKeys.set(address, keys);
+        }
+      };
       try {
         // The `required` relaxation is the piece controller's, so a scoped
         // link the session cannot materialize degrades its member rather
@@ -1549,30 +1582,32 @@ export const runPatternTool: HarnessToolDefinition<
         await measuredResult.pull();
         rawValue = asSerializableValue(measuredResult.get());
         try {
-          const measuredArgument = (await piece.input.getCell())
-            .withTx(inputsTx);
-          await measuredArgument.pull();
-          asSerializableValue(measuredArgument.get());
+          const measuredArgument = await piece.input.getCell();
+          for (const key of suppliedInputKeys) {
+            await readInput(key, measuredArgument.key(key));
+          }
         } catch {
           // An argument cell that will not resolve leaves the caller's own
           // addresses as the route from a clause back to an input key.
         }
-        for (const { cell } of liveCellInputs) {
-          const measuredInput = cell.withTx(inputsTx);
-          await measuredInput.pull();
-          asSerializableValue(measuredInput.get());
+        for (const { key, cell } of liveCellInputs) {
+          await readInput(key, cell);
         }
         // Copied before the abort below, which clears them.
-        attributionTraces = [...inputsTx.getCfcState().dereferenceTraces];
+        attributionTraces = inputTransactions.flatMap((
+          tx,
+        ) => [...tx.getCfcState().dereferenceTraces]);
         return describeSinkReleaseRefusal(
           releaseTx,
-          inputsTx,
+          inputTransactions,
           RUN_PATTERN_ANSWER_SINK,
           RUN_PATTERN_ANSWER_CEILING,
         );
       } finally {
         releaseTx.abort("run_pattern release measurement");
-        inputsTx.abort("run_pattern release attribution");
+        for (const tx of inputTransactions) {
+          tx.abort("run_pattern release attribution");
+        }
       }
     };
     // Raced with the signal like every other wait this tool performs: the

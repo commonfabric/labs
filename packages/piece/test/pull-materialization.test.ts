@@ -36,6 +36,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
@@ -1392,9 +1393,12 @@ describe("piece pull materialization", () => {
     // Layer 2: commit the forgery raw (as an unvalidated write path would),
     // making it identical to committed state — the preserve branch's own
     // wrapper check still refuses the non-durable envelope.
-    await runtime.editWithRetry((tx) => {
-      base.withTx(tx).key("v").setRawUntyped(forged);
+    const { error } = await runtime.editWithRetry((tx) => {
+      const address = base.getAsNormalizedFullLink();
+      const stored = tx.readOrThrow(address) as Record<string, FabricValue>;
+      seedStoredEnvelope(tx, address, { ...stored, value: { v: forged } });
     });
+    expect(error).toBeUndefined();
     expect(supplyForged).toThrow(/non-durable Cell wrapper/);
   });
 

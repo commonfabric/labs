@@ -123,7 +123,7 @@ describe("cfc-current-principal-legacy", () => {
     });
   }
 
-  it("refuses to derive a held reference from an unresolved stored creator", async () => {
+  it("stores a held reference without binding its target's unresolved creator", async () => {
     const fixture = await setup("both");
     try {
       const tx = fixture.runtime.edit();
@@ -133,10 +133,11 @@ describe("cfc-current-principal-legacy", () => {
       }, tx);
       copy.set({ books: fixture.source.asSchema(fixture.schema) });
       const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "Stored CurrentPrincipal confidentiality",
-      );
+      expect(result.error).toBeUndefined();
       expect(fixture.readEnvelope()).toEqual(fixture.envelope);
+      const held = copy.withTx(undefined).get().books;
+      expect(held).toBeDefined();
+      expect(() => held!.get()).toThrow(/read ceiling/);
     } finally {
       await fixture.dispose();
     }

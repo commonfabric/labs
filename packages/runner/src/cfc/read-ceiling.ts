@@ -1,6 +1,7 @@
 /**
  * The runtime-wide read ceiling: a confidentiality ceiling every cell payload
- * read and `db.query` uses, whether or not the query declares one of its own.
+ * read, retained reference observation, and `db.query` uses, whether or not the
+ * query declares one of its own.
  * Declared through `RuntimeOptions.cfcReadMaxConfidentiality` and
  * `cfcReadOnExceed`, validated and frozen here at construction.
  *
@@ -136,7 +137,7 @@ export function buildCfcReadCeiling(
 }
 
 /**
- * A value withheld because its stored label exceeds the runtime read ceiling.
+ * A value withheld because its confidentiality exceeds the runtime read ceiling.
  */
 export class CfcReadCeilingError extends Error {
   constructor() {
@@ -203,7 +204,18 @@ export function assertCfcReadCeiling(
   const confidentiality = entries.flatMap((entry) =>
     entry.label.confidentiality ?? []
   );
-  if (atomsOutsideCeiling(confidentiality, ceiling).length > 0) {
+  assertCfcObservationReadCeiling(confidentiality, ceiling);
+}
+
+/** Measures observed confidentiality before exposing a value or reference. */
+export function assertCfcObservationReadCeiling(
+  confidentiality: readonly CfcConfClause[],
+  ceiling: readonly CfcConfClause[] | undefined,
+): void {
+  if (
+    ceiling !== undefined &&
+    atomsOutsideCeiling(confidentiality, ceiling).length > 0
+  ) {
     throw new CfcReadCeilingError();
   }
 }

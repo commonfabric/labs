@@ -767,6 +767,11 @@ export class CellHandle<T = unknown> {
       space: this.#ref.space,
       scope: this.#ref.scope,
       path: [...this.#ref.path, key],
+      ...(this.#ref.overwrite !== undefined &&
+        { overwrite: this.#ref.overwrite }),
+      ...(this.#ref.cfcReferenceToken !== undefined && {
+        cfcReferenceToken: this.#ref.cfcReferenceToken,
+      }),
       // Child schema is unknown, so we don't include it
       ...(this.#ref.cfcLabelView !== undefined && {
         cfcLabelView: rebaseCfcLabelView(this.#ref.cfcLabelView, [key]),
@@ -784,17 +789,18 @@ export class CellHandle<T = unknown> {
    * same way, its `toSigilLinkOrNull()` answering the callers that have
    * recognized a cell and its `toJSON()` answering the protocol.
    *
-   * The ref-carried `cfcLabelView` is deliberately not included, as
-   * `toWireString()` omits it: what this produces re-enters the worker without
-   * passing `getCell()` or `cellRefToSigilLink()`, and a main-thread display
-   * copy must not go back in as label state.
+   * The acquisition token survives the crossing so the worker can restore
+   * its own reference history. The display-only `cfcLabelView` is omitted.
    */
   toSigilLink(): SigilLink {
-    return linkRefFrom<CfcCellLinkRefPayload>({
+    return linkRefFrom<CfcCellLinkRefPayload & { cfcReferenceToken?: string }>({
       id: this.#ref.id,
       space: this.#ref.space,
       scope: this.#ref.scope,
       path: this.#ref.path,
+      ...(this.#ref.cfcReferenceToken !== undefined && {
+        cfcReferenceToken: this.#ref.cfcReferenceToken,
+      }),
       ...(this.#ref.schema !== undefined && { schema: this.#ref.schema }),
       ...(this.#ref.overwrite !== undefined &&
         { overwrite: this.#ref.overwrite }),
@@ -1120,6 +1126,8 @@ function applyValue<T>(
 
 function cellRefsEqual(a: CellRef, b: CellRef): boolean {
   if (a.id !== b.id) return false;
+  if (a.cfcReferenceToken !== b.cfcReferenceToken) return false;
+  if (a.overwrite !== b.overwrite) return false;
   if (a.space !== b.space) return false;
   if ((a.scope ?? "space") !== (b.scope ?? "space")) return false;
   if (a.path.length !== b.path.length) return false;
@@ -1204,7 +1212,9 @@ function parseAsCellRef(
   from: CellRef,
 ): CellRef | undefined {
   if (isSigilLink(value)) {
-    const linkData = linkRefPayload(value);
+    const linkData = linkRefPayload(value) as CfcCellLinkRefPayload & {
+      cfcReferenceToken?: string;
+    };
 
     return {
       id: linkData.id ?? from.id,
@@ -1215,6 +1225,11 @@ function parseAsCellRef(
         : from.scope,
       path: (linkData.path ?? []).map((p) => p.toString()),
       ...(linkData.schema !== undefined && { schema: linkData.schema }),
+      ...(linkData.overwrite === "redirect" &&
+        { overwrite: "redirect" as const }),
+      ...(linkData.cfcReferenceToken !== undefined && {
+        cfcReferenceToken: linkData.cfcReferenceToken,
+      }),
       ...((linkData as { cfcLabelView?: CfcLabelView }).cfcLabelView !==
           undefined && {
         cfcLabelView: (linkData as { cfcLabelView?: CfcLabelView })

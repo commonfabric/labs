@@ -1,7 +1,5 @@
 import { expect } from "@std/expect";
 
-import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
-
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -15,10 +13,9 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
-import type { CellLinkRefPayload } from "../../runner/src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../../runner/src/storage/interface.ts";
 import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -68,7 +65,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     const tx = runtime.edit();
     const cell = runtime.getCell<string>(signer.did(), id, undefined, tx);
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: cell.getAsNormalizedFullLink().id!,
       type: "application/json",
@@ -83,7 +80,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
             version: 1,
             entries: labels.map(([path, confidentiality]) => ({
               path,
-              label: { confidentiality },
+              label: { confidentiality: [...confidentiality] },
             })),
           },
         },
@@ -634,15 +631,10 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
           schema: { type: "unknown" | "string" },
           overwrite?: "redirect",
         ) => {
-          const address = cell.getAsNormalizedFullLink();
-          return linkRefFrom<CellLinkRefPayload>({
-            id: address.id,
-            space: address.space,
-            scope: address.scope,
-            path: [...address.path],
-            schema,
-            ...(overwrite !== undefined && { overwrite }),
-          });
+          const shaped = cell.asSchema(schema);
+          return overwrite === "redirect"
+            ? shaped.getAsWriteRedirectLink({ includeSchema: true })
+            : shaped.getAsLink({ includeSchema: true });
         };
         const record = await write("prop-ceiling-reference-record", {
           key: PUBLIC,

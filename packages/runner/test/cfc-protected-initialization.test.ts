@@ -7,6 +7,7 @@ import { Identity } from "@commonfabric/identity";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { recordReplayedArgumentSlots } from "../src/cfc/reference-initialization.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -87,6 +88,53 @@ describe("protected initialization", () => {
       guarded: [],
       note: "saved",
     });
+  });
+
+  it("upgrades reference metadata while replaying an unchanged protected field", async () => {
+    await seed({ note: "saved" });
+    const setup = runtime.edit();
+    const cell = runtime.getCell(signer.did(), "argument", schema, setup);
+    const address = cell.getAsNormalizedFullLink();
+    recordNewProtectedDefaults(setup, address, previousSchema, schema, {
+      guarded: [],
+    }, { guarded: [], note: "saved" });
+    cell.set({ guarded: [], note: "saved" });
+    expect((await setup.commit()).error).toBeUndefined();
+    const before = runtime.edit();
+    expect(readStoredCfcMetadata(before, address)?.version).toBe(1);
+    before.abort();
+
+    const rerun = runtime.edit();
+    const target = runtime.getCell(
+      signer.did(),
+      "new-reference-target",
+      undefined,
+      rerun,
+    );
+    target.set("public");
+    recordReplayedArgumentSlots(rerun, address, { ref: target }, {
+      guarded: [],
+      note: "saved",
+    });
+    cell.withTx(rerun).set({ guarded: [], note: "saved", ref: target });
+    expect((await rerun.commit()).error).toBeUndefined();
+    const inspect = runtime.edit();
+    try {
+      const metadata = readStoredCfcMetadata(inspect, address);
+      expect(metadata?.version).toBe(3);
+      expect(metadata?.labelMap.entries).toContainEqual(
+        expect.objectContaining({
+          path: ["ref"],
+          origin: "link",
+          observes: "followRef",
+          referenceAcquisition: "complete",
+        }),
+      );
+      expect(cell.withTx(inspect).key("guarded").get()).toEqual([]);
+      expect(cell.withTx(inspect).key("ref").get()).toBe("public");
+    } finally {
+      inspect.abort();
+    }
   });
 
   it("refuses the whole commit when a protected seed belongs to another owner", async () => {

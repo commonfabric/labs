@@ -449,7 +449,8 @@ export function createDebugUtils(
     }
 
     const path = options?.path ?? [];
-    const ref = buildCellRef(space, id, path);
+    const cell = await rt.acquireCell(buildCellRef(space, id, path));
+    const ref = cell.ref();
 
     const label = options?.meta ? `read ${options.meta} cell` : "readCell";
     if (log) console.log(`[debug] ${label} ref:`, ref);
@@ -461,11 +462,10 @@ export function createDebugUtils(
         meta: options.meta,
       });
       value = CellHandle.deserialize(
-        new CellHandle(rt, ref),
+        cell,
         response.value,
       );
     } else {
-      const cell = new CellHandle(rt, ref);
       value = await cell.sync();
     }
     if (log) console.log(`[debug] ${label} value:`, value);
@@ -509,13 +509,25 @@ export function createDebugUtils(
     const ref = buildCellRef(space, id, path);
 
     console.log("[debug] subscribeToCell ref:", ref);
-    const cell = new CellHandle(rt, ref);
-    const cancel = cell.subscribe((value) => {
-      console.log(`[debug] cell update [${new Date().toISOString()}]:`, value);
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void rt.acquireCell(ref).then((cell) => {
+      if (cancelled) return;
+      unsubscribe = cell.subscribe((value) => {
+        console.log(
+          `[debug] cell update [${new Date().toISOString()}]:`,
+          value,
+        );
+      });
+    }).catch((error) => {
+      if (!cancelled) console.error("[debug] Cell acquisition failed:", error);
     });
 
     console.log("[debug] Subscribed. Call the returned function to cancel.");
-    return cancel;
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }
 
   async function watchWrites(

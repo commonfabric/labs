@@ -62,14 +62,7 @@ describe("piece-view-reads", () => {
               children: ["Hello"],
             });
             target.withTx(tx).set({ $NAME: "Visible name", $UI: ui, hidden });
-            slug.withTx(tx).set({
-              "/": {
-                "link@1": {
-                  ...target.getAsNormalizedFullLink(),
-                  overwrite: "redirect",
-                },
-              },
-            });
+            slug.withTx(tx).set(target.getAsWriteRedirectLink());
           });
           expect(result.error).toBeUndefined();
           await writer.storageManager.synced();

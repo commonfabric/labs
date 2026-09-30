@@ -20,7 +20,9 @@ interface ChatReply {
 ## Fields
 
 - **`message`** links the message replied to. It MUST be a message in the same
-  room, and not deleted. A link keeps the target's identity and label.
+  room, and not deleted. The reference preserves the message's identity and
+  carries its own acquisition confidentiality. Reading the message through it
+  additionally consumes the message's labels.
 - **`shownIn`** says where the reply is shown:
 
   | `shownIn` | The reply is shown | Like |

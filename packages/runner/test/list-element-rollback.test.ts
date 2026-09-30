@@ -709,7 +709,12 @@ describe("a list coordinator whose first reconcile is discarded", () => {
       ) => {
         const moved = runtime.edit();
         elementResult.withTx(moved).setRaw("moved under the reconcile");
-        return moved.commit().then(() => originalCommit(...commitArgs));
+        return moved.commit().then(() => {
+          // Keep the stale native snapshot while preparing the fixture's
+          // complete read set, so this pins the storage rejection boundary.
+          reconcileTx.prepareCfc();
+          return originalCommit(...commitArgs);
+        });
       }) as typeof reconcileTx.commit;
       return run;
     }) as typeof runtime.runner.run;

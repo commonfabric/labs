@@ -30,7 +30,7 @@
  *    further out. {@link experimentalOptionsForDeployedClient} is what such
  *    a client calls instead of {@link experimentalOptionsFromEnv}.
  * 4. Every preset composes the same {@link coreOptions}, so the invariant
- *    posture (today: the CFC dials) is written once. The conformance test
+ *    enforcement posture is written once. The conformance test
  *    (`runner/test/runtime-presets.test.ts`) pins each preset's full output
  *    as a golden, so any change to fleet posture is a visible diff there.
  *
@@ -446,16 +446,10 @@ interface CoreParams {
    * ({@link MAX_ENFORCEMENT_CFC_OPTIONS}). Applied in {@link coreOptions},
    * under the per-preset host dials, so a host that raises
    * `cfcEnforcementMode` or `cfcFlowLabels` for one session still wins.
-   * Unset means the fleet posture: the core pin plus constructor defaults.
+   * Unset means the core enforcement pin and each preset's declared defaults.
    */
   cfcPosture?: CfcPosture;
 }
-
-/**
- * The invariant first-party posture, written once. Rollout dials (the CFC
- * modes) get flipped HERE, in one reviewed place, for every preset user at
- * once — the constructor defaults then only govern non-preset constructions.
- */
 
 /**
  * The first-party server-execution default for the DEPLOYED-TOPOLOGY
@@ -490,6 +484,7 @@ export function withServerExecutionDefault(
   };
 }
 
+/** Shared enforcement posture, beneath each preset's declared host options. */
 function coreOptions(params: CoreParams): RuntimeOptions {
   return {
     apiUrl: params.apiUrl,
@@ -688,6 +683,7 @@ export const runtimePresets = {
         ...params,
         experimental: withServerExecutionDefault(params.experimental),
       }),
+      cfcFlowLabels: "persist",
       patternEnvironment: { apiUrl: params.patternApiUrl ?? params.apiUrl },
       ...(params.consoleHandler !== undefined
         ? { consoleHandler: params.consoleHandler }

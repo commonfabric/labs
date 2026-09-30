@@ -61,17 +61,21 @@ describe("reference-initialization", () => {
   // The principal each new transaction acts as.
   let actingPrincipal: string;
 
-  beforeEach(() => {
-    actingPrincipal = signer.did();
-    manager = StorageManager.emulate({ as: signer });
-    runtime = new Runtime({
+  const createRuntime = (cfcFlowLabels: "off" | "persist") =>
+    new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: manager,
+      cfcFlowLabels,
       trustSnapshotProvider: () => ({
         id: actingPrincipal,
         actingPrincipal,
       }),
     });
+
+  beforeEach(() => {
+    actingPrincipal = signer.did();
+    manager = StorageManager.emulate({ as: signer });
+    runtime = createRuntime("persist");
   });
 
   afterEach(async () => {
@@ -382,6 +386,12 @@ describe("reference-initialization", () => {
   });
 
   describe("labels of a staged reference", () => {
+    beforeEach(async () => {
+      // Recursive target-label derivation is the legacy reference contract.
+      await runtime.dispose({ closeStorage: false });
+      runtime = createRuntime("off");
+    });
+
     // The owner's message is initialized as a protected default, which mints
     // the owner's authorship on it. Another principal then stages a reference
     // to the message into a new argument, as a collection coordinator running

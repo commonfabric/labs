@@ -384,6 +384,24 @@ instead. And it is read-only in its own right: assignment, deletion, `freeze`
 and `defineProperty` each throw, and `snapshotQueryResult` is how a caller
 takes a value it owns.
 
+## Reflection observes properties lazily
+
+Both schema views and schema-less query-result proxies expose live properties
+through accessor descriptors. `Object.getOwnPropertyDescriptor(view, key).get`
+returns the getter; calling it reads the property with the same transaction and
+snapshot semantics as `view[key]`. The array `length` descriptor remains a data
+descriptor. A live view is not an inert record of data descriptors; snapshot it
+before passing it to an API that requires one.
+
+Key enumeration does not invoke those getters. A schema view checks optional
+properties for projection failures before reporting them as present. An exact
+stored-kind schema (`string`, `number`, `boolean`, `null`, or `undefined`) can
+decide that from shape alone; integer validation and more complex projections
+retain the value observations their validation makes. Required properties were
+checked for presence at the container boundary and need no child projection to
+report a key. Invoking a getter always materializes the value and consumes its
+value-scoped confidentiality, even after a presence check of the same property.
+
 ## A view is a read
 
 Assignment, deletion, `defineProperty` and freezing all throw. Snapshot it with

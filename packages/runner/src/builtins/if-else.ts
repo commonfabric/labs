@@ -2,13 +2,12 @@ import { internSchema } from "@commonfabric/data-model-schema";
 
 import { type Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
-import { resolveLink } from "../link-resolution.ts";
-import { parseLink } from "../link-utils.ts";
 import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
+import { resolveCellReference } from "./resolve-cell-reference.ts";
 import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
 
 /**
@@ -44,13 +43,7 @@ export function ifElse(
   runtime: Runtime, // Runtime will be injected by the registration function
 ): RawBuiltinResult {
   const readCondition = (tx: IExtendedStorageTransaction) => {
-    const conditionCell = inputsCell.key("condition");
-    const resolvedCondition = resolveLink(
-      runtime,
-      tx,
-      conditionCell.getAsNormalizedFullLink(),
-    );
-    const cell = runtime.getCellFromLink(resolvedCondition).withTx(tx);
+    const cell = inputsCell.withTx(tx).key("condition");
     return { cell, value: cell.get() };
   };
 
@@ -72,16 +65,13 @@ export function ifElse(
     const resultWithLog = result.withTx(tx);
     const inputsWithLog = inputsCell.withTx(tx);
 
-    const ref = inputsWithLog.key(condition ? "ifTrue" : "ifFalse")
-      .getAsLink({ base: result });
-    const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));
-    // A stream is declared by its link's schema and holds no value, so the
-    // reference written here carries that schema along; a reader following
-    // it to the stream's document would otherwise find nothing that says
-    // what the position is.
-    const serializedRef = runtime.getCellFromLink(resolvedRef).getAsLink({
+    const selected = inputsWithLog.key(condition ? "ifTrue" : "ifFalse");
+    const resolved = resolveCellReference(runtime, tx, selected);
+    const serializedRef = resolved.getAsLink({
       base: result,
-      includeSchema: ContextualFlowControl.declaresStream(resolvedRef.schema),
+      includeSchema: ContextualFlowControl.declaresStream(
+        resolved.getAsNormalizedFullLink().schema,
+      ),
     });
 
     // When writing links, we need to use setRawUntyped (link doesn't match T).

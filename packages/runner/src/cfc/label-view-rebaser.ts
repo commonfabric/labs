@@ -5,6 +5,12 @@
 import { isDeepFrozen } from "@commonfabric/data-model";
 
 import { isOrClause } from "./clause.ts";
+import { carryImmutableReferenceTables } from "./immutable-reference.ts";
+import {
+  cfcReferenceConfidentialityForView,
+  cfcReferenceSelectionWitnessesForView,
+  withCfcReferenceConfidentiality,
+} from "./reference-provenance.ts";
 import {
   type CfcLabelView,
   cfcLabelViewOriginSpaces,
@@ -46,23 +52,32 @@ export class CfcLabelViewRebaser {
     }
     const slice = this.#slices.get(key);
     if (slice === undefined) return undefined;
-    return withCfcLabelViewOrigins({
-      version: 1,
-      entries: slice.entries.map((entry) => {
-        const label = cloneCfcLabel(entry.label);
-        if (label.confidentiality !== undefined) {
-          // Normalization creates mutable OR wrappers. Each result owns those
-          // arrays too; their already-canonical alternatives need no sorting.
-          label.confidentiality = label.confidentiality.map((clause) =>
-            isOrClause(clause) ? { anyOf: [...clause.anyOf] } : clause
-          );
-        }
-        return {
-          path: [...entry.path],
-          label,
-          ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-        };
-      }),
-    }, cfcLabelViewOriginSpaces(slice));
+    return carryImmutableReferenceTables(
+      [slice],
+      withCfcReferenceConfidentiality(
+        withCfcLabelViewOrigins({
+          version: 1,
+          entries: slice.entries.map((entry) => {
+            const label = cloneCfcLabel(entry.label);
+            if (label.confidentiality !== undefined) {
+              // Normalization creates mutable OR wrappers. Each result owns those
+              // arrays too; their already-canonical alternatives need no sorting.
+              label.confidentiality = label.confidentiality.map((clause) =>
+                isOrClause(clause) ? { anyOf: [...clause.anyOf] } : clause
+              );
+            }
+            return {
+              path: [...entry.path],
+              label,
+              ...(entry.observes !== undefined
+                ? { observes: entry.observes }
+                : {}),
+            };
+          }),
+        }, cfcLabelViewOriginSpaces(slice)),
+        cfcReferenceConfidentialityForView(slice),
+        cfcReferenceSelectionWitnessesForView(slice),
+      ),
+    );
   }
 }

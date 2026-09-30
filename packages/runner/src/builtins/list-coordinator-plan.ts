@@ -1,7 +1,10 @@
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
+import { getCarriedCfcLabelView } from "../cell.ts";
+import { carryCfcReferenceProvenance } from "../cfc/reference-provenance.ts";
 import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
+import { isPrimitiveCellLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { listElementKeys } from "./list-element-keys.ts";
@@ -9,6 +12,7 @@ import { listElementLink } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
 import { listResultSchema } from "./list-result-schema.ts";
 import { resolveOpPattern } from "./op-pattern-ref.ts";
+import { resolveCellReference } from "./resolve-cell-reference.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
 import { narrowestCellScope, outputSpotFromBinding } from "./scope-policy.ts";
 
@@ -52,8 +56,8 @@ export type ListCoordinatorPlan = {
  * coordinator never consumes, and under flow labels join every element's
  * whole-doc label into the coordinator's per-transaction join, smearing
  * member content onto the result container's structure label. The slot
- * resolutions are link-resolution probes, which flow derivation treats
- * as resolution machinery rather than observations.
+ * resolutions contribute reference-selection confidentiality without
+ * observing the target's content confidentiality.
  *
  * The result container is keyed on the node's reserved output spot — a
  * stable, position-derived, program-independent identity (CT-1623) —
@@ -168,9 +172,26 @@ export function listSlotResolutions(
   const rawList = listCell.withTx(tx).getRaw() as unknown;
   const listBase = listCell.getAsNormalizedFullLink();
   const slots = Array.isArray(rawList)
-    ? rawList.map((slot, i) =>
-      resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
-    )
+    ? rawList.map((slot, i) => {
+      const slotLink = listElementLink(listBase, slot, i);
+      if (tx.getCfcState().flowLabelsMode !== "persist") {
+        return resolveLink(runtime, tx, slotLink, "value");
+      }
+      const slotCell = listCell.key(String(i));
+      // Raw acquisition retains the slot's selection history and immutable
+      // reference table. Inline slots keep their list-relative identity.
+      if (isPrimitiveCellLink(slot)) {
+        carryCfcReferenceProvenance(slotCell.getRawUntyped(), slotLink);
+      }
+      const source = runtime.getCellFromLink(
+        slotLink,
+        undefined,
+        tx,
+        getCarriedCfcLabelView(slotCell),
+      );
+      return resolveCellReference(runtime, tx, source)
+        .getAsNormalizedFullLink();
+    })
     : [];
   return { listCell, rawList, slots };
 }

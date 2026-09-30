@@ -205,14 +205,17 @@ describe("prepareBoundaryCommit()", () => {
       try {
         // .set() records the value and schema; target A's preparation persists
         // the confidential envelope. Target B must then re-read that envelope
-        // instead of reusing the absent metadata cached while checking A.
+        // instead of reusing the absent metadata cached while checking A. The
+        // reference was selected without consuming its target, so the closed
+        // sink's content predicate cannot inspect the newly private target.
         expect(tx.readOrThrow({
           ...intermediate.getAsNormalizedFullLink(),
           path: ["cfc"],
         })).toBeUndefined();
         const reasons = prepareBoundaryCommit(withoutWriteInspection(tx));
-        expect(reasons.some((reason) => reason.includes("maxConfidentiality")))
-          .toBe(true);
+        expect(reasons).toEqual([
+          "cfc-verdict: linked content evidence is unavailable",
+        ]);
       } finally {
         tx.abort();
       }

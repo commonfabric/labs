@@ -1058,7 +1058,7 @@ describe("data-updating", () => {
       expect(long.changed).toBe("after");
       expect(long.recognitions / 200).toBe(short.recognitions / 20);
       expect(long.recognitions / 200).toBeGreaterThan(0);
-      expect(long.recognitions / 200).toBeLessThanOrEqual(17);
+      expect(long.recognitions / 200).toBeLessThanOrEqual(19);
     });
 
     it("replaces a stored link whose path does not parse with a write redirect", () => {
@@ -1464,9 +1464,7 @@ describe("data-updating", () => {
         undefined,
         tx,
       );
-      const link = createSigilLinkFromParsedLink(
-        target.getAsNormalizedFullLink(),
-      );
+      const link = target.getAsLink();
       let draws = 0;
       diffAndUpdate(
         runtime,

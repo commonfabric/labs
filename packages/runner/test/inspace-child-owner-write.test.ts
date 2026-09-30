@@ -46,8 +46,10 @@ const PROGRAM: RuntimeProgram = {
       name: "/main.tsx",
       contents: [
         "import {",
+        "  Cell,",
         "  Cfc,",
         "  handler,",
+        "  lift,",
         "  pattern,",
         "  RepresentsCurrentUser,",
         "  Stream,",
@@ -87,11 +89,16 @@ const PROGRAM: RuntimeProgram = {
         "  remove: Stream<MutateEvent>;",
         "}",
         "",
+        "const createItems = lift<",
+        "  { seed?: string },",
+        "  OwnerProtected<Cell<OwnerProtected<string[], typeof mutate>>, typeof mutate>",
+        ">(({ seed }) =>",
+        "  new Writable<OwnerProtected<string[], typeof mutate>>(seed ? [seed] : []).for('items')",
+        ");",
+        "",
         "export const child = pattern<{ seed?: string }, ChildOutput>(",
         "  ({ seed }) => {",
-        "    const items = new Writable<OwnerProtected<string[], typeof mutate>>(",
-        "      seed ? [seed] : [],",
-        "    ).for('items');",
+        "    const items = createItems({ seed });",
         "    return {",
         "      items,",
         "      add: mutate({ items, mode: 'add' }),",
@@ -158,6 +165,9 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: managerB,
     });
+    const schedulerErrors: Error[] = [];
+    rt1.scheduler.onError((error) => schedulerErrors.push(error));
+    rt2.scheduler.onError((error) => schedulerErrors.push(error));
     try {
       // Session 1: run the parent in space A; the handler creates the child in
       // space B with the owner-protected `items` list (profile creation).
@@ -197,6 +207,10 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       expect(links.length).toBe(1);
       const childLink = links[0].getAsNormalizedFullLink();
       expect(childLink.space).toBe(spaceB);
+      expect(links[0].key("items").asSchema(itemListSchema).get()).toEqual([
+        "first",
+      ]);
+      expect(schedulerErrors).toEqual([]);
 
       await rt1.patternManager.flushCompileCacheWrites();
       await rt1.storageManager.synced();
@@ -231,6 +245,7 @@ describe("inSpace child owner-protected write (profile elements)", () => {
       await itemsCell.pull();
       const items = itemsCell.get() as string[];
       expect([...items].sort()).toEqual(["first", "second"]);
+      expect(schedulerErrors).toEqual([]);
     } finally {
       await rt2.dispose();
       await rt1.dispose();

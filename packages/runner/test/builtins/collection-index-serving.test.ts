@@ -48,6 +48,7 @@ describe("collection index serving", () => {
           experimental: { serverExecution: true },
         });
         const [cancel, addCancel] = useCancelGroup();
+        const actorRuntimes: Runtime[] = [];
         try {
           const actors = await Promise.all([
             Identity.fromPassphrase("index-serving-alice"),
@@ -75,44 +76,45 @@ describe("collection index serving", () => {
             const actorStorage = EmulatedStorageManager.connectTo(server, {
               as: actor,
             });
-            let actorRuntime: Runtime | undefined;
+            let actorRuntime: Runtime;
             try {
               actorRuntime = new Runtime({
                 apiUrl: new URL(import.meta.url),
                 storageManager: actorStorage,
                 experimental: { serverExecution: false },
               });
-              const identity = { ...actorRuntime.scopeKeyIdentity };
-              identities.push(identity);
-              const tx = actorRuntime.edit();
-              const element = actorRuntime.getCell<{ title: string }>(
-                signer.did(),
-                "element",
-                undefined,
-                tx,
-                scope,
-              );
-              element.set({ title: `Row ${position}` });
-              const selected = actorRuntime.getCell<
-                CollectionIndexInput["list"][number]
-              >(signer.did(), "selected", undefined, tx, scope);
-              selected.set({ isCell: false, value: `key-${position}` });
-              actorRuntime.getCellFromLink<CollectionIndexInput>(
-                inputs.getAsNormalizedFullLink(),
-                undefined,
-                tx,
-              ).set({ list: [selected], elements: [element], mode });
-              expect((await tx.commit()).error).toBeUndefined();
-              await actorStorage.synced();
-              for (const cell of [inputs, element, selected]) {
-                await storage.syncInstance(
-                  cell.getAsNormalizedFullLink(),
-                  identity,
-                );
-              }
-            } finally {
-              await actorRuntime?.dispose({ closeStorage: false });
+            } catch (error) {
               await actorStorage.close();
+              throw error;
+            }
+            actorRuntimes.push(actorRuntime);
+            const identity = { ...actorRuntime.scopeKeyIdentity };
+            identities.push(identity);
+            const tx = actorRuntime.edit();
+            const element = actorRuntime.getCell<{ title: string }>(
+              signer.did(),
+              "element",
+              undefined,
+              tx,
+              scope,
+            );
+            element.set({ title: `Row ${position}` });
+            const selected = actorRuntime.getCell<
+              CollectionIndexInput["list"][number]
+            >(signer.did(), "selected", undefined, tx, scope);
+            selected.set({ isCell: false, value: `key-${position}` });
+            actorRuntime.getCellFromLink<CollectionIndexInput>(
+              inputs.getAsNormalizedFullLink(),
+              undefined,
+              tx,
+            ).set({ list: [selected], elements: [element], mode });
+            expect((await tx.commit()).error).toBeUndefined();
+            await actorStorage.synced();
+            for (const cell of [inputs, element, selected]) {
+              await storage.syncInstance(
+                cell.getAsNormalizedFullLink(),
+                identity,
+              );
             }
           }
           expect(identities[0].sessionId).not.toBe(identities[1].sessionId);
@@ -170,7 +172,10 @@ describe("collection index serving", () => {
           }
           using childRuns = spy(runtime.runner, "run");
           for (const [position, identity] of identities.entries()) {
-            const tx = runtime.edit();
+            // The actor connection commits under the same physical scope
+            // that the shared serving coordinator reads for this instance.
+            const actorRuntime = actorRuntimes[position];
+            const tx = actorRuntime.edit();
             tx.tx.scopeKeyIdentity = identity;
             const before = childRuns.calls.length;
             coordinator.action(tx);
@@ -236,6 +241,10 @@ describe("collection index serving", () => {
             ).toBe(scope);
             runtime.prepareTxForCommit(tx);
             expect((await tx.commit()).error).toBeUndefined();
+            expect(
+              actorRuntime.getCellFromLink(link).getArgumentCell()
+                ?.key("extracted").get(),
+            ).toEqual({ isCell: false, value: `key-${position}` });
           }
           expect(indexNames).toHaveLength(2);
           expect(indexNames[0]).toBe(indexNames[1]);
@@ -244,6 +253,9 @@ describe("collection index serving", () => {
           expect(keyEntriesNames[0]).toBe(keyEntriesNames[1]);
         } finally {
           cancel();
+          for (const actorRuntime of actorRuntimes) {
+            await actorRuntime.dispose();
+          }
           await runtime.dispose({ closeStorage: false });
           await storage.close();
           await server.close();

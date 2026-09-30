@@ -82,9 +82,25 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
       // The one-hop reader starts in the query doc and never arrives.
       expect(cfcLabelViewForCellWithStatus(leaf).view).toBeUndefined();
 
+      const reference = {
+        path: [],
+        observes: "followRef",
+        label: {
+          integrity: [{
+            type: "https://commonfabric.org/cfc/atom/LinkReference",
+            source: { space, id: row.getAsNormalizedFullLink().id, path: [] },
+            target: {
+              space,
+              id: query.getAsNormalizedFullLink().id,
+              path: ["result", "0"],
+            },
+          }],
+        },
+      };
       const status = cfcLabelViewForResolvedCellWithStatus(leaf);
       expect(status.readFailed).toBe(false);
       expect(status.view?.entries).toEqual([
+        reference,
         { path: [], label: { confidentiality: ["finance"] } },
       ]);
 
@@ -93,6 +109,7 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
         query.key("result").key(0),
       );
       expect(atRow.view?.entries).toEqual([
+        reference,
         { path: ["secret"], label: { confidentiality: ["finance"] } },
       ]);
     });
@@ -184,16 +201,14 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
     }
   });
 
-  it("treats a link getter that throws as no link, not a failed read", () => {
-    // The one-hop reader already swallows this and reports no label; the
-    // resolved reader must not turn the same object into a fail-closed read.
+  it("fails closed when a link getter throws", () => {
     const broken = {
       getAsNormalizedFullLink(): never {
         throw new Error("no link here");
       },
     };
     const status = cfcLabelViewForResolvedCellWithStatus(broken);
-    expect(status.readFailed).toBe(false);
+    expect(status.readFailed).toBe(true);
     expect(status.view).toBeUndefined();
   });
 

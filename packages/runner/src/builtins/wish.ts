@@ -31,10 +31,7 @@ import {
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
-import {
-  createSigilLinkFromParsedLink,
-  toMemorySpaceAddress,
-} from "../link-utils.ts";
+import { toMemorySpaceAddress } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
 import { setRunnableName } from "../runner-utils.ts";
@@ -2630,9 +2627,7 @@ export function wish(
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
     slot.input = {
-      profiles: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
-      ),
+      profiles: homeDefaultPattern.key("profiles").withTx(),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -2778,7 +2773,7 @@ export function wish(
   }
 
   // Launch the profile picker for #profile wishes with multiple profiles. Feeds
-  // the home `profiles`/`defaultProfile`/`mru` cells (as sigil links) so the
+  // the home's acquired `profiles`/`defaultProfile`/`mru` Cells so the
   // picker can render natively, select (stamp MRU), set the default, and create
   // another — all as trusted picker-surface writes. Mirrors
   // launchProfileCreatePattern's deferred-fetch/run handling.
@@ -2798,15 +2793,9 @@ export function wish(
     const homeDefaultPattern = getHomeSpaceCell(ctx).key("defaultPattern")
       .resolveAsCell();
     slot.input = {
-      profiles: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("profiles").getAsNormalizedFullLink(),
-      ),
-      defaultProfile: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("defaultProfile").getAsNormalizedFullLink(),
-      ),
-      mru: createSigilLinkFromParsedLink(
-        homeDefaultPattern.key("mru").getAsNormalizedFullLink(),
-      ),
+      profiles: homeDefaultPattern.key("profiles").withTx(),
+      defaultProfile: homeDefaultPattern.key("defaultProfile").withTx(),
+      mru: homeDefaultPattern.key("mru").withTx(),
     };
     const tx = providedTx || runtime.edit();
 

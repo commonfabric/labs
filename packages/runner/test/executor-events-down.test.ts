@@ -28,6 +28,8 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -66,6 +68,14 @@ import {
   markRendererTrustedEvent,
 } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { normalizeClause } from "../src/cfc/clause.ts";
+import type { CfcMetadata } from "../src/cfc/types.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredReferenceEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+import { waitUntil } from "./support/wait-until.ts";
 import {
   ArrivalLog,
   awaitAdmitted,
@@ -470,16 +480,6 @@ const GATED_ORDERED_LOG_PATTERN = [
   ">(({ log, gate }) => ({ log, a: pushA({ log, gate }), b: pushB({ log }) }));",
 ].join("\n");
 
-// The refused-commit class (verification-coverage.md §3): a stored envelope
-// whose `result.anyOf` carries TWO ifc branches is genuinely ambiguous — the
-// class the narrowing in cfc/schema-merge.ts refuses. The FIRST writer's commit
-// lands (nothing is stored yet, so no merge runs), poisoning the stored
-// envelope; every later merging writer's commit-prep records the refusal and
-// the commit is rejected PRE-STORAGE with the "CFC enforcement rejected commit"
-// message class (extended-storage-transaction.ts). The fixtures mirror
-// cfc-prepare-crash-surfacing.test.ts, which pins the mechanism at the
-// transaction level; here the same refusal lands on a SERVED event's commit,
-// where it classifies as a give-up disposition (scheduler/events.ts).
 const profileViewSchema: JSONSchema = {
   type: "object",
   properties: {
@@ -487,20 +487,10 @@ const profileViewSchema: JSONSchema = {
   },
 } as JSONSchema;
 
-const altProfileViewSchema: JSONSchema = {
-  type: "string",
-  ifc: { confidentiality: ["other"] },
-} as JSONSchema;
-
-const ambiguousEnvelopeSchema: JSONSchema = {
+const preparedEnvelopeSchema: JSONSchema = {
   type: "object",
   properties: {
-    result: {
-      anyOf: [
-        profileViewSchema,
-        altProfileViewSchema,
-      ],
-    },
+    result: profileViewSchema,
     candidates: { type: "array", items: profileViewSchema },
   },
 } as JSONSchema;
@@ -530,6 +520,7 @@ describe("Phase 3 events-down (serving side)", () => {
   let clientRuntime: Runtime;
   let extraManagers: EmulatedStorageManager[];
   let extraRuntimes: Runtime[];
+  let preciseEventReferences = false;
 
   /** The live serving runtime/manager (set by newHost's createRuntime)
    * — the C8d raced-cascade test reads sealed state through them and
@@ -625,6 +616,7 @@ describe("Phase 3 events-down (serving side)", () => {
           apiUrl: new URL(import.meta.url),
           storageManager: manager,
           servingPosture: true,
+          cfcFlowLabels: preciseEventReferences ? "persist" : "off",
           experimental: {
             serverExecution: true,
           },
@@ -688,6 +680,7 @@ describe("Phase 3 events-down (serving side)", () => {
     });
 
   beforeEach(() => {
+    preciseEventReferences = false;
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     GatedStorageManager.loadParkRecoveryGeneration = 0;
     GatedStorageManager.syncGateParks = new ArrivalLog();
@@ -760,6 +753,7 @@ describe("Phase 3 events-down (serving side)", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
+      cfcFlowLabels: preciseEventReferences ? "persist" : "off",
       experimental: { serverExecution: true },
     });
     return { manager, runtime };
@@ -799,6 +793,90 @@ describe("Phase 3 events-down (serving side)", () => {
     }
     return { compiled, argument, result };
   };
+
+  it("restores a durable event's acquired reference when a serving host starts", async () => {
+    preciseEventReferences = true;
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const source = [
+      "import { handler, pattern, Stream, Writable } from 'commonfabric';",
+      "const bump = handler<{ piece: Writable<number> }, { value: Writable<number> }>(",
+      "  (event, { value }) => { value.set(event.piece.get() + 1); },",
+      ");",
+      "export default pattern<{ value: Writable<number> },",
+      "  { value: number; bump: Stream<{ piece: Writable<number> }> }>",
+      "(({ value }) => ({ value, bump: bump({ value }) }));",
+    ].join("\n");
+    const { argument, result } = await standUp(clientRuntime, source, {
+      arg: "reference-event-arg",
+      result: "reference-event-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientManager.synced();
+    result.key("bump").send({ piece: argument.key("value") });
+    await clientRuntime.idle();
+    await clientManager.synced();
+    await waitUntil(
+      () => sidecarIdsIn(engine).length === 1,
+      "the reference event append",
+    );
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const readEntry = () =>
+      (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
+        .entries![0];
+    expect(readEntry().runtimeReferenceContext).toBeDefined();
+    expect(readEntry().consequenced).toBeUndefined();
+    host = newHost();
+    const poke = clientRuntime.edit();
+    clientRuntime.getCell(space, "reference-event-activate", undefined, poke)
+      .set(1);
+    expect((await poke.commit()).error).toBeUndefined();
+    await waitUntil(
+      () => readEntry().consequenced === true,
+      "the restored reference event consequence",
+    );
+    expect(readEntry().status).toBeUndefined();
+    expect(readEntry().error).toBeUndefined();
+    expect(
+      (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { value: number }).value,
+    ).toBe(1);
+    // Neither corrupted attestation nor plain decoded reference bytes can
+    // execute the handler. Each refusal reaches a durable terminal outcome.
+    for (
+      const [eventId, context] of [
+        ["evt-reference-invalid", "invalid-context"],
+        ["evt-reference-missing", undefined],
+      ] as const
+    ) {
+      const original = readEntry();
+      const delivery = await clientManager.open(space).replica
+        .enqueueEventAppend!({
+          sidecarId,
+          stream: original.stream,
+          eventId,
+          payload: original.payload,
+          ...(context === undefined
+            ? {}
+            : { runtimeReferenceContext: context }),
+        });
+      expect(delivery.delivered).toBe(true);
+      const terminal = () =>
+        (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
+          .entries?.find((entry) => entry.eventId === eventId);
+      await waitUntil(
+        () => terminal()?.consequenced === true,
+        "the invalid reference event refusal",
+      );
+      expect(terminal()?.status).toBe("dropped");
+      expect(
+        (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+          ?.value as { value: number }).value,
+      ).toBe(1);
+    }
+    cancelDemand();
+  });
 
   it("the full loop: fire → drain → authoritative handler → ONE derived commit with consequenceOf + mark + watermark → echo retires", async () => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
@@ -1860,16 +1938,15 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    // Poison the stored envelope before the serving side exists: the
-    // first writer's commit lands, and the stored envelope is then
-    // genuinely ambiguous for every later merging writer.
+    // The served handler writes through a persisted, CFC-relevant envelope.
+    // A fault at preparation supplies the crash independently of schema policy.
     const poisonedDocName = "ow54-poisoned-envelope";
     {
       const tx = clientRuntime.edit();
       const cell = clientRuntime.getCell(
         space,
         poisonedDocName,
-        ambiguousEnvelopeSchema,
+        preparedEnvelopeSchema,
         tx,
       );
       cell.set({ candidates: [{ name: "Bob" }] });
@@ -1925,16 +2002,13 @@ describe("Phase 3 events-down (serving side)", () => {
     await servingRuntime!.getCell(
       space,
       poisonedDocName,
-      ambiguousEnvelopeSchema,
+      preparedEnvelopeSchema,
     ).sync();
 
-    // The probe replaces the pattern's handler on the serving runtime:
-    // a served handler whose write meets the stored ambiguous envelope,
-    // so its commit-prep records the refusal and the commit is rejected
-    // before storage.
-    /** Every served run of the probe handler, by event kind — the
-     * handler's own report, so a wait names the run rather than a
-     * counter turning true. */
+    // The probe keeps the actual preparation and commit paths: only the first
+    // state read inside preparation throws, then the normal failure settles.
+    const preparationCrash = "injected served CFC preparation failure";
+    const preparationFailures: Array<{ kind: string; name: string }> = [];
     const probeRuns = new ArrivalLog<string>();
     const gatedRetryStarted = Promise.withResolvers<void>();
     const releaseGatedRetry = Promise.withResolvers<void>();
@@ -1959,9 +2033,19 @@ describe("Phase 3 events-down (serving side)", () => {
         servingRuntime!.getCell(
           space,
           poisonedDocName,
-          ambiguousEnvelopeSchema,
+          preparedEnvelopeSchema,
           tx,
         ).set({ result: resolved, candidates: [] });
+        const fault = stub(tx, "getCfcState", () => {
+          fault.restore();
+          throw new Error(preparationCrash);
+        });
+        tx.prepareCfc();
+        tx.addCommitCallback((_tx, outcome) => {
+          if (outcome.error) {
+            preparationFailures.push({ kind, name: outcome.error.name });
+          }
+        });
       },
       streamLink,
     );
@@ -2003,6 +2087,10 @@ describe("Phase 3 events-down (serving side)", () => {
             undefined,
       );
       const deferred = entryByKind("poison-1")!;
+      expect(preparationFailures).toContainEqual({
+        kind: "poison-1",
+        name: "CommitPreparationError",
+      });
       expect(deferred.consequenced).not.toBe(true);
       expect(deferred.error).toBeUndefined();
       expect(deferred.status).toBeUndefined();
@@ -2610,6 +2698,7 @@ describe("Phase 3 events-down (serving side)", () => {
     const probeRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: probeManager,
+      cfcFlowLabels: "off",
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
@@ -2968,6 +3057,100 @@ describe("Phase 3 events-down (serving side)", () => {
       .toBeGreaterThanOrEqual(1);
     await awaitActive();
     expect(engineOpenFailures).toBe(0);
+  });
+
+  it("retains reference acquisitions in a same-space served cascade", async () => {
+    preciseEventReferences = true;
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const source = CASCADE_PATTERN
+      .replace(
+        "handler<unknown, { value: Writable<number> }>",
+        "handler<{ piece: Writable<number> }, { value: Writable<number> }>",
+      )
+      .replace(
+        "(_ev, { value }) => { value.set((value.get() ?? 0) + 10); }",
+        "(event, { value }) => { value.set(event.piece.get() + 10); }",
+      )
+      .replaceAll(
+        "second: Stream<unknown>",
+        "second: Stream<{ piece: Writable<number> }>",
+      )
+      .replace("second.send({});", "second.send({ piece: value });");
+    const { argument, result } = await standUp(clientRuntime, source, {
+      arg: "reference-cascade-arg",
+      result: "reference-cascade-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientManager.synced();
+    const secret = normalizeClause({
+      anyOf: ["stream-selection", cfcAtom.space(space)],
+    });
+    const seed = clientRuntime.edit();
+    const selected = clientRuntime.getCell(
+      space,
+      "private-cascade-stream",
+      undefined,
+      seed,
+    );
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredReferenceEnvelope(seed, {
+      ...selected.getAsNormalizedFullLink(),
+      path: [],
+    }, {
+      value: result.key("first").getAsLink(),
+      cfc: {
+        version: 2,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            origin: "link",
+            observes: "followRef",
+            label: { confidentiality: [secret] },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit()).error).toBeUndefined();
+    host = newHost();
+    selected.withTx(undefined).send({});
+    await clientRuntime.idle();
+    await clientManager.synced();
+    const entries = () =>
+      sidecarIdsIn(engine).flatMap((id) =>
+        (Engine.read(engine, { id })?.value as StreamEventsDocValue).entries ??
+          []
+      );
+    await waitUntil(
+      () =>
+        entries().length === 2 &&
+        entries().every((entry) => entry.consequenced === true),
+      "both reference cascade consequences",
+    );
+    expect(
+      entries().filter((entry) => entry.runtimeReferenceContext !== undefined),
+    ).toHaveLength(2);
+    for (const entry of entries()) {
+      expect(entry.status).toBeUndefined();
+      expect(entry.error).toBeUndefined();
+      expect(entry.firedAt?.user).toBe(aliceSigner.did());
+    }
+    expect(
+      (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { value: number }).value,
+    ).toBe(11);
+    const metadata = Engine.read(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.cfc as CfcMetadata;
+    expect(
+      metadata.labelMap.entries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      ),
+    ).toContainEqual(secret);
+    cancelDemand();
   });
 
   it("same-space cascade (LT1): the served handler's send commits a durable wave-carried entry with the INHERITED actor — processed exactly once", async () => {

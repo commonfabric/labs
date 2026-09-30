@@ -88,7 +88,7 @@ export function spaceAccess(
   return accessLevel(
     runtime,
     tx,
-    spaceOfTarget(target),
+    spaceOfTarget(target, tx),
     principal,
     kind === "lift",
   );
@@ -98,7 +98,10 @@ export function spaceAccess(
  * Helper for {@link spaceAccess}, which returns the space `target` lives in,
  * after following any links it holds.
  */
-function spaceOfTarget(target: unknown): MemorySpace {
+function spaceOfTarget(
+  target: unknown,
+  tx: IExtendedStorageTransaction,
+): MemorySpace {
   let cell: Cell<unknown>;
   if (isCell(target)) {
     cell = target;
@@ -109,7 +112,7 @@ function spaceOfTarget(target: unknown): MemorySpace {
       "`spaceAccess(target)` takes a cell, or `undefined`, as its target.",
     );
   }
-  return cell.resolveAsCell().getAsNormalizedFullLink().space;
+  return cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink().space;
 }
 
 /**

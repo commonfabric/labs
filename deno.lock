@@ -60,6 +60,7 @@
     "jsr:@std/path@^1.1.6": "1.1.6",
     "jsr:@std/streams@^1.1.1": "1.1.1",
     "jsr:@std/testing@1": "1.0.19",
+    "jsr:@std/testing@1.0.19": "1.0.19",
     "jsr:@std/testing@^1.0.19": "1.0.19",
     "jsr:@std/text@~1.0.7": "1.0.19",
     "jsr:@std/ulid@1": "1.0.0",

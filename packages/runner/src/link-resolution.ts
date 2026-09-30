@@ -21,16 +21,14 @@ import {
   type ScopeCapAtDepth,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import type {
-  IExtendedStorageTransaction,
-  INotFoundError,
-} from "./storage/interface.ts";
+import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   dereferenceResolutionProbe,
   linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import type { Runtime } from "./runtime.ts";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
 import { canFollowScopedLink, narrowerScopeCap } from "./scope.ts";
 import type { JSONSchema, SchemaScope } from "./builder/types.ts";
@@ -64,10 +62,15 @@ export type ResolvedFullLink = NormalizedFullLink & {
  * other `asCell` entry keeps carrying: its document holds a value, which the
  * carried schema is there to read.
  */
-const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
+export const schemaConstrainsNothing = (
+  schema: JSONSchema | undefined,
+): boolean =>
   schema === undefined ||
   (ContextualFlowControl.isTrueSchema(schema) &&
     !ContextualFlowControl.declaresStream(schema));
+
+/** A reference chain cannot terminate at a value. */
+export class LinkResolutionError extends Error {}
 
 export const MAX_PATH_RESOLUTION_LENGTH = 100;
 
@@ -153,7 +156,7 @@ const recordDereferenceHop = (
  * leading segments. Caps at or below the hop are dropped (already enforced);
  * the rest move by `shift` so their depths still address the same segments.
  */
-const rebaseScopeCaps = (
+export const rebaseScopeCaps = (
   caps: readonly ScopeCapAtDepth[] | undefined,
   consumed: number,
   shift: number,
@@ -165,7 +168,8 @@ const rebaseScopeCaps = (
   return moved.length > 0 ? moved : undefined;
 };
 
-const schemaScopeForLinkAtDepth = (
+/** The effective follow cap for a stored link at one depth of a read path. */
+export const schemaScopeForLinkAtDepth = (
   link: NormalizedFullLink,
   depth: number,
 ): SchemaScope | undefined => {
@@ -177,7 +181,6 @@ const schemaScopeForLinkAtDepth = (
     ContextualFlowControl.getSchemaScopeCap(link.schema),
     ContextualFlowControl.getAsCellFollowScopeCap(link.schema),
   );
-  if (depth >= link.path.length) return leafCap;
   return narrowerScopeCap(
     link.scopeCaps?.find((cap) => cap.depth === depth)?.scope,
     leafCap,
@@ -261,12 +264,18 @@ const kickDocPull = (
   runtime: Runtime,
   link: NormalizedFullLink,
   reserved: boolean,
+  identity: ScopeKeyIdentity | undefined,
 ): void => {
   const mgr = runtime.storageManager;
   const { space, id, scope } = link;
+  // A served read loads the same principal's instance that its transaction
+  // reads. The detached cell keeps the asynchronous load from retaining tx.
   mgr.trackUntilSettled(
-    runtime.getCellFromLink(link).sync().catch(() => {
-      if (reserved) mgr.retractDocPullKick?.(space, id, scope);
+    mgr.syncCell(
+      runtime.getCellFromLink(link),
+      identity === undefined ? undefined : { scopeKeyIdentity: identity },
+    ).catch(() => {
+      if (reserved) mgr.retractDocPullKick?.(space, id, scope, identity);
     }),
   );
 };
@@ -368,8 +377,8 @@ type ProbeRecord = {
   readonly payload: ReturnType<typeof linkPayloadAtProbe>;
 
   /**
-   * Where the position does not exist, the `NotFoundError` path: the longest
-   * prefix that could be addressed, `[]` when the document itself is missing.
+   * The attempted child path from a missing or non-container position.
+   * Empty when the document itself is missing.
    */
   readonly notFound: readonly string[] | undefined;
 
@@ -391,7 +400,8 @@ const probeMemoKey = (
  * What distinguishes two resolutions of the same address. `schema` and
  * `scopeCaps` decide which hops may be followed and what the result carries,
  * `overwrite` survives into the result under `preserveOverwrite`, and all of
- * these change the answer for the same link.
+ * these change the answer for the same link. `requestMissingDocs` separates
+ * snapshot-only verification from reads that can schedule document pulls.
  *
  * `viaLinkHop` (OW51) belongs here too: a DATA-DERIVED input link makes a
  * missing-doc dead-end resolve to a `pendingHopDoc` result (`inputViaLinkHop`
@@ -409,6 +419,7 @@ const resolutionMemoVariant = (
   link: NormalizedFullLink,
   lastNode: LastNode,
   preserveOverwrite: boolean,
+  requestMissingDocs: boolean,
 ): string => {
   const schema = isObjectOrArray(link.schema)
     ? `#${identityTag(link.schema)}`
@@ -416,7 +427,9 @@ const resolutionMemoVariant = (
   const caps = link.scopeCaps === undefined
     ? ""
     : `#${identityTag(link.scopeCaps)}`;
-  return `link:${lastNode}|${preserveOverwrite ? 1 : 0}|` +
+  return `link:${lastNode}|${preserveOverwrite ? 1 : 0}|${
+    requestMissingDocs ? 1 : 0
+  }|` +
     `${link.overwrite ?? ""}|${schema}|${caps}|${link.viaLinkHop ? "v" : ""}|`;
 };
 
@@ -500,6 +513,12 @@ export function resolveLink(
     preserveOverwrite?: boolean;
     onScopeBlocked?: () => void;
 
+    /** Keeps protected verifier failures out of observer-visible logs. */
+    silentFailures?: boolean;
+
+    /** When false, uses this snapshot without starting missing-document pulls. */
+    requestMissingDocs?: boolean;
+
     /**
      * Mark the transaction cfc-relevant for every crossed link whose
      * stored schema carries `ifc` (the crossing seam,
@@ -548,6 +567,12 @@ export function resolveLinkTracingDereferences(
     preserveOverwrite?: boolean;
     onScopeBlocked?: () => void;
 
+    /** Keeps protected verifier failures out of observer-visible logs. */
+    silentFailures?: boolean;
+
+    /** When false, uses this snapshot without starting missing-document pulls. */
+    requestMissingDocs?: boolean;
+
     /**
      * Mark the transaction cfc-relevant for every crossed link whose
      * stored schema carries `ifc` (the crossing seam,
@@ -576,6 +601,7 @@ export function resolveLinkTracingDereferences(
     link,
     lastNode,
     options.preserveOverwrite === true,
+    options.requestMissingDocs !== false,
   ) + addressKey;
   const cached = memo?.get(memoKey) as LinkResolutionRecord | undefined;
   if (cached !== undefined) {
@@ -585,9 +611,12 @@ export function resolveLinkTracingDereferences(
         markIfcBearingLinkCrossing(tx, hop.space, hop.schema, hop.id);
       }
     }
-    if (options.kickCrossSpaceTargets !== false) {
+    if (
+      options.requestMissingDocs !== false &&
+      options.kickCrossSpaceTargets !== false
+    ) {
       for (const target of cached.crossSpaceTargets) {
-        kickDocPull(runtime, target, false);
+        kickDocPull(runtime, target, false, tx.tx?.scopeKeyIdentity);
       }
     }
     return {
@@ -603,8 +632,8 @@ export function resolveLinkTracingDereferences(
   // it holds one and from a read where it does not. Probe reads are shape
   // observations of link topology — flow labels must not treat them as
   // content reads (reactivity still does, so the link appearing later
-  // re-resolves). A read that fails other than by `NotFoundError` reads as a
-  // position holding no link, and is not memoized.
+  // re-resolves). Missing paths and attempts to descend through a leaf name
+  // an ancestor that may hold a link. Other failures are not memoized.
   const probeAt = (
     link: NormalizedFullLink,
     position: readonly string[],
@@ -627,10 +656,17 @@ export function resolveLinkTracingDereferences(
         payload: linkPayloadAtProbe(probe.ok.value),
         notFound: undefined,
       };
-    } else if (probe.error?.name === "NotFoundError") {
+    } else if (
+      probe.error?.name === "NotFoundError" ||
+      probe.error?.name === "TypeMismatchError"
+    ) {
+      // A FabricLink is a leaf, so probing past it reports a type mismatch.
+      // Both errors locate the attempted child of a possible link.
       record = {
         payload: undefined,
-        notFound: (probe.error as INotFoundError).path,
+        notFound: probe.error.name === "NotFoundError"
+          ? probe.error.path
+          : probe.error.address.path,
       };
     } else {
       return { payload: undefined, notFound: undefined };
@@ -696,19 +732,26 @@ export function resolveLinkTracingDereferences(
   while (true) {
     let deadEndDocMissing = false;
     if (iteration++ > MAX_PATH_RESOLUTION_LENGTH) {
-      logger.error("link-res-error", `Link resolution iteration limit reached`);
-      throw new Error(`Link resolution iteration limit reached`);
+      if (!options.silentFailures) {
+        logger.error(
+          "link-res-error",
+          `Link resolution iteration limit reached`,
+        );
+      }
+      throw new LinkResolutionError(`Link resolution iteration limit reached`);
     }
 
     // Detect cycles. `addressKey` always names the link this iteration starts
     // from: computed for the first before the loop, refreshed by each hop.
     const key = addressKey;
     if (seen.has(key)) {
-      logger.error(
-        "link-res-error",
-        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
-      );
-      throw new Error(
+      if (!options.silentFailures) {
+        logger.error(
+          "link-res-error",
+          debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
+        );
+      }
+      throw new LinkResolutionError(
         debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
@@ -775,6 +818,7 @@ export function resolveLinkTracingDereferences(
               tx,
               nextHop.source.space,
               schema,
+              { silentFailures: options.silentFailures },
             );
             schema = closureComplete
               ? ContextualFlowControl.getSchemaAtPath(schema, remainingPath)
@@ -800,18 +844,20 @@ export function resolveLinkTracingDereferences(
         // Blocked narrower-scope follow during link resolution — resolves to
         // undefined silently. Warn (not info) so the drop is observable; see
         // the matching site in traverse.ts followPointer (CT-1642).
-        logger.warn("scope: blocked narrower link follow", () => [
-          `a "${hopCap}"-scoped read cannot follow a ` +
-          `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
-          `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
-          `at the top level and pass the value down.`,
-          {
-            schemaScope: hopCap,
-            linkScope: nextHop.link.scope,
-            source: cfcAddressFromLink(link),
-            target: cfcAddressFromLink(nextHop.link),
-          },
-        ]);
+        if (!options.silentFailures) {
+          logger.warn("scope: blocked narrower link follow", () => [
+            `a "${hopCap}"-scoped read cannot follow a ` +
+            `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
+            `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
+            `at the top level and pass the value down.`,
+            {
+              schemaScope: hopCap,
+              linkScope: nextHop.link.scope,
+              source: cfcAddressFromLink(link),
+              target: cfcAddressFromLink(nextHop.link),
+            },
+          ]);
+        }
         options.onScopeBlocked?.();
         memoizable = false;
         link = undefinedDataLink(link);
@@ -832,8 +878,12 @@ export function resolveLinkTracingDereferences(
       ) {
         const detail = `link at [${hopSource.path.join("/")}] targets its ` +
           `own subpath [${hopTarget.path.join("/")}]`;
-        logger.error("link-res-error", `Link cycle detected: ${detail}`);
-        throw new Error(`Link cycle detected at ${key}: ${detail}`);
+        if (!options.silentFailures) {
+          logger.error("link-res-error", `Link cycle detected: ${detail}`);
+        }
+        throw new LinkResolutionError(
+          `Link cycle detected at ${key}: ${detail}`,
+        );
       }
       carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));
@@ -942,16 +992,21 @@ export function resolveLinkTracingDereferences(
         ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
       }
       const mgr = runtime.storageManager;
-      const reserved = !crossSpace &&
-        mgr.shouldPullDoc?.(link.space, link.id, link.scope) === true;
-      if (crossSpace || reserved) {
+      const reserved = options.requestMissingDocs !== false && !crossSpace &&
+        mgr.shouldPullDoc?.(
+            link.space,
+            link.id,
+            link.scope,
+            tx.tx?.scopeKeyIdentity,
+          ) === true;
+      if (options.requestMissingDocs !== false && (crossSpace || reserved)) {
         // Only the cross-space kick is replayed. A same-space one is taken
         // against a reservation, so a second resolution of this link would not
         // kick it either — and if the sync fails and retracts the reservation,
         // the read that retries is in a later transaction with its own memo.
         if (crossSpace) crossSpaceTargets.push(link);
         if (!crossSpace || options.kickCrossSpaceTargets !== false) {
-          kickDocPull(runtime, link, reserved);
+          kickDocPull(runtime, link, reserved, tx.tx?.scopeKeyIdentity);
         }
       }
       addressKey = linkAddressKey(link);

@@ -1,0 +1,912 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CommuteMode": {
+        "enum": [
+          "drive",
+          "transit",
+          "bike",
+          "wfh",
+          "other"
+        ]
+      },
+      "ParkingAdminList": {
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ],
+          "requiredIntegrity": [
+            "parking-admin"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/factory-outputs/parking-coordinator/main.tsx",
+              "moduleIdentity": "jXvoA59z9hHaVxJsYqx05s2YtzhGxtBtLJxzUvmPzuE",
+              "path": [
+                "commitParkingAdminChange"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ParkingAdminRole"
+        },
+        "type": "array"
+      },
+      "ParkingAdminRegistryStoredValue": {
+        "properties": {
+          "admins": {
+            "$ref": "#/$defs/ParkingAdminList"
+          }
+        },
+        "type": "object"
+      },
+      "ParkingAdminRegistryValue": {
+        "$ref": "#/$defs/ParkingAdminRegistryStoredValue",
+        "default": {}
+      },
+      "ParkingAdminRole": {
+        "$ref": "#/$defs/ParkingAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ]
+        }
+      },
+      "ParkingAdminRoleAssignment": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/$defs/ParkingProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "ParkingProfile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ParkingSpot": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spotNumber",
+          "label",
+          "notes",
+          "active"
+        ],
+        "type": "object"
+      },
+      "ParkingSpotEntry": {
+        "$ref": "#/$defs/ParkingSpot",
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ]
+        }
+      },
+      "ParkingSpotList": {
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ],
+          "requiredIntegrity": [
+            "parking-admin"
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/ParkingSpotEntry"
+        },
+        "type": "array"
+      },
+      "ParkingViewerClaim": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/ParkingProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "commuteMode": {
+            "$ref": "#/$defs/CommuteMode"
+          },
+          "defaultSpot": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priorityRank": {
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/$defs/ParkingProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The Fabric identity that claimed this row, once someone has. A person with\nno profile is a name on a roster: they can hold a parking spot, and they\ncannot hold a parking-admin role, because nothing identifies them."
+          },
+          "spotPreferences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vehicles": {
+            "items": {
+              "$ref": "#/$defs/Vehicle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "commuteMode",
+          "spotPreferences",
+          "defaultSpot",
+          "priorityRank"
+        ],
+        "type": "object"
+      },
+      "RequestStatus": {
+        "enum": [
+          "pending",
+          "allocated",
+          "denied",
+          "cancelled"
+        ]
+      },
+      "SpotRequest": {
+        "properties": {
+          "assignedSpot": {
+            "type": "string"
+          },
+          "autoAllocated": {
+            "type": "boolean"
+          },
+          "date": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "personName": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/RequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "personName",
+          "date",
+          "status",
+          "assignedSpot",
+          "autoAllocated"
+        ],
+        "type": "object"
+      },
+      "Vehicle": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "plateId": {
+            "type": "string"
+          },
+          "plateState": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plateId",
+          "plateState",
+          "color",
+          "make",
+          "model"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "adminRegistry": {
+        "$ref": "#/$defs/ParkingAdminRegistryValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "people": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SpotRequest"
+        },
+        "type": "array"
+      },
+      "spots": {
+        "$ref": "#/$defs/ParkingSpotList",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [
+          {
+            "active": true,
+            "label": "Near entrance",
+            "notes": "",
+            "spotNumber": "1"
+          },
+          {
+            "active": true,
+            "label": "",
+            "notes": "",
+            "spotNumber": "5"
+          },
+          {
+            "active": true,
+            "label": "Compact only",
+            "notes": "Tight, no large vehicles",
+            "spotNumber": "12"
+          }
+        ]
+      },
+      "viewer": {
+        "$ref": "#/$defs/ParkingViewerClaim",
+        "description": "Stands a particular viewer up in place of the `#profile` wish, for a test\nor a composing pattern that already holds one. A claim always carries a\nname: the name is what says the claim is real, because a cell-typed field\ncannot say so (see `hasViewerClaim` below).",
+        "tags": [
+          "profile"
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "factory-outputs/parking-coordinator/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CommuteMode": {
+        "enum": [
+          "drive",
+          "transit",
+          "bike",
+          "wfh",
+          "other"
+        ]
+      },
+      "ParkingAdminChangeEvent": {
+        "properties": {
+          "displayName": {
+            "description": "Name to record on a granted role, for display where the cell is offline.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/ParkingProfile",
+            "description": "The identity whose role changes."
+          }
+        },
+        "type": "object"
+      },
+      "ParkingAdminList": {
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ],
+          "requiredIntegrity": [
+            "parking-admin"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/factory-outputs/parking-coordinator/main.tsx",
+              "moduleIdentity": "jXvoA59z9hHaVxJsYqx05s2YtzhGxtBtLJxzUvmPzuE",
+              "path": [
+                "commitParkingAdminChange"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ParkingAdminRole"
+        },
+        "type": "array"
+      },
+      "ParkingAdminRegistryStoredValue": {
+        "properties": {
+          "admins": {
+            "$ref": "#/$defs/ParkingAdminList"
+          }
+        },
+        "type": "object"
+      },
+      "ParkingAdminRegistryValue": {
+        "$ref": "#/$defs/ParkingAdminRegistryStoredValue",
+        "default": {}
+      },
+      "ParkingAdminRole": {
+        "$ref": "#/$defs/ParkingAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "parking-admin"
+          ]
+        }
+      },
+      "ParkingAdminRoleAssignment": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/$defs/ParkingProfile"
+          }
+        },
+        "required": [
+          "subject",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "ParkingProfile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ParkingSpot": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spotNumber",
+          "label",
+          "notes",
+          "active"
+        ],
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "commuteMode": {
+            "$ref": "#/$defs/CommuteMode"
+          },
+          "defaultSpot": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priorityRank": {
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/$defs/ParkingProfile",
+            "description": "The Fabric identity that claimed this row, once someone has. A person with\nno profile is a name on a roster: they can hold a parking spot, and they\ncannot hold a parking-admin role, because nothing identifies them."
+          },
+          "spotPreferences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vehicles": {
+            "items": {
+              "$ref": "#/$defs/Vehicle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "commuteMode",
+          "spotPreferences",
+          "defaultSpot",
+          "priorityRank"
+        ],
+        "type": "object"
+      },
+      "RequestStatus": {
+        "enum": [
+          "pending",
+          "allocated",
+          "denied",
+          "cancelled"
+        ]
+      },
+      "SpotRequest": {
+        "properties": {
+          "assignedSpot": {
+            "type": "string"
+          },
+          "autoAllocated": {
+            "type": "boolean"
+          },
+          "date": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "personName": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/RequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "personName",
+          "date",
+          "status",
+          "assignedSpot",
+          "autoAllocated"
+        ],
+        "type": "object"
+      },
+      "Vehicle": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "plateId": {
+            "type": "string"
+          },
+          "plateState": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plateId",
+          "plateState",
+          "color",
+          "make",
+          "model"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addPerson": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "commuteMode": {
+            "$ref": "#/$defs/CommuteMode"
+          },
+          "defaultSpot": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "preferences": {
+            "type": "string"
+          },
+          "priorityRank": {
+            "type": "number"
+          },
+          "vehicles": {
+            "items": {
+              "$ref": "#/$defs/Vehicle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "commuteMode",
+          "priorityRank",
+          "defaultSpot",
+          "preferences"
+        ],
+        "type": "object"
+      },
+      "addSpot": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spotNumber",
+          "label",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "adminMode": {
+        "type": "boolean"
+      },
+      "adminOverride": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "personName": {
+            "type": "string"
+          },
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spotNumber",
+          "date",
+          "personName"
+        ],
+        "type": "object"
+      },
+      "adminRegistry": {
+        "$ref": "#/$defs/ParkingAdminRegistryValue"
+      },
+      "cancelRequest": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "claimPerson": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "currentPersonIsAdmin": {
+        "type": "boolean"
+      },
+      "currentUserCanManageAdmins": {
+        "type": "boolean"
+      },
+      "editPerson": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "commuteMode": {
+            "$ref": "#/$defs/CommuteMode"
+          },
+          "defaultSpot": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "originalName": {
+            "type": "string"
+          },
+          "preferences": {
+            "type": "string"
+          },
+          "priorityRank": {
+            "type": "number"
+          },
+          "vehicles": {
+            "items": {
+              "$ref": "#/$defs/Vehicle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "originalName",
+          "name",
+          "email",
+          "commuteMode",
+          "priorityRank",
+          "defaultSpot",
+          "preferences"
+        ],
+        "type": "object"
+      },
+      "editSpot": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "originalNumber": {
+            "type": "string"
+          },
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "originalNumber",
+          "spotNumber",
+          "label",
+          "notes",
+          "active"
+        ],
+        "type": "object"
+      },
+      "enableAdminManager": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "movePersonDown": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "movePersonUp": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "people": {
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      },
+      "removePerson": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "removeSpot": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "spotNumber": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spotNumber"
+        ],
+        "type": "object"
+      },
+      "requestDate": {
+        "type": "string"
+      },
+      "requestResult": {
+        "type": "string"
+      },
+      "requests": {
+        "items": {
+          "$ref": "#/$defs/SpotRequest"
+        },
+        "type": "array"
+      },
+      "selectedPersonName": {
+        "type": "string"
+      },
+      "spots": {
+        "items": {
+          "$ref": "#/$defs/ParkingSpot"
+        },
+        "type": "array"
+      },
+      "submitRequest": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "personName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "personName",
+          "date"
+        ],
+        "type": "object"
+      },
+      "toggleAdminMode": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "togglePersonAdmin": {
+        "$ref": "#/$defs/ParkingAdminChangeEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "spots",
+      "people",
+      "requests",
+      "adminMode",
+      "selectedPersonName",
+      "requestDate",
+      "requestResult",
+      "adminRegistry",
+      "currentPersonIsAdmin",
+      "currentUserCanManageAdmins",
+      "enableAdminManager",
+      "claimPerson",
+      "togglePersonAdmin",
+      "toggleAdminMode",
+      "submitRequest",
+      "cancelRequest",
+      "addPerson",
+      "editPerson",
+      "removePerson",
+      "movePersonUp",
+      "movePersonDown",
+      "addSpot",
+      "editSpot",
+      "removeSpot",
+      "adminOverride",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

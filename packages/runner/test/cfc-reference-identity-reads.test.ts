@@ -95,6 +95,8 @@ describe("cfc-reference-identity-reads", () => {
     path,
     label: { confidentiality: [audience(tag)] },
     origin: "link",
+    observes: "followRef",
+    referenceAcquisition: "complete",
   });
 
   // One seeding transaction: `write` installs a document with its stored label
@@ -113,7 +115,7 @@ describe("cfc-reference-identity-reads", () => {
       seedStoredEnvelope(tx, { space, scope: "space", id: link.id, path: [] }, {
         value,
         cfc: {
-          version: 1,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: { version: 1, entries },
         },
@@ -293,7 +295,13 @@ describe("cfc-reference-identity-reads", () => {
     const localSeed = seeding(rt);
     const localHolder = localSeed.write("same-space-reference-holder", {
       ref: createSigilLinkFromParsedLink(localTarget.getAsNormalizedFullLink()),
-    });
+    }, [{
+      path: ["ref"],
+      origin: "link",
+      observes: "followRef",
+      referenceAcquisition: "complete",
+      label: {},
+    }]);
     await localSeed.commit();
     await flowJoinOf(rt, "same-space-reference-out", (tx) => {
       const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
@@ -456,13 +464,9 @@ describe("cfc-reference-identity-reads", () => {
   });
 
   describe("carrying the reference onward", () => {
-    // Why a wiring probe can consume nothing without losing the label. What
-    // the runtime does with a reference it obtains is write that same
-    // reference into another slot, and the link write mints the source
-    // document's own label there (`derivePersistedLinkLabel`). So the
-    // protection arrives at the slot that now holds the reference, whatever
-    // the probe consumed. This is the substitute route the skip rests on, and
-    // nothing else pins it.
+    // A runtime-acquired carrier retains the slot's reference restrictions.
+    // Forwarding that carrier consumes its identity even when a machinery
+    // read originally found the slot. The target's content is not observed.
 
     const seedOnward = async (rt: Runtime) => {
       const seed = seeding(rt);
@@ -478,6 +482,19 @@ describe("cfc-reference-identity-reads", () => {
       return holder;
     };
 
+    const acquireReference = (
+      rt: Runtime,
+      holder: NormalizedFullLink,
+      tx: IExtendedStorageTransaction,
+    ): Cell<unknown> =>
+      rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...holder,
+        schema: {
+          type: "object",
+          properties: { ref: { type: "unknown", asCell: ["cell"] } },
+        },
+      }).withTx(tx).key("ref").get();
+
     /**
      * Obtains the reference at the holder's slot the way the runtime's wiring
      * does, writes it into a fresh document, and answers with what that
@@ -488,12 +505,12 @@ describe("cfc-reference-identity-reads", () => {
     const carryOnward = async (
       rt: Runtime,
       outCause: string,
-      obtain: (tx: IExtendedStorageTransaction) => NormalizedFullLink,
+      obtain: (tx: IExtendedStorageTransaction) => Cell<unknown>,
     ): Promise<{ slot: string[] | undefined; container: string[] }> => {
       const tx = rt.edit();
       const reference = obtain(tx);
       const out = rt.getCell(space, outCause, undefined, tx);
-      out.set({ slot: createSigilLinkFromParsedLink(reference) });
+      out.set({ slot: reference });
       tx.prepareCfc();
       expect((await tx.commit()).ok).toBeDefined();
       const id = out.getAsNormalizedFullLink().id;
@@ -503,7 +520,7 @@ describe("cfc-reference-identity-reads", () => {
       };
     };
 
-    it("mints the source's label at the slot the reference lands in", async () => {
+    it("retains acquisition confidentiality when forwarding a machinery-discovered reference", async () => {
       const rt = makeRuntime();
       const holder = await seedOnward(rt);
       const carried = await carryOnward(
@@ -512,27 +529,24 @@ describe("cfc-reference-identity-reads", () => {
         (tx) =>
           tx.runWithAmbientReadMeta(
             machineryRead,
-            () => readMaybeLink(tx, { ...holder, path: ["ref"] })!,
+            () => acquireReference(rt, holder, tx),
           ),
       );
-      expect(carried.slot).toEqual(["on-target"]);
-      expect(carried.container).toEqual([]);
+      expect(carried.slot).toEqual(["pointer-label"]);
+      expect(carried.container).toEqual(["pointer-label"]);
     });
 
-    it("mints the same label there when the probe consumed one", async () => {
-      // The slot's label does not come from the probe. An unmarked probe at
-      // the same position consumes the holder's pointer label, and what that
-      // adds is a stamp over the container the reference landed in — the
-      // second, coarser copy. The slot carries what it carried above either
-      // way, so the skip removes the copy and not the protection.
+    it("retains acquisition confidentiality when forwarding an application-discovered reference", async () => {
+      // An application identity read and later forwarding retain the same
+      // acquisition restriction without consuming the target's content.
       const rt = makeRuntime();
       const holder = await seedOnward(rt);
       const carried = await carryOnward(
         rt,
         "rir-onward-standalone-out",
-        (tx) => readMaybeLink(tx, { ...holder, path: ["ref"] })!,
+        (tx) => acquireReference(rt, holder, tx),
       );
-      expect(carried.slot).toEqual(["on-target"]);
+      expect(carried.slot).toEqual(["pointer-label"]);
       expect(carried.container).toEqual(["pointer-label"]);
     });
   });

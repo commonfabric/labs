@@ -157,13 +157,16 @@ consults no `cid:` document on any of its three channels:
 - a write target whose id begins with `cid:` is skipped by `valueWriteTargets`;
 - a read of one is skipped by `flowReadExcluded`;
 - a trigger read naming one is skipped by `forEachFlowObservation`, on top of
-  the same filter applied when trigger reads are recorded;
-- a link written into a labeled document that names a `cid:` source records
-  no link-write policy input (`recordLinkWritePolicyInput`), so the link-label
-  derivation never asks a `cid:` document for metadata it cannot carry. The
-  compile cache's records link their code this way, to
-  [code documents](content-addressed-schemas.md#code-documents) staged
-  through the same privileged blind write as a schema document.
+  the same filter applied when trigger reads are recorded.
+
+References to these documents retain their own acquisition history. With
+`cfcFlowLabels: "persist"`, `recordLinkWritePolicyInput` records a CID reference
+at its receiving slot, including selection confidentiality and scope caps,
+without consulting target metadata. The compile cache acquires its links to
+[code documents](content-addressed-schemas.md#code-documents) through the
+Runtime after staging the bytes, so a public code reference has complete
+provenance. Legacy link labeling skips CID sources because it derives labels
+from target metadata instead.
 
 That exclusion is deliberate. A `cid:` document sits on an unverified write
 path that any principal who can write to the space can reach, so a label map

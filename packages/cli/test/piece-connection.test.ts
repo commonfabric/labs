@@ -428,6 +428,7 @@ describe("piece-connection", () => {
         }),
       };
       return {
+        runtime: { cfcFlowLabels: "off" },
         getSpace: () => SPACE,
         get: () =>
           Promise.resolve({

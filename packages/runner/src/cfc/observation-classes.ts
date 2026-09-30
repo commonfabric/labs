@@ -57,7 +57,7 @@ const CONSUMED_CLASSES: Record<
   ReadObservationShape,
   readonly LabelObservationClass[]
 > = {
-  value: ["value", "shape", "enumerate"],
+  value: ["value", "shape", "enumerate", "followRef"],
   shape: ["shape", "enumerate"],
   followRef: ["followRef"],
 };
@@ -75,11 +75,9 @@ export const readObservationShapes = (): ReadObservationShape[] =>
 
 /**
  * The consumption class of a persisted entry; `undefined` means covering
- * (consumed by every content read class). Implements the C0 §3 carve-out: a
- * legacy `origin:"link"` entry with absent `observes` is implicitly
- * `observes:"followRef"` — never covering. Without the carve-out, plain
- * value reads would start consuming link-origin pointer labels, breaking
- * the §6 byte-identity contract (and the blind-passing split) on day one.
+ * (consumed by every content read class). A legacy `origin:"link"` entry
+ * with absent `observes` labels the reference identity. Materializing a
+ * subtree exposes the references it contains and consumes those labels too.
  */
 export const entryObservationClass = (
   entry: Pick<LabelMapEntry, "origin" | "observes">,

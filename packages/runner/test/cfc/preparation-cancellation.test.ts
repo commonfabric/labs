@@ -28,13 +28,13 @@ const rowSchema = {
   },
 } as const;
 
-function makeRuntime() {
+function makeRuntime(cfcFlowLabels: "off" | "persist" = "persist") {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcEnforcementMode: "enforce-explicit",
-    cfcFlowLabels: "persist",
+    cfcFlowLabels,
   });
   return { runtime, storageManager };
 }
@@ -214,7 +214,8 @@ describe("preparation-cancellation", () => {
   });
 
   it("cancels a staged-reference walk before its first target persists", async () => {
-    const { runtime, storageManager } = makeRuntime();
+    // Recursive target-label derivation belongs to the legacy reference mode.
+    const { runtime, storageManager } = makeRuntime("off");
     try {
       await seedReferenceGraphLeaf(runtime, space);
       const { tx, holder } = stageReferenceGraph(
@@ -262,7 +263,7 @@ describe("preparation-cancellation", () => {
 
   it("preserves every staged-reference label across yields within a target", async () => {
     const prepare = async (cooperative: boolean) => {
-      const { runtime, storageManager } = makeRuntime();
+      const { runtime, storageManager } = makeRuntime("off");
       try {
         await seedReferenceGraphLeaf(runtime, space);
         const { tx, holder, nodes } = stageReferenceGraph(
@@ -357,7 +358,9 @@ describe("preparation-cancellation", () => {
         ? "aborts a transaction changed during reference derivation without granting write privilege"
         : "aborts a transaction changed during a yield without granting write privilege",
       async () => {
-        const { runtime, storageManager } = makeRuntime();
+        const { runtime, storageManager } = makeRuntime(
+          duringDerivation ? "off" : "persist",
+        );
         const turn = Promise.withResolvers<void>();
         let yielded = false;
         using _slices = stub(CooperativeYield.prototype, "maybeYield", () => {

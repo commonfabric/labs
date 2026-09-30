@@ -147,10 +147,12 @@ describe("wish profile-create sidecar duplicate launch", () => {
     const rt1 = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: managerA,
+      cfcFlowLabels: "persist",
     });
     const rt2 = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: managerB,
+      cfcFlowLabels: "persist",
     });
     try {
       // Home space with a profile-less default pattern: `#profile` resolves

@@ -55,6 +55,7 @@ testComponents.forEach(({ name, file }) => {
       spaceDid = await createTestSpace(identity);
       cc = await initializePiecesController({
         space: spaceDid,
+        cfcFlowLabels: "persist",
         apiUrl: new URL(API_URL),
         identity: identity,
       });
@@ -143,6 +144,7 @@ describe("cf-checkbox waitForDisabled fallback integration test", () => {
     spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
       space: spaceDid,
+      cfcFlowLabels: "persist",
       apiUrl: new URL(API_URL),
       identity,
     });

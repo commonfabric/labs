@@ -55,11 +55,24 @@ import {
   type CfcAddress,
   runtimeWritePolicyAuthorization,
 } from "./cfc/types.ts";
+import {
+  carryCfcReferenceProvenance,
+  cfcReferenceBinding,
+  cfcReferenceBindingMatches,
+  type CfcReferenceProvenance,
+  getCfcReferenceProvenance,
+} from "./cfc/reference-provenance.ts";
 import { createRef } from "./create-ref.ts";
+import {
+  assertSerializableReferenceScope,
+  referenceScopeIsSerializable,
+  schemaWithRetainedReferenceScope,
+} from "./cfc/reference-scope.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import { resolveLink } from "./link-resolution.ts";
 import {
   areNormalizedLinksSame,
+  type CellLink,
   createSigilLinkFromParsedLink,
   declareStreamSchema,
   isCellLink,
@@ -86,13 +99,14 @@ import {
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
-import { isCellScope, scopeRank } from "./scope.ts";
+import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import type {
   IExtendedStorageTransaction,
   IReadOptions,
 } from "./storage/interface.ts";
 import {
+  authorizationRead,
   ignoreReadForScheduling,
   internalVerifierRead,
   linkResolutionProbe,
@@ -321,63 +335,89 @@ const recordLinkWritePolicyInput = (
   target: NormalizedFullLink,
   source: NormalizedFullLink,
   cfcLabelView?: CfcLabelView,
+  reference?: CfcReferenceProvenance,
 ): void => {
   if (tx.getCfcState().enforcementMode === "disabled") {
     return;
   }
-  // A content-addressed document is a runtime surface outside labeling:
-  // immutable, named by its own content, and never given an envelope —
-  // the write-policy and flow-read passes exclude `cid:` ids on the same
-  // ground. A link to one carries nothing a label could describe, so it
-  // records no policy input; recording one would demand source metadata
-  // the document can never carry.
-  if (source.id.startsWith("cid:")) {
-    return;
-  }
   const carriedCfcLabelView = cloneCfcLabelView(cfcLabelView);
-  let sourceMetadata: ReturnType<typeof readStoredCfcMetadata>;
-  let sourceEnvelopeUninterpretable = false;
-  try {
-    sourceMetadata = readStoredCfcMetadata(tx, source);
-  } catch (error) {
-    // A source envelope this build cannot produce labels from still makes
-    // the link CFC-relevant (fail closed): recording the policy input
-    // routes the write to prepare, where the unreadable envelope rejects
-    // it in enforcing modes instead of the labels silently not carrying.
-    if (!(error instanceof StoredCfcMetadataError)) throw error;
-    sourceEnvelopeUninterpretable = true;
+  if (tx.getCfcState().flowLabelsMode !== "persist") {
+    if (source.id.startsWith("cid:")) return;
+    let sourceMetadata: ReturnType<typeof readStoredCfcMetadata>;
+    let sourceEnvelopeUninterpretable = false;
+    try {
+      sourceMetadata = readStoredCfcMetadata(tx, source);
+    } catch (error) {
+      // A source envelope this build cannot produce labels from still makes
+      // the link CFC-relevant (fail closed): recording the policy input
+      // routes the write to prepare, where the unreadable envelope rejects
+      // it in enforcing modes instead of the labels silently not carrying.
+      if (!(error instanceof StoredCfcMetadataError)) throw error;
+      sourceEnvelopeUninterpretable = true;
+    }
+    const sourceRelevant = schemaIfcOverlapsPath(source.schema, [], []) ||
+      sourceMetadata !== undefined || sourceEnvelopeUninterpretable ||
+      hasPendingSchemaPolicyInput(tx, source) ||
+      cfcLabelViewHasValues(carriedCfcLabelView);
+    // A link stored below a document's root under a write authorization that
+    // arrives with this write is held to the same source check as one stored
+    // under the claim once a commit has persisted it: otherwise the write that
+    // creates a protected list admits a first entry every later one is refused.
+    // A link AT the root is excluded — the document then aliases its source and
+    // stores no entry of its own. The stored labels that the pointer this write
+    // replaces brought to the slot do not count: they leave with it (see
+    // `storedCfcMetadataAppliesToPath`).
+    const targetRelevant =
+      storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
+      hasPendingSchemaPolicyInput(tx, target) ||
+      (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
+    if (!sourceRelevant && !targetRelevant) {
+      return;
+    }
   }
-  const sourceRelevant = schemaIfcOverlapsPath(source.schema, [], []) ||
-    sourceMetadata !== undefined || sourceEnvelopeUninterpretable ||
-    hasPendingSchemaPolicyInput(tx, source) ||
-    cfcLabelViewHasValues(carriedCfcLabelView);
-  // A link stored below a document's root under a write authorization that
-  // arrives with this write is held to the same source check as one stored
-  // under the claim once a commit has persisted it: otherwise the write that
-  // creates a protected list admits a first entry every later one is refused.
-  // A link AT the root is excluded — the document then aliases its source and
-  // stores no entry of its own. The stored labels that the pointer this write
-  // replaces brought to the slot do not count: they leave with it (see
-  // `storedCfcMetadataAppliesToPath`).
-  const targetRelevant =
-    storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
-    hasPendingSchemaPolicyInput(tx, target) ||
-    (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
-  if (!sourceRelevant && !targetRelevant) {
-    return;
+  if (
+    reference !== undefined && !cfcReferenceBindingMatches(reference, source)
+  ) {
+    throw new Error("Reference acquisition does not match its binding");
   }
-
+  if (tx.getCfcState().flowLabelsMode === "persist") {
+    assertSerializableReferenceScope(source.schema, reference?.scopeCaps);
+  }
   tx.markCfcRelevant(`link-write:${target.id}`);
   tx.recordCfcWritePolicyInput({
     kind: "link-write",
     target: cfcAddressFromLink(target),
-    source: cfcAddressFromLink(source),
+    source: cfcReferenceBinding(source),
+    ...(reference !== undefined && { reference }),
     ...(source.schema !== undefined && { linkSchema: source.schema }),
     ...(carriedCfcLabelView !== undefined && {
       cfcLabelView: carriedCfcLabelView,
     }),
-  });
+  }, runtimeWritePolicyAuthorization);
 };
+
+/** Records a trusted raw-output reference at the slot receiving its link. */
+export function recordTrustedLinkValueWrite(
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+  value: unknown,
+): void {
+  const reference = getCfcReferenceProvenance(value);
+  const source = parseLink(value, target);
+  if (source === undefined) {
+    if (reference !== undefined) {
+      throw new Error("Reference acquisition does not name a link");
+    }
+    return;
+  }
+  recordLinkWritePolicyInput(
+    tx,
+    target,
+    source,
+    cfcLabelViewForPrimitiveLink(value),
+    reference,
+  );
+}
 
 const cfcLabelViewForPrimitiveLink = (
   value: unknown,
@@ -472,6 +512,54 @@ function declaredCellScope(
   return isCellScope(cap) ? cap : undefined;
 }
 
+/** Serializes a generated scope redirect with its retained follow restriction. */
+function scopedRedirect(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+  base: NormalizedFullLink,
+): ReturnType<typeof createSigilLinkFromParsedLink> {
+  if (tx.getCfcState().flowLabelsMode !== "persist") {
+    return carryCfcReferenceProvenance(
+      runtime.getCellFromLink(target, undefined, tx),
+      createSigilLinkFromParsedLink(target, { base }),
+    );
+  }
+  const cap = narrowerScopeCap(
+    ContextualFlowControl.getSchemaScopeCap(target.schema),
+    ContextualFlowControl.getAsCellFollowScopeCap(target.schema),
+  );
+  const schema = schemaWithRetainedReferenceScope(
+    cap === undefined ? undefined : { scope: cap },
+    target.scopeCaps,
+  );
+  return carryCfcReferenceProvenance(
+    runtime.getCellFromLink(target, undefined, tx),
+    createSigilLinkFromParsedLink({ ...target, schema }, {
+      base,
+      includeSchema: true,
+    }),
+  );
+}
+
+/** A reference no-op must retain the new reference's durable restrictions. */
+function storedReferenceRetainsScope(
+  current: NormalizedFullLink,
+  next: NormalizedFullLink,
+  acquisition: CfcReferenceProvenance | undefined,
+): boolean {
+  const cap = narrowerScopeCap(
+    ContextualFlowControl.getSchemaScopeCap(next.schema),
+    ContextualFlowControl.getAsCellFollowScopeCap(next.schema),
+  );
+  return referenceScopeIsSerializable(current.schema, acquisition?.scopeCaps) &&
+    (cap === undefined ||
+      referenceScopeIsSerializable(current.schema, [{
+        depth: next.path.length,
+        scope: cap,
+      }]));
+}
+
 export type DiffAndUpdateOptions = IReadOptions & {
   /**
    * Marks every schema-bearing document produced by this traversal as a
@@ -480,6 +568,13 @@ export type DiffAndUpdateOptions = IReadOptions & {
    * marker on the containing document cannot cover them.
    */
   schemaRole?: "output";
+
+  /**
+   * The stored prefix carried unchanged by a mergeable append. Only the root
+   * array's identical slots are bookkeeping; newly supplied values still
+   * pass through reference and write-policy validation.
+   */
+  unchangedArrayPrefix?: readonly unknown[];
 };
 
 /**
@@ -499,6 +594,11 @@ export interface DiffWalkState {
    */
   nextAnchorId?: () => string | number;
 
+  /** The root append value and its stored, unchanged prefix. */
+  unchangedArrayPrefix?: {
+    array: unknown;
+    values: readonly unknown[];
+  };
   /**
    * Each array element this walk anchored: the slot that holds the
    * reference, and the entity document it refers to. `diffAndUpdate` records
@@ -515,6 +615,30 @@ export interface DiffWalkState {
    * position held before.
    */
   writtenKinds?: Map<string, boolean>;
+}
+
+/** Records the comparison interval for an unchanged root output reference. */
+function recordOutputReissue(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  readStart: number | undefined,
+  readEnd: number | undefined,
+): void {
+  if (readStart === undefined || readEnd === undefined) return;
+  // The authorization dependency binds this comparison to the stored
+  // reference. Prepare exempts only these attempts, and only while no
+  // payload write overlaps the output in this transaction.
+  tx.recordCfcWritePolicyInput({
+    kind: "output-reissue",
+    target: {
+      space: link.space,
+      id: link.id,
+      scope: link.scope,
+      path: link.path,
+    },
+    readStart,
+    readEnd,
+  }, runtimeWritePolicyAuthorization);
 }
 
 /**
@@ -574,20 +698,24 @@ export function diffAndUpdate(
   // names without reading a member of it. Each member read on one resolves
   // through this transaction and is recorded on it as a dependency the commit
   // has to check.
+  const normalizedValue = flattenBuilderArtifacts(newValue, {
+    isLeaf: isCellResultForDereferencing,
+  });
   const anchored: NonNullable<DiffWalkState["anchored"]> = [];
   const state: DiffWalkState = {
     seen: new Map(),
     nextAnchorId: anchorIds,
     anchored,
+    unchangedArrayPrefix: options?.unchangedArrayPrefix === undefined
+      ? undefined
+      : { array: normalizedValue, values: options.unchangedArrayPrefix },
     writtenKinds: new Map(),
   };
   const changes = normalizeAndDiff(
     runtime,
     tx,
     link,
-    flattenBuilderArtifacts(newValue, {
-      isLeaf: isCellResultForDereferencing,
-    }),
+    normalizedValue,
     context,
     readOptions,
     state,
@@ -650,13 +778,19 @@ function scopeInitialization(value: unknown): "session" | undefined {
 
 /** A space-to-user default link whose missing user instances continue to session. */
 function sessionInitializationLink(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
   target: NormalizedFullLink,
   base: NormalizedFullLink,
 ) {
-  return linkRefFrom({
-    ...linkRefPayload(createSigilLinkFromParsedLink(target, { base })),
-    scopeInitialization: "session",
-  });
+  const reference = scopedRedirect(runtime, tx, target, base);
+  return carryCfcReferenceProvenance(
+    reference,
+    linkRefFrom({
+      ...linkRefPayload(reference),
+      scopeInitialization: "session",
+    }),
+  );
 }
 
 /** The canonical user continuation named by an automatic session default. */
@@ -776,7 +910,7 @@ export function initializeScopedArgumentSlots(
           runtime,
           tx,
           childLink,
-          sessionInitializationLink(target, childLink),
+          sessionInitializationLink(runtime, tx, target, childLink),
           argumentLink,
           options,
           { seen: new Map() },
@@ -817,9 +951,7 @@ export function initializeScopedArgumentSlots(
         runtime,
         tx,
         target,
-        createSigilLinkFromParsedLink({ ...target, scope: "session" }, {
-          base: target,
-        }),
+        scopedRedirect(runtime, tx, { ...target, scope: "session" }, target),
         argumentLink,
         options,
         { seen: new Map() },
@@ -862,7 +994,7 @@ function scopedRedirectChanges(
       runtime,
       tx,
       target,
-      createSigilLinkFromParsedLink(scopedLink, { base: target }),
+      scopedRedirect(runtime, tx, scopedLink, target),
       context,
       options,
       state,
@@ -873,8 +1005,8 @@ function scopedRedirectChanges(
     tx,
     link,
     viaUser
-      ? sessionInitializationLink(target, link)
-      : createSigilLinkFromParsedLink(target, { base: link }),
+      ? sessionInitializationLink(runtime, tx, target, link)
+      : scopedRedirect(runtime, tx, target, link),
     context,
     options,
     state,
@@ -1071,7 +1203,10 @@ function anchorValueAsEntity(
       runtime,
       tx,
       link,
-      createSigilLinkFromParsedLink(newEntryLink, { base: link }),
+      carryCfcReferenceProvenance(
+        runtime.getCellFromLink(newEntryLink, undefined, tx),
+        createSigilLinkFromParsedLink(newEntryLink, { base: link }),
+      ),
       context,
       options,
       state,
@@ -1232,7 +1367,10 @@ export function normalizeAndDiff(
           runtime,
           tx,
           seenLink,
-          createSigilLinkFromParsedLink(promotedLink, { base: seenLink }),
+          carryCfcReferenceProvenance(
+            runtime.getCellFromLink(promotedLink, undefined, tx),
+            createSigilLinkFromParsedLink(promotedLink, { base: seenLink }),
+          ),
           context,
           options,
           state,
@@ -1296,9 +1434,7 @@ export function normalizeAndDiff(
           runtime,
           tx,
           userLink,
-          createSigilLinkFromParsedLink(scopedLink, {
-            base: userLink,
-          }) as unknown,
+          scopedRedirect(runtime, tx, scopedLink, userLink),
           context,
           options,
           state,
@@ -1308,7 +1444,7 @@ export function normalizeAndDiff(
           runtime,
           tx,
           link,
-          sessionInitializationLink(userLink, link),
+          sessionInitializationLink(runtime, tx, userLink, link),
           context,
           options,
           state,
@@ -1336,7 +1472,7 @@ export function normalizeAndDiff(
         runtime,
         tx,
         link,
-        createSigilLinkFromParsedLink(scopedLink, { base: link }) as unknown,
+        scopedRedirect(runtime, tx, scopedLink, link),
         context,
         options,
         state,
@@ -1359,7 +1495,7 @@ export function normalizeAndDiff(
       () =>
         `[BRANCH_QUERY_RESULT] Converted query result to sigil link at path=${pathStr} link=${sigilLink} parsedLink=${parsedLink}`,
     );
-    newValue = sigilLink;
+    newValue = carryCfcReferenceProvenance(getCellOrThrow(newValue), sigilLink);
   }
 
   // Track whether this link originates from a Cell value (either a cycle we
@@ -1369,6 +1505,19 @@ export function normalizeAndDiff(
   // self-links.
   let linkOriginFromCell = false;
   if (isCell(newValue)) {
+    if (isFabricDataUri(newValue.getAsNormalizedFullLink().id)) {
+      // Reading the trusted cell acquires references at their source slots;
+      // decoding its URI after serialization would lose that provenance.
+      return normalizeAndDiff(
+        runtime,
+        tx,
+        link,
+        newValue.withTx(tx).getRawUntyped(),
+        context,
+        options,
+        state,
+      );
+    }
     diffLogger.debug(
       "diff",
       () => `[BRANCH_CELL] Converting cell to link at path=${pathStr}`,
@@ -1385,7 +1534,9 @@ export function normalizeAndDiff(
     // the write, so seed the target doc here, only if it has no value yet —
     // re-derivations serialize the same cell again but find the doc present
     // and leave user edits alone.
-    const cellSchema = newValue.schema;
+    // The seed belongs to this handle's schema. Looking up an inherited
+    // schema would observe the referenced document during serialization.
+    const cellSchema = newValue.getAsNormalizedFullLink().schema;
     let initializedSeed = false;
     const seedDefault = isObjectOrArray(cellSchema)
       ? cellSchema.default
@@ -1424,10 +1575,11 @@ export function normalizeAndDiff(
         ),
       )
     ) {
-      // Don't subscribe the serializing action to the seed doc — mirror
-      // materializeDerivedInternalCells' read for the same check.
+      // Initialization depends on presence, not existing payload contents.
+      // Keep that shape dependency without subscribing the serializing action.
       const absent = tx.readValueOrThrow(seedTarget, {
         meta: ignoreReadForScheduling,
+        nonRecursive: true,
       }) === undefined;
       if (!absent) {
         seededDocs(runtime).add(
@@ -1469,6 +1621,7 @@ export function normalizeAndDiff(
     // its final protection. Materialization runs first so an existing reference
     // cannot hide an absent backing document.
     if (
+      tx.getCfcState().flowLabelsMode !== "persist" &&
       options?.schemaRole === "output" && !streamHandle &&
       link.path.length === 0 &&
       seedTarget !== undefined && seedTarget.path.length === 0 &&
@@ -1521,19 +1674,22 @@ export function normalizeAndDiff(
     // The handle's kind decides, with nothing read: a read of the target here
     // would join its label into this write.
     const cellLink = newValue.getAsNormalizedFullLink();
-    newValue = attachCfcLabelViewToSigilLink(
-      createSigilLinkFromParsedLink(
-        streamHandle
-          ? { ...cellLink, schema: declareStreamSchema(cellLink.schema) }
-          : cellLink,
-        {
-          base: link,
-          includeSchema: true,
-        },
+    newValue = carryCfcReferenceProvenance(
+      newValue,
+      attachCfcLabelViewToSigilLink(
+        createSigilLinkFromParsedLink(
+          streamHandle
+            ? { ...cellLink, schema: declareStreamSchema(cellLink.schema) }
+            : cellLink,
+          {
+            base: link,
+            includeSchema: true,
+          },
+        ),
+        carriedCfcLabelView,
       ),
-      carriedCfcLabelView,
     );
-    if (initializedSeed && !streamHandle) {
+    if (initializedSeed && !streamHandle && options?.schemaRole === "output") {
       tx.recordCfcWritePolicyInput({
         kind: "initialization",
         mode: "projection",
@@ -1570,7 +1726,17 @@ export function normalizeAndDiff(
       runtime,
       tx,
       link,
-      findAndInlineDataUriLinks(newValue),
+      tx.getCfcState().flowLabelsMode === "persist" &&
+        getCfcReferenceProvenance(newValue) !== undefined
+        ? runtime.getCellFromLink(
+          carryCfcReferenceProvenance(
+            newValue,
+            parseLink(newValue as CellLink, link),
+          ),
+          undefined,
+          tx,
+        ).getRawUntyped()
+        : findAndInlineDataUriLinks(newValue),
       context,
       options,
       state,
@@ -1589,17 +1755,28 @@ export function normalizeAndDiff(
     return [];
   }
 
-  // Get current value to compare against (use precomputed if available).
-  // `writeDestinationRead` says what this read is for: the comparison
-  // decides whether the walk writes here, and what it returns reaches no
-  // written value. The two branches below where a stored link sends the
-  // write elsewhere read the slot again through `consumeSteeringSlot`.
+  // Get current value to compare against (use precomputed if available)
+  const outputComparison = linkOriginFromCell &&
+    options?.schemaRole === "output" && link.path.length === 0 &&
+    precomputedCurrent === NO_PRECOMPUTED &&
+    tx.getCfcState().flowLabelsMode === "persist";
+  const readStart = outputComparison ? tx.currentActivityIndex?.() : undefined;
   let currentValue = precomputedCurrent === NO_PRECOMPUTED
-    ? tx.readValueOrThrow(link, {
-      ...options,
-      meta: { ...options?.meta, ...writeDestinationRead },
-    })
+    ? tx.readValueOrThrow(
+      link,
+      outputComparison
+        ? {
+          ...options,
+          meta: {
+            ...options?.meta,
+            ...authorizationRead,
+            ...writeDestinationRead,
+          },
+        }
+        : { ...options, meta: { ...options?.meta, ...writeDestinationRead } },
+    )
     : precomputedCurrent;
+  const readEnd = outputComparison ? tx.currentActivityIndex?.() : undefined;
 
   // Whether the stored value is a link, asked once. Where it points is parsed
   // only by a check that needs to know: a write redirect replaces a stored
@@ -1612,19 +1789,33 @@ export function normalizeAndDiff(
   if (newValueLink?.overwrite === "redirect") {
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
     if (
-      currentValueIsLink && isWriteRedirectLink(currentValue) &&
-      areNormalizedLinksSame(parseLink(currentValue, link), newValueLink)
+      isWriteRedirectLink(currentValue) &&
+      areNormalizedLinksSame(
+        parseLink(currentValue, link),
+        newValueLink,
+      ) &&
+      (tx.getCfcState().flowLabelsMode !== "persist" ||
+        storedReferenceRetainsScope(
+          parseLink(currentValue, link),
+          newValueLink,
+          getCfcReferenceProvenance(newValue),
+        ))
     ) {
       diffLogger.debug(
         "diff",
         () => `[BRANCH_WRITE_REDIRECT] Same redirect, no-op at path=${pathStr}`,
       );
-      if (cfcLabelViewHasValues(carriedCfcLabelView)) {
+      recordOutputReissue(tx, link, readStart, readEnd);
+      if (
+        tx.getCfcState().flowLabelsMode === "persist" ||
+        cfcLabelViewHasValues(carriedCfcLabelView)
+      ) {
         recordLinkWritePolicyInput(
           tx,
           link,
           newValueLink,
           carriedCfcLabelView,
+          getCfcReferenceProvenance(newValue),
         );
       }
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
@@ -1635,7 +1826,13 @@ export function normalizeAndDiff(
         () =>
           `[BRANCH_WRITE_REDIRECT] Different redirect, updating at path=${pathStr}`,
       );
-      recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
+      recordLinkWritePolicyInput(
+        tx,
+        link,
+        newValueLink,
+        carriedCfcLabelView,
+        getCfcReferenceProvenance(newValue),
+      );
       changes.push({
         location: link,
         value: stripCfcLabelViewFromPrimitiveLink(newValue) as FabricValue,
@@ -1754,14 +1951,30 @@ export function normalizeAndDiff(
         newValueLink,
         parseLink(currentValue as PrimitiveCellLink, link),
       ) &&
-      scopeInitialization(newValue) === scopeInitialization(currentValue)
+      scopeInitialization(newValue) === scopeInitialization(currentValue) &&
+      (tx.getCfcState().flowLabelsMode !== "persist" ||
+        storedReferenceRetainsScope(
+          parseLink(currentValue as PrimitiveCellLink, link),
+          newValueLink,
+          getCfcReferenceProvenance(newValue),
+        ))
     ) {
       diffLogger.debug(
         "diff",
         () => `[BRANCH_CELL_LINK] Same cell link, no-op at path=${pathStr}`,
       );
-      if (cfcLabelViewHasValues(carriedCfcLabelView)) {
-        recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
+      recordOutputReissue(tx, link, readStart, readEnd);
+      if (
+        tx.getCfcState().flowLabelsMode === "persist" ||
+        cfcLabelViewHasValues(carriedCfcLabelView)
+      ) {
+        recordLinkWritePolicyInput(
+          tx,
+          link,
+          newValueLink,
+          carriedCfcLabelView,
+          getCfcReferenceProvenance(newValue),
+        );
       }
       tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
       return [];
@@ -1836,7 +2049,13 @@ export function normalizeAndDiff(
         () =>
           `[BRANCH_CELL_LINK] Different cell link, updating at path=${pathStr}`,
       );
-      recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
+      recordLinkWritePolicyInput(
+        tx,
+        link,
+        newValueLink,
+        carriedCfcLabelView,
+        getCfcReferenceProvenance(newValue),
+      );
       return [
         // TODO(seefeld): Normalize the link to a sigil link?
         {
@@ -1987,6 +2206,16 @@ export function normalizeAndDiff(
       const inCur = currentArray ? i in currentArray : false;
 
       if (!inNew && !inCur) continue; // hole→hole: no change
+
+      const prefix = state.unchangedArrayPrefix;
+      if (
+        prefix?.array === newValue && i < prefix.values.length &&
+        i in prefix.values && inNew && inCur &&
+        Object.is(currentArray![i], prefix.values[i]) &&
+        Object.is(newValue[i], prefix.values[i])
+      ) {
+        continue;
+      }
 
       if (!inNew && inCur) {
         // value→hole: emit an explicit delete (a plain `undefined` write

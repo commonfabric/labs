@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -52,6 +53,22 @@ describe("schema-ifc", () => {
       const tx = txReading(() => ({ error: { name: "NotFoundError" } }));
 
       expect(ensureExternalSchemaClosure(tx, space, ref)).toBe(false);
+    });
+
+    it("keeps protected closure failures out of observer-visible logs", () => {
+      const { ref } = uniqueExternal("closure-unit-silent");
+      const tx = txReading(() => ({ error: { name: "NotFoundError" } }));
+      const warn = stub(console, "warn", () => {});
+      try {
+        expect(
+          ensureExternalSchemaClosure(tx, space, ref, { silentFailures: true }),
+        ).toBe(false);
+        expect(warn.calls).toHaveLength(0);
+        expect(ensureExternalSchemaClosure(tx, space, ref)).toBe(false);
+        expect(warn.calls).toHaveLength(1);
+      } finally {
+        warn.restore();
+      }
     });
 
     it("reports a document that is not a schema document incomplete", () => {

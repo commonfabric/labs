@@ -26,6 +26,7 @@ describe("test-cfc-label-store", {
         apiUrl: new URL(import.meta.url),
         storageManager,
         cfcEnforcementMode: "enforce-explicit",
+        cfcFlowLabels,
       });
       try {
         const result = await runTestPattern(

@@ -94,6 +94,11 @@ import {
   markEffectCompletion,
 } from "../src/executor/effect-completion.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
+import {
+  authorizationRead,
+  ignoreReadForScheduling,
+  internalVerifierRead,
+} from "../src/storage/reactivity-log.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
@@ -2158,6 +2163,79 @@ describe("stage D seal-into-wave", () => {
     // retry an event that does not exist.
     expect(outcome.requeuedEventIds).toEqual(["e-parent"]);
   });
+
+  for (const observedScope of ["space", "user"] as const) {
+    it(`keeps an ordinary ${observedScope} read in the basis beside verifier-only reads of another instance`, async () => {
+      const identity = {
+        principal: signer.did(),
+        sessionId: "wave-test-session",
+      };
+      const ignoredScope = observedScope === "space" ? "user" : "space";
+      const seedTx = runtime.edit();
+      seedTx.tx.scopeKeyIdentity = identity;
+      const observed = runtime.getCell<number>(
+        space,
+        "basis-scope-source",
+        undefined,
+        seedTx,
+        observedScope,
+      );
+      const ignored = runtime.getCell<number>(
+        space,
+        "basis-scope-source",
+        undefined,
+        seedTx,
+        ignoredScope,
+      );
+      observed.set(1);
+      ignored.set(2);
+      expect((await seedTx.commit()).error).toBeUndefined();
+      const lease = liveLease();
+      const wave = newWave({ lease });
+      runtime.installSealDestination(wave);
+      try {
+        const tx = runtime.edit();
+        tx.tx.scopeKeyIdentity = identity;
+        stampWaveRunContext(tx, {
+          actionId: "basis-with-verification",
+          kind: "derivation",
+          scopeKeyIdentity: identity,
+        });
+        for (const cell of [observed, ignored]) {
+          tx.readOrThrow({
+            ...cell.getAsNormalizedFullLink(),
+            path: ["cfc"],
+          }, {
+            meta: {
+              ...authorizationRead,
+              ...internalVerifierRead,
+              ...ignoreReadForScheduling,
+            },
+          });
+        }
+        const value = observed.withTx(tx).get();
+        runtime.getCell(space, "basis-output", undefined, tx).set(value);
+        expect((await tx.commit()).error).toBeUndefined();
+        runtime.clearSealDestination();
+        const outcome = await wave.commitWave(newSink());
+        await wave.settled();
+        expect(outcome.aborted).toBeUndefined();
+        const rows = selectSchedulerBasisRows(engine, {
+          branch: "",
+          action: "basis-with-verification",
+          actionScopeKey: Engine.resolveScopeKey(observedScope, identity),
+        }).filter((row) =>
+          row.entity === observed.getAsNormalizedFullLink().id
+        );
+        expect(rows.map((row) => row.entityScopeKey)).toEqual([
+          Engine.resolveScopeKey(observedScope, identity),
+        ]);
+      } finally {
+        runtime.clearSealDestination();
+        lease.release();
+      }
+    });
+  }
 
   it("the emit-path tail read is append mechanics, not a dependency (review 2026-08-11 M3, RULED let-stand 2026-08-13): a derivation emitter neither logs nor bases on the target sidecar", async () => {
     // LT6's case: a demanded DERIVATION that emits. Pre-fix, cell.ts's

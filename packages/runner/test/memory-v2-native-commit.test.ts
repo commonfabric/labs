@@ -42,7 +42,16 @@ const captureNativeDrafts = () => {
 
   const drafts: NativeStorageCommit[] = [];
   replica.commitNative = async (transaction, source) => {
-    drafts.push(structuredClone(transaction));
+    // These assertions pin wire operations; local array replay is exercised
+    // by the pending-visibility and promotion tests in stacked commits.
+    const wireDraft = structuredClone(transaction);
+    for (const operation of wireDraft.operations) {
+      if (operation.op === "patch") {
+        delete operation.replayPatches;
+        delete operation.replayDependencies;
+      }
+    }
+    drafts.push(wireDraft);
     return await originalCommitNative(transaction, source);
   };
 

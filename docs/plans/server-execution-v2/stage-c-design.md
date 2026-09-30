@@ -1422,11 +1422,12 @@ render preserved (§6).
   reads to the wrapped tx; `extraTx` is consulted only when minting
   child cells, which the schema-less path never does); then
   `prepareTxForCommit` + `commit` on both txs → FOUR
-  `flowLabelWorkExists` probes per run (two expensive), each
-  `forEachFlowObservation` → `probeBelongsToDereference` →
-  `sources.some(isPrefix)` = O(reads × sources) = O(E²) — computing
-  `false` (the sidecar has no labelMap). T1 halved the count; the shape
-  is unchanged.
+  `flowLabelWorkExists` probes per run. Each `forEachFlowObservation`
+  classifies reads from their metadata: a link-resolution probe consumes
+  reference confidentiality as `followRef`, and content reads consume the
+  target's labels. Trace membership does not exempt either read. Measure the
+  observation walk and label lookup separately; trace count alone does not
+  establish their cost.
 - **The demand leak (C Q4):** the sink's dependency log = every sidecar
   path touched PLUS every path of every payload-linked doc it walked
   into; as an effect its dependencies are DEMAND — an old event payload

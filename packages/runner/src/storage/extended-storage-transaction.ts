@@ -28,6 +28,7 @@ import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { LinkResolutionError } from "../link-resolution.ts";
 import type { CellScope } from "../builder/types.ts";
 import {
   type AttemptedWrite,
@@ -53,6 +54,8 @@ import {
   cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
+  type CfcReferenceObservation,
+  type CfcReferenceProvenance,
   CfcRefusalDetail,
   type CfcTriggerReadGating,
   type CfcTrustConfig,
@@ -163,6 +166,7 @@ import { validateLocalReadBasis } from "./local-read-policy.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 import {
   allowMutableTransactionRead,
+  authorizationRead,
   clearSchemaRefusalTx,
   ignoreReadForCommit,
   internalVerifierRead,
@@ -172,6 +176,7 @@ import {
   markLazyMaterializationTx,
   noteSchemaRefusalTx,
   reactivityLogFromActivities,
+  requireCommitReadValidation,
   takeSchemaRefusalTx,
   unmarkLazyMaterializationTx,
 } from "./reactivity-log.ts";
@@ -271,6 +276,33 @@ export type CfcInstrumentationHooks = {
     options?: IReadOptions,
   ): void;
 
+  /** The runtime's ceiling check for a retained reference observation. */
+  checkReferenceReadCeiling?(
+    tx: IExtendedStorageTransaction,
+    observation: CfcReferenceObservation,
+  ): void;
+
+  acquireReference?(
+    source: CfcAddress,
+    sourceAcquisition: CfcReferenceProvenance | undefined,
+    tx: IExtendedStorageTransaction,
+  ): CfcReferenceProvenance | undefined;
+
+  /** Resolves a current content subject with Runtime scope enforcement. */
+  resolveContentTarget?(
+    address: CfcAddress & Pick<NormalizedFullLink, "schema" | "scopeCaps">,
+    destinationSpace: MemorySpace,
+    lastNode: "value" | "top",
+    tx: IExtendedStorageTransaction,
+    projectionPath: readonly string[],
+  ): {
+    address: CfcAddress;
+    value: FabricValue;
+    references: readonly CfcAddress[];
+    /** Existing parent whose shape establishes a missing descendant. */
+    absenceParent?: CfcAddress;
+  } | undefined;
+
   onRelevantTx?(): void;
 
   /** Stage C tuning T1: one flow-label probe was evaluated (`computed`) or
@@ -292,10 +324,8 @@ export type CfcInstrumentationHooks = {
   /** Work performed by preparation, including label lookup and stamping. */
   onPreparationWork?(kind: CfcPreparationWork, count: number): void;
 
-  /** One dereference trace was recorded, and how many the transaction holds
-   * after it. `probeBelongsToDereference` scans this set once per read
-   * activity at commit preparation, so its size is a per-read multiplier.
-   * Measurement only. */
+  /** Records a dereference trace and the transaction's resulting trace count.
+   * Measurement only; observations are classified by their read metadata. */
   onDereferenceTrace?(held: number): void;
 
   /**
@@ -449,6 +479,49 @@ export const readOnlyCfcView = <T>(value: T): T => {
   return view as T;
 };
 
+type ValueWriteAuthor = Readonly<
+  { identity: ImplementationIdentity | undefined }
+>;
+type ValueWriteAuthorNode = {
+  at?: ValueWriteAuthor;
+  latest?: ValueWriteAuthor;
+  children?: Map<string, ValueWriteAuthorNode>;
+  untrustedChildren: number;
+  untrusted: boolean;
+  revision: number;
+};
+const valueWriteDocumentKey = (
+  target: Pick<CfcAddress, "space" | "id"> & {
+    scope?: IMemorySpaceAddress["scope"];
+  },
+): string =>
+  `${target.space}\0${normalizeCellScope(target.scope)}\0${target.id}`;
+const unattributedValueWrite: ValueWriteAuthor = Object.freeze({
+  identity: undefined,
+});
+const valueWriteAuthors = new WeakMap<
+  ImplementationIdentity,
+  ValueWriteAuthor
+>();
+
+/** Reuses immutable author evidence across writes by the same implementation. */
+const valueWriteAuthor = (
+  identity: ImplementationIdentity | undefined,
+): ValueWriteAuthor => {
+  if (identity === undefined) return unattributedValueWrite;
+  let author = valueWriteAuthors.get(identity);
+  if (author === undefined) {
+    author = deepFreeze({ identity });
+    valueWriteAuthors.set(identity, author);
+  }
+  return author;
+};
+
+const valueWriteAuthorNode = (): ValueWriteAuthorNode => ({
+  untrustedChildren: 0,
+  untrusted: false,
+  revision: 0,
+});
 // The transaction's trust state — who is acting, and which implementation is
 // writing — is what the CFC gates decide on, so no method sets it, and code
 // holding a transaction cannot change whose writes it carries. The classes
@@ -477,6 +550,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     ) => void
   >();
   #statusOverride?: StorageTransactionStatus;
+  #dispatchedEventId?: string;
   #commitCallbacksDispatched = false;
 
   /**
@@ -535,6 +609,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #createOnlyMarks = new Map<MemorySpace, Set<string>>();
   #outboxIdempotencyKeys = new Set<string>();
   #readOnlySource?: string;
+  #valueWriteIdentities = new Map<string, ValueWriteAuthorNode>();
   #narrowestReadScope: CellScope = "space";
 
   /**
@@ -571,6 +646,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     consultedGrants: [],
     consultedPolicyManifests: [],
     labelMetadataObservations: [],
+    referenceObservations: [],
     externalContentObservations: [],
     refusalDetails: [],
   };
@@ -754,6 +830,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     cfcInstrumentation: CfcInstrumentationHooks = {},
   ) {
     this.#cfcInstrumentation = cfcInstrumentation;
+  }
+
+  /** The durable event whose outcome depends on this transaction's reads. */
+  get dispatchedEventId(): string | undefined {
+    return this.#dispatchedEventId;
+  }
+
+  set dispatchedEventId(value: string | undefined) {
+    if (
+      this.#dispatchedEventId !== undefined && value !== this.#dispatchedEventId
+    ) {
+      throw new Error(
+        "A dispatched event identity cannot be cleared or rebound",
+      );
+    }
+    this.#dispatchedEventId = value;
+    if (value !== undefined) requireCommitReadValidation(this);
   }
 
   /**
@@ -1561,6 +1654,71 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  /** Captures payload authorship independently of schema relevance. */
+  #recordValueWriteIdentity(
+    address: IMemorySpaceAddress,
+    identity: ImplementationIdentity | undefined,
+  ): void {
+    if (
+      this.#privilegedSystemWriteDepth > 0 ||
+      (address.path.length > 0 && address.path[0] !== "value")
+    ) return;
+    const key = valueWriteDocumentKey(address);
+    const root = this.#valueWriteIdentities.get(key) ?? valueWriteAuthorNode();
+    root.revision++;
+    this.#valueWriteIdentities.set(key, root);
+    const spine = [root];
+    let node = root;
+    for (const segment of canonicalizeDocumentPath(address.path)) {
+      const children = node.children ??= new Map();
+      const child = children.get(segment) ?? valueWriteAuthorNode();
+      children.set(segment, child);
+      spine.push(child);
+      node = child;
+    }
+    const stamp = valueWriteAuthor(identity);
+    let previousUntrusted = node.untrusted;
+    // A replacement shadows prior writes inside its subtree. Sibling writes
+    // remain represented, so one later builtin cannot certify a user's bytes.
+    node.children = undefined;
+    node.untrustedChildren = 0;
+    node.at = stamp;
+    node.latest = stamp;
+    node.untrusted = identity?.kind !== "builtin";
+    for (let depth = spine.length - 2; depth >= 0; depth--) {
+      const parent = spine[depth];
+      const parentWasUntrusted = parent.untrusted;
+      parent.untrustedChildren += Number(node.untrusted) -
+        Number(previousUntrusted);
+      parent.untrusted =
+        (parent.at !== undefined && parent.at.identity?.kind !== "builtin") ||
+        parent.untrustedChildren > 0;
+      parent.latest = stamp;
+      node = parent;
+      previousUntrusted = parentWasUntrusted;
+    }
+  }
+
+  getCfcValueWriteAuthor(
+    target: CfcAddress,
+  ): ValueWriteAuthor | undefined {
+    const key = valueWriteDocumentKey(target);
+    let node = this.#valueWriteIdentities.get(key);
+    let covering = node?.at;
+    for (const segment of target.path) {
+      node = node?.children?.get(segment);
+      if (node?.at !== undefined) covering = node.at;
+      if (node === undefined) return covering;
+    }
+    if (
+      node?.untrusted ||
+      (covering !== undefined && covering.identity?.kind !== "builtin")
+    ) {
+      return unattributedValueWrite;
+    }
+    return node?.latest ?? covering;
+  }
+
   invalidateCfc(reason: string): void {
     this.#preparedDigestMemo = undefined;
     const wasPrepared = this.#cfcState.prepare.status === "prepared";
@@ -1600,6 +1758,58 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     } finally {
       this.#ambientReadMeta = previous;
     }
+  }
+
+  /** Resolves trusted content evidence while retaining authorization reads. */
+  resolveCfcContentTarget(
+    address: CfcAddress & Pick<NormalizedFullLink, "schema" | "scopeCaps">,
+    destinationSpace: MemorySpace,
+    authorization?: RuntimeWritePolicyAuthorization,
+    lastNode: "value" | "top" = "value",
+    projectionPath: readonly string[] = [],
+  ): {
+    address: CfcAddress;
+    value: FabricValue;
+    references: readonly CfcAddress[];
+    /** Existing parent whose shape establishes a missing descendant. */
+    absenceParent?: CfcAddress;
+  } | undefined {
+    if (!runtimeWritePolicyAuthorized(authorization)) return undefined;
+    try {
+      return this.runWithAmbientReadMeta(
+        { ...internalVerifierRead, ...authorizationRead },
+        () =>
+          this.#cfcInstrumentation.resolveContentTarget?.(
+            address,
+            destinationSpace,
+            lastNode,
+            this,
+            projectionPath,
+          ),
+      );
+    } catch (error) {
+      // Cyclic or excessively deep links share the unavailable-evidence result;
+      // their protected topology must not change the verifier's failure kind.
+      if (error instanceof LinkResolutionError) return undefined;
+      throw error;
+    }
+  }
+
+  acquireCfcReference(
+    source: CfcAddress,
+    sourceAcquisition?: CfcReferenceProvenance,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CfcReferenceProvenance | undefined {
+    if (!runtimeWritePolicyAuthorized(authorization)) return undefined;
+    return this.runWithAmbientReadMeta(
+      { ...internalVerifierRead, ...authorizationRead },
+      () =>
+        this.#cfcInstrumentation.acquireReference?.(
+          source,
+          sourceAcquisition,
+          this,
+        ),
+    );
   }
 
   #withAmbientReadMeta(options?: IReadOptions): IReadOptions | undefined {
@@ -1684,12 +1894,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
-  #prepareRead(address: Pick<IMemorySpaceAddress, "scope">): void {
+  #prepareRead(
+    address: Pick<IMemorySpaceAddress, "scope">,
+    options?: IReadOptions,
+  ): void {
     this.#noteCfcActivity();
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("read-after-prepare");
     }
-    this.#recordReadScope(address);
+    // Verifier reads replay authorization and flow evidence. They remain
+    // dependencies, but do not observe another scoped payload for the action.
+    if (!isInternalVerifierRead(options?.meta)) this.#recordReadScope(address);
   }
 
   getCachedReadResult(
@@ -2189,6 +2404,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  recordCfcReferenceObservation(observation: CfcReferenceObservation): void {
+    if (observation.confidentiality.length === 0) return;
+    this.#cfcInstrumentation.checkReferenceReadCeiling?.(this, observation);
+    if (this.#cfcState.enforcementMode === "disabled") return;
+    this.#noteCfcActivity();
+    this.#cfcState.referenceObservations.push(deepFreeze(observation));
+    this.markCfcRelevant("reference-observation");
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("reference-observation-added");
+    }
+  }
+
   recordCfcLabelMetadataObservation(
     observation: CfcLabelMetadataObservation,
   ): void {
@@ -2362,6 +2589,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       return;
     }
     this.#outboxIdempotencyKeys.add(key);
+    requireCommitReadValidation(this);
     this.#cfcState.outbox.push(effect);
   }
 
@@ -2423,6 +2651,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     for (const attempt of rawAttempts) {
       rawRanks.push(attempt.journalIndex);
     }
+    for (const observation of this.#cfcState.referenceObservations) {
+      rawRanks.push(observation.journalIndex);
+    }
     const rankByRaw = new Map<number, number>();
     rawRanks.sort((a, b) => a - b).forEach((raw, rank) => {
       rankByRaw.set(raw, rank);
@@ -2482,6 +2713,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       attemptedWrites,
       writes,
       writeAttemptLog,
+      ...(this.#cfcState.referenceObservations.length > 0
+        ? {
+          referenceObservations: this.#cfcState.referenceObservations.map(
+            (observation) => ({
+              ...observation,
+              journalIndex: rankByRaw.get(observation.journalIndex)!,
+            }),
+          ),
+        }
+        : {}),
       dereferenceTraces: [...this.#cfcState.dereferenceTraces],
       triggerReads: [...this.#cfcState.triggerReads],
       writePolicyInputs: [...this.#cfcState.writePolicyInputs],
@@ -3226,6 +3467,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return getTransactionReadActivities(this.tx);
   }
 
+  currentActivityIndex(): number | undefined {
+    return this.tx.currentActivityIndex?.();
+  }
+
   /** @inheritDoc */
   getPotentiallyExternalReadActivities(): Iterable<IReadActivity> | undefined {
     return this.tx.getPotentiallyExternalReadActivities?.();
@@ -3275,7 +3520,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
-    this.#prepareRead(address);
+    this.#prepareRead(address, options);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
   }
@@ -3287,7 +3532,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
-    this.#prepareRead(address);
+    this.#prepareRead(address, readOptions);
     if (this.tx.trackReadPaths) {
       return this.tx.trackReadPaths(address, paths, readOptions);
     }
@@ -3307,7 +3552,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     options?: IReadOptions,
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
-    this.#prepareRead(address);
+    this.#prepareRead(address, options);
     this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
     if (
@@ -3347,8 +3592,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
+    const deleteWriteCount = options?.delete === true
+      ? getTransactionWriteAttempts(this.tx)?.length
+      : undefined;
     const result = this.tx.write(address, value, options);
+    if (
+      deleteWriteCount !== undefined &&
+      deleteWriteCount === getTransactionWriteAttempts(this.tx)?.length
+    ) {
+      return result;
+    }
     if (result.ok) {
+      this.#recordValueWriteIdentity(
+        address,
+        this.#cfcState.implementationIdentity,
+      );
       this.#noteWrite();
       this.#stageSchemaDocsForValue(address.space, address, value);
     }
@@ -3371,6 +3629,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
+    const deleteWriteCount = options?.delete === true
+      ? getTransactionWriteAttempts(this.tx)?.length
+      : undefined;
     const writeResult = this.tx.write(address, value, options);
     if (
       writeResult.error &&
@@ -3442,6 +3703,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     } else if (writeResult.error) {
       throw toThrowable(writeResult.error);
     }
+    if (
+      deleteWriteCount !== undefined &&
+      deleteWriteCount === getTransactionWriteAttempts(this.tx)?.length
+    ) return;
+    this.#recordValueWriteIdentity(
+      address,
+      this.#cfcState.implementationIdentity,
+    );
     this.#noteWrite();
     // The staged value may carry link schemas — or be, or carry, a
     // `schema` metadata member — with external refs; stage their closure
@@ -3466,6 +3735,38 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     >,
   ): void {
     this.#assertWritable("writeValuesOrThrow()");
+    const iterator = writes[Symbol.iterator]();
+    let finished = false;
+    try {
+      let next = iterator.next();
+      while (!next.done) {
+        if (next.value.delete) {
+          // Flush preceding runs before testing deletion's slot presence. The
+          // single-write seam records authorship only when deletion applies.
+          this.writeValueOrThrow(next.value.address, next.value.value, {
+            delete: true,
+          });
+          next = iterator.next();
+        } else {
+          this.#writeValuesBatchOrThrow((function* () {
+            while (!next.done && !next.value.delete) {
+              yield next.value;
+              next = iterator.next();
+            }
+          })());
+        }
+      }
+      finished = true;
+    } finally {
+      if (!finished) iterator.return?.();
+    }
+  }
+
+  #writeValuesBatchOrThrow(
+    writes: Iterable<
+      { address: NormalizedFullLink; value: FabricValue; delete?: boolean }
+    >,
+  ): void {
     if (this.tx.writeBatch) {
       // Keep the batch path on the same noteSystemWrite chokepoint as single
       // writes (S18). This is not inert, and never was: `#noteSystemWrite`'s
@@ -3501,9 +3802,34 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // Capture the identity per yielded write, not once up front: an empty
       // batch authored nothing, so it must not record a write for the
       // transaction's write-identity summary.
-      const noteWriteIdentity = () => {
+      const batchRevisions = new Map<string, number>();
+      const interleavedDocuments = new Set<string>();
+      const captured: Array<{
+        address: IMemorySpaceAddress;
+        identity: ImplementationIdentity | undefined;
+      }> = [];
+      const noteWriteIdentity = (address: IMemorySpaceAddress) => {
         this.#noteCfcActivity();
         this.#noteWriteIdentity();
+        if (this.#privilegedSystemWriteDepth === 0) {
+          const key = valueWriteDocumentKey(address);
+          const previous = batchRevisions.get(key);
+          if (
+            previous !== undefined &&
+            this.#valueWriteIdentities.get(key)?.revision !== previous
+          ) {
+            interleavedDocuments.add(key);
+          }
+          captured.push({
+            address: { ...address, path: [...address.path] },
+            identity: deepFreeze(this.#cfcState.implementationIdentity),
+          });
+          this.#recordValueWriteIdentity(address, undefined);
+          batchRevisions.set(
+            key,
+            this.#valueWriteIdentities.get(key)!.revision,
+          );
+        }
       };
       const refuseMalformedSchemaMeta = (
         address: IMemorySpaceAddress,
@@ -3527,27 +3853,50 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // read through the link resolve). Staging mid-batch would inject
       // writes while `writeBatch` is applying runs.
       const staged: { address: IMemorySpaceAddress; value: FabricValue }[] = [];
-      const result = this.tx.writeBatch(
-        (function* () {
-          for (const write of writes) {
-            const address = toMemorySpaceAddress(write.address);
-            noteSystemWrite(address, write.value);
-            noteWriteIdentity();
-            if (!write.delete) {
-              refuseMalformedSchemaMeta(address, write.value);
-              if (getContentAddressedSchemasConfig()) {
-                staged.push({ address, value: write.value });
+      let result;
+      try {
+        result = this.tx.writeBatch(
+          (function* () {
+            for (const write of writes) {
+              const address = toMemorySpaceAddress(write.address);
+              noteSystemWrite(address, write.value);
+              noteWriteIdentity(address);
+              if (!write.delete) {
+                refuseMalformedSchemaMeta(address, write.value);
+                if (getContentAddressedSchemasConfig()) {
+                  staged.push({ address, value: write.value });
+                }
               }
+              // After the chokepoint, so a write it refuses leaves the caches
+              // standing over a state it did not change.
+              invalidateReadCaches();
+              yield { address, value: write.value, delete: write.delete };
             }
-            // After the chokepoint, so a write it refuses leaves the caches
-            // standing over a state it did not change.
-            invalidateReadCaches();
-            yield { address, value: write.value, delete: write.delete };
-          }
-        })(),
-      );
-      if (result.error) {
-        throw toThrowable(result.error);
+          })(),
+        );
+        if (result.error) throw toThrowable(result.error);
+      } catch (error) {
+        // A generator can fail after native document runs have already landed.
+        // No earlier builtin proof may certify that partially authored value.
+        for (const write of captured) {
+          this.#recordValueWriteIdentity(write.address, undefined);
+        }
+        throw error;
+      }
+      for (const [key, revision] of batchRevisions) {
+        if (this.#valueWriteIdentities.get(key)?.revision !== revision) {
+          interleavedDocuments.add(key);
+        }
+      }
+      for (const write of captured) {
+        // Native runs can flush between yields. An interleaved same-document
+        // write makes yield order insufficient to prove final authorship.
+        this.#recordValueWriteIdentity(
+          write.address,
+          interleavedDocuments.has(valueWriteDocumentKey(write.address))
+            ? undefined
+            : write.identity,
+        );
       }
       if (cachesInvalidated) this.#noteWrite();
       for (const write of staged) {
@@ -4074,6 +4423,15 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.tx;
   }
 
+  /** The durable event whose outcome depends on the wrapped transaction. */
+  get dispatchedEventId(): string | undefined {
+    return this.#wrapped.dispatchedEventId;
+  }
+
+  set dispatchedEventId(value: string | undefined) {
+    this.#wrapped.dispatchedEventId = value;
+  }
+
   /**
    * Forwards to the wrapped transaction, as `isAuthoritativeWrites()` below
    * does. `markEffectCompletion()` marks whatever tx shape it is handed, and
@@ -4164,6 +4522,41 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T {
     return this.#wrapped.runWithAmbientReadMeta(meta, fn);
+  }
+
+  /** Resolves content evidence through the wrapped transaction. */
+  resolveCfcContentTarget(
+    address: CfcAddress & Pick<NormalizedFullLink, "schema" | "scopeCaps">,
+    destinationSpace: MemorySpace,
+    authorization?: RuntimeWritePolicyAuthorization,
+    lastNode: "value" | "top" = "value",
+    projectionPath: readonly string[] = [],
+  ): {
+    address: CfcAddress;
+    value: FabricValue;
+    references: readonly CfcAddress[];
+    /** Existing parent whose shape establishes a missing descendant. */
+    absenceParent?: CfcAddress;
+  } | undefined {
+    return this.#wrapped.resolveCfcContentTarget(
+      address,
+      destinationSpace,
+      authorization,
+      lastNode,
+      projectionPath,
+    );
+  }
+
+  acquireCfcReference(
+    source: CfcAddress,
+    sourceAcquisition?: CfcReferenceProvenance,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CfcReferenceProvenance | undefined {
+    return this.#wrapped.acquireCfcReference(
+      source,
+      sourceAcquisition,
+      authorization,
+    );
   }
 
   markLazyMaterialize(enabled = true): void {
@@ -4270,6 +4663,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.markCfcAttributedInitialization(authorization);
   }
 
+  getCfcValueWriteAuthor(
+    target: CfcAddress,
+  ): Readonly<{ identity: ImplementationIdentity | undefined }> | undefined {
+    return this.#wrapped.getCfcValueWriteAuthor(target);
+  }
+
   recordCfcWritePolicyInput(
     input: WritePolicyInput,
     authorization?: RuntimeWritePolicyAuthorization,
@@ -4347,6 +4746,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     observation: CfcLabelMetadataObservation,
   ): void {
     this.#wrapped.recordCfcLabelMetadataObservation(observation);
+  }
+
+  recordCfcReferenceObservation(observation: CfcReferenceObservation): void {
+    this.#wrapped.recordCfcReferenceObservation(observation);
   }
 
   recordCfcExternalContentObservation(
@@ -4470,6 +4873,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   getReadActivities(): Iterable<IReadActivity> {
     return this.#wrapped.getReadActivities?.() ??
       getTransactionReadActivities(this.#wrapped.tx);
+  }
+
+  currentActivityIndex(): number | undefined {
+    return this.#wrapped.currentActivityIndex?.();
   }
 
   /** @inheritDoc */

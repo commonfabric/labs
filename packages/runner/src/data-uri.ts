@@ -36,10 +36,11 @@ import {
 } from "@commonfabric/data-model/codec-data-uri";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { type Cell, isCell } from "./cell.ts";
+import { type Cell, convertCellsToLinks, isCell } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { isPrimitiveCellLink, type NormalizedLink } from "./link-types.ts";
 import {
+  type CellLink,
   createSigilLinkFromParsedLink,
   inlineExternalSchemaRefsInValue,
   isCellLink,
@@ -168,17 +169,33 @@ export function dataUriFromValueWithResolvedLinks(
  * naming a document in a space.
  *
  * A `FabricPrimitive` comes back as the same instance: a leaf holds no link to
- * inline. A `FabricInstance` is refused, since passing one through would leave
- * a link inside it un-inlined.
+ * inline. Other instances are refused by default. The runtime can opt into
+ * canonical conversion of link-free instance state.
  *
  * @param value - The value to find and inline data: URI links in.
+ * @param resolveDataUriLink - Optional live-carrier resolver, called before a
+ *   data URI is decoded. Its returned value retains runtime-owned provenance.
+ * @param allowLinkFreeFabricInstances Whether to preserve canonically converted
+ *   instances whose codec state contains no references.
  * @returns The value with any data: URI links inlined.
  */
-export function findAndInlineDataUriLinks(value: any): any {
+export function findAndInlineDataUriLinks(
+  value: any,
+  resolveDataUriLink?: (link: CellLink) => { value: FabricValue } | undefined,
+  allowLinkFreeFabricInstances = false,
+): any {
   if (isCellLink(value)) {
     const dataLink = parseLink(value)!;
 
     if (dataLink.id !== undefined && isFabricDataUri(dataLink.id)) {
+      const resolved = resolveDataUriLink?.(value);
+      if (resolved !== undefined) {
+        return findAndInlineDataUriLinks(
+          resolved.value,
+          resolveDataUriLink,
+          allowLinkFreeFabricInstances,
+        );
+      }
       let dataValue: any = valueFromDataUri(dataLink.id);
       const path = [...dataLink.path];
 
@@ -210,7 +227,11 @@ export function findAndInlineDataUriLinks(value: any): any {
             includeSchema: true,
             keepAsCell: KeepAsCell.All,
           });
-          return findAndInlineDataUriLinks(newSigilLink);
+          return findAndInlineDataUriLinks(
+            newSigilLink,
+            resolveDataUriLink,
+            allowLinkFreeFabricInstances,
+          );
         }
         if (path.length > 0) {
           // TODO(danfuzz): a path segment naming something inside a
@@ -234,6 +255,11 @@ export function findAndInlineDataUriLinks(value: any): any {
       // returned rather than walked -- nothing here descends one, so there is
       // no descent for a nested instance to be caught by.
       if (dataValue instanceof FabricInstance) {
+        if (allowLinkFreeFabricInstances) {
+          return convertCellsToLinks(dataValue, {
+            allowLinkFreeFabricInstances: true,
+          });
+        }
         refuseFabricInstance(
           dataValue,
           "when inlining a `data:` URI whose content is a `FabricInstance`",
@@ -249,7 +275,11 @@ export function findAndInlineDataUriLinks(value: any): any {
     for (let index = 0; index < value.length; index++) {
       if (!(index in value)) continue;
       const current = value[index];
-      const inlined = findAndInlineDataUriLinks(current);
+      const inlined = findAndInlineDataUriLinks(
+        current,
+        resolveDataUriLink,
+        allowLinkFreeFabricInstances,
+      );
       if (next) {
         next[index] = inlined;
       } else if (!Object.is(inlined, current)) {
@@ -266,30 +296,18 @@ export function findAndInlineDataUriLinks(value: any): any {
     // than an omission.
     return value;
   } else if (value instanceof FabricInstance) {
-    // Refused. An instance's state can carry a `data:` URI link, and inlining
-    // those is what this walk is for, so passing the value through would hand
-    // it back _untransformed_ -- the link surviving as a link, the walk's
-    // purpose defeated for everything inside the wrapper.
-    //
-    // Nothing reaches this today, de facto rather than by construction. A link
-    // ends up inside an error only if an author attaches a cell to one, which
-    // `fabricFromConvertibleJsValue()` would then convert, and nothing in the
-    // tree does that; the whole suite runs green with this throw in place.
-    //
-    // It cannot be narrowed to instances that actually carry such a link, which
-    // is the shape that would sound safer: deciding that means reading the
-    // instance's codec contents, the very traversal whose absence causes the
-    // gap. So it is all instances or none -- and a tripwire that announces
-    // itself the moment these classes see real use beats a comment nobody runs.
-    //
-    // TODO(danfuzz): descend by codec-mediated traversal into instance state,
-    // at which point this becomes a walk rather than a refusal -- the same gap
-    // marked at the sibling walk in `dataUriFromValueWithResolvedLinks()`.
+    if (allowLinkFreeFabricInstances) {
+      return convertCellsToLinks(value, { allowLinkFreeFabricInstances: true });
+    }
     refuseFabricInstance(value, "when inlining `data:` URI links");
   } else if (isObjectOrArray(value)) {
     let next: Record<string, unknown> | undefined;
     for (const [key, entry] of Object.entries(value)) {
-      const inlined = findAndInlineDataUriLinks(entry);
+      const inlined = findAndInlineDataUriLinks(
+        entry,
+        resolveDataUriLink,
+        allowLinkFreeFabricInstances,
+      );
       if (next) {
         next[key] = inlined;
       } else if (!Object.is(inlined, entry)) {

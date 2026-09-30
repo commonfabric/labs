@@ -128,113 +128,92 @@ Regression guards: `test/worker-reconciler-cfc-text-integrity.test.ts`.
 
 ## Nested pattern outputs
 
-A pattern embedded in another pattern's view reaches the reconciler as one
-cell: the parent's `$UI` holds a link to the sub-pattern's result document, and
-`renderCellChild` fits that cell's label against the ceiling before rendering
-anything below it. A label covering the result document decides the whole
-sub-view — the sub-pattern's headings, its controls, and the render boundaries
-inside it, which the walk stops short of.
+A pattern embedded in another pattern's view reaches the reconciler through a
+Cell. `renderCellChild` fits that Cell's label against the effective ceiling
+before rendering its subtree. A covering restriction on the view or its acquired
+reference can therefore block headings, controls, and nested render boundaries
+before the walk reaches them. A boundary inside a blocked view cannot release
+that enclosing restriction.
 
-The labels a sub-pattern's result document carries are the ones its own fields
-earned. A field aliasing an argument cell carries that cell's label through the
-link machinery. A field fed by a lift or a sub-pattern carries the join
-that module makes onto its own result (`applyArgumentIfcToResult`, called from
-`packages/runner/src/builder/module.ts`), and every module's output cells carry
-the join of its input cells' labels (`connectInputAndOutputs`, defined in
-`packages/runner/src/builder/node-utils.ts` and called from `module.ts` and
-`pattern.ts`), which covers a built-in whose result is written at run time
-rather than declared. And under
-`cfcFlowLabels: "persist"` the per-transaction join is written as a `derived`
-component on each value write target; at `observe` it only reaches a
-diagnostic, and at `off` nothing derives it.
+Under `cfcFlowLabels: "persist"`, a field aliasing an argument Cell retains the
+confidentiality of acquiring and selecting its reference, together with the
+writing attempt's flow confidentiality. Forwarding that reference does not copy
+the target's content labels onto the result. An independently public reference
+can name confidential contents, while a reference selected using private data
+remains private. Rendering the contents consumes the reference restrictions and
+the current target labels for that observation. The legacy flow-off and
+flow-observe profiles retain target-label copying; see
+[CFC references](cfc-references.md) and
+[CFC across spaces](cfc-cross-space-integrity.md).
 
-No module is excused that input join. A module labeling its outputs below the
-join of its inputs makes §8.9.1's flow-precision claim, which that section
-holds to trust in the executing implementation for `flow-taint-precision` under
-the acting user, and a graph is assembled before there is one. What the join
-states is not §8.9.2's measurement: the build transaction reads nothing, so
-§8.9.2 applied there yields the empty label, which is the argument the next
-paragraph makes for a pattern's own root. It is a static over-approximation of
-what any future attempt could consume, and it is the floor rather than a first
-guess — it mints a `declared` entry, and a path's effective label is the join of
-all its components, so the `derived` component above adds to it and never
-narrows it. A label narrower than the join is therefore available only through
-§8.9.1's trust gate, and nothing in the runtime evaluates that concept.
+Render policy inspection follows the reference to its current label metadata
+without constructing a value snapshot. It retains the handle's acquisition
+history but does not acquire unrelated history from other cells inspected in
+the same render transaction. Unavailable label evidence blocks rendering.
 
-The two build-time mechanisms differ in what each ranges over.
-`applyArgumentIfcToResult` runs once per module factory, joining the schema
-that module declares for its argument onto the result schema it declares — or
-onto `true`, for a module that declares none; every node minted from that
-factory is given what it returns. `applyInputIfcToOutput` runs once per node,
-over that node's own edges. Neither takes a join over a pattern's argument as a
-whole, so a field a lift or a sub-pattern produces carries what its own edge
-carries: a confidential argument field's label reaches the fields that read it,
-and a public field beside it stays public.
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures both
-halves of that over one result.
+`factoryFromPattern` stores the author's declared result schema without adding
+a blanket join of the pattern's argument schemas. Explicit result `ifc`
+declarations still classify their own paths. In particular,
+`Confidential<VNode, ...>` on `[UI]` classifies the authored view itself, so a
+ceiling may hide the entire card rather than just a confidential value inside
+it. A public card that displays confidential contents keeps the classification
+on those contents and lets the render boundary govern their observation.
 
-A handler's write targets take no build-time label, and that is the division
-rather than a gap in it. A handler node is built with `outputs: {}` and the
-cells it is handed sit in `inputs.$ctx`, so the per-node join has nothing to
-write onto, and the event stream the factory returns is one of those inputs
-rather than an output. What a handler writes is decided when it runs, and CFC
-§8.12.8 puts the label for it — §8.9.2's conservative join over the attempt's
-journal, plus §8.9.3's output labels — in the `derived` component, under
-replace-on-overwrite. The `cfcFlowLabels` dial is what persists that component,
-and §18.6.3's conformance matrix marks `enforce-explicit` with propagation
-`off` a conforming state, because that ladder rung consumes declared policy
-alone. Reaching for a build-time stand-in here would put a measurement in the
-component §8.12.8 reserves for declarations, which is the join
-`factoryFromPattern` stopped taking.
+Lifts and sub-patterns apply their declared argument-schema policy to their
+result schemas through `applyArgumentIfcToResult`, called from
+`packages/runner/src/builder/module.ts`. The per-node `applyInputIfcToOutput`
+walk, reached through `connectInputAndOutputs` in
+`packages/runner/src/builder/node-utils.ts`, labels each module's output cells
+from that node's input edges, including LLM builtins whose results are written
+at runtime. Neither mechanism joins the whole enclosing pattern's argument
+schema onto every reachable result. These static declarations establish a floor
+at every flow-label setting; measured dependencies can add restrictions but
+cannot narrow that floor without the authority required by §8.9.1.
 
-A built-in that writes its own schema over its output's link composes that
-label back in rather than replacing it. Four do: `mapWithPattern`,
-`filterWithPattern` and `flatMapWithPattern` stamp a result-container schema
-onto the cell their node factory has just labeled, and a named aggregate stamps
-a scalar one. `schemaCarryingLinkIfc` in `packages/runner/src/cell.ts` carries
-the label onto what they write. CFC §8.5.4.3 requires it: a decomposed
-collection operation's coordinator taints its own structural writes —
-container, membership, order, length — with what its journal consumed. §8.9.2's
-propagation takes the output container's confidentiality from the source
-container's, through `lengthPreserved` for a map and
-`propagateCollectionConstraint` for the two that change length. The label lands
-at the container root, which is the conservative shape rather than the
-pointwise one: `joinSchema` flattens a source's member-level atoms in with its
-container-level ones, so what §8.5.6.1 keeps apart as member and structural
-confidentiality arrives together.
-`packages/runner/test/list-result-schema.test.ts` measures a labeled source and
-an unlabeled one. An aggregate reduces without per-value attribution, so
-§8.17.1 gives its scalar the join of its contributors — a count and a sum are
-that section's own examples — and
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures one.
+A handler node has `outputs: {}`; its context cells and event stream are inputs.
+Its write targets therefore receive no label from the build-time output walk.
+The handler's actual observations, including the selected stream reference and
+sending flow carried into dispatch, contribute to its transaction's derived
+labels under `cfcFlowLabels: "persist"`. Under §8.12.8 these measured dependencies
+belong to the replaceable derived component, while authored declarations retain
+their own monotone discipline.
 
-The declared result schema adds none of its own: `factoryFromPattern` stores
-the schema the author declared, so a pattern that accepts a confidential
-argument does not thereby label its own view. That division is §8.12.8's. It
-gives the `declared` component schema `ifc` declarations and explicit
-store-label operations under a monotone discipline, and gives a transaction's
-measured dependency to the `derived` component under replace-on-overwrite,
-because a ratchet applied to a measurement is the label creep that section
-opens by ruling out. A join taken over the shape of an argument schema
-measures no transaction, so the declared component is not where it belongs;
-the flow join above is. §8.9.1 reaches the same place from the other side, for
-the collection helpers it is written about: where a runtime can decompose an
-operation, the conservative join is a structural fact of the journal and no
-claim is involved. A pattern body reads no value, so the join over its build
-transaction is empty by construction.
+A built-in replacing its output link's schema preserves that link's `ifc` through
+`schemaCarryingLinkIfc` in `packages/runner/src/cell.ts`. The three list operations
+use it for their container schemas, and named scalar aggregates use it for their
+result schemas. The list join is conservative: `joinSchema` flattens source
+member and container atoms onto the result's container root. §8.5.4.3 requires
+the coordinator to retain its structural dependencies; §8.17.1 requires a scalar
+aggregate without per-value attribution to retain its contributors' join.
+`packages/runner/test/list-result-schema.test.ts` and
+`packages/runner/test/cfc-argument-ifc-propagation.test.ts` cover those carriers.
 
-Two consequences follow. The
-render boundaries a sub-pattern declares are reached, so a nested
-`declassifyConfidentiality` reaches the parent policy as a union
-(`childRenderPolicyForNode`), fail-closed to nothing under a
-`"deny"` declassification policy. And the write-policy grant recorded for each
-result binding (`recordOutputSchemaPolicyInputs`) is the schema at that
-binding's own path rather than one raised by a root entry, which narrows the
-grant — the direction that refuses rather than admits.
+Persistent flow labels separately record the transaction's measured dependencies
+as `derived` components; flow-observe mode diagnoses that join without
+persisting it.
+Forwarding a held private reference or consuming private data can contribute to
+that join even when the surrounding markup is literal. Public layout does not
+justify dropping those dependencies.
 
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` holds each builder
-against its own schema, and `packages/runner/test/pattern.test.ts` measures
-where the label reaches the result instead.
-`packages/runner/test/cfc-builtin-output-ifc.test.ts` holds each LLM built-in
-to the input join, at both dial settings. The `cfc-render-policy-demo`
-integration test drives the composed case under the ceiling.
+This distinction follows §8.12.8: authored declarations belong to the monotone
+`declared` component, while measured dependencies belong to the replaceable
+`derived` component. The presence of confidentiality in a pattern's argument
+schema alone is not a measurement of its whole view. Conversely, the absence of
+an explicit view declaration does not prove that its construction had an empty
+flow join.
+
+When the enclosing view and reference fit the ceiling, the walk reaches nested
+render boundaries. Their `declassifyConfidentiality` declarations compose through
+`childRenderPolicyForNode`, and the host's `"deny"` declassification policy
+ignores those declarations. The write-policy grant recorded for each result
+binding (`recordOutputSchemaPolicyInputs`) is the schema at that binding's own
+path rather than one raised by an unrelated root entry.
+
+`packages/runner/test/cfc-argument-ifc-propagation.test.ts` checks the builder
+schema behavior, and `packages/runner/test/pattern.test.ts` checks result-label
+placement. `packages/runner/test/cfc-builtin-output-ifc.test.ts` checks the LLM
+builtins' static input join with flow persistence both enabled and disabled.
+The `cfc-render-policy-demo` integration test requires public cards
+and controls to remain visible while the protected content is blocked; under
+the render ceiling, the trusted surface's authored declassification cannot
+release that content.

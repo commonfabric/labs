@@ -1228,6 +1228,49 @@ describe("executePieceCallable", () => {
     expect(harness.tracker.syncedCalls).toBe(0);
   });
 
+  it("propagates issued-commit failure after receipt readback", async () => {
+    const harness = createPieceCallableHarness({
+      callableKind: "handler",
+      cellKey: "register",
+      inputSchema: { type: "object", properties: {} },
+      receiptValue: {},
+    });
+    const confirmation = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<"waiting">();
+    harness.pieces.runtime.storageManager.pendingCommitsSettled = () => {
+      waiting.resolve("waiting");
+      return confirmation.promise;
+    };
+    const execution = executePieceCallable(
+      {
+        apiUrl: "http://localhost:8000",
+        identity: "/tmp/test-identity.pem",
+        piece: "fid1:piece-123",
+        space: "home",
+      },
+      "register",
+      [],
+      {
+        sendEvent: sendThroughStandIn,
+        loadPieces: () => Promise.resolve(harness.pieces),
+        loadPiece: () => Promise.resolve(harness.piece),
+        invocation: { id: "inv-register", session: callerSession },
+      },
+    );
+    try {
+      await waiting.promise;
+      const rejected = expect(execution).rejects.toThrow("confirmation failed");
+      confirmation.reject(new Error("confirmation failed"));
+      await rejected;
+      expect(harness.tracker.receiptLinkRequested?.id).toBe("of:receipt-1");
+      expect(harness.tracker.idleCalls).toBe(0);
+      expect(harness.tracker.syncedCalls).toBe(0);
+    } finally {
+      confirmation.resolve();
+      await execution.catch(() => {});
+    }
+  });
+
   it("carries the caller's session beside the invocation id to send", async () => {
     const harness = createPieceCallableHarness({
       callableKind: "handler",
@@ -1791,6 +1834,7 @@ function createPieceCallableHarness(options: {
       },
       storageManager: {
         synced: async () => {},
+        pendingCommitsSettled: async () => {},
       },
       edit: () => ({
         commit: async () => {},

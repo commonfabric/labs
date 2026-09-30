@@ -67,6 +67,8 @@ import {
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
 
+import { isReadIgnoredForScheduling } from "../storage/reactivity-log.ts";
+
 const logger = getLogger("wave-accumulator", {
   enabled: true,
   level: "warn",
@@ -642,6 +644,9 @@ interface WaveContribution {
    * spaces) — over-dropping a derivation is sound, committing one
    * derived from withdrawn state is not (§3d). */
   readOnlyReadKeys: Set<string>;
+
+  /** Commit dependencies with no scheduling read of the same doc instance. */
+  commitOnlyReadKeys: ReadonlySet<string>;
 
   /** Verdict for a publication obligation with no replica writes. */
   emptySettlement?: {
@@ -1246,6 +1251,18 @@ export class WaveAccumulator
         this.#onUndemandedNarrowing?.();
       }
     }
+    const commitOnlyReadKeys = new Set<string>();
+    if (context !== undefined) {
+      const schedulingReadKeys = new Set<string>();
+      for (const read of getTransactionReadActivities(tx)) {
+        const key = `${read.space}\0${
+          docInstanceKey(read.id, this.#scopeKeyFor(read.scope, context))
+        }`;
+        if (isReadIgnoredForScheduling(read.meta)) commitOnlyReadKeys.add(key);
+        else schedulingReadKeys.add(key);
+      }
+      for (const key of schedulingReadKeys) commitOnlyReadKeys.delete(key);
+    }
     this.#assembly = {
       context,
       spaces: [],
@@ -1344,6 +1361,7 @@ export class WaveAccumulator
         context,
         spaces: assembly.spaces,
         readOnlyReadKeys: assembly.readOnlyReadKeys,
+        commitOnlyReadKeys,
         ...(emptySettlement === undefined ? {} : { emptySettlement }),
         // Copied: a (refused) post-seal enqueue must not be able to
         // mutate the sealed contribution through the shared array.
@@ -3156,7 +3174,9 @@ export class WaveAccumulator
   }
 
   /** Basis rows (§3b) for one surviving contribution: doc-granular
-   * ids + seqs from the sealed commit's read set — confirmed reads carry
+   * ids + seqs from the sealed commit's scheduling-relevant reads. Commit-only
+   * verification stays in the sealed read set for CAS and withdrawal without
+   * making an emitter depend on its destination. Confirmed reads carry
    * their store version; in-wave pending reads share the wave's own
    * commit seq (`seq: null`, filled by the sink). Keyed by the run's
    * TRUE instance key (S4, stage A — see #trueBasisKey). */
@@ -3171,6 +3191,13 @@ export class WaveAccumulator
           read.scope,
           contribution.context,
         );
+        if (
+          contribution.commitOnlyReadKeys.has(
+            `${spaceContribution.space}\0${
+              docInstanceKey(read.id, entityScopeKey)
+            }`,
+          )
+        ) continue;
         rows.set(`${spaceContribution.space} ${read.id} ${entityScopeKey}`, {
           action: context.actionId,
           actionScopeKey,
@@ -3185,6 +3212,13 @@ export class WaveAccumulator
           read.scope,
           contribution.context,
         );
+        if (
+          contribution.commitOnlyReadKeys.has(
+            `${spaceContribution.space}\0${
+              docInstanceKey(read.id, entityScopeKey)
+            }`,
+          )
+        ) continue;
         rows.set(`${spaceContribution.space} ${read.id} ${entityScopeKey}`, {
           action: context.actionId,
           actionScopeKey,

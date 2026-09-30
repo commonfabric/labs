@@ -17,6 +17,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 const signer = await Identity.fromPassphrase("runner-cfc-label-metadata");
 
 describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
+  // Legacy flow-off writes re-derive target labels from stored metadata.
   // Inv-12 Stage 0 (SC-14/SC-25 prerequisite; docs/specs/
   // cfc-label-metadata-confidentiality.md §3): the carried `cfcLabelView` on a
   // link write round-trips through the main thread (worker →
@@ -48,6 +49,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
     });
 
     // Seed a source doc whose STORED cfc metadata is the authoritative label
@@ -327,6 +329,7 @@ describe("CFC persist-seam link-label re-derivation (inv-12 Stage 0)", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
     });
     try {
       const sourceId = parseLink(

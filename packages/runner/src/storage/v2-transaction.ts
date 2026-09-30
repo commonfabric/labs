@@ -4,6 +4,7 @@ import {
   deepFreeze,
   isDeepFrozen,
   isFabricPlainContainer,
+  isFabricPlainObject,
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
@@ -41,6 +42,7 @@ import type {
   Activity,
   ChangeGroup,
   CommitError,
+  CommitReadBasis,
   IAttestation,
   IMemoryAddress,
   IMemorySpaceAddress,
@@ -57,6 +59,7 @@ import type {
   IWriteOptions,
   MediaType,
   MemorySpace,
+  Metadata,
   NativeStorageCommit,
   NativeStorageCommitOperation,
   ReadError,
@@ -93,6 +96,7 @@ import {
 import {
   getBlindStructuralTarget,
   ignoreReadForCommit,
+  isAuthorizationRead,
   isDurableReadTx,
   isInternalVerifierRead,
   isMutableTransactionReadAllowed,
@@ -103,6 +107,7 @@ import {
   registerCommitRejectionListener,
   stableInternalVerifierRead,
   takeCoverageWaits,
+  withAuthorizationReadBasis,
 } from "./reactivity-log.ts";
 import {
   ReadOnlyAddressError,
@@ -142,6 +147,7 @@ type DisplacedRoot = {
 
 type ReadDocumentEntry = {
   initial: RootAttestation;
+  initialReadBasis?: CommitReadBasis;
   validated: boolean;
   current?: RootAttestation;
   frozenReads?: PathKeyMap<FabricValue | undefined>;
@@ -155,6 +161,7 @@ type ReadDocumentEntry = {
 
 type WritableDocumentEntry = {
   initial: RootAttestation;
+  initialReadBasis?: CommitReadBasis;
   current: RootAttestation;
   validated: boolean;
   frozenReads: PathKeyMap<FabricValue | undefined>;
@@ -576,6 +583,75 @@ const buildArrayPatchCandidates = (
   }
 
   return candidates;
+};
+
+/**
+ * Splits covering writes along mergeable paths so sibling values travel in
+ * separate patches. The mergeable operation owns its target; an enclosing
+ * object replacement would overwrite its result against the durable base.
+ */
+const expandMergeablePatchCandidate = (
+  candidate: PatchDraftCandidate,
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+  suppress: readonly OpSuppression[],
+): PatchDraftCandidate[] => {
+  const path = candidate.path;
+  if (
+    !candidate.coversDescendants ||
+    !suppress.some((entry) =>
+      entry.path.length > path.length && isPrefixPath(path, entry.path)
+    )
+  ) {
+    return [candidate];
+  }
+
+  const beforeValue = readValueAtPath(before, path);
+  const afterValue = readValueAtPath(after, path);
+  if (!isFabricPlainContainer(afterValue)) {
+    return [candidate];
+  }
+
+  const children: PatchDraftCandidate[] = [];
+  if (Array.isArray(afterValue)) {
+    // Intents covered by a structural array payload are abandoned before
+    // emission. The remaining array candidates address existing elements.
+    children.push(...buildArrayPatchCandidates(path, beforeValue, afterValue));
+  } else if (isFabricPlainObject(afterValue)) {
+    const beforeObject = isFabricPlainObject(beforeValue) ? beforeValue : {};
+    const keys = new Set([
+      ...Object.keys(beforeObject),
+      ...Object.keys(afterValue),
+    ]);
+    for (const key of keys) {
+      const childPath = [...path, key];
+      const previous = beforeObject[key];
+      const value = afterValue[key];
+      const previousPresent = Object.hasOwn(beforeObject, key);
+      const valuePresent = Object.hasOwn(afterValue, key);
+      if (Array.isArray(previous) || Array.isArray(value)) {
+        children.push(...buildArrayPatchCandidates(
+          childPath,
+          previous,
+          value,
+          previousPresent,
+          valuePresent,
+        ));
+      } else {
+        const child = buildValuePatchCandidate(
+          childPath,
+          value,
+          previous,
+          valuePresent,
+          previousPresent,
+        );
+        if (child) children.push(child);
+      }
+    }
+  }
+  return children.flatMap((child) =>
+    expandMergeablePatchCandidate(child, before, after, suppress)
+  );
 };
 
 // A concrete RFC 6901 array-index segment: a non-negative integer with no
@@ -1197,6 +1273,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     return this.#readActivities;
   }
 
+  currentActivityIndex(): number {
+    return this.#activityClock;
+  }
+
   /** @inheritDoc */
   getPotentiallyExternalReadActivities(): readonly IReadActivity[] {
     return this.#potentiallyExternalReadActivities;
@@ -1512,10 +1592,8 @@ export class V2StorageTransaction implements IStorageTransaction {
           mergeable.suppress,
         );
         if (mergeable.ops.length > 0) {
-          // Emit the mergeable ops even when there is no base to diff against
-          // (where buildPatchOperation returns null) so a stale-base write lands
-          // against durable state instead of clobbering it with a whole-value
-          // `set`.
+          // Mergeable operations create their missing ancestors. Residual
+          // sibling patches follow them, including for a new document.
           const basePatches = patch?.op === "patch" ? patch.patches : [];
           operations.push({
             op: "patch",
@@ -1523,6 +1601,12 @@ export class V2StorageTransaction implements IStorageTransaction {
             type,
             scope,
             patches: [...mergeable.ops, ...basePatches],
+            ...(patch?.op === "patch" && patch.replayPatches !== undefined
+              ? {
+                replayPatches: [...mergeable.ops, ...patch.replayPatches],
+                replayDependencies: patch.replayDependencies,
+              }
+              : {}),
             value: doc.current.value,
           });
           continue;
@@ -1636,6 +1720,20 @@ export class V2StorageTransaction implements IStorageTransaction {
     return { ok: {} };
   }
 
+  /** Whether verifier values and their tracked paths use the durable view. */
+  #usesDurableVerifierView(
+    branch: SpaceBranch,
+    address: Pick<IMemorySpaceAddress, "id">,
+    meta: Metadata,
+  ): boolean {
+    return isInternalVerifierRead(meta) &&
+      (!isUiInputBlindWriteTx(this) || isAuthorizationRead(meta)) &&
+      !hasDataUriScheme(address.id) && !address.id.startsWith("cid:") &&
+      (isUiInputBlindWriteTx(this) ||
+        getBlindStructuralTarget(this) !== undefined) &&
+      branch.replica.getNonSpeculativeDocument !== undefined;
+  }
+
   read(
     address: IMemorySpaceAddress,
     options?: IReadOptions,
@@ -1658,16 +1756,31 @@ export class V2StorageTransaction implements IStorageTransaction {
     const current = this.#readEpoch === undefined
       ? currentDocument(doc)
       : documentAtEpoch(doc, this.#readEpoch);
-    const readMeta = options?.meta ?? EMPTY_META;
-    // In a UI-input blind-leaf-write tx (a scalar `$value` overwrite), every read
-    // is recorded for CFC/scheduling but carries no value-equality commit
-    // precondition: tag each activity with `ignoreReadForCommit` (so buildReads
-    // downgrades it to a nonRecursive entity-root existence read instead of a
-    // leaf-value precondition) and skip marking the doc `validated` (so the client
-    // validate()/claim() pass skips it too). The mode is scoped to the user
-    // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
-    // and keep their preconditions.
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const suppliedMeta = options?.meta ?? EMPTY_META;
+    const durableVerifierRead = this.#usesDurableVerifierView(
+      branch,
+      address,
+      suppliedMeta,
+    );
+    const readMeta = withAuthorizationReadBasis(
+      suppliedMeta,
+      durableVerifierRead
+        ? branch.replica.getDocumentReadBasis?.(
+          address.id,
+          address.scope,
+          this.#scopeKeyIdentity,
+          true,
+        )
+        : doc.initialReadBasis,
+    );
+    // During a blind scalar UI write, incidental reads remain recorded for
+    // CFC/scheduling but yield a structural commit precondition at the parent
+    // instead of a leaf-value dependency. Authorization reads preserve their
+    // preconditions, including inside this window: the verifier's durable
+    // evidence must remain valid when the write commits. After the user set()
+    // call unmarks the transaction, all reads keep their preconditions.
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) &&
+      !isAuthorizationRead(readMeta);
     const { space: _, ...memoryAddress } = address;
 
     if (!hasDataUriScheme(address.id)) {
@@ -1732,51 +1845,15 @@ export class V2StorageTransaction implements IStorageTransaction {
       };
     }
 
-    // A CFC internal-verifier read of a blind UI-input write transaction
-    // bases on the doc's NON-speculative stack (RULED 2026-08-21;
-    // verification-coverage.md OW47, second producer — the name-draft
-    // triage): the verifier verifies the durable policy state the server
-    // will enforce against — a client speculation layer never reaches
-    // the wire, so deriving from it verified state the server can never
-    // see, and the basis it contributed made the §6 export refusal
-    // terminal on the user's own typed input. `SpaceReplica.#buildReads`
-    // (storage/v2.ts) names the same durable layer set for these reads,
-    // so verify-durable and name-durable travel together. Scoped tight:
-    // only the blind-write tx shape (the structural target survives the
-    // unmark), and only reads issued AFTER the blind window closes —
-    // CFC prepare's own reads. In-window reads keep the transaction's
-    // ordinary view (they are machinery reads the commit set drops via
-    // `ignoreReadForCommit`), value-consuming reads keep their overlay
-    // view and the ruled §6 refusal, and every other transaction is
-    // byte-identical to before. CFC prepare consults the transaction's
-    // own writes through its write set (`writeValueForTarget`) before
-    // falling back to this read, so serving replica state here loses
-    // nothing the verifier needs. Served fresh and cache-bypassed: the
-    // frozen-reads cache describes the transaction's checkout view, and
-    // a durable-view value must neither take from it nor land in it.
-    if (
-      !skipCommitPrecondition &&
-      isInternalVerifierRead(readMeta) &&
-      !hasDataUriScheme(address.id) &&
-      // Content-addressed documents are EXEMPT from durable serving:
-      // their content is identical on every layer (the replica refuses
-      // a cid: doc whose content does not hash to its id), so the
-      // ordinary view IS the durable content — while the client's own
-      // durable copy may not exist yet during an echo's arrival window
-      // (the echo's staging carries the schema docs its writes
-      // reference, and the covering SERVED commit already persisted the
-      // same docs server-side). Serving "durably absent" here turned
-      // the user's fill into the silent stored-schemaHash-missing
-      // prepare failure. Their layers stay excluded from the blind tx's
-      // verifier basis in `SpaceReplica.#buildReads` — consistent by
-      // construction: the value equals the durable content whichever layer
-      // serves it.
-      !address.id.startsWith("cid:") &&
-      getBlindStructuralTarget(this) !== undefined &&
-      // A replica without a speculation overlay serves no separate
-      // durable view — fall through then: the ordinary read IS it.
-      branch.replica.getNonSpeculativeDocument !== undefined
-    ) {
+    // Internal verification in a blind UI write uses the non-speculative
+    // view. Required authorization reads use that view even inside the blind
+    // value-write window, and their captured revision basis describes it.
+    // Content-addressed documents keep their ordinary immutable view.
+    //
+    // The verifier consults its own staged writes separately. This fallback
+    // bypasses the frozen-read cache, which describes the transaction's
+    // original snapshot rather than the current durable view.
+    if (durableVerifierRead && branch.replica.getNonSpeculativeDocument) {
       const durable = branch.replica.getNonSpeculativeDocument(
         address.id,
         address.scope,
@@ -1947,8 +2024,20 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (hasDataUriScheme(address.id)) return { ok: {} };
     if (readStatsActive) recordDocumentRead(this, doc);
 
-    const readMeta = options?.meta ?? EMPTY_META;
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const suppliedMeta = options?.meta ?? EMPTY_META;
+    const readMeta = withAuthorizationReadBasis(
+      suppliedMeta,
+      this.#usesDurableVerifierView(branch, address, suppliedMeta)
+        ? branch.replica.getDocumentReadBasis?.(
+          address.id,
+          address.scope,
+          this.#scopeKeyIdentity,
+          true,
+        )
+        : doc.initialReadBasis,
+    );
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) &&
+      !isAuthorizationRead(readMeta);
     const activityMeta = skipCommitPrecondition
       ? { ...readMeta, ...ignoreReadForCommit }
       : readMeta;
@@ -3174,6 +3263,12 @@ export class V2StorageTransaction implements IStorageTransaction {
       const loaded = this.#loadRoot(branch, address);
       doc = {
         initial: loaded,
+        initialReadBasis: branch.replica.getDocumentReadBasis?.(
+          address.id,
+          address.scope,
+          this.#scopeKeyIdentity,
+          isDurableReadTx(this),
+        ),
         validated: false,
       };
       branch.docs.set(key, doc);
@@ -3500,12 +3595,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     doc: WritableDocumentEntry,
     suppress: readonly OpSuppression[] = [],
   ): NativeStorageCommitOperation | null {
-    if (doc.initial.value === undefined || doc.current.value === undefined) {
+    if (doc.current.value === undefined) {
       return null;
     }
 
     const details = [...doc.patchDetails.values()];
-    if (details.some((detail) => detail.address.path.length === 0)) {
+    if (
+      suppress.length === 0 &&
+      (doc.initial.value === undefined ||
+        details.some((detail) => detail.address.path.length === 0))
+    ) {
       return null;
     }
 
@@ -3614,9 +3713,38 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
     }
 
+    const expandedCoverCandidates = fullCoverCandidates.flatMap((candidate) =>
+      expandMergeablePatchCandidate(
+        candidate,
+        doc.initial.value,
+        doc.current.value,
+        suppress,
+      )
+    );
+    fullCoverCandidates.length = 0;
+    for (const candidate of expandedCoverCandidates) {
+      if (candidate.coversDescendants) {
+        fullCoverCandidates.push(candidate);
+      } else {
+        nonCoverCandidates.push(candidate);
+      }
+    }
+
+    if (fullCoverCandidates.length === 0 && nonCoverCandidates.length === 0) {
+      return null;
+    }
+
+    // Root and leaf details can discover the same generated array tail.
+    // A splice carries its delta once, regardless of how many writes cover it.
+    const uniqueNonCoverCandidates = [...new Map(
+      nonCoverCandidates.map((candidate) => [
+        encodePointer(candidate.path),
+        candidate,
+      ]),
+    ).values()];
     const patches = selectPatchOps(
       fullCoverCandidates,
-      nonCoverCandidates,
+      uniqueNonCoverCandidates,
       suppress,
     );
 
@@ -3625,7 +3753,42 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
     assertNoIndexedArrayStructuralOps(patches);
 
-    return { op: "patch", id, type, scope, patches, value: doc.current.value };
+    // A generated tail splice encodes a fixed array value against the
+    // transaction's base. Replaying that delta over a longer pending base
+    // would duplicate slots and separate them from companion metadata.
+    // Keep the compact delta for admission; the local view replaces only
+    // this array. Deliberate mergeable operations suppress these candidates.
+    const tailSpliceCandidates = uniqueNonCoverCandidates.filter((candidate) =>
+      candidate.tailSpliceStartIndex !== undefined
+    );
+    const fixedArrays = new Map(
+      tailSpliceCandidates.map((
+        candidate,
+      ) => [candidate.patch, candidate.path]),
+    );
+    const replayPatches = patches.some((patch) => fixedArrays.has(patch))
+      ? patches.map((patch): PatchOp => {
+        const path = fixedArrays.get(patch);
+        return path === undefined ? patch : {
+          op: "replace",
+          path: encodePointer(path),
+          value: readValueAtPath(doc.current.value, path),
+        };
+      })
+      : undefined;
+
+    return {
+      op: "patch",
+      id,
+      type,
+      scope,
+      patches,
+      ...(replayPatches === undefined ? {} : {
+        replayPatches,
+        replayDependencies: doc.initialReadBasis?.localSeqs ?? [],
+      }),
+      value: doc.current.value,
+    };
   }
 
   /**
@@ -3667,10 +3830,47 @@ export class V2StorageTransaction implements IStorageTransaction {
     }));
 
     const abandoned: string[] = [];
+    const arrayPayloads = new Map<string, PatchDraftCandidate[]>();
+    const indivisibleObjects = new Map<string, boolean>();
     for (const { intent, ctx } of pending) {
-      const built = pending.some(({ intent: other, ctx: otherCtx }) =>
-          mergeableOpPayloadContains(other, otherCtx, intent.path)
-        )
+      // Generated array payloads and object writes changing numeric key sets
+      // carry their nested mutations whole. Numeric add/remove pointers cannot
+      // express the object-only intent safely against a possibly-array base.
+      // Abandon contained intents before filtering their incidental reads.
+      const carriedByCoveringWrite = intent.path.some((_, depth) => {
+        const path = intent.path.slice(0, depth);
+        const before = readValueAtPath(doc.initial.value, path);
+        const after = readValueAtPath(doc.current.value, path);
+        const key = encodePointer(path);
+        if (isFabricPlainObject(after)) {
+          let indivisible = indivisibleObjects.get(key);
+          if (indivisible === undefined) {
+            const beforeObject = isFabricPlainObject(before) ? before : {};
+            indivisible = [...Object.keys(beforeObject), ...Object.keys(after)]
+              .some((member) =>
+                ARRAY_INDEX_SEGMENT.test(member) &&
+                Object.hasOwn(beforeObject, member) !==
+                  Object.hasOwn(after, member)
+              );
+            indivisibleObjects.set(key, indivisible);
+          }
+          return indivisible;
+        }
+        if (!Array.isArray(after)) return false;
+        let candidates = arrayPayloads.get(key);
+        if (candidates === undefined) {
+          candidates = buildArrayPatchCandidates(path, before, after);
+          arrayPayloads.set(key, candidates);
+        }
+        return candidates.some((candidate) =>
+          (candidate.coversDescendants && candidate.path.length === depth) ||
+          isSubsumedByTailSplice(candidate, intent.path)
+        );
+      });
+      const built = carriedByCoveringWrite ||
+          pending.some(({ intent: other, ctx: otherCtx }) =>
+            mergeableOpPayloadContains(other, otherCtx, intent.path)
+          )
         ? { abandon: true, ops: [], suppress: [] }
         : buildMergeableIntent(intent, ctx);
       if (built.abandon) {

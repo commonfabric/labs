@@ -1223,7 +1223,8 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
           ).join(", ")
         }]`,
     );
-    // Bob's ONLY space-scoped root row is the holder doc; every piece doc
+    // Bob's only mutable space-scoped root row is the holder doc; schema
+    // documents are immutable roots and cannot re-arm a piece. Every piece doc
     // he reaches (the child's result, `echo`'s output doc) is a CLOSURE
     // row. This is the isolation the pin exists for: the root-level
     // arrival re-arm (`invalidateActionsForDemandRoots`) re-arms a
@@ -1237,7 +1238,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // but its re-arm reaches no echo node; the LANDING is the assertion
     // that matters, and M-C makes it red.)
     expect(
-      bobRows.filter((r) => r.root && r.scopeKey === "space").map((r) => r.id),
+      bobRows.filter((r) =>
+        r.root && r.scopeKey === "space" && !r.id.startsWith("cid:")
+      ).map((r) => r.id),
     ).toEqual([holderId]);
     expect(bobEchoRows.length).toBeGreaterThan(0);
     expect(bobEchoRows.every((r) => !r.root)).toBe(true);

@@ -1,5 +1,6 @@
 import {
   computed,
+  Default,
   handler,
   ifElse,
   NAME,
@@ -11,7 +12,6 @@ import {
   Writable,
 } from "commonfabric";
 import type {
-  BackwardsCompatibleProfile,
   SetProfileAvatarEvent,
   SetProfileBioEvent,
   SetProfileNameEvent,
@@ -50,10 +50,18 @@ import type {
  * UI additionally avoids sending empty names.
  */
 
-// The wish `result` for `#profile` is the profile-home pattern's output: it
-// carries the readable `name`/`avatar`/`bio` fields AND the exported
-// owner-protected write streams we amend through.
-type ProfileResult = BackwardsCompatibleProfile;
+// The wish publishes a display view and the profile's mutation capabilities.
+// Field write policy belongs to the profile's stored documents; this view does
+// not redeclare it on the foreign reference. Older profiles default bio to an
+// empty string and may omit its mutation stream.
+type ProfileResult = {
+  name: string;
+  avatar: string;
+  bio: Default<string, "">;
+  setName: Stream<SetProfileNameEvent>;
+  setAvatar: Stream<SetProfileAvatarEvent>;
+  setBio?: Stream<SetProfileBioEvent>;
+};
 
 const trimmed = (value?: string): string => (value ?? "").trim();
 

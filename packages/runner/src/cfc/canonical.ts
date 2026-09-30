@@ -200,6 +200,7 @@ const compareWritePolicyInput = (
       break;
     }
     case "schema":
+    case "output-reissue":
     case "structural-provenance":
     case "trusted-event":
     case "link-write": {
@@ -276,6 +277,7 @@ export const canonicalizeWritePolicyInput = (
         },
       };
     case "schema":
+    case "output-reissue":
       return { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "structural-provenance":
       return {
@@ -303,12 +305,30 @@ export const canonicalizeWritePolicyInput = (
         entries: cloned.entries.map((entry) => ({
           path: entry.path,
           label: canonicalizeCfcLabel(entry.label),
+          ...(entry.observes !== undefined && { observes: entry.observes }),
         })),
       };
       return {
         ...input,
         target: canonicalizeAttemptedWrite(input.target),
         source: canonicalizeAttemptedWrite(input.source),
+        ...(input.reference !== undefined && {
+          reference: {
+            ...input.reference,
+            ...(input.reference.originSpaces !== undefined && {
+              originSpaces: [...new Set(input.reference.originSpaces)].sort(),
+            }),
+            binding: {
+              ...input.reference.binding,
+              // Reference bindings carry logical Cell paths, including a
+              // possible payload field named "value", not envelope paths.
+              path: [...input.reference.binding.path],
+            },
+            confidentiality: canonicalizeCfcLabel({
+              confidentiality: [...input.reference.confidentiality],
+            }).confidentiality ?? [],
+          },
+        }),
         ...(cfcLabelView !== undefined && { cfcLabelView }),
       };
     }
@@ -369,15 +389,14 @@ const withoutUndefinedLabelMembers = (label: IFCLabel): IFCLabel => {
 
 /**
  * The comparison form of an envelope: entries sorted, paths and clauses
- * canonical, `undefined` label members dropped, and `version` fixed at 1 —
- * the stored spelling is not part of what two envelopes are compared on,
- * so a version-1 and a version-2 envelope holding the same labels are
- * equal here.
+ * canonical, and `undefined` label members dropped. Legacy inline and
+ * content-addressed envelopes compare at version 1. Version 3 stays distinct
+ * because it carries the per-slot reference acquisition contract.
  */
 export const canonicalizeCfcMetadata = (
   metadata: CfcMetadata,
 ): CfcMetadata => ({
-  version: 1,
+  version: metadata.version === 3 ? 3 : 1,
   schemaHash: metadata.schemaHash,
   labelMap: {
     version: 1,
@@ -386,6 +405,9 @@ export const canonicalizeCfcMetadata = (
       label: withoutUndefinedLabelMembers(canonicalizeCfcLabel(entry.label)),
       ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
       ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+      ...(entry.referenceAcquisition !== undefined
+        ? { referenceAcquisition: entry.referenceAcquisition }
+        : {}),
     })).sort((left, right) => {
       const leftKey = logicalPathToPointer(left.path);
       const rightKey = logicalPathToPointer(right.path);
@@ -406,7 +428,8 @@ export const canonicalizeCfcMetadata = (
         ? -1
         : leftObserves > rightObserves
         ? 1
-        : 0;
+        : Number(left.referenceAcquisition !== undefined) -
+          Number(right.referenceAcquisition !== undefined);
     }),
   },
 });
@@ -540,6 +563,23 @@ export const canonicalizePreparedDigestInput = (
       labelMetadataObservations: [...input.labelMetadataObservations].sort(
         compareLabelMetadataObservation,
       ),
+    }
+    : {}),
+  ...(input.referenceObservations?.length
+    ? {
+      referenceObservations: input.referenceObservations.map((observation) => ({
+        ...observation,
+        ...(observation.originSpaces !== undefined && {
+          originSpaces: [...new Set(observation.originSpaces)].sort(),
+        }),
+      })).sort((a, b) => {
+        if (a.journalIndex !== b.journalIndex) {
+          return a.journalIndex - b.journalIndex;
+        }
+        const left = hashStringOf(a);
+        const right = hashStringOf(b);
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
     }
     : {}),
   // External-content observations are an order-insensitive set of opaque

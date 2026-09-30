@@ -252,14 +252,15 @@ export const referencedCfcLabelDocumentHashes = (
 /**
  * The label document hashes the value at a document's reserved `cfc`
  * member references, for a value of any shape: none unless it is a
- * version-2 envelope with an entries array, since only version 2 defines
- * the reference, and otherwise {@link referencedCfcLabelDocumentHashes}
+ * version-2 or version-3 envelope with an entries array, and otherwise {@link referencedCfcLabelDocumentHashes}
  * over whatever entries it holds. This is the one scan every delivery seam
  * — traversal, direct loads, arrival hydration — applies, so they agree on
  * which documents an envelope is owed.
  */
 export const cfcEnvelopeLabelDocumentHashes = (cfc: unknown): string[] => {
-  if (!isObjectNotArray(cfc) || cfc.version !== 2) return [];
+  if (!isObjectNotArray(cfc) || (cfc.version !== 2 && cfc.version !== 3)) {
+    return [];
+  }
   const labelMap = cfc.labelMap;
   const entries = isObjectNotArray(labelMap) ? labelMap.entries : undefined;
   if (!Array.isArray(entries)) return [];

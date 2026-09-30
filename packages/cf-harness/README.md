@@ -2297,13 +2297,18 @@ dropping those keys is the whole remedy (`complete`), narrows the flow
 (`partial`), or reaches none of it (`none`). An input is attributed by the
 label-map entry the refused read consumed, so a link addressing a labeled field
 of a document is named for that entry whether the read landed on the field or on
-the document root. The refusal's reason names labels and documents, so it stays
-in the artifact's `rawCauseMessage` and out of the model-facing text. At
-`disabled` and `observe` nothing withholds: the values go out, and the same
-measurement is recorded on the artifact as `releaseObservation`, so an operator
-staging the ladder can size what raising it would withhold. The measurement
-applies no exchange-rule rewriting, so a clause a policy evaluation would have
-discharged is withheld here.
+the document root. The attribution reads also record reference observations in
+an isolated transaction per input, so immutable snapshots created while reading
+an array retain the input key that supplied them. Refusal evidence and key
+attribution use that same snapshot. A failed input retains partial evidence
+while the remaining inputs are still inspected. Observations match their full
+address, including space, scope, and path. The refusal's reason names labels and
+documents, so it stays in the artifact's `rawCauseMessage` and out of the
+model-facing text. At `disabled` and `observe` nothing withholds: the values go
+out, and the same measurement is recorded on the artifact as
+`releaseObservation`, so an operator staging the ladder can size what raising it
+would withhold. The measurement applies no exchange-rule rewriting, so a clause
+a policy evaluation would have discharged is withheld here.
 
 Whichever way it went, the measurement is also a decision in the run's
 `policy-trace.json`, in the same record every tool-policy decision is written

@@ -1,17 +1,23 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { resetCfcDenialAnnouncements } from "../src/cfc/denial-report.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
-import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 // The write gate says what it turned away, on the logger, without being asked.
 // Two refusals appear below. A `writeAuthorizedBy` field written by a setup
@@ -195,6 +201,127 @@ const refusedSetup = (mode: CfcEnforcementMode, name: string) => async () => {
 
 describe("cfc-denial-reporting", () => {
   describe("the write gate", () => {
+    for (const transfer of ["cell", "sigil"] as const) {
+      for (const predicate of ["integrity", "type"] as const) {
+        it(`reports the same protected ${predicate} outcome through a ${transfer}`, async () => {
+          const outcomes: unknown[] = [];
+          const privateLabel = "private-reference-predicate";
+          const approved = "approved-reference-content";
+          for (const matches of [false, true]) {
+            const storage = StorageManager.emulate({ as: signer });
+            const runtime = new Runtime({
+              apiUrl: new URL("https://example.com"),
+              storageManager: storage,
+              cfcEnforcementMode: "enforce-strict",
+              cfcFlowLabels: "persist",
+              cfcWriteFloor: "enforce",
+            });
+            try {
+              const seed = runtime.edit();
+              const source = runtime.getCell(
+                signer.did(),
+                "protected-reference-source",
+                undefined,
+                seed,
+              );
+              const value: FabricValue = predicate === "type" && !matches
+                ? 42
+                : "private reference value";
+              writeSeedEnvelopeDoc(seed, signer.did());
+              seedStoredEnvelope(seed, source.getAsNormalizedFullLink(), {
+                value,
+                cfc: {
+                  version: 2,
+                  schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                  labelMap: {
+                    version: 1,
+                    entries: [{
+                      path: [],
+                      origin: "derived",
+                      observes: "value",
+                      label: {
+                        confidentiality: [privateLabel],
+                        integrity: predicate === "integrity" && matches
+                          ? [approved]
+                          : [],
+                      },
+                    }],
+                  },
+                },
+              });
+              expect((await seed.commit()).error).toBeUndefined();
+              const held = source.withTx(undefined);
+              const sigil = held.getAsLink();
+              const tx = runtime.edit();
+              const schema = {
+                type: "object",
+                properties: {
+                  selected: {
+                    type: "string",
+                    ifc: predicate === "integrity"
+                      ? { requiredIntegrity: [approved] }
+                      : { maxConfidentiality: [] },
+                  },
+                },
+              } as const satisfies JSONSchema;
+              runtime.getCell<{ selected: unknown }>(
+                signer.did(),
+                "protected-reference-sink",
+                schema,
+                tx,
+              ).set({
+                selected: transfer === "cell" ? held.withTx(tx) : sigil,
+              });
+              expect(deriveFlowJoin(tx).confidentiality).toEqual([]);
+              const logger = getLogger("cfc");
+              const before = { ...logger.counts };
+              let refusal: unknown;
+              const said = await capturing(async () => {
+                tx.prepareCfc();
+                const { error } = await tx.commit();
+                expect(error?.name).toBe("CfcCommitRefusalError");
+                if (error?.name !== "CfcCommitRefusalError") {
+                  throw new Error("Expected a protected content refusal");
+                }
+                expect(error.message).toContain(
+                  "linked content evidence is unavailable",
+                );
+                refusal = error;
+              });
+              const counts = Object.fromEntries(
+                Object.entries(logger.counts).map(([key, count]) => [
+                  key,
+                  count - before[key as keyof typeof before],
+                ]),
+              );
+              expect(counts).toEqual({
+                debug: 1,
+                info: 0,
+                warn: 1,
+                error: 0,
+                total: 2,
+              });
+              expect(said).toContain(HEADLINE);
+              expect(said).not.toContain(privateLabel);
+              expect(said).not.toContain(approved);
+              expect(said).not.toContain("private reference value");
+              outcomes.push({
+                refusal,
+                counts,
+                // The clock is incidental; the code, headline, payload, and
+                // number of reports must not reveal the protected predicate.
+                said: said.replaceAll(/\d{2}:\d{2}:\d{2}\.\d{3}/g, "<time>"),
+              });
+            } finally {
+              await runtime.dispose();
+              await storage.close();
+            }
+          }
+          expect(outcomes[1]).toEqual(outcomes[0]);
+        });
+      }
+    }
+
     it("names the kind of decision without being asked", async () => {
       const said = await capturing(
         refusedSetup("enforce-explicit", "denial-headline"),

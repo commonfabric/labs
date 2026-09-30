@@ -1296,6 +1296,76 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  it("compares optional argument projections equally through inline and referenced branches", () => {
+    const previousValue: JSONSchema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        details: { type: "string", default: "" },
+      },
+      required: ["title"],
+    };
+    const projectedValue: JSONSchema = {
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+    };
+    const argument = (value: JSONSchema, referenced: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        selected: {
+          anyOf: [
+            { type: "undefined" },
+            referenced ? { $ref: "#/$defs/Value" } : value,
+          ],
+          asCell: ["cell"],
+        },
+      },
+      ...(referenced ? { $defs: { Value: value } } : {}),
+    });
+    for (const previousRef of [false, true]) {
+      for (const candidateRef of [false, true]) {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(argument(previousValue, previousRef), {}),
+            pattern(argument(projectedValue, candidateRef), {}),
+          )
+        ).not.toThrow();
+      }
+    }
+  });
+
+  it("resolves branch types before proving descendant defaults safe", () => {
+    for (const keyword of ["anyOf", "oneOf"] as const) {
+      const schema: JSONSchema = {
+        [keyword]: [
+          { $ref: "#/$defs/Row" },
+          { type: "undefined" },
+        ],
+        $defs: {
+          Row: {
+            type: "object",
+            properties: { title: { type: "string", default: "" } },
+          },
+        },
+      };
+      expect(() => assertSchemaSubset(schema, schema)).not.toThrow();
+
+      const overlapping: JSONSchema = {
+        ...schema,
+        [keyword]: [{ $ref: "#/$defs/Row" }, { type: "object" }],
+      };
+      expect(() => assertSchemaSubset(overlapping, overlapping)).toThrow(
+        /not stable under default insertion/,
+      );
+      const unresolved: JSONSchema = {
+        ...schema,
+        [keyword]: [{ $ref: "#/$defs/Missing" }, { type: "undefined" }],
+      };
+      expect(() => assertSchemaSubset(unresolved, unresolved)).toThrow();
+    }
+  });
+
   it("uses target defaults as link proofs only under default-stable ancestors", () => {
     const properties = {
       x: { type: "number" as const },

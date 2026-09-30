@@ -30,11 +30,13 @@ function transaction(
   entries: FabricValue = [],
   externalContentObservations: readonly CfcExternalContentObservation[] = [],
 ): IExtendedStorageTransaction {
-  const state = {
-    triggerReadGating: false,
-    labelMetadataObservations: [...observations],
-    externalContentObservations: [...externalContentObservations],
-  } satisfies Partial<ReturnType<IExtendedStorageTransaction["getCfcState"]>>;
+  const state: Partial<ReturnType<IExtendedStorageTransaction["getCfcState"]>> =
+    {
+      triggerReadGating: false,
+      referenceObservations: [],
+      labelMetadataObservations: [...observations],
+      externalContentObservations: [...externalContentObservations],
+    };
   const surfaces: Partial<IExtendedStorageTransaction> = {
     getCfcState: () =>
       state as ReturnType<IExtendedStorageTransaction["getCfcState"]>,

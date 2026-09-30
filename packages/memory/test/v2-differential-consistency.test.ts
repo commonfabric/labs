@@ -376,6 +376,9 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
         }
       }
 
+      for (const read of [...reads.confirmed, ...reads.pending]) {
+        read.validation = chance(rng, 0.8) ? "elidable" : "required";
+      }
       const commit: ClientCommit = {
         localSeq: session.nextLocalSeq++,
         reads,
@@ -418,15 +421,10 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
     // INV-1 (confirmed reads): re-scan the accepted history with the exact
     // overlap test — the in-process twin of the state-inspector oracle.
     for (const record of accepted) {
-      // An identity commit's observation may be stale by construction: the
-      // deviation 09-invariants.md records under INV-1. Its reads are not
-      // held to coherence; its elided operations are already absent from
-      // every other record's durable-write scan.
-      if (
-        record.commit.operations.length > 0 &&
-        record.elidedOpIndexes.length === record.commit.operations.length
-      ) continue;
+      const identity = record.commit.operations.length > 0 &&
+        record.elidedOpIndexes.length === record.commit.operations.length;
       for (const rd of record.commit.reads.confirmed) {
+        if (identity && rd.validation === "elidable") continue;
         for (const other of accepted) {
           if (other.seq <= rd.seq || other.seq >= record.seq) continue;
           if (other.sessionId === record.sessionId) continue;
@@ -454,6 +452,7 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
       // stay uncheckable here; their deviation is recorded against INV-1
       // in 09-invariants.md.
       for (const rd of record.commit.reads.pending) {
+        if (identity && rd.validation === "elidable") continue;
         if (rd.basisSeq === undefined) continue;
         const named = Array.isArray(rd.localSeq) ? rd.localSeq : [rd.localSeq];
         for (const other of accepted) {

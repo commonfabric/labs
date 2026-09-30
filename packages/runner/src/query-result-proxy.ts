@@ -1,3 +1,4 @@
+import { immutableReferenceViewIdentity } from "./cfc/immutable-reference.ts";
 import {
   FabricInstance,
   FabricPrimitive,
@@ -20,10 +21,18 @@ import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForDereferenceTraces,
+  cfcLabelViewOriginSpaces,
   cloneCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
+import {
+  cfcReferenceBinding,
+  cfcReferenceConfidentialityForView,
+  cfcReferenceSelectionWitnessesForView,
+  recordCfcReferenceObservation,
+  registerCfcReferenceCarrier,
+} from "./cfc/reference-provenance.ts";
 
 // Maximum recursion depth to prevent infinite loops
 const MAX_RECURSION_DEPTH = 100;
@@ -170,6 +179,9 @@ const proxyCacheKey = (
     link.id,
     link.path,
     cfcLabelView ?? null,
+    cfcLabelViewOriginSpaces(cfcLabelView),
+    cfcReferenceSelectionWitnessesForView(cfcLabelView),
+    immutableReferenceViewIdentity(cfcLabelView) ?? null,
     epoch ?? null,
     kind,
   ]);
@@ -330,8 +342,16 @@ function createViewProxy<T>(
   // unpinned one resolves afresh, so it tracks current state once its original
   // has finished. A child of an unpinned tx-less view inherits that view's own
   // transaction rather than minting one per child.
-  const readTx = (): IExtendedStorageTransaction =>
-    pinned ? viewTx : runtime.readTx(tx);
+  const readTx = (): IExtendedStorageTransaction => {
+    const current = pinned ? viewTx : runtime.readTx(tx);
+    recordCfcReferenceObservation(current, {
+      binding: cfcReferenceBinding(link),
+      confidentiality: cfcReferenceConfidentialityForView(cfcLabelView),
+      selectionWitnesses: cfcReferenceSelectionWitnessesForView(cfcLabelView),
+      originSpaces: cfcLabelViewOriginSpaces(cfcLabelView),
+    }, "dereference");
+    return current;
+  };
   const childViewTx = (): IExtendedStorageTransaction =>
     pinned ? viewTx : runtime.readTx(tx ?? viewTx);
   // The instant a pinned view describes. A child built inside a parent's trap
@@ -419,8 +439,14 @@ function createViewProxy<T>(
   link = resolved.link;
   cfcLabelView = mergeCfcLabelViews([
     cloneCfcLabelView(cfcLabelView),
-    cfcLabelViewForDereferenceTraces(viewTx, resolved.traces),
+    cfcLabelViewForDereferenceTraces(viewTx, resolved.traces, cfcLabelView),
   ]);
+  recordCfcReferenceObservation(viewTx, {
+    binding: cfcReferenceBinding(link),
+    confidentiality: cfcReferenceConfidentialityForView(cfcLabelView),
+    selectionWitnesses: cfcReferenceSelectionWitnessesForView(cfcLabelView),
+    originSpaces: cfcLabelViewOriginSpaces(cfcLabelView),
+  }, "dereference");
   // A stream position is declared by the link's schema: the stamp the builder
   // puts on a stream's alias, which the stored redirect carries onto the
   // resolved link. The handle is minted from that alone, since the document
@@ -458,15 +484,9 @@ function createViewProxy<T>(
   // serves no purpose and would leak that proxy into any consumer that
   // deep-clones or freezes the surrounding value (e.g. schema interning).
   if (!isObjectOrArray(value) || value instanceof FabricPrimitive) {
-    // The SHAPE_READ above tracks only the container's shape, but a
-    // FabricPrimitive is an atomic VALUE the consumer materializes here (handed
-    // back directly, like a JS primitive), not a container whose shape it
-    // inspects. Register a recursive value read so an in-place change to the
-    // primitive (e.g. a FabricBytes updated to different bytes) re-triggers
-    // consumers — a nonRecursive read is compared shape-only and would miss it.
-    if (value instanceof FabricPrimitive) {
-      viewTx.readValueOrThrow(link);
-    }
+    // Returning a leaf exposes its value, including its value-scoped labels.
+    // Container construction keeps the shape read until a child is consumed.
+    viewTx.readValueOrThrow(link);
     return remember(value);
   }
 
@@ -632,14 +652,15 @@ function createViewProxy<T>(
   if (existingProxy) return remember(existingProxy);
 
   const proxy = new Proxy(proxyTarget as object, {
-    get: (target, prop, receiver) =>
-      atEpoch(() => {
+    get: (target, prop, receiver) => {
+      // Promise adoption of a finished view observes no stored value.
+      if (prop === "then" && pinned && !isReadable(viewTx)) return undefined;
+      return atEpoch(() => {
         // Promise adoption probes `then` on every value it receives, so a view
         // that refuses the probe cannot cross a promise boundary at all — and a
         // lift's result crosses one by construction. A finished view returns
         // `undefined` for it, which is what a live one returns for a value
         // with no `then`; every other property still refuses.
-        if (prop === "then" && pinned && !isReadable(viewTx)) return undefined;
 
         // The back-pointer to the cell is not an answer from the document, and
         // reads nothing: it comes ahead of the kind check, so a view whose
@@ -861,7 +882,8 @@ function createViewProxy<T>(
           childLabelView(cfcLabelView, String(prop)),
           pinned,
         );
-      }),
+      });
+    },
     set: (_, prop) => {
       if (typeof prop === "symbol") return false;
       throw new Error(
@@ -954,22 +976,30 @@ function createViewProxy<T>(
         // record never had, and every read-modify-write against a cell failed
         // (loom CT-1949). The `has` trap below keeps `in` -- there it is correct,
         // being the `in` operator's own trap.
-        if (Object.hasOwn(current, prop)) {
-          const accessTx = childViewTx();
-          if (readStatsActive) recordProxyAccess(accessTx);
+        if (
+          (isObjectOrArray(current) || Array.isArray(current)) &&
+          Object.hasOwn(current, prop)
+        ) {
+          // A live property is an accessor: descriptor inspection and key
+          // enumeration expose its presence, while invoking the getter consumes
+          // its value through the same transaction and epoch as ordinary access.
           return {
             configurable: true,
             enumerable: true,
-            writable: false,
-            value: createViewProxy(
-              runtime,
-              accessTx,
-              tx,
-              { ...link, path: [...link.path, prop as string] },
-              depth + 1,
-              childLabelView(cfcLabelView, String(prop)),
-              pinned,
-            ),
+            get: () =>
+              atEpoch(() => {
+                const accessTx = childViewTx();
+                if (readStatsActive) recordProxyAccess(accessTx);
+                return createViewProxy(
+                  runtime,
+                  accessTx,
+                  tx,
+                  { ...link, path: [...link.path, prop as string] },
+                  depth + 1,
+                  childLabelView(cfcLabelView, String(prop)),
+                  pinned,
+                );
+              }),
           };
         }
         return undefined;
@@ -1021,6 +1051,13 @@ function createViewProxy<T>(
     },
   }) as T;
 
+  registerCfcReferenceCarrier(proxy as object, () => ({
+    binding: cfcReferenceBinding(link),
+    confidentiality: cfcReferenceConfidentialityForView(cfcLabelView),
+    selectionWitnesses: cfcReferenceSelectionWitnessesForView(cfcLabelView),
+    originSpaces: cfcLabelViewOriginSpaces(cfcLabelView),
+    ...(link.scopeCaps !== undefined && { scopeCaps: link.scopeCaps }),
+  }), () => cfcLabelView);
   // A client that must compare or hand on the instance itself, rather than a
   // record with no keys, asks `instanceReadThroughView()`, which reads it the
   // way a method call on this view does.

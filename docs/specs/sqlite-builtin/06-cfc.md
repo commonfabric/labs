@@ -464,6 +464,11 @@ Constructing an `asCell` handle may probe the terminal target's shape without
 reading its protected payload. Every intermediate redirect remains a pointer
 observation and must fit the reader's ceiling before its target is followed.
 Reading through the returned handle performs the ordinary payload check.
+Observing a retained handle's identity or dereferencing it also measures the
+confidentiality of its acquisition, even when the operation performs no storage
+read. The effective ceiling meets the runtime ceiling with the served session's
+ceiling. These observation checks apply when CFC write enforcement is disabled;
+that setting controls the observation journal, not read clearance.
 
 Scheduler dependency seeding carries `schedulerDependencyRead`: it records
 subscription edges without delivering the materialized values to an action.

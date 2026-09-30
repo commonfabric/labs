@@ -439,7 +439,9 @@ describe("inspectConfLabel builtin (inv-12 Stage 2)", () => {
     });
 
     it("still answers purely public queries (miss from public consultation)", async () => {
-      await seedLabeledDoc(runtime, "inspect-src-off-pub");
+      await seedLabeledDoc(runtime, "inspect-src-off-pub", {
+        origin: "declared",
+      });
       const source = runtime.getCell(
         space,
         "inspect-src-off-pub",

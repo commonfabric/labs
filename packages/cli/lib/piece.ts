@@ -53,6 +53,7 @@ import {
   Cell,
   cellRuntime,
   cellTx,
+  cellWriteSchema,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -84,6 +85,7 @@ import {
   VNode,
 } from "@commonfabric/runner";
 import {
+  cfcDeclaredLabelViewForWriteTargetWithStatus,
   type CfcLabelView,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewFromSchema,
@@ -316,26 +318,22 @@ export function parseCellCfcLabelUpdate(
   } as CellCfcLabelUpdate;
 }
 
-/**
- * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
- *
- * Each command needs that doc for its own reason. An INSPECTION read must not
- * answer "none" for a value carrying a label behind a link the path crosses
- * part way through. A read that feeds a WRITE needs it because the write
- * resolves too: `applyCfcSchemaToExistingValue` follows the same links, so the
- * doc this view describes is the doc the update lands in.
- */
+/** Display labels, or the destination's declared labels for an update. */
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  writeTarget = false,
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = writeTarget
+    ? cfcDeclaredLabelViewForWriteTargetWithStatus(cell)
+    : cfcLabelViewForResolvedCellWithStatus(cell);
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
   }
-  const schema = isObjectOrArray(cell)
+  const schema = writeTarget && isCell(cell)
+    ? cellWriteSchema(cell)
+    : isObjectOrArray(cell)
     ? cell.schema as JSONSchema | undefined
     : undefined;
   const effectiveView = mergeCfcLabelViews([
@@ -669,8 +667,8 @@ export async function loadPieces(
     "loadPieces.runtime",
     () =>
       // Shared first-party posture for client runtimes against a deployed
-      // API (CT-1814); collectors and the navigate hook are this CLI's
-      // declared deltas.
+      // API (CT-1814); reference persistence, collectors, and navigation
+      // are this CLI's declared host choices.
       new Runtime({
         ...runtimePresets.remoteClient({
           apiUrl: new URL(config.apiUrl),
@@ -679,6 +677,8 @@ export async function loadPieces(
             memoryHost: new URL(config.apiUrl),
           }),
           experimental,
+          // CLI writes are consumed by the shell's precise reference reader.
+          cfcFlowLabels: "persist",
           errorHandlers: [
             (error) => {
               runtimeErrors.push({
@@ -952,10 +952,9 @@ function cellDocumentTraversalKey(cell: Cell<unknown>): string {
 
 function cellValueTraversalKey(cell: Cell<unknown>): string {
   const { space, id, scope, path } = cell.getAsNormalizedFullLink();
-  return hashStringOf({
-    link: { space, id, scope, path },
-    cfcLabelView: getCarriedCfcLabelView(cell),
-  });
+  // A read can accumulate reference labels without changing which cell it
+  // materialized. Preserve that read's schema, including opaque children.
+  return hashStringOf({ space, id, scope, path });
 }
 
 /** Identify a piece's document independently of its selected fields or view labels. */
@@ -5270,8 +5269,8 @@ async function verbReadRefusalOrNull(
  * includes stored declared, derived, and link-carried labels and uses the same
  * display redaction as the runtime-client boundary.
  *
- * The path is followed through the links it crosses, so the answer describes
- * the doc that holds the value rather than the doc the path started in.
+ * Following the path accumulates reference labels alongside the labels on
+ * the document that holds the value.
  */
 export async function getCellCfcLabel(
   config: PieceConfig,
@@ -5332,12 +5331,8 @@ export async function setCellCfcLabel(
     await (options.input ? piece.input.getCell() : piece.result.getCell());
   const targetCell = rootCell.key(...path);
   await targetCell.pull();
-  // The guard's "what classes already exist here" question is asked of the doc
-  // the write lands in. Asked of the unresolved doc it was asked about a doc
-  // the write never touches: the row doc's `observes` was invisible to it, so
-  // the update silently REPLACED a value-class entry with a class-less one,
-  // and the command returned null while having written a label.
-  const currentView = cfcLabelViewForCommand(targetCell, path);
+  // Only the destination's declared classes constrain this schema update.
+  const currentView = cfcLabelViewForCommand(targetCell, path, true);
   const value = targetCell.getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
@@ -5345,9 +5340,10 @@ export async function setCellCfcLabel(
   }
 
   const { observes: requestedObserves, ...label } = update;
-  const schemaIfc = isObjectOrArray(targetCell.schema) &&
-      isObjectOrArray(targetCell.schema.ifc)
-    ? targetCell.schema.ifc
+  const writeSchema = cellWriteSchema(targetCell);
+  const schemaIfc = isObjectOrArray(writeSchema) &&
+      isObjectOrArray(writeSchema.ifc)
+    ? writeSchema.ifc
     : undefined;
   const existingObservationClasses = new Set<
     LabelObservationClass | undefined

@@ -66,10 +66,16 @@ type IFCAtom = JSONValue;
 // never cached (in-place edits must be observed), and neither is a mutable
 // default (see `defaultSchemaTag`).
 let schemaAtPathCache = new WeakMap<object, Map<string, JSONSchema>>();
+/** Frozen root-reference scope declarations, keyed by their defining document. */
+let scopeDeclarationCache = new WeakMap<
+  object,
+  WeakMap<object, ScopeDeclaration>
+>();
 // Path derivations can embed registry content; the registry clear (last
 // lease out) swaps the cache so an epoch's derivations do not outlive it.
 onSchemaRegistryClear(() => {
   schemaAtPathCache = new WeakMap();
+  scopeDeclarationCache = new WeakMap();
 });
 const SCHEMA_AT_PATH_CACHE_MAX_ENTRIES = 2_048;
 
@@ -1122,15 +1128,33 @@ const resolveRootRefForScope = (
   if (!isExternalSchemaRef(ref) && localDefinition(root, ref) === undefined) {
     return { schema, root };
   }
+  const rootObject = isObjectOrArray(root) ? root : undefined;
+  const memoizable = rootObject !== undefined && isDeepFrozen(schema) &&
+    isDeepFrozen(rootObject);
+  if (memoizable) {
+    const cached = scopeDeclarationCache.get(schema)?.get(rootObject);
+    if (cached !== undefined) return cached;
+  }
+  const missesBefore = externalResolutionMissCount();
   const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
-  if (!isObjectNotArray(resolved)) return { schema, root };
-  return {
-    schema: resolved,
-    root: cfcSchemaResolvedRoot(
-      resolved,
-      resolveCfcSchemaRefRoot(schema, root),
-    ),
-  };
+  const declaration = isObjectNotArray(resolved)
+    ? {
+      schema: resolved,
+      root: cfcSchemaResolvedRoot(
+        resolved,
+        resolveCfcSchemaRefRoot(schema, root),
+      ),
+    }
+    : { schema, root };
+  if (memoizable && externalResolutionMissCount() === missesBefore) {
+    let byRoot = scopeDeclarationCache.get(schema);
+    if (byRoot === undefined) {
+      byRoot = new WeakMap();
+      scopeDeclarationCache.set(schema, byRoot);
+    }
+    byRoot.set(rootObject, declaration);
+  }
+  return declaration;
 };
 
 /**

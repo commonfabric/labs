@@ -840,6 +840,12 @@ Rules the shape carries, binding:
 - **Doc-granular, ids + seqs ONLY**: no path column, no payloads.
   Path precision stays in-memory in the reactivity log; a JSON path
   column is the first step back toward evidence.
+- **Scheduling dependencies only**: a document instance whose reads all carry
+  `ignoreReadForScheduling` creates no basis row. These include append mechanics
+  and commit-only verification; verification that observes a consumed input's
+  policy remains a scheduling dependency. Ignored reads remain in the commit's
+  validation and withdrawal dependencies. Any scheduling read of that same
+  instance, shallow or recursive, retains its basis row.
 - **Carriage**: rows are written INSIDE the wave's derived store
   TRANSACTION (above — never own commits). protocol.md §3 and §7
   carry the matching sanctions, so the closed metadata list stays
@@ -1557,8 +1563,9 @@ the durable rows of §5 carry APPENDS, never effect state).
   carriage pattern, sanctioned in protocol.md §7 — and DELETED on
   delivery-ack: a queue that empties, never history, so the
   no-per-run-persistence lesson holds. A row carries the event
-  (payload bounded by the event, never graph-scaled) plus the
-  acting
+  (payload and optional opaque `runtimeReferenceContext`, bounded by the event
+  and its immutable reference contents, without reading target document graphs)
+  plus the acting
   identity (`actingPrincipal` + `actingSession`) + `capabilityRef`
   that the target's admission validates and stamps `firedAt` from —
   actor inheritance crosses spaces through exactly this carriage

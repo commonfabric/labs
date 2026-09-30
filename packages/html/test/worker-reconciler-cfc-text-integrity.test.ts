@@ -7,7 +7,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -50,7 +50,7 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
     const tx = runtime.edit();
     const cell = runtime.getCell<unknown>(signer.did(), id, undefined, tx);
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: cell.getAsNormalizedFullLink().id!,
       type: "application/json",

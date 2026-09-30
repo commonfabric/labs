@@ -144,7 +144,7 @@ describe("wish commit-failure reporting", () => {
     );
     const result = rt.run(tx, wishPattern, {}, resultCell);
     rt.prepareTxForCommit(tx);
-    await tx.commit();
+    expect((await tx.commit()).error).toBeUndefined();
     await result.pull().catch(() => {});
     await rt.idle();
     const readTx = rt.edit();

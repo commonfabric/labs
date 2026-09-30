@@ -33,6 +33,7 @@ describe("CLI runtime creation", () => {
           })).rejects.toThrow("Could not connect");
           expect(created?.apiUrl.href).toBe("https://toolshed.test/");
           expect(created?.experimental.contentAddressedSchemas).toBe(false);
+          expect(created?.cfcFlowLabels).toBe("persist");
 
           const output: unknown[][] = [];
           const originalLog = console.log;

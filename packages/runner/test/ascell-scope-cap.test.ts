@@ -125,6 +125,19 @@ describe("asCell scope cap", () => {
     expect(r.whole).toBeUndefined();
   });
 
+  it("keeps a handle's cap through schema replacement and a trusted sigil round trip", () => {
+    const { outer } = build("schema-roundtrip", "space", "session");
+    const widened = outer.key("handle").asSchema(innerSchema);
+    expect(widened.get()).toBeUndefined();
+    expect(widened.key("field").get()).toBeUndefined();
+    const recovered = runtime.getCellFromLink(
+      widened.getAsLink(),
+      undefined,
+      tx,
+    );
+    expect(recovered.key("field").get()).toBeUndefined();
+  });
+
   it("allows every route when the cap admits the link's scope", () => {
     // A session cap is permissive: it admits space, user and session links.
     const r = build("permitted", "session", "session");

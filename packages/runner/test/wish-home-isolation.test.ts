@@ -11,6 +11,7 @@ import {
   newLoopbackServer,
 } from "../src/storage/v2-emulate.ts";
 
+import { servedCommitDestination } from "./support/served-commits.ts";
 import { wish } from "../src/builtins/wish.ts";
 import type { Cell } from "../src/cell.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
@@ -106,6 +107,12 @@ describe("wish-home-isolation", () => {
         parent,
         runtime,
       );
+      runtime.installSealDestination(servedCommitDestination(
+        runtime,
+        service.did(),
+        await server.engineForSpace(service.did()),
+        lease,
+      ));
       for (const user of [users[0], users[1], users[0]]) {
         const tx = runtime.edit();
         stampWaveRunContext(tx, {

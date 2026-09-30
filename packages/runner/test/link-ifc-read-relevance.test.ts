@@ -18,6 +18,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
+import { carryCfcReferenceProvenance } from "../src/cfc/reference-provenance.ts";
 import { cfcLabelViewForCell } from "../src/cfc/mod.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
 import type { Cell } from "../src/cell.ts";
@@ -81,26 +82,32 @@ describe("link-ifc-read-relevance", () => {
    */
   const linkCarrying = (cell: Cell<unknown>, schema: JSONSchema) => {
     const link = cell.getAsNormalizedFullLink();
-    return linkRefFrom<CellLinkRefPayload>({
-      id: link.id,
-      space: link.space,
-      scope: link.scope,
-      path: [...link.path],
-      overwrite: "redirect",
-      schema,
-    });
+    return carryCfcReferenceProvenance(
+      cell.getAsWriteRedirectLink(),
+      linkRefFrom<CellLinkRefPayload>({
+        id: link.id,
+        space: link.space,
+        scope: link.scope,
+        path: [...link.path],
+        overwrite: "redirect",
+        schema,
+      }),
+    );
   };
 
   /** A stored plain value link to `cell` carrying `schema`. */
   const plainLinkCarrying = (cell: Cell<unknown>, schema: JSONSchema) => {
     const link = cell.getAsNormalizedFullLink();
-    return linkRefFrom<CellLinkRefPayload>({
-      id: link.id,
-      space: link.space,
-      scope: link.scope,
-      path: [...link.path],
-      schema,
-    });
+    return carryCfcReferenceProvenance(
+      cell,
+      linkRefFrom<CellLinkRefPayload>({
+        id: link.id,
+        space: link.space,
+        scope: link.scope,
+        path: [...link.path],
+        schema,
+      }),
+    );
   };
 
   const holderOverLinkCarrying = (storedSchema: JSONSchema): Cell<Holder> => {
@@ -188,9 +195,8 @@ describe("link-ifc-read-relevance", () => {
   it("marks a crossing whose only label signal is the stored schema's declaration", () => {
     // The seam's non-redundant case. The target document carries no
     // stored cfc metadata and no label view, so the ifc exists only as
-    // the stored link schema's declaration. Every diagnostic the read
-    // records names a schema-ifc seam, so the crossing is what marked
-    // the transaction.
+    // the stored link schema's declaration. Reference writes establish
+    // acquisition provenance independently of the read's schema-ifc marking.
     const holder = holderOverLinkCarrying(labeledLinkSchema);
 
     expect(holder.key("item").get()).toEqual({ name: "Ada" });
@@ -199,7 +205,7 @@ describe("link-ifc-read-relevance", () => {
     expect(tx.getCfcState().relevant).toBe(true);
     const reasons = tx.getCfcState().diagnostics;
     expect(reasons.length).toBeGreaterThan(0);
-    expect(reasons.every((reason) => reason.startsWith("schema-ifc-"))).toBe(
+    expect(reasons.some((reason) => reason.startsWith("schema-ifc-"))).toBe(
       true,
     );
   });
@@ -236,13 +242,16 @@ describe("link-ifc-read-relevance at resolution and handle hops", () => {
 
   const linkTo = (cell: Cell<unknown>, schema?: JSONSchema) => {
     const link = cell.getAsNormalizedFullLink();
-    return linkRefFrom<CellLinkRefPayload>({
-      id: link.id,
-      space: link.space,
-      scope: link.scope,
-      path: [...link.path],
-      ...(schema !== undefined && { schema }),
-    });
+    return carryCfcReferenceProvenance(
+      cell,
+      linkRefFrom<CellLinkRefPayload>({
+        id: link.id,
+        space: link.space,
+        scope: link.scope,
+        path: [...link.path],
+        ...(schema !== undefined && { schema }),
+      }),
+    );
   };
 
   const hopReasons = () =>
@@ -321,9 +330,10 @@ describe("link-ifc-read-relevance at resolution and handle hops", () => {
     );
     holder.setRaw({ item: linkTo(target, labeledLinkSchema) } as never);
 
+    const priorHops = hopReasons();
     const value = holder.get() as { item?: Cell<{ name: string }> };
     expect(value.item).toBeDefined();
-    expect(tx.getCfcState().relevant).toBe(false);
+    expect(hopReasons()).toEqual(priorHops);
   });
 });
 
@@ -351,13 +361,16 @@ describe("link-ifc-read-relevance closure, narrowing, and raw readers", () => {
 
   const linkTo = (cell: Cell<unknown>, schema?: JSONSchema) => {
     const link = cell.getAsNormalizedFullLink();
-    return linkRefFrom<CellLinkRefPayload>({
-      id: link.id,
-      space: link.space,
-      scope: link.scope,
-      path: [...link.path],
-      ...(schema !== undefined && { schema }),
-    });
+    return carryCfcReferenceProvenance(
+      cell,
+      linkRefFrom<CellLinkRefPayload>({
+        id: link.id,
+        space: link.space,
+        scope: link.scope,
+        path: [...link.path],
+        ...(schema !== undefined && { schema }),
+      }),
+    );
   };
 
   const hopReasons = () =>

@@ -41,14 +41,16 @@ The actor is read from the panel document's own stored label map, with
 `readStoredCfcMetadata` on the panel's document, which resolves a label map
 stored by reference: the `represents-principal` atom of the entry whose path is
 exactly `["addedByProfile"]` and whose `origin` is not `"link"`. Entries with
-`origin: "link"`, at that path or below it, are copies of the linked profile's
-label and name its owner, not the actor. A merged label view, such as
-`cfcLabelViewForCell` on the field, unions the two without saying which is
-which, and a document that links the panel, such as the panels list, holds all
-of them as link copies; neither can name the actor. A reader shows the linked
-profile as the adder only when that profile's own `represents-principal` names
-the actor; otherwise the panel was added by the actor under someone else's
-profile. The runtime does not refuse that combination.
+`origin: "link"` record reference relationships and their acquisition
+confidentiality. The profile owner's label stays on the profile document, and
+list entries retain references to the panel without copying its actor claim. A
+display label view, such as `cfcLabelViewForCell` on the field, can combine the
+panel's declaration with the target's current label; use the stored panel entry
+to identify the actor and inspect the target to identify its owner. A reader
+shows the linked profile as the adder only when that profile's own
+`represents-principal` names the actor; otherwise the panel was added by the
+actor under someone else's profile. The runtime does not refuse that
+combination.
 
 `admission.tsx` holds `admitPanel`, the only handler the field's write contract
 admits, so `addPiece`, `addPanel`, and `duplicatePanel` are all bindings of it

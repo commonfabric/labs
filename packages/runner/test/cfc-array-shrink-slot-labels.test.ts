@@ -95,7 +95,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
       )
       .flatMap((e) => e.label.confidentiality ?? []);
 
-  it("drops the truncated slot's link entry on shrink; survivors keep theirs", async () => {
+  it("drops truncated link entries and retains survivor selection history", async () => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -128,7 +128,44 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     expect((await setup.commit()).ok).toBeDefined();
 
     const listId = listCell.getAsNormalizedFullLink().id;
-    // Precondition: both slots carry their element's link label.
+    // Seed historical selection labels independently of target contents.
+    // Truncation must clear these reference restrictions even when new
+    // reference writes no longer copy the targets' labels.
+    const selections = runtime.edit();
+    writeSeedEnvelopeDoc(selections, space);
+    seedStoredEnvelope(selections, {
+      space,
+      scope: "space",
+      id: listId,
+      path: [],
+    }, {
+      value: selections.readValueOrThrow(listCell.getAsNormalizedFullLink()),
+      cfc: {
+        version: 3,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [
+            {
+              path: ["0"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: { confidentiality: ["alice-secret"] },
+            },
+            {
+              path: ["1"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: { confidentiality: ["bob-secret"] },
+            },
+          ],
+        },
+      },
+    });
+    expect((await selections.commit()).ok).toBeDefined();
+    // Both slots carry their independently recorded selection labels.
     expect(linkConfidentialityAt(listId, "0")).toEqual(["alice-secret"]);
     expect(linkConfidentialityAt(listId, "1")).toEqual(["bob-secret"]);
 
@@ -136,23 +173,32 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     // slot 1 itself is not overwritten by any surviving element).
     const shrinkTx = runtime.edit();
     const lc = runtime.getCell(space, "shrink-list", listSchema, shrinkTx);
-    lc.set([el0]);
+    lc.set([lc.get()[0]]);
     expect((await shrinkTx.commit()).ok).toBeDefined();
 
-    expect(linkConfidentialityAt(listId, "0")).toEqual(["alice-secret"]);
+    // Reselecting the surviving identity records the shrink transaction's
+    // container observations even when the serialized reference is unchanged.
+    expect(linkConfidentialityAt(listId, "0").sort()).toEqual([
+      "alice-secret",
+      "bob-secret",
+    ]);
     // The truncated slot's stale entry is the echo carrier — it must go.
     expect(linkConfidentialityAt(listId, "1")).toEqual([]);
 
-    // Growth re-uses the slot: its label is the new occupant's alone, with
-    // no residue of the departed member to re-import via followRef.
+    // Growth reuses the slot. Its selection includes the current container
+    // observations, whose history is independent of the cleared link entry.
     const growTx = runtime.edit();
     const el2 = runtime.getCell(space, "shrink-el-2", undefined, growTx);
     el2.get(); // a content read: carol joins the growing tx's flow join
     const lc2 = runtime.getCell(space, "shrink-list", listSchema, growTx);
-    lc2.set([el0, el2]);
+    lc2.set([lc2.get()[0], el2]);
     expect((await growTx.commit()).ok).toBeDefined();
 
-    expect(linkConfidentialityAt(listId, "1")).toEqual(["carol-secret"]);
+    expect(linkConfidentialityAt(listId, "1").sort()).toEqual([
+      "alice-secret",
+      "bob-secret",
+      "carol-secret",
+    ]);
 
     // The grow-side twin of the shrink bug: element writes auto-extend the
     // array, so a trailing length change no-ops and is elided from the

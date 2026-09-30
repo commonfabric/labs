@@ -1,32 +1,15 @@
 /**
- * Micro-benchmark for `unwrapOneLevelAndBindToDoc`.
- *
- * CONTEXT / CONCLUSION: reload profiling showed `bindNodeIO` is ~90% of per-node
- * instantiation cost during the `raw:map` notes-list reconcile (~3ms/node, up to
- * ~52ms for one node). `bindNodeIO` = unwrapOneLevelAndBindToDoc(in/out) +
- * findAllWriteRedirectCells(in/out). This bench was written to study the unwrap
- * part — and it PROVED unwrap is NOT the bottleneck:
- *   * unwrap is ~1.9µs/alias (5.2µs with $ref/$defs schemas) and linear — a real
- *     UI node (~30 aliases) is sub-millisecond.
- *   * A browser split-probe confirmed it: per reload, bio/unwrap = 6ms total
- *     across 133 nodes, while bio/findRedir (findAllWriteRedirectCells) = 356ms.
- * So the real cost is `findAllWriteRedirectCells`, which is NOT a pure transform:
- * it follows every write-redirect link via
- * `parseLink -> resolveLink -> readMaybeLink -> next hop`, i.e. storage
- * resolution per node. That part needs a Runtime, so it
- * isn't covered by this pure micro-bench (TODO: add an emulate-runtime bench for
- * findAllWriteRedirectCells to study/optimize the actual hotspot).
- *
- * unwrapOneLevelAndBindToDoc itself is PURE (CFC schema traversal + deep
- * clone/rebind of the binding tree; no storage/tx), studied in isolation below.
- *
- * Run as a bench:        deno bench -A packages/runner/test/pattern-binding.bench.ts
- * Run directly (study):  deno run  -A packages/runner/test/pattern-binding.bench.ts
- *                        deno run  -A packages/runner/test/pattern-binding.bench.ts 2000   # custom size
+ * Measures alias binding with real Runtime acquisition and retained scope caps.
+ * Runtime construction and disposal are outside each benchmark's timed region.
+ * Run a diagnostic comparison with `deno run -A <this file> [alias-count]`.
  */
+
+import { Identity } from "@commonfabric/identity";
 
 import { unwrapOneLevelAndBindToDoc } from "../src/pattern-binding.ts";
 import type { AnyCell } from "../src/cell.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import type { FabricExecValue, JSONSchema } from "../src/builder/types.ts";
 
@@ -57,34 +40,6 @@ const ARG_SCHEMA: JSONSchema = {
   },
 };
 
-function link(
-  id: string,
-  schema: JSONSchema | undefined,
-): NormalizedFullLink {
-  return {
-    id: `of:${id}` as NormalizedFullLink["id"],
-    space: "did:key:zBench" as NormalizedFullLink["space"],
-    scope: "space",
-    path: [],
-    ...(schema !== undefined ? { schema } : {}),
-  };
-}
-
-function cell(
-  id: string,
-  schema: JSONSchema | undefined,
-): AnyCell<unknown> {
-  const cellLink = link(id, schema);
-  return {
-    getAsNormalizedFullLink: () => cellLink,
-    export: () => ({
-      cell: cellLink.id,
-      path: cellLink.path,
-      scope: cellLink.scope,
-    }),
-  } as unknown as AnyCell<unknown>;
-}
-
 // A $ref/$defs schema as the CTS transformer actually emits (recursive piece
 // shape + asCell markers), to test whether ref resolution in getSchemaAtPath is
 // what's slow.
@@ -114,20 +69,43 @@ const REF_SCHEMA: JSONSchema = {
       },
     },
   },
-} as unknown as JSONSchema;
+};
 
-const withSchema = {
-  arg: link("argument", ARG_SCHEMA),
-  result: cell("result", undefined),
-};
-const refSchema = {
-  arg: link("argument", REF_SCHEMA),
-  result: cell("result", undefined),
-};
-const noSchema = {
-  arg: link("argument", undefined),
-  result: cell("result", undefined),
-};
+const signer = await Identity.fromPassphrase("pattern-binding-benchmark");
+
+type Posture = "off" | "persist" | "persist with retained cap";
+type Links = { arg: NormalizedFullLink; result: AnyCell<unknown> };
+
+function fixture(posture: Posture, schema: JSONSchema | undefined) {
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager: StorageManager.emulate({ as: signer }),
+    cfcFlowLabels: posture === "off" ? "off" : "persist",
+  });
+  const tx = runtime.edit();
+  const argument = runtime.getCellFromLink(
+    {
+      space: signer.did(),
+      id: "of:argument",
+      scope: "space",
+      path: [],
+      ...(schema === undefined ? {} : { schema }),
+      ...(posture === "persist with retained cap"
+        ? { scopeCaps: [{ depth: 0, scope: "space" as const }] }
+        : {}),
+    },
+    undefined,
+    tx,
+  );
+  return {
+    arg: argument.getAsNormalizedFullLink(),
+    result: runtime.getCell(signer.did(), "result", undefined, tx),
+    async close() {
+      tx.abort();
+      await runtime.dispose();
+    },
+  };
+}
 
 type BuildOpts = {
   /** number of `$alias` leaves (≈ the cell references in the binding) */
@@ -192,44 +170,57 @@ function makeUiBinding(opts: BuildOpts): FabricExecValue {
   return { type: "vnode", name: "cf-screen", props: {}, children };
 }
 
-type Links = typeof withSchema;
-
-function op(binding: FabricExecValue, links: Links = withSchema): void {
-  unwrapOneLevelAndBindToDoc(
-    binding,
-    links.arg,
-    links.result,
-  );
+function op(binding: FabricExecValue, links: Links): void {
+  unwrapOneLevelAndBindToDoc(binding, links.arg, links.result);
 }
-
-//
-// deno bench cases
-//
 
 for (const aliases of [10, 30, 100, 300]) {
   const binding = makeUiBinding({ aliases, pathDepth: 2 });
-  Deno.bench(
-    `unwrapOneLevelAndBindToDoc aliases=${aliases}`,
-    () => op(binding),
-  );
+  for (
+    const posture of ["off", "persist", "persist with retained cap"] as const
+  ) {
+    Deno.bench({
+      name: `unwrapOneLevelAndBindToDoc aliases=${aliases}${
+        posture === "off" ? "" : ` (${posture})`
+      }`,
+      async fn(b) {
+        const links = fixture(posture, ARG_SCHEMA);
+        try {
+          for (let i = 0; i < 20; i++) op(binding, links);
+          b.start();
+          op(binding, links);
+          b.end();
+        } finally {
+          await links.close();
+        }
+      },
+    });
+  }
 }
 
-//
-// direct-run study harness
-//
-
-function time(
+/** Reports warm alias-binding cost with one Runtime held across iterations. */
+async function time(
   label: string,
   binding: FabricExecValue,
-  iters: number,
-  links: Links = withSchema,
-): void {
-  for (let i = 0; i < Math.min(200, iters); i++) op(binding, links); // warmup
-  const t0 = performance.now();
-  for (let i = 0; i < iters; i++) op(binding, links);
-  const ms = performance.now() - t0;
-  const nsPerOp = (ms * 1e6) / iters;
-  console.error(label.padEnd(44), `${nsPerOp.toFixed(0).padStart(9)} ns/op`);
+  aliases: number,
+  posture: Posture,
+  schema: JSONSchema | undefined,
+): Promise<void> {
+  const links = fixture(posture, schema);
+  const iterations = Math.max(20, Math.floor(20000 / aliases));
+  try {
+    for (let i = 0; i < 20; i++) op(binding, links);
+    const t0 = performance.now();
+    for (let i = 0; i < iterations; i++) op(binding, links);
+    const nsPerOp = ((performance.now() - t0) * 1e6) / iterations;
+    console.error(
+      `${posture}: ${label}`,
+      `${nsPerOp.toFixed(0)} ns/op`,
+      `${(nsPerOp / aliases).toFixed(0)} ns/alias`,
+    );
+  } finally {
+    await links.close();
+  }
 }
 
 if (import.meta.main) {
@@ -237,57 +228,31 @@ if (import.meta.main) {
   const sizes = Number.isFinite(custom) && custom > 0
     ? [custom]
     : [1, 10, 30, 100, 300, 1000];
-
-  console.error(
-    "\n# scaling: ns/op and ns/alias (pathDepth=2, link schema on)",
-  );
-  for (const aliases of sizes) {
-    const binding = makeUiBinding({ aliases, pathDepth: 2 });
-    const iters = aliases >= 300 ? 2000 : 20000;
-    for (let i = 0; i < 200; i++) op(binding);
-    const t0 = performance.now();
-    for (let i = 0; i < iters; i++) op(binding);
-    const ms = performance.now() - t0;
-    const nsPerOp = (ms * 1e6) / iters;
-    console.error(
-      `aliases=${String(aliases).padStart(5)}`,
-      `${nsPerOp.toFixed(0).padStart(9)} ns/op`,
-      `${(nsPerOp / Math.max(1, aliases)).toFixed(0).padStart(6)} ns/alias`,
-    );
+  for (
+    const posture of ["off", "persist", "persist with retained cap"] as const
+  ) {
+    for (const aliases of sizes) {
+      await time(
+        `aliases=${aliases}`,
+        makeUiBinding({ aliases, pathDepth: 2 }),
+        aliases,
+        posture,
+        ARG_SCHEMA,
+      );
+    }
+    for (
+      const [label, schema] of [
+        ["no schema", undefined],
+        ["recursive schema", REF_SCHEMA],
+      ] as const
+    ) {
+      await time(
+        label,
+        makeUiBinding({ aliases: 100, pathDepth: 2 }),
+        100,
+        posture,
+        schema,
+      );
+    }
   }
-
-  console.error("\n# what drives it (aliases=100, 20000 iters each)");
-  const N = 100;
-  time(
-    "baseline (depth2, link schema)",
-    makeUiBinding({ aliases: N, pathDepth: 2 }),
-    20000,
-  );
-  time(
-    "depth1 (shallow paths)",
-    makeUiBinding({ aliases: N, pathDepth: 1 }),
-    20000,
-  );
-  time(
-    "depth4 (deep paths)",
-    makeUiBinding({ aliases: N, pathDepth: 4 }),
-    20000,
-  );
-  time(
-    "no link schema (linkForPath cheap)",
-    makeUiBinding({ aliases: N, pathDepth: 2 }),
-    20000,
-    noSchema,
-  );
-  time(
-    "aliasSchema on (transformer-style)",
-    makeUiBinding({ aliases: N, pathDepth: 2, aliasSchema: true }),
-    20000,
-  );
-  time(
-    "$ref/$defs schema (transformer-style)",
-    makeUiBinding({ aliases: N, pathDepth: 3 }),
-    20000,
-    refSchema,
-  );
 }

@@ -133,6 +133,7 @@ describe("list-coordinator-instances", () => {
           sessionId: `session-${index}` as never,
         }));
         const cancellations: (() => void)[] = [];
+        const actorRuntimes: Runtime[] = [];
         try {
           const { pattern } = createTrustedBuilder(runtime).commonfabric;
           const op = pattern(({ element }: { element: number }) => ({
@@ -162,38 +163,34 @@ describe("list-coordinator-instances", () => {
               storageManager: actorStorage,
               experimental: { serverExecution: false },
             });
-            try {
-              identities[position] = actorRuntime
-                .scopeKeyIdentity as typeof identities[number];
-              const identity = identities[position];
-              const tx = actorRuntime.edit();
-              const element = actorRuntime.getCell<number>(
-                signer.did(),
-                "element",
-                undefined,
-                tx,
-                scope,
-              );
-              element.set(position + 1);
-              actorRuntime.getCellFromLink(
-                inputs.getAsNormalizedFullLink(),
-                undefined,
-                tx,
-              ).set({ list: [element], op });
-              expect((await tx.commit()).error).toBeUndefined();
-              await actorStorage.synced();
-              await storage.syncInstance(
-                inputs.getAsNormalizedFullLink(),
-                identity,
-              );
-              await storage.syncInstance(
-                element.getAsNormalizedFullLink(),
-                identity,
-              );
-            } finally {
-              await actorRuntime.dispose({ closeStorage: false });
-              await actorStorage.close();
-            }
+            actorRuntimes.push(actorRuntime);
+            identities[position] = actorRuntime
+              .scopeKeyIdentity as typeof identities[number];
+            const identity = identities[position];
+            const tx = actorRuntime.edit();
+            const element = actorRuntime.getCell<number>(
+              signer.did(),
+              "element",
+              undefined,
+              tx,
+              scope,
+            );
+            element.set(position + 1);
+            actorRuntime.getCellFromLink(
+              inputs.getAsNormalizedFullLink(),
+              undefined,
+              tx,
+            ).set({ list: [element], op });
+            expect((await tx.commit()).error).toBeUndefined();
+            await actorStorage.synced();
+            await storage.syncInstance(
+              inputs.getAsNormalizedFullLink(),
+              identity,
+            );
+            await storage.syncInstance(
+              element.getAsNormalizedFullLink(),
+              identity,
+            );
           }
           expect(identities[0].sessionId).not.toBe(identities[1].sessionId);
           if (scope === "session") {
@@ -216,8 +213,11 @@ describe("list-coordinator-instances", () => {
             throw new Error("Expected a map coordinator");
           }
           const childNames: string[] = [];
-          for (const identity of identities) {
-            const tx = runtime.edit();
+          for (const [position, identity] of identities.entries()) {
+            // The same coordinator stages each actor's transaction, whose
+            // connection also commits under that actor's physical scope.
+            const actorRuntime = actorRuntimes[position];
+            const tx = actorRuntime.edit();
             tx.tx.scopeKeyIdentity = identity;
             const plan = listCoordinatorPlan(
               runtime,
@@ -249,10 +249,17 @@ describe("list-coordinator-instances", () => {
             ).toBeDefined();
             runtime.prepareTxForCommit(tx);
             expect((await tx.commit()).error).toBeUndefined();
+            const durableChild = actorRuntime.getCellFromLink(
+              child.getAsNormalizedFullLink(),
+            );
+            expect(durableChild.getArgumentCell()).toBeDefined();
           }
           expect(childNames[0]).toBe(childNames[1]);
         } finally {
           for (const cancel of cancellations) cancel();
+          for (const actorRuntime of actorRuntimes) {
+            await actorRuntime.dispose();
+          }
           await storage.synced();
           await runtime.dispose({ closeStorage: false });
           await storage.close();

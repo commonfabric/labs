@@ -326,21 +326,28 @@ describe("CFC redundant entry collapse", () => {
       };
       const mapSchema = {
         type: "object",
-        additionalProperties: {
-          type: "string",
-          ifc: { confidentiality: [cfcAtom.resource("Shared")] },
+        properties: {
+          retained: {
+            type: "object",
+            additionalProperties: {
+              type: "string",
+              ifc: { confidentiality: [cfcAtom.resource("Shared")] },
+            },
+          },
+          added: { type: "string" },
         },
       } as unknown as JSONSchema;
+      type MapValue = { retained: Record<string, string>; added?: string };
       const mapId = runtime
-        .getCell<Record<string, string>>(
+        .getCell<MapValue>(
           signer.did(),
           "collapse-shadowed-map",
           mapSchema,
         )
         .getAsNormalizedFullLink().id;
 
-      // The state an earlier certified write over the container leaves, with
-      // a later uncertified write to one child under it.
+      // A retained subtree carries a parent certification and a child that
+      // shadows it. A disjoint sibling write leaves that attestation valid.
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, signer.did());
       seedStoredEnvelope(seed, {
@@ -349,7 +356,7 @@ describe("CFC redundant entry collapse", () => {
         id: mapId,
         path: [],
       }, {
-        value: { kept: "1" },
+        value: { retained: { kept: "1" } },
         cfc: {
           version: 1,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
@@ -357,12 +364,12 @@ describe("CFC redundant entry collapse", () => {
             version: 1,
             entries: [
               {
-                path: ["*"],
+                path: ["retained", "*"],
                 label: { confidentiality: [cfcAtom.resource("Shared")] },
                 origin: "declared",
               },
               {
-                path: [],
+                path: ["retained"],
                 label: {
                   confidentiality: [cfcAtom.resource("Shared")],
                   integrity: [certified],
@@ -371,7 +378,7 @@ describe("CFC redundant entry collapse", () => {
                 observes: "value",
               },
               {
-                path: ["kept"],
+                path: ["retained", "kept"],
                 label: { confidentiality: [cfcAtom.resource("Shared")] },
                 origin: "derived",
                 observes: "value",
@@ -383,10 +390,10 @@ describe("CFC redundant entry collapse", () => {
       } as any);
       expect((await seed.commit()).ok).toBeDefined();
 
-      // Any further persist rebuilds the entry set and runs the collapse over
-      // it, carried-forward entries included.
+      // Rebuilding metadata runs collapse over carried entries. This write
+      // is outside the certified subtree, so it does not expire its stamp.
       const tx = runtime.edit();
-      runtime.getCell<Record<string, string>>(
+      runtime.getCell<MapValue>(
         signer.did(),
         "collapse-shadowed-map",
         mapSchema,
@@ -396,17 +403,17 @@ describe("CFC redundant entry collapse", () => {
       expect((await tx.commit()).ok).toBeDefined();
 
       const entries = replicaEntries(storageManager, mapId);
-      expect(
-        entries.some((entry) =>
-          entry.origin === "derived" && entry.path.join("/") === "kept"
-        ),
-      ).toBe(true);
-      expect(
-        entries.some((entry) =>
-          entry.origin === "derived" && entry.path.length === 0 &&
-          (entry.label.integrity ?? []).length > 0
-        ),
-      ).toBe(true);
+      const child = entries.find((entry) =>
+        entry.origin === "derived" &&
+        entry.path.join("/") === "retained/kept"
+      );
+      expect(child).toBeDefined();
+      expect(child!.label.integrity ?? []).toEqual([]);
+      const parent = entries.find((entry) =>
+        entry.origin === "derived" && entry.path.join("/") === "retained"
+      );
+      expect(parent).toBeDefined();
+      expect(parent!.label.integrity).toEqual([certified]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

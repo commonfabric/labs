@@ -37,6 +37,7 @@ describe("instantiate-pattern integration test", () => {
     spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
       space: spaceDid,
+      cfcFlowLabels: "persist",
       apiUrl: new URL(API_URL),
       identity: identity,
     });

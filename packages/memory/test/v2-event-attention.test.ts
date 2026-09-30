@@ -132,6 +132,7 @@ describe("event attention resolution", () => {
               stream,
               payload: { answer: "captured", nested: [1, 2] },
               runtimeInjectedEventKeys: ["detail"],
+              runtimeReferenceContext: "opaque-captured-reference-context",
               rendererTrusted: true,
             }],
           }],
@@ -403,6 +404,12 @@ describe("event attention resolution", () => {
     expect(retry.payload).toEqual(original.payload);
     expect(retry.runtimeInjectedEventKeys).toEqual(
       original.runtimeInjectedEventKeys,
+    );
+    expect(retry.runtimeReferenceContext).toBe(
+      "opaque-captured-reference-context",
+    );
+    expect(retry.runtimeReferenceContext).toBe(
+      original.runtimeReferenceContext,
     );
     expect(retry.rendererTrusted).toBe(true);
     expect(retry.retryOf).toBe(original.eventId);

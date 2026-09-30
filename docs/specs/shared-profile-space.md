@@ -241,6 +241,36 @@ type SetProfileInboxEvent = {
 };
 ```
 
+`ProfileHomeOutput` declares the producer's owner-protected fields and mutation
+streams. `BackwardsCompatibleProfile` retains those field policies, defaults,
+and item-level verified-identity integrity requirements while making supported
+optional mutation streams optional. A consumer requesting that full view also
+requests its integrity checks. The profile's stored policy remains authoritative
+for edits, including edits through a reference held in another space.
+
+Creation and selection use `ProfileLink` with the shared `ProfileReferenceValue`
+projection (`$NAME`). Home's published roster, default selection, and MRU list
+expose `ProfileDisplayValue` (`$NAME`, `name`, and `avatar`). Their reference
+slots retain their authorized-writer and trusted-UI policies. Forwarding these
+references does not redeclare the producing profile's field policies or assert
+its verified identities. Consumers that read identity assertions use the full
+integrity-bearing view and verify those assertions at that boundary.
+
+The profile embed wishes for plain `name`, `avatar`, and `bio` values plus the
+profile's exported mutation streams. Its published wish result does not carry
+the producer's field write declarations. `bio` defaults to an empty string and
+`setBio` is optional for supported older profiles; `setName` and `setAvatar`
+remain required. Edits dispatch through those capabilities, and the profile's
+stored owner and authorized-writer policies govern the resulting writes.
+
+The initial name feeds a named writable cell. The compiler preserves the
+constructor's authored owner and authorized-writer policy on the generated
+lift's reference result. Trusted initialization records the constructor's policy
+with its default value and creates the protected reference to it. Later edits to
+the name cell and replacements of that reference require the profile's `setName`
+stream. Initializing either document still enforces its integrity floor and
+confidentiality ceiling.
+
 `avatar` starts as a string. The first implementation can use a URL, data URL,
 or emoji-like text. Binary/blob avatar upload is out of scope.
 

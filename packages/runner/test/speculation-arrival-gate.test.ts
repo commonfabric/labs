@@ -373,16 +373,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = aliceAgain.edit();
       authoritative.withTx(tx).set("echo:server" as never);
       authoritativeSlot.withTx(tx).set(
-        {
-          "/": {
-            "link@1": {
-              id: echoDocId,
-              overwrite: "redirect",
-              path: [],
-              scope: "user",
-            },
-          },
-        } as never,
+        authoritative.withTx(tx).getAsWriteRedirectLink() as never,
       );
       expect((await tx.commit()).error).toBeUndefined();
     }
@@ -679,16 +670,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = aliceAgain.edit();
       authoritative.withTx(tx).set("echo:server" as never);
       authoritativeSlot.withTx(tx).set(
-        {
-          "/": {
-            "link@1": {
-              id: echoDocId,
-              overwrite: "redirect",
-              path: [],
-              scope: "user",
-            },
-          },
-        } as never,
+        authoritative.withTx(tx).getAsWriteRedirectLink() as never,
       );
       expect((await tx.commit()).error).toBeUndefined();
     }

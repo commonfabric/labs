@@ -183,7 +183,13 @@ the source. A trusted compiler/verifier first proves that the source closure
 and exported symbol lower to that manifest; digest verification alone proves
 only copied-byte integrity. At label creation the subject is bound. Before any
 space commits a persisted reference, it atomically stores or confirms a
-verified local copy of the small manifest keyed by `policyDigest`.
+verified local copy of the small manifest keyed by `policyDigest`. Fresh copies
+store the manifest inline. The trusted metadata reader also reconstructs
+factored copies through the canonical schema traversal and accepts them only
+after verifying the complete advertised digest, module identity, and symbol.
+Every traversed document remains an authorization read bound to the commit;
+malformed existing copies cannot be overwritten as though they were absent.
+This metadata traversal grants no runtime reference acquisition.
 
 Under cross-space label-metadata protection, `Policy.subject` may be represented
 by a self-describing `{ digestOf: <hash> }` field commitment rather than

@@ -1,6 +1,15 @@
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
+import {
+  cfcReferenceConfidentialityForView,
+  cfcReferenceSelectionWitnessesForView,
+  joinCfcReferenceConfidentiality,
+  joinCfcReferenceSelectionWitnesses,
+  withCfcReferenceConfidentiality,
+} from "./reference-provenance.ts";
+
+import { carryImmutableReferenceTables } from "./immutable-reference.ts";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
@@ -158,7 +167,20 @@ export const redactCaveatSourcesForDisplay = (
   view: CfcLabelView,
 ): CfcLabelView => ({
   version: 1,
-  entries: view.entries.map((entry) => {
+  // A display view crosses structured-clone boundaries. Project retained
+  // acquisition restrictions onto the displayed content so class-aware v1
+  // consumers enforce them without access to the runtime's private carrier.
+  entries: [
+    ...view.entries,
+    ...(cfcReferenceConfidentialityForView(view).length > 0
+      ? [{
+        path: [],
+        label: {
+          confidentiality: [...cfcReferenceConfidentialityForView(view)],
+        },
+      }]
+      : []),
+  ].map((entry: CfcLabelViewEntry) => {
     const label: IFCLabel = {};
     for (const key of LABEL_KEYS) {
       const value = entry.label[key];
@@ -237,10 +259,12 @@ export const mergeLabel = (
  * view keeps the origins of every view it was built from, including one whose
  * entries a rebase or merge dropped, which can only add a place to look.
  *
- * Runtime-only, and deliberately outside the view's data: it never enters a
- * view's hash, equality or serialized form, so a view that crosses a worker
- * boundary or a persisted link arrives without it and names no space. Keyed by
- * the view object and carried forward by {@link cloneCfcLabelView},
+ * Deliberately outside the view's data: it never enters a view's hash,
+ * equality or serialized form. An ordinary worker or persisted-link view
+ * arrives without origins and names no space. Authenticated Runtime event
+ * receipts carry origins separately in their reference acquisitions and
+ * restore them only after validating the receipt. Keyed by the view object
+ * and carried forward by {@link cloneCfcLabelView},
  * {@link mergeCfcLabelViews} and {@link rebaseCfcLabelView}, which build every
  * derived view; a site that builds one another way passes the origins on with
  * {@link withCfcLabelViewOrigins}. The lists are frozen and shared between
@@ -315,7 +339,14 @@ export const cloneCfcLabelView = (
     })).filter((entry) => hasCfcLabelValues(entry.label)),
   );
   return carryOrigins(
-    entries.length > 0 ? { version: 1, entries } : undefined,
+    carryImmutableReferenceTables(
+      [view],
+      withCfcReferenceConfidentiality(
+        entries.length > 0 ? { version: 1, entries } : undefined,
+        cfcReferenceConfidentialityForView(view),
+        cfcReferenceSelectionWitnessesForView(view),
+      ),
+    ),
     [view],
   );
 };
@@ -347,7 +378,14 @@ export const mergeCfcLabelViews = (
     [...byKey.values()].filter((entry) => hasCfcLabelValues(entry.label)),
   );
   return carryOrigins(
-    entries.length > 0 ? { version: 1, entries } : undefined,
+    carryImmutableReferenceTables(
+      views,
+      withCfcReferenceConfidentiality(
+        entries.length > 0 ? { version: 1, entries } : undefined,
+        joinCfcReferenceConfidentiality(views),
+        joinCfcReferenceSelectionWitnesses(views),
+      ),
+    ),
     views,
   );
 };
@@ -398,9 +436,16 @@ export const rebaseCfcLabelView = (
   }
 
   return carryOrigins(
-    mergeCfcLabelViews([
-      entries.length > 0 ? { version: 1, entries } : undefined,
-    ]),
+    carryImmutableReferenceTables(
+      [view],
+      withCfcReferenceConfidentiality(
+        mergeCfcLabelViews([
+          entries.length > 0 ? { version: 1, entries } : undefined,
+        ]),
+        cfcReferenceConfidentialityForView(view),
+        cfcReferenceSelectionWitnessesForView(view),
+      ),
+    ),
     [view],
   );
 };

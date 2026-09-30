@@ -60,6 +60,7 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+import { linkRefPayload } from "@commonfabric/runner/shared";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
@@ -92,7 +93,7 @@ import {
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
-import { buildProcessor } from "./build-processor.ts";
+import { acquireCellRef, buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
 const cfcSigner = await Identity.fromPassphrase(
@@ -1552,190 +1553,6 @@ describe("runtime-processor", () => {
       expect(result.piece.cell.schema).toBeUndefined();
     });
 
-    it("returns a cell inside a piece under the piece's result schema at its path when its links carry none, syncing the piece's root alone", async () => {
-      const targetRef: CellRef = {
-        id: "of:fid1-parent-piece" as CellRef["id"],
-        space,
-        scope: "space",
-        path: ["activityTab"],
-      };
-      const landingRef: CellRef = { ...targetRef, path: [] };
-      const slugRef: CellRef = {
-        id: "of:fid1-slug-doc" as CellRef["id"],
-        space,
-        scope: "space",
-        path: [],
-      };
-      const activityTabSchema = {
-        type: "object",
-        properties: {
-          "$NAME": { type: "string" },
-          "$UI": { type: "object" },
-        },
-        required: ["$NAME", "$UI"],
-      };
-      const resultSchema = {
-        type: "object",
-        properties: {
-          activityTab: activityTabSchema,
-          other: { type: "string" },
-        },
-      };
-      let landingSynced = false;
-      const landingCell = mockCell(landingRef, {
-        patternIdentity: { identity: "pattern-identity", symbol: "default" },
-        resultSchema,
-        onSync: () => {
-          landingSynced = true;
-        },
-      });
-      let targetSynced = false;
-      const targetCell = mockCell(targetRef, {
-        onSync: () => {
-          targetSynced = true;
-        },
-      });
-      const slugCell = mockCell(slugRef, { raw: redirectRaw(targetRef) });
-      const pieces = {
-        getSpace: () => space,
-        getPieceCell: () => {
-          throw new Error(
-            "nested output-cell slug redirects should not load as pieces",
-          );
-        },
-      };
-      const processor = buildProcessor({
-        runtime: runtimeLandingIn(
-          slugCell,
-          { ref: landingRef, cell: landingCell },
-          targetCell,
-        ),
-        cc: pieces,
-        space,
-      });
-
-      const result = await processor.handlePieceGet({
-        type: RequestType.PieceGet,
-        pieceId: fid("slug-doc"),
-        space,
-        runIt: true,
-      });
-
-      expect(landingSynced).toBe(true);
-      expect(targetSynced).toBe(false);
-      expect(result.piece.cell).toMatchObject({
-        ...targetRef,
-        schema: activityTabSchema,
-      });
-    });
-
-    it("returns a cell inside a piece under the schema the links along its path carry, over the result schema at that path", async () => {
-      // What a stored link on the path says it is read under wins, as it
-      // does for a piece cell `getPieceCell()` resolves: the result schema
-      // is what the piece declared, and the link is what is there.
-      const targetRef: CellRef = {
-        id: "of:fid1-parent-piece" as CellRef["id"],
-        space,
-        scope: "space",
-        path: ["activityTab"],
-      };
-      const landingRef: CellRef = { ...targetRef, path: [] };
-      const slugRef: CellRef = {
-        id: "of:fid1-slug-doc" as CellRef["id"],
-        space,
-        scope: "space",
-        path: [],
-      };
-      const linkedSchema: NonNullable<CellRef["schema"]> = {
-        type: "object",
-        properties: { entries: { type: "array" } },
-      };
-      const landingCell = mockCell(landingRef, {
-        patternIdentity: { identity: "pattern-identity", symbol: "default" },
-        resultSchema: {
-          type: "object",
-          properties: { activityTab: { type: "object" } },
-        },
-        linkedSchema,
-      });
-      const targetCell = mockCell(targetRef);
-      const slugCell = mockCell(slugRef, { raw: redirectRaw(targetRef) });
-      const processor = buildProcessor({
-        runtime: runtimeLandingIn(
-          slugCell,
-          { ref: landingRef, cell: landingCell },
-          targetCell,
-        ),
-        cc: { getSpace: () => space },
-        space,
-      });
-
-      const result = await processor.handlePieceGet({
-        type: RequestType.PieceGet,
-        pieceId: fid("slug-doc"),
-        space,
-        runIt: true,
-      });
-
-      expect(result.piece.cell).toMatchObject({
-        ...targetRef,
-        schema: linkedSchema,
-      });
-    });
-
-    it("returns a cell inside a piece under the schema the redirect carries when the links along its path carry none", async () => {
-      const redirectSchema: NonNullable<CellRef["schema"]> = {
-        type: "object",
-        properties: { entries: { type: "array" } },
-      };
-      const targetRef: CellRef = {
-        id: "of:fid1-parent-piece" as CellRef["id"],
-        space,
-        scope: "space",
-        path: ["activityTab"],
-        schema: redirectSchema,
-      };
-      const landingRef: CellRef = {
-        id: targetRef.id,
-        space,
-        scope: "space",
-        path: [],
-      };
-      const slugRef: CellRef = {
-        id: "of:fid1-slug-doc" as CellRef["id"],
-        space,
-        scope: "space",
-        path: [],
-      };
-      const landingCell = mockCell(landingRef, {
-        patternIdentity: { identity: "pattern-identity", symbol: "default" },
-        resultSchema: {
-          type: "object",
-          properties: { activityTab: { type: "object" } },
-        },
-      });
-      const targetCell = mockCell(targetRef);
-      const slugCell = mockCell(slugRef, { raw: redirectRaw(targetRef) });
-      const processor = buildProcessor({
-        runtime: runtimeLandingIn(
-          slugCell,
-          { ref: landingRef, cell: landingCell },
-          targetCell,
-        ),
-        cc: { getSpace: () => space },
-        space,
-      });
-
-      const result = await processor.handlePieceGet({
-        type: RequestType.PieceGet,
-        pieceId: fid("slug-doc"),
-        space,
-        runIt: true,
-      });
-
-      expect(result.piece.cell).toMatchObject(targetRef);
-    });
-
     it("loads slug redirects to piece cells through the pieces controller", async () => {
       const pieceRef: CellRef = {
         id: "of:fid1-piece" as CellRef["id"],
@@ -2130,11 +1947,20 @@ describe("runtime-processor", () => {
 
         const { cell, done } = await withCell();
         try {
-          const result = toConsoleDebugValue(cell.get()) as Record<
-            string,
-            unknown
-          >;
-          expect(result.self).toEqual({ "/circle": 0 });
+          // The stored self-reference carries its own reference endorsement.
+          // Its first view differs from the directly acquired root, and its
+          // subsequent self-reference shares that acquired view.
+          const root = cell.get() as Record<string, unknown>;
+          const acquired = root.self as Record<string, unknown>;
+          expect(acquired).not.toBe(root);
+          expect(acquired.self).toBe(acquired);
+          const result = toConsoleDebugValue(root) as Record<string, unknown>;
+          expect(result.self).toEqual({
+            __ref: expect.stringMatching(CELL_LINK),
+            name: "test",
+            count: 42,
+            self: { "/circle": 1 },
+          });
         } finally {
           await done();
         }
@@ -2201,14 +2027,24 @@ describe("runtime-processor", () => {
               __ref: expect.stringMatching(CELL_LINK),
               name: "test",
               count: 42,
-              self: { "/circle": 1 },
+              self: {
+                __ref: expect.stringMatching(CELL_LINK),
+                name: "test",
+                count: 42,
+                self: { "/circle": 2 },
+              },
             },
             b: {
               c: {
                 __ref: expect.stringMatching(CELL_LINK),
                 name: "test",
                 count: 42,
-                self: { "/circle": 2 },
+                self: {
+                  __ref: expect.stringMatching(CELL_LINK),
+                  name: "test",
+                  count: 42,
+                  self: { "/circle": 3 },
+                },
               },
             },
           });
@@ -3913,13 +3749,13 @@ describe("runtime-processor", () => {
 
         const response = await processor.handleCellGetCfcLabel({
           type: RequestType.CellGetCfcLabel,
-          cell: {
+          cell: acquireCellRef(processor, {
             id: nestedId as CellRef["id"],
             space: cfcSigner.did() as CellRef["space"],
             scope: "space",
             path: ["piece"],
             schema: pieceSchema,
-          },
+          }),
         });
         expect(response.cfcLabel).toBeDefined();
         expect(response.cfcLabel?.version).toBe(1);
@@ -4061,13 +3897,13 @@ describe("runtime-processor", () => {
 
         const response = await processor.handleCellGetCfcLabel({
           type: RequestType.CellGetCfcLabel,
-          cell: {
+          cell: acquireCellRef(processor, {
             id: nestedId as CellRef["id"],
             space: cfcSigner.did() as CellRef["space"],
             scope: "space",
             path: ["piece"],
             schema: { $ref: "#/$defs/TrustedMessage" },
-          },
+          }),
         });
         expect(response.cfcLabel).toEqual({
           version: 1,
@@ -4138,6 +3974,11 @@ describe("runtime-processor", () => {
         processor: buildProcessor({
           runtime: {
             edit: () => tx,
+            editWithRetry: (action: (candidate: unknown) => object) => {
+              action(tx);
+              prepared = true;
+              return tx.commit();
+            },
             prepareTxForCommit: (candidate: unknown) => {
               expect(candidate).toBe(tx);
               prepared = true;
@@ -4327,6 +4168,72 @@ describe("runtime-processor", () => {
   });
 
   describe("direct cell appends", () => {
+    it("retains both concurrent appends when reference metadata conflicts", async () => {
+      const server = new MemoryV2Server.Server({
+        authorizeSessionOpen: () => cfcSigner.did(),
+        sessionOpenAuth: { audience: testSessionOpenAudience },
+      });
+      const runtimes = [0, 1].map(() => {
+        const storageManager = new SharedV2StorageManager({
+          as: cfcSigner,
+          memoryHost: new URL("memory://"),
+        }, server);
+        return new Runtime({
+          apiUrl: new URL("http://localhost/"),
+          storageManager,
+          cfcFlowLabels: "persist",
+        });
+      });
+      const schema = {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { optionId: { type: "string" } },
+          required: ["optionId"],
+        },
+      } as const;
+      const cells = runtimes.map((runtime) =>
+        runtime.getCell(cfcSigner.did(), "concurrent-client-appends", schema)
+      );
+      try {
+        expect(
+          (await runtimes[0].editWithRetry((tx) => {
+            cells[0].withTx(tx).set([]);
+          })).error,
+        ).toBeUndefined();
+        await cells[1].sync();
+        await cells[1].pull();
+
+        const outcomes = await Promise.allSettled(runtimes.map((runtime, i) => {
+          const processor = buildProcessor({ runtime });
+          const { cell } = processor.handleGetCell({
+            type: RequestType.GetCell,
+            space: cfcSigner.did(),
+            cause: "concurrent-client-appends",
+            schema,
+          });
+          return processor.handleCellPush({
+            type: RequestType.CellPush,
+            cell,
+            values: [{ optionId: i === 0 ? "library" : "studio" }],
+            awaitCommit: true,
+          });
+        }));
+        expect(outcomes.map((outcome) => outcome.status))
+          .toEqual(["fulfilled", "fulfilled"]);
+        await cells[0].pull();
+        expect(cells[0].get()?.map((entry) => entry.optionId).sort())
+          .toEqual(["library", "studio"]);
+        expect(cells[0].key(0).resolveAsCell().getAsNormalizedFullLink().id)
+          .not.toBe(
+            cells[0].key(1).resolveAsCell().getAsNormalizedFullLink().id,
+          );
+      } finally {
+        for (const runtime of runtimes) await runtime.dispose();
+        await server.close();
+      }
+    });
+
     it("keeps object members distinct across independent callers", async () => {
       const signer = await Identity.fromPassphrase(
         `direct-cell-push-${crypto.randomUUID()}`,
@@ -4368,7 +4275,7 @@ describe("runtime-processor", () => {
           try {
             await processor.handleCellPush({
               type: RequestType.CellPush,
-              cell: createCellRef(cell),
+              cell: acquireCellRef(processor, createCellRef(cell)),
               values: [value],
               awaitCommit: true,
             });
@@ -4475,7 +4382,7 @@ describe("runtime-processor", () => {
 
         const selected = await processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(readerCell),
+          cell: acquireCellRef(processor, createCellRef(readerCell)),
           value: { winner: "default" },
         });
         await readerCell.pull();
@@ -4512,7 +4419,7 @@ describe("runtime-processor", () => {
         );
         await cell.sync();
         const processor = buildProcessor({ runtime });
-        const ref = createCellRef(cell);
+        const ref = acquireCellRef(processor, createCellRef(cell));
 
         const [first, second] = await Promise.all([
           processor.handleCellInitialize({
@@ -4589,7 +4496,7 @@ describe("runtime-processor", () => {
 
           await expect(processor.handleCellInitialize({
             type: RequestType.CellInitialize,
-            cell: createCellRef(cell),
+            cell: acquireCellRef(processor, createCellRef(cell)),
             value: initial,
           })).resolves.toEqual({ value: initial });
           expect(cell.asSchema(undefined).getRaw()).not.toBeUndefined();
@@ -4664,7 +4571,7 @@ describe("runtime-processor", () => {
         const processor = buildProcessor({ runtime });
         await expect(processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(alias),
+          cell: acquireCellRef(processor, createCellRef(alias)),
           value: initial,
         })).resolves.toEqual({ value: initial });
         expect(target.asSchema(undefined).getRaw()).not.toBeUndefined();
@@ -4724,7 +4631,7 @@ describe("runtime-processor", () => {
           const capped = alias.asSchema<{ n: number }>(schema);
           await expect(processor.handleCellInitialize({
             type: RequestType.CellInitialize,
-            cell: createCellRef(capped),
+            cell: acquireCellRef(processor, createCellRef(capped)),
             value: { n: 1 },
           })).rejects.toThrow("Cannot write to read-only address");
           expect(target.asSchema(undefined).getRaw()).toEqual(existing);
@@ -4763,7 +4670,7 @@ describe("runtime-processor", () => {
 
         await expect(processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(projected),
+          cell: acquireCellRef(processor, createCellRef(projected)),
           value: { n: 1 },
         })).rejects.toThrow("incompatible with its schema");
         expect(raw.get()).toBe(42);
@@ -4794,17 +4701,31 @@ describe("runtime-processor", () => {
         );
         await target.sync();
         const processor = buildProcessor({ runtime });
-        const linkedRef = createCellRef(linked);
+        const linkedRef = acquireCellRef(processor, createCellRef(linked));
 
         const selected = await processor.handleRequest({
           type: RequestType.CellInitialize,
-          cell: createCellRef(target),
+          cell: acquireCellRef(processor, createCellRef(target)),
           value: { linked: linkedRef },
         }) as { value: unknown };
 
-        expect(selected.value).toEqual({
-          linked: cellRefToSigilLink(linkedRef),
+        const returned = (selected.value as { linked: SigilLink }).linked;
+        expect(parseLink(returned)).toMatchObject({
+          id: linkedRef.id,
+          space: linkedRef.space,
+          scope: linkedRef.scope,
+          path: linkedRef.path,
         });
+        const token = (linkRefPayload(returned) as {
+          cfcReferenceToken?: string;
+        }).cfcReferenceToken;
+        expect(token).toBeDefined();
+        expect(
+          processor.handleCellGet({
+            type: RequestType.CellGet,
+            cell: { ...linkedRef, cfcReferenceToken: token },
+          }).value,
+        ).toBeUndefined();
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -6330,7 +6251,7 @@ describe("runtime-processor", () => {
         state.handleVDomMount({
           type: RequestType.VDomMount,
           mountId: 1,
-          cell: cell.getAsNormalizedFullLink() as unknown as CellRef,
+          cell: acquireCellRef(state, createCellRef(cell)),
         });
         const mount = state.accessForTestingOnly.vdomMounts.get("0 1");
         expect(mount).toBeDefined();
@@ -7044,13 +6965,13 @@ describe("runtime-processor", () => {
         const exec = (id: number) =>
           processor.handleSqliteExec({
             type: RequestType.SqliteExec,
-            cell: createCellRef(database),
+            cell: acquireCellRef(processor, createCellRef(database)),
             sql: "INSERT INTO documents (id, target_cf_link) VALUES (?, ?)",
             params: {
               kind: "positional",
               values: [
                 id,
-                createCellRef(secret),
+                acquireCellRef(processor, createCellRef(secret)),
               ],
             },
           });
@@ -7332,7 +7253,7 @@ describe("runtime-processor", () => {
         expect(commit.ok !== undefined).toBe(true);
 
         const processor = buildProcessor({ runtime });
-        const link = cell.getAsNormalizedFullLink() as unknown as CellRef;
+        const link = acquireCellRef(processor, createCellRef(cell));
         return { runtime, processor, link };
       }
 
@@ -7351,7 +7272,7 @@ describe("runtime-processor", () => {
         const mounting = processor.handleVDomMount({
           type: RequestType.VDomMount,
           mountId: 37,
-          cell: link,
+          cell: acquireCellRef(processor, link),
         }, client);
         try {
           expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);

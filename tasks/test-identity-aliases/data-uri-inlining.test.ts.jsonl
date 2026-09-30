@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"data URI inlining > diffAndUpdate with data URI inlining > should surface the storage error for a foreign-media-type data URI"},"to":{"k":"unit","s":"runner","n":"data URI inlining > diffAndUpdate with data URI inlining > stores a foreign-media-type reference and reports its media error on dereference"}}

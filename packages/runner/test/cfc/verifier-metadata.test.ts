@@ -164,7 +164,9 @@ describe("prepareBoundaryCommit()", () => {
         );
       expect(intermediateWrites.length).toBe(1);
       const result = await tx.commit();
-      expect(result.error?.message).toContain("maxConfidentiality");
+      expect(result.error?.message).toContain(
+        "linked content evidence is unavailable",
+      );
     } finally {
       await runtime.dispose({ closeStorage: false });
       await storageManager.close();
@@ -206,7 +208,7 @@ describe("prepareBoundaryCommit()", () => {
         ),
       ).toBe(true);
       expect((await tx.commit()).error?.message).toContain(
-        "maxConfidentiality",
+        "linked content evidence is unavailable",
       );
     } finally {
       await runtime.dispose({ closeStorage: false });
@@ -256,7 +258,7 @@ describe("prepareBoundaryCommit()", () => {
         ),
       ).toEqual([]);
       expect((await tx.commit()).error?.message).toContain(
-        "maxConfidentiality",
+        "linked content evidence is unavailable",
       );
     } finally {
       await runtime.dispose({ closeStorage: false });

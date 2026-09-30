@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
@@ -26,7 +27,7 @@ const signer = await Identity.fromPassphrase("runner-cfc-write-floor");
 // Epic D3 (§8.12.4.1 / SC-18): the write-side `requiredIntegrity` FLOOR. The
 // read-side gate (verifyInputRequirements) quantifies over consumed reads; the
 // floor tests the WRITTEN VALUE's integrity — schema `addIntegrity` mints,
-// carried link-view integrity, the flow hereditary meet — against the declared
+// current linked-content integrity, the flow hereditary meet — against the declared
 // floor. Dial `cfcWriteFloor: off | observe | enforce`. Each case names the
 // rung it drives, so the arm under test is the one that decides it.
 const ADMIN_ATOM = "admin-approved";
@@ -179,11 +180,16 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
   });
 
   it("credits a nested link floor beside a reader the link's label view carries", async () => {
-    // The carried view binds its reader placeholder at `reader`; the floor
+    // Legacy mode accepts serialized views. The carried view binds its
+    // reader placeholder at `reader`; the floor
     // path `approved` takes its credit from the source's own label there.
 
     const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
     try {
       await seedLabelMap(runtime, "reader-source", {
         reader: "r",
@@ -245,10 +251,15 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
+  // Serialized reader placeholders exercise the legacy derivation path.
   for (const storedReader of [true, false]) {
     it(`${storedReader ? "binds" : "refuses"} a carried reader through an object back-reference ${storedReader ? "with" : "without"} an authoritative reader`, async () => {
       const storageManager = StorageManager.emulate({ as: signer });
-      const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcWriteFloor: "enforce",
+        cfcFlowLabels: "off",
+      });
       try {
         await seedLabelMap(runtime, "reader-cycle", { reader: "r" }, [
           { path: [], label: { integrity: ["object-proof"] } },
@@ -313,11 +324,16 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
   }
 
   it("fails a nested link floor under a link whose label view carries a reader the source does not store", async () => {
-    // The link itself cannot be derived, so the floor credits nothing from it,
+    // In legacy mode the serialized link cannot be derived, so the floor
+    // credits nothing from it,
     // in agreement with the persisted labels it would have left.
 
     const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
     try {
       await seedLabeledDoc(
         runtime,
@@ -644,7 +660,7 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
-  it("a link whose source carries the floor atom passes (carried link-view integrity)", async () => {
+  it("accepts a link whose current target carries the floor atom", async () => {
     // The D2 by-reference contract on the write side: a floor-protected slot
     // accepts a REFERENCE to a value that genuinely carries the endorsement.
     const storageManager = StorageManager.emulate({ as: signer });
@@ -744,12 +760,10 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
     }
   });
 
-  it("a wildcard (*) floor entry is not enforced by the write floor (read-gate only, v1)", async () => {
+  it("rejects an unendorsed value at a wildcard floor", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
     try {
-      // Array items produce a `*` floor entry path (walkIfcSchema), which the
-      // write floor skips in v1 — the per-element read gate still covers it.
       const schema = {
         type: "object",
         properties: {
@@ -772,26 +786,79 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       sink.set({ items: ["unendorsed"] });
       tx.prepareCfc();
       const result = await tx.commit();
-      // The wildcard floor is skipped by verifyWriteFloor (v1 scope), so no
-      // write-floor rejection.
       expect(
         String((result.error as Error | undefined)?.message ?? ""),
-      ).not.toContain("write floor failed");
+      ).toContain("write floor failed at /items/0");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
+  it("checks wildcard floors on a whole-document replacement", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "persist",
+    });
+    try {
+      const schema = {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: { type: "string", ifc: { requiredIntegrity: [ADMIN_ATOM] } },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const initial = runtime.edit();
+      const sink = runtime.getCell(
+        signer.did(),
+        "wf-document-root",
+        schema,
+        initial,
+      );
+      sink.set({ items: [] });
+      expect((await initial.commit()).error).toBeUndefined();
+      const tx = runtime.edit();
+      const address = { ...sink.getAsNormalizedFullLink(), path: [] };
+      const document = tx.readOrThrow(address) as Record<string, FabricValue>;
+      tx.writeOrThrow(address, {
+        ...document,
+        value: { items: ["unendorsed"] },
+      });
+      const declared = internSchema(schema, true);
+      tx.recordCfcWritePolicyInput({
+        kind: "schema",
+        target: address,
+        schemaHash: declared.taggedHashString,
+        schema: declared.schema,
+      });
+      tx.prepareCfc();
+      const result = await tx.commit();
+      expect(String(result.error?.message ?? "")).toContain(
+        "write floor failed at /items/0",
+      );
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
   it("a link whose source is not CFC-relevant still fails the floor", async () => {
-    // The write at /out is a link whose source carries no stored metadata and
+    // In legacy mode the write at /out is a link with no stored metadata and
     // no schema, so nothing marks the link CFC-relevant and no link-write
     // policy input is recorded for it. The floor measures the path with no
     // link contribution at all, crediting only the transaction's flow
-    // integrity, which is empty at the default `cfcFlowLabels` rung, and
+    // integrity, which is empty with `cfcFlowLabels: "off"`, and
     // refuses there.
     const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
     try {
       const tx = runtime.edit();
       const src = runtime.getCell(

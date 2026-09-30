@@ -37,6 +37,11 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectForeignStaleInstances } from "../src/executor/space-server.ts";
+import { servedCommitDestination } from "./support/served-commits.ts";
+import {
+  ExecutionLeaseCycle,
+  executionLeaseHolder,
+} from "@commonfabric/memory/v2/execution-lease";
 import {
   stampWaveRunContext,
   type WaveCommitSink,
@@ -1502,6 +1507,19 @@ describe("Phase 5 cross-space serving", () => {
       servingPosture: true,
       experimental: { serverExecution: true },
     });
+    const engine = await server.engineForSpace(homeSpace);
+    const lease = new ExecutionLeaseCycle({
+      engine,
+      space: homeSpace,
+      holder: executionLeaseHolder(serviceSigner.did()),
+    });
+    expect(lease.acquire()).toBe(true);
+    const destination = servedCommitDestination(
+      serving,
+      homeSpace,
+      engine,
+      lease,
+    );
 
     // Seed BOTH users' home spaces: a defaultPattern link with no
     // profiles, so a #profile wish falls to the create surface.
@@ -1623,6 +1641,7 @@ describe("Phase 5 cross-space serving", () => {
         sessionId: string,
         actionId: string,
       ): Promise<Cell<unknown>> => {
+        serving.installSealDestination(destination);
         const tx = serving.edit();
         stampWaveRunContext(tx, {
           actionId,
@@ -1637,6 +1656,7 @@ describe("Phase 5 cross-space serving", () => {
         const sidecar = state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();
         const committed = await tx.commit();
+        serving.clearSealDestination();
         expect(committed.error).toBeUndefined();
         return sidecar;
       };
@@ -1683,6 +1703,7 @@ describe("Phase 5 cross-space serving", () => {
       await serving.idle();
       await serving.dispose();
       await manager.close();
+      lease.release();
     }
   });
 
@@ -1701,7 +1722,7 @@ describe("Phase 5 cross-space serving", () => {
     // Harness: the F2 test's direct drive above (a serving runtime, the
     // wish node run per demander with stamped txs) plus the run-supply
     // seam `executor-run-supply.test.ts` pins the nested / list-builtin
-    // chains with — a pass-through seal destination whose stamper records
+    // chains with — a seal destination whose stamper records
     // every scheduler run's demanded identity and whose demander resolver
     // knows ONLY the outer (wish parent) root. Real clock: the sidecar's
     // fetch → compile → run continuation must actually land. Derivations
@@ -1722,6 +1743,19 @@ describe("Phase 5 cross-space serving", () => {
       servingPosture: true,
       experimental: { serverExecution: true },
     });
+    const engine = await server.engineForSpace(homeSpace);
+    const lease = new ExecutionLeaseCycle({
+      engine,
+      space: homeSpace,
+      holder: executionLeaseHolder(serviceSigner.did()),
+    });
+    expect(lease.acquire()).toBe(true);
+    const destination = servedCommitDestination(
+      serving,
+      homeSpace,
+      engine,
+      lease,
+    );
 
     // Both users' home spaces: a defaultPattern link with no profiles, so
     // a #profile wish falls to the create surface (the sidecar).
@@ -1825,7 +1859,14 @@ describe("Phase 5 cross-space serving", () => {
       const stamped: ServerRunInfo[] = [];
       const resolverQueries: string[][] = [];
       serving.installSealDestination(
-        { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+        {
+          seal: (tx: IExtendedStorageTransaction) =>
+            // Unstamped setup uses the runtime's own storage session. Demanded
+            // runs carry an instance identity into both reads and wave writes.
+            tx.tx.scopeKeyIdentity === undefined
+              ? tx.tx.commit()
+              : destination.seal(tx),
+        },
         {
           runStamper: (tx, info) => {
             stamped.push(info);
@@ -1959,6 +2000,7 @@ describe("Phase 5 cross-space serving", () => {
       serving.clearSealDestination();
       await serving.dispose();
       await manager.close();
+      lease.release();
     }
   });
 

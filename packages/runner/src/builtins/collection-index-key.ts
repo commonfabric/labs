@@ -8,6 +8,7 @@ import { resolveLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import { UnresolvedInputError } from "../schema-view.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { resolveCellReference } from "./resolve-cell-reference.ts";
 import { cellIdentityKey } from "./scope-policy.ts";
 
 /** A typed routing key, suitable for inclusion in an owning index's cause. */
@@ -41,14 +42,15 @@ export function resolveCollectionKey(
     return { key, identity: { kind: "number", value: key } };
   }
   if (isCell(value)) {
-    const link = resolveLink(runtime, tx, value.getAsNormalizedFullLink());
+    const reference = value.withTx(tx);
+    const link = resolveLink(runtime, tx, reference.getAsNormalizedFullLink());
     if (link.pendingHopDoc) {
       tx.readValueOrThrow(link);
       const refusal = new UnresolvedInputError(link);
       tx.noteSchemaRefusal(refusal);
       throw refusal;
     }
-    const key = runtime.getCellFromLink<unknown>(link, undefined, tx);
+    const key = resolveCellReference(runtime, tx, reference);
     return {
       key,
       identity: { kind: "cell", value: cellIdentityKey(key).dedupKey },

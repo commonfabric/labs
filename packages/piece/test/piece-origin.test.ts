@@ -1323,18 +1323,12 @@ describe("reading a piece's source state", () => {
     expect(pulls).toBe(1);
     expect(cells.size).toBe(2);
 
-    const stream = patchableCell(
-      runtime.getImmutableCell(controller.getSpace(), "event"),
+    const stream = runtime.getImmutableCell(
+      controller.getSpace(),
+      { $stream: true },
     );
-    const streamShape = stream as unknown as { isStream(): boolean };
-    const isStream = streamShape.isStream.bind(streamShape);
-    try {
-      streamShape.isStream = () => true;
-      await expect(preloadCloneValue(stream, undefined, new Map())).rejects
-        .toThrow("piece input containing streams cannot be copied");
-    } finally {
-      streamShape.isStream = isStream;
-    }
+    await expect(preloadCloneValue(stream, undefined, new Map())).rejects
+      .toThrow("piece input containing streams cannot be copied");
   });
 
   it("recreates computed values and streams instead of copying them", async () => {

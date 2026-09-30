@@ -57,6 +57,7 @@ export type OutboxAppendRow = {
    * graph-scaled (protocol.md §7's metadata discipline applies to the
    * carried event too). */
   payload: unknown;
+  runtimeReferenceContext?: string;
 
   /** The ORIGINATING chain actor (events.md §2): absent only for a
    * chain with no acting user (a space-scope derivation's emission). */
@@ -106,12 +107,12 @@ export type PendingOutboxRow = OutboxAppendRow & {
 const INSERT_ROW = `
 INSERT INTO execution_outbox (
   branch, target_space, target_stream, target_stream_link, event_id,
-  payload, acting_principal, acting_session, sessionless_space_scope,
+  payload, runtime_reference_context, acting_principal, acting_session, sessionless_space_scope,
   capability_ref, source_event, created_seq
 )
 VALUES (
   :branch, :target_space, :target_stream, :target_stream_link, :event_id,
-  :payload, :acting_principal, :acting_session, :sessionless_space_scope,
+  :payload, :runtime_reference_context, :acting_principal, :acting_session, :sessionless_space_scope,
   :capability_ref, :source_event, :created_seq
 )
 `;
@@ -144,6 +145,7 @@ export const insertExecutionOutboxRows = (
         : JSON.stringify(row.targetStreamLink),
       event_id: row.eventId,
       payload: JSON.stringify(row.payload ?? null),
+      runtime_reference_context: row.runtimeReferenceContext ?? null,
       acting_principal: row.actingPrincipal ?? null,
       acting_session: row.actingSession ?? null,
       sessionless_space_scope: row.sessionlessSpaceScope === true ? 1 : null,
@@ -168,7 +170,7 @@ export const selectPendingExecutionOutboxRows = (
 ): PendingOutboxRow[] => {
   const rows = engine.database.prepare(`
 SELECT id AS row_id, target_space, target_stream, target_stream_link,
-       event_id, payload, acting_principal, acting_session,
+       event_id, payload, runtime_reference_context, acting_principal, acting_session,
        sessionless_space_scope, capability_ref, source_event, created_seq
 FROM execution_outbox
 WHERE branch = :branch
@@ -180,6 +182,7 @@ ORDER BY id ASC
     target_stream_link: string | null;
     event_id: string;
     payload: string;
+    runtime_reference_context: string | null;
     acting_principal: string | null;
     acting_session: string | null;
     sessionless_space_scope: number | null;
@@ -196,6 +199,9 @@ ORDER BY id ASC
       : { targetStreamLink: JSON.parse(row.target_stream_link) }),
     eventId: row.event_id,
     payload: JSON.parse(row.payload),
+    ...(row.runtime_reference_context === null ? {} : {
+      runtimeReferenceContext: row.runtime_reference_context,
+    }),
     ...(row.acting_principal === null
       ? {}
       : { actingPrincipal: row.acting_principal }),

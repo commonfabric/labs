@@ -83,6 +83,79 @@ describe("memory-v2-wave-promotion", () => {
     });
   }
   for (const order of ["forward", "reverse"] as const) {
+    it(`promotes admitted array patches with ${order} verdict settlement`, async () => {
+      const manager = StorageManager.emulate({ as: signer });
+      const replica = manager.open(signer.did()).replica as SpaceReplica;
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 0,
+        toSeq: 1,
+        removes: [],
+        upserts: [{
+          id,
+          branch: "",
+          seq: 1,
+          doc: { value: { items: ["base"] } },
+        }],
+      }, "pull");
+      const verdicts = [
+        Promise.withResolvers<SealedCommitVerdict>(),
+        Promise.withResolvers<SealedCommitVerdict>(),
+      ];
+      const first = replica.sealNative(
+        {
+          operations: [{
+            op: "patch",
+            id,
+            type: "application/json",
+            patches: [{ op: "replace", path: "/value/items/0", value: "peer" }],
+            value: { value: { items: ["peer"] } },
+          }],
+        },
+        undefined,
+        verdicts[0].promise,
+      );
+      const second = replica.sealNative(
+        {
+          operations: [{
+            op: "patch",
+            id,
+            type: "application/json",
+            patches: [{ op: "add", path: "/value/items/-", value: "tail" }],
+            replayPatches: [{
+              op: "replace",
+              path: "/value/items",
+              value: ["base", "tail"],
+            }],
+            value: { value: { items: ["base", "tail"] } },
+          }],
+        },
+        undefined,
+        verdicts[1].promise,
+      );
+      const sealed = [first, second];
+      try {
+        expect(replica.getDocument(id)?.value).toEqual({
+          items: ["base", "tail"],
+        });
+        for (const index of order === "forward" ? [0, 1] : [1, 0]) {
+          verdicts[index].resolve({ committed: { seq: 10 } });
+          expect(await sealed[index].settled).toEqual({ ok: {} });
+          expect(replica.getDocument(id)?.value).toEqual({
+            items: [
+              order === "forward" && index === 0 ? "base" : "peer",
+              "tail",
+            ],
+          });
+        }
+      } finally {
+        for (const verdict of verdicts) {
+          verdict.resolve({ withdrawn: { message: "test cleanup" } });
+        }
+        await manager.close();
+      }
+    });
+
     it(`applies appends once with ${order} verdict settlement`, async () => {
       const manager = StorageManager.emulate({ as: signer });
       const replica = manager.open(signer.did()).replica as SpaceReplica;

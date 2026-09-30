@@ -1,39 +1,6 @@
-/**
- * OW50 (server-execution v2, verification-coverage.md §3; seat S-J): a crash
- * inside CFC commit-prep must surface as a FAILED COMMIT, never as an escaped
- * throw that kills the action without settling its transaction.
- *
- * The live shape (first-on-ci-gate.md row 3 / on-render-stall-rootcause.md
- * §4a): the wish builtin's /result declaration is
- * `anyOf: [{type:"undefined"}, <requested schema>]`, and when the requested
- * schema carries ifc (the profile consumer view), a SECOND writer's
- * commit-prep against the STORED envelope walks into
- * `mergeCfcSchemaEnvelopes`, whose entry assert
- * (`assertNoDivergentIfcBranches`) THROWS "ifc inside divergent anyOf
- * branches is unsupported at /result". Under ON the serving loop is the first
- * writer and the browser's raw:wish is the second, so the client action dies
- * at prep: the throw escaped `prepareCfc`, the transaction never settled (no
- * rollback callbacks), the scheduler's run promise never resolved, the resolve
- * re-entry threw AGAIN into an unhandled rejection (the logged
- * SES_UNHANDLED_REJECTION), and the wish UI silently never mounted.
- *
- * Contract pinned here (red before the fix):
- *  1. `prepareCfc()` does not throw on a prep crash — it records the crash as
- *     an invalidation reason (fail-closed, same as every modeled refusal).
- *  2. `commit()` then rejects through the standard pre-storage-rejection
- *     path: the caller gets `{error}` naming the crash, and commit callbacks
- *     fire with that error (rollback observers run).
- *  3. The scheduler survives: an action whose commit-prep crashes fails like
- *     any refused commit — the error is observable, no unhandled rejection,
- *     and unrelated actions keep running.
- *
- * The divergence assert itself (cfc/schema-merge.ts) is DELIBERATELY not
- * touched: whether ifc-under-anyOf becomes mergeable is the CFC owner's call
- * (register row OW49). This file pins only detectability — the S-J seat.
- */
-
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
@@ -53,21 +20,6 @@ import type { JSONSchema } from "../src/builder/types.ts";
 const signer = await Identity.fromPassphrase("cfc prepare crash surfacing");
 const space = signer.did();
 
-// Two envelope fixtures, either side of RULING 5 (CFC owner, 2026-08-21):
-//
-// - The live wish shape (mirroring the schema doc the
-//   serving loop persisted, cid:fid1:-3unxof…): ONE ifc-carrying branch
-//   (`result.anyOf[1]`) whose sibling `{type:"undefined"}` is syntactically
-//   type-disjoint — is the ruled ADMITTED shape; its merge pin lives in
-//   cfc-schema-merge.test.ts, and its two-writer clean journey below runs
-//   through the REAL wish builtin (the profile-embed lift condition).
-// - `ambiguousWishShapedSchema` keeps the CRASH class alive for the OW50
-//   detectability pins: TWO ifc-carrying branches is genuine ambiguity, which
-//   the narrowed assert still refuses. The `candidates.items` position (plain
-//   properties/items) is what makes the doc cfc-relevant, the metadata apply,
-//   and the candidate schema recordable; a confidentiality label needs no
-//   write authority, so the FIRST writer's commit lands, poisoning the stored
-//   envelope for every later merging writer.
 const profileViewSchema: JSONSchema = {
   type: "object",
   properties: {
@@ -102,6 +54,17 @@ const ambiguousWishShapedSchema: JSONSchema = {
   },
 } as JSONSchema;
 
+const prepareCrashMessage = "injected CFC preparation failure";
+
+function injectPrepareCrash(tx: IExtendedStorageTransaction): void {
+  // The boundary reads transaction state before evaluating any policies. Restore
+  // that read before throwing so the real rejection and settlement paths run.
+  const fault = stub(tx, "getCfcState", () => {
+    fault.restore();
+    throw new Error(prepareCrashMessage);
+  });
+}
+
 describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
   describe("CFC prepare crash becomes a failed commit", () => {
     let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -120,43 +83,25 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       await storageManager.close();
     });
 
-    /** Seed the doc so its STORED envelope carries the AMBIGUOUS divergent
-     * shape — the class RULING 5's narrowing still refuses (the first writer
-     * never merges — nothing is stored yet — so this commit lands). The
-     * labeled VALUE under `candidates.items.name` is what makes the label
-     * metadata persist. */
     async function seedStoredEnvelope(
       rt: Runtime,
       id: string,
     ): Promise<void> {
       const tx = rt.edit();
-      const cell = rt.getCell(space, id, ambiguousWishShapedSchema, tx);
-      cell.set({ candidates: [{ name: "Bob" }] });
+      const cell = rt.getCell(space, id, profileViewSchema, tx);
+      cell.set({ name: "Bob" });
       tx.prepareCfc();
       const result = await tx.commit();
       expect(result.error).toBeUndefined();
     }
 
-    /** A second-writer transaction reproducing the raw:wish shape: a full-doc
-     * write through the schema-carrying cell whose /result now holds a LINK.
-     * Its prep meets the stored envelope + a link write and walks into the
-     * divergence assert. */
     function secondWriterTx(
       rt: Runtime,
       id: string,
     ): IExtendedStorageTransaction {
       const tx = rt.edit();
-      const cell = rt.getCell(space, id, ambiguousWishShapedSchema, tx);
-      // The link SOURCE carries the ifc-labeled view (as the live resolved
-      // profile does), so the /result link write is CFC-recorded.
-      const resolved = rt.getCell<{ name: string }>(
-        space,
-        `${id}-resolved`,
-        profileViewSchema,
-        tx,
-      );
-      resolved.set({ name: "Ada" });
-      cell.set({ result: resolved, candidates: [] });
+      rt.getCell(space, id, profileViewSchema, tx).set({ name: "Ada" });
+      injectPrepareCrash(tx);
       return tx;
     }
 
@@ -174,11 +119,11 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       });
       const result = await tx.commit();
       expect(result.error?.name).toBe("CommitPreparationError");
-      expect(String(result.error?.message)).toMatch(/divergent anyOf/);
+      expect(String(result.error?.message)).toContain(prepareCrashMessage);
       // ...and commit callbacks observed the same failure (rollback ran).
       expect(observed.length).toBe(1);
-      expect(String((observed[0] as Error)?.message)).toMatch(
-        /divergent anyOf/,
+      expect(String((observed[0] as Error)?.message)).toContain(
+        prepareCrashMessage,
       );
     });
 
@@ -201,11 +146,13 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
         // (enforcing modes reject unprepared-but-relevant outright and never
         // reach prep here). Observe never rejects on CFC grounds — so the
         // contract on a prep crash is: no throw, the commit proceeds, the
-        // crash is recorded. Today the crash escapes commit() as a thrown
-        // error.
+        // crash is recorded.
         const tx = secondWriterTx(observeRuntime, id);
         const result = await tx.commit();
         expect(result.error).toBeUndefined();
+        expect(tx.getCfcState().diagnostics).toContain(
+          `CFC commit-prep crashed: ${prepareCrashMessage}`,
+        );
       } finally {
         await observeRuntime.dispose();
         await observeManager.close();
@@ -243,22 +190,16 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       // The crashing action: re-does the second-writer write inside a
       // scheduled action, so prep runs on the scheduler's commit path.
       let crashingRuns = 0;
+      const failures: string[] = [];
       const crashingAction = (actionTx: IExtendedStorageTransaction) => {
         crashingRuns++;
-        const cell = runtime.getCell(
-          space,
-          id,
-          ambiguousWishShapedSchema,
-          actionTx,
-        );
-        const resolved = runtime.getCell<{ name: string }>(
-          space,
-          `${id}-resolved`,
-          profileViewSchema,
-          actionTx,
-        );
-        resolved.set({ name: "Ada" });
-        cell.set({ result: resolved, candidates: [] });
+        runtime.getCell(space, id, profileViewSchema, actionTx).set({
+          name: "Ada",
+        });
+        injectPrepareCrash(actionTx);
+        actionTx.addCommitCallback((_tx, result) => {
+          if (result.error) failures.push(result.error.message);
+        });
       };
       runtime.scheduler.subscribe(crashingAction, {
         reads: [],
@@ -267,6 +208,8 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
       }, { isEffect: true });
       await runtime.scheduler.idle();
       expect(crashingRuns).toBeGreaterThanOrEqual(1);
+      expect(failures.some((message) => message.includes(prepareCrashMessage)))
+        .toBe(true);
 
       // The scheduler is still alive: an unrelated action runs and commits.
       const healthy = runtime.getCell<number>(

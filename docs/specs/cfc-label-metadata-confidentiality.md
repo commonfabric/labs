@@ -145,8 +145,9 @@ revisited when invariant 12 is implemented." This is that revisit:
    conservative join already contains each influencing source's
    confidentiality; declared/authored entries carry no such containment
    guarantee and stay fail-closed), else fail closed. Computable from the
-   entry in hand, no cross-space resolution. `type`/`kind`/presence stay
-   public per the default profile. _Note (2026-07-10): the full profile now
+   entry in hand, no cross-space resolution. Metadata presence, `type`, and
+   `kind` retain the selection context; table-public fields add no further
+   field-specific restriction. _Note (2026-07-10): the full profile now
    ships — template-population Stage B persists it as multi-`*` templates
    under `/cfc/labels/...` at the same seam that writes the payload entries
    (`cfc-template-population.md` §5/§6). The interim rule remains the label
@@ -160,22 +161,14 @@ revisited when invariant 12 is implemented." This is that revisit:
    *application-visible* projections of label metadata always pass through
    (2)'s labeling.
 
-The shipped display redaction (`redactCaveatSourcesForDisplay` at the three
-IPC response sites) remains as defense-in-depth for same-space views.
-Extending it to the sigil `cfcLabelView` copies in `handleCellGet`/
-`subscribe` value payloads is **not safe by itself**: those views round-trip
-— `CellHandle.deserialize` preserves the view on the `CellRef`,
-`mapCellRefsToSigilLinks` sends it back to the worker, and
-`prepareBoundaryCommit` persists `input.cfcLabelView` entries as link-origin
-labels — so response-side redaction would persist redacted, under-labeled
-views on copy-forward/link writes. The prerequisite (independently
-motivated: a round-tripped view is main-thread-influenceable, and today it
-is gated only for runtime-minted-integrity forgery) is **re-derivation at
-the persist seam**: the worker treats an inbound `cfcLabelView` as an
-untrusted display artifact and persists link-origin labels only from its own
-authoritative sources (stored source metadata / the worker-side label-view
-state), never from the round-tripped copy. Once persistence no longer
-consumes inbound views, redacting the outbound copies is safe.
+Display redaction preserves confidentiality needed to gate disclosure. A
+held reference's restrictions project into a covering display entry so existing
+view consumers retain them after serialization. Display fields grant no
+acquisition authority. The worker strips inbound `cfcLabelView` fields and uses
+processor-scoped opaque transfer tokens to restore the original Runtime carrier.
+The precise persistence path derives reference labels from authenticated
+acquisition and selection observations, independently of current target content.
+See [CFC references](cfc-references.md).
 
 ## 4. What this deliberately does not do
 
@@ -188,10 +181,11 @@ consumes inbound views, redacting the outbound copies is safe.
   have; the `reference` form achieves the same authority semantics through
   the existing session/ACL layer. Recorded as the upgrade path if probe-able
   commitments prove insufficient.
-- **No existence hiding.** "This path carries *a* label entry" stays
-  observable (the spec: "the bare existence of a label entry is usually less
-  revealing than the source identities inside it"). SC-4's existence channel
-  is a payload-label concern, tracked separately.
+- **Metadata shape is an observation.** Selecting a derived label protects
+  its presence, type, kind, count, ordering, and empty query results with the
+  applicable control confidentiality. Field classification can add restrictions;
+  a public field does not erase its selection context. Static declared metadata
+  can remain public under its own policy.
 - **Schema replication stays.** Content-addressed schema docs continue to
   cross spaces; `ifc` annotations reveal policy *structure*, accepted (they
   are code, not data). Noted so the boundary is explicit.
@@ -206,8 +200,9 @@ consumes inbound views, redacting the outbound copies is safe.
   classification table as data (no transform yet). Each is small and
   independently shippable, in that order. _Implementation note (2026-07-09):
   shipped — `MetaField` drops `"cfc"` (fail-closed at `handleCellGet`), the
-  persist loop re-derives the source's stored label map per link write while
-  the IPC ingress stops consuming inbound views, all main-thread-facing view
+  legacy persist path derives from stored source metadata, while the precise
+  reference profile uses authenticated acquisition; IPC ingress rejects display
+  fields as authority, all main-thread-facing view
   copies redact `Caveat.source`, and the §2 table lives at
   `runner/src/cfc/label-field-classification.ts`._
 - **Stage 1 (representation):** the cross-space persist transform
@@ -248,11 +243,11 @@ consumes inbound views, redacting the outbound copies is safe.
   `notAvailable` constant across the unobservable / missing /
   matching-but-unreadable arms; Stage 1 commitment-aware matching with
   verbatim committed projections (a miss over committed fields still
-  consumes the per-field labels); population = atom presence/`type`/`kind`
-  public, §2-table-`public` fields public, every other present field
-  source-protected — the source identity's confidentiality when known (no
-  carrier exists yet), else the derived-component (`derived`/`structure`)
-  entry's own effective confidentiality, else fail closed. The
+  consumes the per-field labels). Metadata shape, including atom presence,
+  `type`, and `kind`, consumes its selection context. Table-public fields add
+  no further field restriction. Other present fields use the source identity's
+  confidentiality when known, else the entry's confidentiality for derived,
+  structure, or precise version 2 reference components, else fail closed. The
   pattern-facing surface is the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
   `commonfabric.inspectConfLabel`): builtins are the one channel pattern

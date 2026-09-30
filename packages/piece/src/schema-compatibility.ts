@@ -850,8 +850,8 @@ function schemaSubsetIssue(
   // dependentRequired, enum/const, conditionals, and uniqueItems can be broken
   // even when both schemas carry the same constraint.
   if (
-    !schemaIsStableUnderDescendantDefaults(source) ||
-    !schemaIsStableUnderDescendantDefaults(target)
+    !schemaIsStableUnderDescendantDefaults(source, context.sourceRoot) ||
+    !schemaIsStableUnderDescendantDefaults(target, context.targetRoot)
   ) {
     context = {
       ...context,
@@ -1038,12 +1038,15 @@ const DEFAULT_STABLE_SCHEMA_KEYS = new Set([
 ]);
 
 /** Whether inserting defaults below this schema leaves its own constraints true. */
-function schemaIsStableUnderDescendantDefaults(schema: JSONSchema): boolean {
+function schemaIsStableUnderDescendantDefaults(
+  schema: JSONSchema,
+  root: JSONSchema,
+): boolean {
   if (!isObjectOrArray(schema)) return true;
   return Object.keys(schema).every((key) => {
     if (DEFAULT_STABLE_SCHEMA_KEYS.has(key)) return true;
     return (key === "anyOf" || key === "oneOf") &&
-      alternativesAreStableUnderDescendantDefaults(schema[key]!);
+      alternativesAreStableUnderDescendantDefaults(schema[key]!, root);
   });
 }
 
@@ -1057,10 +1060,12 @@ function schemaIsStableUnderDescendantDefaults(schema: JSONSchema): boolean {
  */
 function alternativesAreStableUnderDescendantDefaults(
   alternatives: readonly JSONSchema[],
+  root: JSONSchema,
 ): boolean {
-  const declared = alternatives.map((alternative) => {
+  const declared = alternatives.map((input) => {
+    const alternative = resolveSchema(input, root).schema;
     if (alternative === false) return [] as string[];
-    if (alternative === true) return undefined;
+    if (alternative === undefined || alternative === true) return undefined;
     const types = schemaTypes(alternative);
     return types === undefined || types.includes("unknown")
       ? undefined
@@ -1087,7 +1092,10 @@ function alternativesAreStableUnderDescendantDefaults(
   }
   return alternatives.every((alternative, index) =>
     declared[index]!.every(isScalarSchemaType) ||
-    schemaIsStableUnderDescendantDefaults(alternative)
+    schemaIsStableUnderDescendantDefaults(
+      resolveSchema(alternative, root).schema ?? false,
+      root,
+    )
   );
 }
 
@@ -2306,7 +2314,7 @@ function schemaHasUnsafeMaterializedDefault(
     activeByRoot.set(rootKey, active);
   }
   const unstable = unstableAncestor ||
-    !schemaIsStableUnderDescendantDefaults(schema);
+    !schemaIsStableUnderDescendantDefaults(schema, resolution.root);
   const activeForPath = unstable ? active.unstable : active.stable;
   if (activeForPath.has(schema)) return false;
   activeForPath.add(schema);

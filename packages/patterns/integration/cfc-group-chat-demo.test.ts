@@ -61,6 +61,7 @@ describe("cfc group chat demo integration test", () => {
       }),
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
 
     const sourcePath = join(

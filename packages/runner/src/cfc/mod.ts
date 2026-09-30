@@ -1,3 +1,4 @@
+export { serializeRuntimeEvent } from "./event-reference-context.ts";
 export type {
   CfcLabelView,
   CfcLabelViewEntry,
@@ -5,6 +6,15 @@ export type {
   CfcLabelViewStatus,
   ResolvedLabelReadOptions,
 } from "./label-view.ts";
+export {
+  carryCfcReferenceProvenance,
+  cfcReferenceBindingMatches,
+  getCfcReferenceProvenance,
+} from "./reference-provenance.ts";
+export type {
+  CfcReferenceObservation,
+  CfcReferenceProvenance,
+} from "./reference-provenance.ts";
 export {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
@@ -29,6 +39,7 @@ export {
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
+  cfcDeclaredLabelViewForWriteTargetWithStatus,
   cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
@@ -298,6 +309,8 @@ export type {
   IfcKey,
   MergeCfcSchemaEnvelopeOptions,
 } from "./schema-merge.ts";
+export { assertSerializableReferenceScope } from "./reference-scope.ts";
+export { cfcSchemaMergeIssue } from "./schema-merge.ts";
 export {
   createSinkRequestPolicyInput,
   recordSinkRequestPolicyInput,
@@ -382,6 +395,7 @@ export {
   CFC_LABEL_READ_FAILED_ATOM,
   cfcConfidentialityForObservationNode,
   type CfcFloorTrustContext,
+  cfcIntegrityForObservationNode,
   cfcIntegritySatisfiesFloorCoherently,
   cfcIntegrityWitnessKey,
   cfcJsonPointerForPath,
@@ -432,3 +446,5 @@ export {
   describeRefusalInputs,
   renderCfcAtom,
 } from "./refusal-detail.ts";
+
+export { immutableReferenceViewIdentity } from "./immutable-reference.ts";

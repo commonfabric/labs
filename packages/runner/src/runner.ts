@@ -67,8 +67,10 @@ import {
 } from "./cancel.ts";
 import {
   type Cell,
+  type CellLinkInput,
   cellRuntime,
   cellTx,
+  convertCellsToLinks,
   createCell,
   isCell,
   schemaCellScope,
@@ -181,9 +183,11 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
+  internalVerifierRead,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
+  requireCommitReadValidation,
   schedulerDependencyRead,
 } from "./storage/reactivity-log.ts";
 import {
@@ -236,6 +240,10 @@ import {
   scopedArgumentInitializationTargets,
   sessionScopedArgumentKeys,
 } from "./data-updating.ts";
+import {
+  carryCfcReferenceProvenance,
+  getCfcReferenceProvenance,
+} from "./cfc/reference-provenance.ts";
 import { getVerifiedProvenance } from "./harness/verified-provenance.ts";
 import { setResultCell } from "./result-utils.ts";
 import {
@@ -2412,6 +2420,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     callback: (accepted: boolean) => void,
   ): void {
+    requireCommitReadValidation(tx);
     if (!this.#runtime.servingPosture) {
       tx.addCommitCallback((_committed, result) => callback(!result.error));
       return;
@@ -3090,15 +3099,28 @@ export class Runner {
       resultCell,
       { derivedInternalCells: pattern.derivedInternalCells },
     ) as R;
-    const previousResult = writableResultCell.getRaw({
-      meta: ignoreReadForScheduling,
-    });
-    if (
-      options.preserveName &&
-      isObjectOrArray(previousResult) &&
-      previousResult[NAME]
-    ) {
-      result = { ...result, [NAME]: previousResult[NAME] };
+    // Comparing the stored projection only decides whether a write is needed.
+    // Keep its conflict dependency without consuming the old result's content.
+    const resultLink = writableResultCell.getAsNormalizedFullLink();
+    const previousResult = tx.readValueOrThrow(
+      resultLink,
+      { meta: { ...ignoreReadForScheduling, ...internalVerifierRead } },
+    );
+    // Preserving an authored name copies content, so its read contributes CFC
+    // labels independently of the comparison above.
+    let previousName = options.preserveName
+      ? tx.readValueOrThrow({
+        ...resultLink,
+        path: [...resultLink.path, NAME],
+      }, { meta: ignoreReadForScheduling })
+      : undefined;
+    if (isCellLink(previousName)) {
+      previousName = writableResultCell.key(NAME).getRaw({
+        meta: ignoreReadForScheduling,
+      });
+    }
+    if (previousName) {
+      result = { ...result, [NAME]: previousName };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
     // boundary's `cloneIfNecessary` identity-pass instead of
@@ -3114,9 +3136,12 @@ export class Runner {
     // artifact is not a `FabricValue`, so it is replaced before the
     // conversion. That keeps the gate below comparing what a write would
     // actually store, which is the whole point of converting first.
-    const fabricResult = fabricFromConvertibleJsValue(
-      flattenBuilderArtifacts(result),
-    );
+    const flattened = flattenBuilderArtifacts(result);
+    const fabricResult = tx.getCfcState().flowLabelsMode === "persist"
+      ? convertCellsToLinks(flattened as CellLinkInput, {
+        allowLinkFreeFabricInstances: true,
+      })
+      : fabricFromConvertibleJsValue(flattened);
     return {
       result,
       fabricResult,
@@ -3484,6 +3509,7 @@ export class Runner {
           this.#stageSessionPatternPointer(tx, resultCell, undefined);
         }
       } else if (priorPointer !== undefined) {
+        requireCommitReadValidation(tx);
         tx.addCommitCallback((_tx, result) => {
           if (
             !result.error &&
@@ -3540,6 +3566,7 @@ export class Runner {
       // and is not worth its weight here.)
       const key = this.#getSetupKey(resultCell.withTx(tx));
       const priorPointer = this.#sessionPatternPointers.get(key);
+      requireCommitReadValidation(tx);
       this.#sessionPatternPointers.set(key, entryRef);
       tx.addCommitCallback((_tx, result) => {
         if (!result.error) return;
@@ -3690,13 +3717,24 @@ export class Runner {
     ]);
 
     if (isCellLink(argument)) {
-      argument = createSigilLinkFromParsedLink(
-        parseLink(argument),
-        {
-          base: resultCell.getAsNormalizedFullLink(),
-          includeSchema: true,
-          overwrite: "redirect",
-        },
+      const parsedArgument = carryCfcReferenceProvenance(
+        argument,
+        parseLink(argument, resultCell),
+      );
+      const acquired = getCfcReferenceProvenance(argument) !== undefined
+        ? this.#runtime.getCellFromLink(parsedArgument, undefined, tx)
+          .getAsWriteRedirectLink()
+        : undefined;
+      argument = carryCfcReferenceProvenance(
+        acquired,
+        createSigilLinkFromParsedLink(
+          parsedArgument,
+          {
+            base: resultCell.getAsNormalizedFullLink(),
+            includeSchema: true,
+            overwrite: "redirect",
+          },
+        ),
       ) as T;
     }
 
@@ -3794,6 +3832,7 @@ export class Runner {
     }
 
     if (!validationOptions.prepareForResume) {
+      requireCommitReadValidation(tx);
       const key = this.#getSetupKey(resultCell.withTx(tx));
       const preparedPatternKey = patternIdentityKey(entryRef);
       this.#locallyPreparedResults.set(key, preparedPatternKey);
@@ -4261,6 +4300,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     resultCell: Cell<unknown>,
   ): void {
+    requireCommitReadValidation(tx);
     if (!this.#usesScopedPrograms(resultCell)) {
       const key = this.#getDocKey(resultCell);
       const registration = this.#cancels.get(key);
@@ -9321,12 +9361,16 @@ export class Runner {
       writes: findAllWriteRedirectCells(outputs, resultCell, {
         followRedirectChains: !usesLocalReads(cellTx(resultCell)),
       }),
+      // Static wiring retains each bound input's acquisition. Binding the
+      // wrapper to the transaction does not select it from application data.
       inputsCell: this.#runtime.getImmutableCell(
         resultCell.space,
         inputs,
         undefined,
-        tx,
-      ),
+        undefined,
+        undefined,
+        { authorization: runtimeWritePolicyAuthorization, paths: [[]] },
+      ).withTx(tx),
     };
   }
 
@@ -9451,7 +9495,11 @@ export class Runner {
           ]);
         }
       }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // Preflight needs the declared value dependency and its actor-scoped
+      // load before a handler can synchronously read through the handle.
+      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get({
+        traverseCells: true,
+      });
     }
   }
 
@@ -10129,6 +10177,14 @@ export class Runner {
             ? result
             : {};
         const receipt = receiptCell.withTx(tx);
+        // The handling mints this store from its own event cause. Its policy
+        // must admit the handler's flow, including a value-less receipt's
+        // existence and a returned reference's identity.
+        recordRuntimeOwnedStore(
+          tx,
+          patternResultCell,
+          receipt.getAsNormalizedFullLink(),
+        );
         receipt.set(receiptValue);
         // The receipt says what it holds, the way any other cell does. The
         // shape is only knowable here: the cell is minted at the top of the
@@ -10177,6 +10233,11 @@ export class Runner {
               ? result
               : {};
           const receipt = receiptCell.withTx(tx);
+          recordRuntimeOwnedStore(
+            tx,
+            patternResultCell,
+            receipt.getAsNormalizedFullLink(),
+          );
           receipt.set(receiptValue);
           const shape = receiptShapeSchema(receiptValue);
           if (shape !== undefined) writeResultSchemaMeta(receipt, shape);
@@ -10731,6 +10792,8 @@ export class Runner {
           eventInputs,
           undefined,
           tx,
+          undefined,
+          { authorization: runtimeWritePolicyAuthorization, paths: [["$ctx"]] },
         );
         logger.timeStart("stream", "readInputs");
         const { argument, isValidArgument } = (() => {

@@ -288,24 +288,29 @@ describe("stored write requirements", () => {
 
     it("refuses a writer whose schema declares nothing at the path", async () => {
       const runtime = await seed("floor-unlabeled");
-      const result = await commitUndeclaredWrite(
-        runtime,
-        "floor-unlabeled",
+      const tx = runtime.edit();
+      const out = runtime.getCell(space, "floor-unlabeled", undefined, tx).key(
         "out",
-        "unapproved",
       );
+      // The attempt explicitly observes the confidentiality protecting the verdict.
+      out.get();
+      out.set("unapproved" as never);
+      const result = await tx.commit();
       expect(refusalOf(result)).toContain("requiredIntegrity failed at /out");
     });
 
     it("refuses a writer whose schema declares a label of its own at the path", async () => {
       const runtime = await seed("floor-labeled");
-      const result = await commitWrite(runtime, "floor-labeled", {
+      const tx = runtime.edit();
+      runtime.getCell(space, "floor-labeled", undefined, tx).key("out").get();
+      runtime.getCell(space, "floor-labeled", {
         type: "object",
         properties: {
           out: { type: "string", ifc: { ...STORE_LABEL } },
         },
         required: ["out"],
-      }, { out: "unapproved" });
+      }, tx).set({ out: "unapproved" } as never);
+      const result = await tx.commit();
       expect(refusalOf(result)).toContain("requiredIntegrity failed at /out");
     });
 
@@ -1171,6 +1176,8 @@ describe("stored write requirements", () => {
         holderSchema("release-1", guarded),
         tx,
       );
+      // These union claims inspect profile contents to select their branch.
+      profile.withTx(tx).get();
       const seeded = value(raw ? profile.getAsLink() : profile);
       if (raw) holder.setRaw(seeded as never);
       else holder.set(seeded as never);
@@ -1199,6 +1206,7 @@ describe("stored write requirements", () => {
         holderSchema("release-2", guarded),
         tx,
       );
+      holder.get();
       const next = { ...value, other: "changed" };
       if (raw) holder.setRaw(next as never);
       else holder.set(next as never);
@@ -1251,6 +1259,7 @@ describe("stored write requirements", () => {
           actingPrincipal: space,
         });
         markRelease(runtime, tx, "own-claim-holder");
+        profile.withTx(tx).get();
         runtime.getCell(
           space,
           "own-claim-holder",

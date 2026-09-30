@@ -212,7 +212,11 @@ export class CFCellLink extends BaseElement {
         if (!parsedLink.space) {
           throw new Error("Link missing space.");
         }
-        const linkedCell = runtime.getCellFromRef(parsedLink as CellRef);
+        const linkedCell = await runtime.acquireCell({
+          ...parsedLink,
+          scope: parsedLink.scope ?? "space",
+        } as CellRef);
+        if (generation !== this._resolveCellGeneration) return;
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
         const resolvedCell = await linkedCell.resolveAsCell();
         if (generation !== this._resolveCellGeneration) return;

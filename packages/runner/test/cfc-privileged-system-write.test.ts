@@ -1048,20 +1048,10 @@ describe("CFC privileged system write (S18)", () => {
     }
   });
 
-  it("does not reach a writer whose transaction never loaded the document", async () => {
-    // The bound on the arm above, pinned rather than described. The stored
-    // half reads through the writing transaction, and a transaction whose
-    // view does not hold the document answers the same "no map here" a
-    // document with no map answers. So a writer that simply does not sync
-    // first erases the map and commits: no race, the map present throughout.
-    //
-    // What the arm establishes is therefore narrower than "a root envelope
-    // write cannot erase a stored label map" — it is that such a write cannot
-    // erase a label map THIS TRANSACTION HAS LOADED. Closing the rest means
-    // either forcing the document into view before deciding, which turns
-    // every blind root write into a read-modify-write, or making the commit
-    // boundary establish what the space holds. Both are open design choices,
-    // and this test fails when either lands, which is the point of it.
+  it("refuses metadata erasure by a writer whose transaction never loaded the document", async () => {
+    // Required metadata reads authenticate a cold writer's assumption that
+    // the destination has no stored policy. A concurrent durable policy makes
+    // that absent-base assumption conflict at commit.
     const server: MemoryV2Server.Server = await newSharedServer();
     const space = signer.did();
     let id: URI;
@@ -1112,7 +1102,28 @@ describe("CFC privileged system write (S18)", () => {
             path: [],
           }, { value: { note: "erased" } });
           expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit()).error).toMatchObject({
+            name: "ConflictError",
+            transaction: {
+              reads: {
+                confirmed: expect.arrayContaining([{
+                  id: id!,
+                  path: ["cfc"],
+                  scope: "space",
+                  seq: 0,
+                  validation: "required",
+                }]),
+              },
+            },
+          });
+          const repaired = runtime.edit();
+          expect(repaired.readOrThrow({
+            space,
+            id: id!,
+            type: "application/json",
+            path: ["cfc"],
+          })).toEqual(storedMetadata);
+          repaired.abort();
           await storage.synced();
         } finally {
           await runtime.dispose();
@@ -1120,7 +1131,7 @@ describe("CFC privileged system write (S18)", () => {
         }
       }
 
-      // The stored label map is gone from the durable document.
+      // Refusal preserves both the payload and its stored label metadata.
       {
         const storage = EmulatedStorageManager.connectTo(server, {
           as: signer,
@@ -1138,7 +1149,7 @@ describe("CFC privileged system write (S18)", () => {
             id: id!,
             type: "application/json",
             path: [],
-          })).toEqual({ value: { note: "erased" } });
+          })).toEqual({ value: { note: "one" }, cfc: storedMetadata });
           await tx.commit();
         } finally {
           await runtime.dispose();

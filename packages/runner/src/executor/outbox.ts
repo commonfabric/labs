@@ -577,6 +577,9 @@ export class SpaceOutbox {
             : { targetStreamLink: row.targetStreamLink }),
           eventId: row.eventId,
           payload: row.payload,
+          ...(row.runtimeReferenceContext === undefined ? {} : {
+            runtimeReferenceContext: row.runtimeReferenceContext,
+          }),
           ...(row.actingPrincipal === undefined
             ? {}
             : { actingPrincipal: row.actingPrincipal }),

@@ -671,7 +671,7 @@ describe("external content observation", () => {
           },
           value: { detail: linked },
           producer: PRODUCER,
-        })).rejects.toThrow(/traversed external content observation/);
+        })).rejects.toThrow(/CFC refused the external content observation/);
       } finally {
         targetTx.abort("test complete");
       }

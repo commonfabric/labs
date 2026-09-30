@@ -3062,29 +3062,22 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   after merging to main (the merge happening if the confidence
   criteria succeed) rather than blocking on it.
 
-  **BUILT 2026-08-21 (the optimize-on-main train; build report:
-  `docs/history/plans/server-execution-v2/optimize/ow31-build-report.md`).**
-  What landed, per the recorded work order:
-  (a) **genesis owner = the acting user** —
-  `registerSpaceIdentity(identity, { owner })` threaded from the
-  serving-side `resolveSpaceName` (the acting principal read from the
-  frame tx's wave run context WITHOUT the read-scope-ratchet side
-  effect, F8); a serving runtime with no actor REFUSES to resolve;
-  the bootstrap ACL's non-home arm names the registered owner
-  (`{ [actor]: "OWNER" }`), the home arm and every
-  client byte-identical. Pins: `memory-v2-acl-bootstrap.test.ts`
-  (red-first: the pre-fix run minted `{ [service]: "OWNER" }`),
-  `executor-cross-space.test.ts` (the serving no-actor refusal).
-  (b) **genesis before data** — the wave retains the grant probe's
-  `via` per (space, acting) and the commit step forces
-  `ensureSpaceInitialized` for every `creation`-granted foreign
-  target before the sink applies; the sink refuses a foreign batch
-  into a seq-0/no-ACL engine (INV-13 mirrored on the engine-direct
-  plane; red-first: the pre-fix sink landed the batch in a fresh
-  store). Kill/replay converges on ONE user-owned ACL (the replay
-  grant resolves `acl` through the owner; `executor-wave.test.ts`'s
-  OW31 pins, including the actor-=-space / owner-=-acting-user /
-  service-nowhere / commit-#1-is-the-ACL shape).
+  **Foreign-space creation and read authority.**
+  (a) **genesis owner = the acting user** — a served `.inSpace()`
+  resolution calls `Runtime.createSpace({ owner: actingUser, grants })`.
+  The actor comes from the frame transaction's wave context without changing
+  its read-scope attribution; a serving runtime without an actor refuses.
+  Creation generates a random space key, commits an ACL naming the actor as
+  OWNER, and drops the key. Pins: `memory-v2-acl-bootstrap.test.ts` and
+  `executor-cross-space.test.ts`.
+  (b) **genesis before data** — `createSpace` returns the DID only after
+  the genesis commit confirms. The handler's next run records the allocation
+  in its calling space. Foreign admission then reads the target's current ACL:
+  successful creation supplies no lasting grant, and an intervening revocation
+  refuses the write. Opening a target never creates its ACL. An unknown,
+  ACL-less, malformed, or retracted target fails closed at accumulation; the
+  sink also refuses a foreign batch into a seq-0/no-ACL engine. Pins:
+  `executor/foreign-space-initialization.test.ts`, `executor-wave.test.ts`.
   (c) **the READ posture** — the OWNER blanket is RETIRED:
   `memoryServiceDidsFor` became `memoryAclPrincipalsFor`
   (`serviceDids` = the operator list verbatim on BOTH arms — the
@@ -3115,21 +3108,8 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carriage in scope, and the client precedent is exact (the program
   commit is the user's own session client-side) — so the system-class
   alternative was not needed for this class.
-  **Random space identities, 2026-09-28.** Items (a) and (b) now run
-  through space creation rather than a registered derived key: a served
-  `.inSpace()` resolution calls `Runtime.createSpace({ owner: actingUser,
-  grants })`, which generates a random key, commits the genesis ACL
-  `{ [actor]: "OWNER", ...grants }` through the ordinary route before the
-  handler re-runs, and drops the key; a serving runtime with no actor
-  creates nothing. The handler's re-run records the allocation in the
-  calling space, and its foreign writes are then granted by the
-  space's ACL. `registerSpaceIdentity`, `ensureSpaceInitialized`, the
-  wave's forcing of a target's genesis and the gate's grant for a space
-  with no store are gone: a write into a space nobody created refuses at
-  the accept gate, and the sink's refusal of a foreign batch into a
-  seq-0 / no-ACL engine remains as the backstop.
   [`docs/specs/random-space-identities.md`](../random-space-identities.md)
-  is the design.
+  specifies the creation and allocation contract.
   RESIDUALS, flagged (see the build report's running list): (i) the
   `"*": WRITE` wildcard residual (finding iv) is CLOSED — pinned live
   in the executor mutation test: a mis-threaded genesis owner is

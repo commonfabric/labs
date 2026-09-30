@@ -89,6 +89,8 @@ describe("staged-reference-authorship", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: StorageManager.emulate({ as: alice }),
+      // This suite exercises recursive target-label inheritance.
+      cfcFlowLabels: "off",
     });
   });
 

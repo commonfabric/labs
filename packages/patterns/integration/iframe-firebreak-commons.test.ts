@@ -401,6 +401,7 @@ describe("iframe Firebreak Commons", () => {
       space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: aliceIdentity,
+      cfcFlowLabels: "persist",
     });
     await cc.ensureDefaultPattern();
 

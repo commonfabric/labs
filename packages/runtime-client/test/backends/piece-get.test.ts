@@ -91,7 +91,7 @@ describe("handlePieceGet()", () => {
   }
 
   /** The handler over the reader, awaited until every load it began landed. */
-  async function get(requested: string) {
+  async function get(requested: string, runIt = false) {
     const processor = buildProcessor({
       runtime: readerRuntime,
       cc: readerPieces,
@@ -102,7 +102,7 @@ describe("handlePieceGet()", () => {
       type: RequestType.PieceGet,
       pieceId: requested,
       space,
-      runIt: false,
+      runIt,
     });
     // Every load the reads registered has been issued and answered, so a
     // document the reader never examined here was never asked for.
@@ -233,6 +233,101 @@ describe("handlePieceGet()", () => {
     expect(response.piece.cell.schema).toEqual(refSchema(listSchema));
     expect(readerExamined(itemUri)).toBe(false);
   });
+
+  for (const schemaSource of ["result", "link", "redirect"] as const) {
+    it(`returns a cell inside a piece under its ${schemaSource} schema, leaving the returned value's documents cold`, async () => {
+      const activityTabSchema = {
+        type: "object",
+        properties: {
+          $NAME: { type: "string" },
+          $UI: { type: "object" },
+        },
+        required: ["$NAME", "$UI"],
+      } as const satisfies JSONSchema;
+      const linkedSchema = {
+        type: "object",
+        properties: { entries: listSchema },
+      } as const satisfies JSONSchema;
+      const redirectSchema = {
+        type: "object",
+        properties: { summary: { type: "string" } },
+      } as const satisfies JSONSchema;
+      const parent = writerRuntime.getCell(
+        space,
+        "tab-piece-" + crypto.randomUUID(),
+      );
+      const tab = writerRuntime.getCell(
+        space,
+        "tab-value-" + crypto.randomUUID(),
+      );
+      const list = writerRuntime.getCellFromLink({
+        id: listUri,
+        space,
+        scope: "space",
+        path: [],
+      });
+      const tabValue = {
+        $NAME: "Activity",
+        $UI: {},
+        entries: list,
+        summary: "Activity summary",
+      };
+      const slug = writerRuntime.getCellFromEntityId(
+        space,
+        entityIdFrom(slugIdForSpace(space, "tab")),
+      );
+      await writerRuntime.editWithRetry((tx) => {
+        tab.withTx(tx).set(tabValue);
+        parent.withTx(tx).set({
+          activityTab: schemaSource === "link"
+            ? tab.withTx(tx).asSchema(linkedSchema).getAsLink({
+              includeSchema: true,
+            })
+            : tabValue,
+          other: "unrelated",
+        });
+        parent.withTx(tx).setMetaRaw("schema", {
+          type: "object",
+          properties: {
+            activityTab: activityTabSchema,
+            other: { type: "string" },
+          },
+        }, rawMetaWriteAuthorization);
+        parent.withTx(tx).setMetaRaw("patternIdentity", {
+          identity: "pattern-piece-get-tab",
+          symbol: "default",
+        }, rawMetaWriteAuthorization);
+        const target = parent.withTx(tx).key("activityTab").asSchema(
+          schemaSource === "result" ? undefined : redirectSchema,
+        );
+        slug.withTx(tx).setRawUntyped(target.getAsWriteRedirectLink({
+          base: slug,
+          includeSchema: true,
+        }));
+      });
+      await writerPieces.synced();
+
+      const parentUri = parent.getAsNormalizedFullLink().id;
+      expect(readerExamined(parentUri)).toBe(false);
+      expect(readerExamined(listUri)).toBe(false);
+      expect(readerExamined(itemUri)).toBe(false);
+      const response = await get(slugDocumentId("tab"), true);
+      expect(response.piece.cell).toMatchObject({
+        id: parentUri,
+        path: ["activityTab"],
+      });
+      expect(response.piece.cell.schema).toEqual(refSchema(
+        schemaSource === "link"
+          ? linkedSchema
+          : schemaSource === "redirect"
+          ? redirectSchema
+          : activityTabSchema,
+      ));
+      expect(readerExamined(parentUri)).toBe(true);
+      expect(readerExamined(listUri)).toBe(false);
+      expect(readerExamined(itemUri)).toBe(false);
+    });
+  }
 
   it("returns a document that is no piece for a slug naming it, leaving what its value reaches cold", async () => {
     const response = await get(slugDocumentId("note"));

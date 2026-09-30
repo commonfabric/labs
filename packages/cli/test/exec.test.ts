@@ -3793,6 +3793,7 @@ function createExecHarness(options: {
     runtime: {
       [CF_RUNTIME_ERROR_LOG]: runtimeErrors,
       storageManager: {
+        pendingCommitsSettled: async () => {},
         synced: () => {
           tracker.events.push("storage.synced");
           return Promise.resolve();

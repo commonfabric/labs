@@ -74,6 +74,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   tracks the remaining shipping gates after the core implementation.
 - [CFC exchange-rule authoring](cfc-exchange-rule-authoring.md) tracks the
   remaining owner decisions and blocked stages for exchange rules.
+- [Precise CFC reference rollout](cfc-precise-reference-rollout.md) sequences
+  deployment activation, the deferred Home migration, legacy reference acquisition,
+  and coordinated reader and writer activation gates.
 - [CFC llm-sink admission](cfc-llm-sink-admission.md) tracks the
   boundary-scoped admission mechanism the max-enforcement posture names as
   pending for its llm sinks: public-only ceilings paired with class-scoped

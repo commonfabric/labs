@@ -39,7 +39,9 @@ interface IfcSchemaVisit {
  *
  * Compound schemas contribute at their current path. Array items and
  * record-only additional properties use a wildcard path. Tuple entries use
- * their concrete index. Negated schemas do not describe labels on real data.
+ * their concrete index. Stream children describe future event payloads; only
+ * the stream slot's own declaration applies to stored data. Negated schemas do
+ * not describe labels on real data.
  * A declaration reached through an `anyOf` or `oneOf` branch is marked
  * `conditional`.
  */
@@ -92,6 +94,11 @@ export const cfcSchemaEntries = (
       ...(conditional ? { conditional: true as const } : {}),
     });
   }
+  if (
+    ContextualFlowControl.getAsCellValues(resolved).some((entry) =>
+      ContextualFlowControl.getAsCellKind(entry) === "stream"
+    )
+  ) return entries;
 
   const recordOnly = resolved.properties === undefined ||
     (isObjectOrArray(resolved.properties) &&

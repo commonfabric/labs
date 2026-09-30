@@ -4,6 +4,7 @@
  * remains the piece controller's responsibility.
  */
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   type Cell,
   type IExtendedStorageTransaction,
@@ -52,7 +53,9 @@ export function assertCloneDataUnlabeled(carrier: unknown): void {
   const view = cfcLabelViewForCellFailClosed(carrier);
   const labeled = view?.entries.some((entry) =>
     (entry.label.confidentiality?.length ?? 0) > 0 ||
-    (entry.label.integrity?.length ?? 0) > 0
+    (entry.label.integrity?.some((atom) =>
+      !isObjectOrArray(atom) || atom.type !== CFC_ATOM_TYPE.LinkReference
+    ) ?? false)
   );
   if (labeled) {
     throw new Error(

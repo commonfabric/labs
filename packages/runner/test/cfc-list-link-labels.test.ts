@@ -19,8 +19,7 @@ const space: MemorySpace = signer.did();
 
 const LABEL = "personal-space";
 
-// A labeled element: confidential as a whole, and more so at `secret`, so a
-// link to it mints an entry at the slot and one below it.
+// A confidential element whose nested secret has a separate content label.
 const labeledSchema: JSONSchema = {
   type: "object",
   properties: {
@@ -187,7 +186,184 @@ const labelsOfAAt = (
   ].sort();
 
 describe("cfc-list-link-labels", () => {
-  for (const flow of ["persist", "off"] as const) {
+  describe("with flow labels persist", () => {
+    it("retains independent reference proofs through list edits", async () => {
+      const fixture = await setUp("persist");
+      try {
+        const { runtime, a, b, c, d } = fixture;
+        for (
+          const elements of [
+            [a, b],
+            [b, a],
+            [a, b],
+            [b],
+            [b, b],
+            [b, c, a],
+            [c, d],
+            [a, b, c],
+            [b, c, a],
+            [b, a, c],
+            [a],
+            [],
+          ]
+        ) {
+          expect((await setList(runtime, elements)).error).toBeUndefined();
+          const tx = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(tx, {
+              space,
+              id: idOf(runtime, "list"),
+            });
+            expect(metadata?.version).toBe(3);
+            const references = metadata!.labelMap.entries.filter((entry) =>
+              entry.origin === "link"
+            );
+            expect(references).toHaveLength(elements.length);
+            for (let index = 0; index < elements.length; index++) {
+              const path = [String(index)];
+              const entry = references.find((entry) =>
+                entry.path.length === 1 && entry.path[0] === path[0]
+              );
+              expect(entry).toMatchObject({
+                path,
+                observes: "followRef",
+                referenceAcquisition: "complete",
+              });
+              expect(entry!.label.confidentiality ?? []).toEqual([]);
+              expect(entry!.label.integrity).toEqual([{
+                type: CFC_ATOM_TYPE.LinkReference,
+                source: {
+                  space,
+                  id: elements[index].getAsNormalizedFullLink().id,
+                  path: [],
+                },
+                target: { space, id: idOf(runtime, "list"), path },
+              }]);
+              expect(
+                runtime.getCell(space, "list", undefined, tx).key(index)
+                  .resolveAsCell().getAsNormalizedFullLink().id,
+              )
+                .toBe(elements[index].getAsNormalizedFullLink().id);
+            }
+            expect(
+              metadata!.labelMap.entries.flatMap((entry) =>
+                entry.label.confidentiality ?? []
+              ),
+            ).toEqual([]);
+          } finally {
+            tx.abort();
+          }
+        }
+      } finally {
+        await tearDown(fixture);
+      }
+    });
+
+    it("accepts public references under a confidential destination declaration", async () => {
+      const fixture = await setUp("persist");
+      try {
+        const { runtime, a, b } = fixture;
+        expect(
+          (await setList(runtime, [a], "declared", declaredListSchema)).error,
+        )
+          .toBeUndefined();
+        expect(
+          (await setList(runtime, [b, a], "declared", declaredListSchema))
+            .error,
+        )
+          .toBeUndefined();
+        expect(
+          (await commit(runtime, (tx) => {
+            runtime.getCell(space, "declared-holder", declaredFieldSchema, tx)
+              .set({ x: a });
+          })).error,
+        ).toBeUndefined();
+        expect(
+          (await commit(runtime, (tx) => {
+            runtime.getCell(space, "declared-holder", undefined, tx).key("x")
+              .set(b);
+          })).error,
+        ).toBeUndefined();
+      } finally {
+        await tearDown(fixture);
+      }
+    });
+
+    it("preserves reference acquisition through raw and sibling metadata writes", async () => {
+      const fixture = await setUp("persist");
+      try {
+        const { runtime, a, b, c } = fixture;
+        expect((await setList(runtime, [a, b])).error).toBeUndefined();
+        expect(
+          (await commit(runtime, (tx) => {
+            runtime.getCell(space, "list", undefined, tx).setRaw([
+              a.getAsLink(),
+              c.getAsLink(),
+            ]);
+          })).error,
+        ).toBeUndefined();
+        const source = runtime.getCell(space, "list").key(0).resolveAsCell();
+        expect(source.getAsNormalizedFullLink().id).toBe(
+          a.getAsNormalizedFullLink().id,
+        );
+        const holder = (n: number) =>
+          commit(runtime, (tx) => {
+            runtime.getCell(space, "holder", undefined, tx).set({
+              x: a,
+              schema: b,
+              "*": n,
+            });
+          });
+        expect((await holder(1)).error).toBeUndefined();
+        const before = storedLabels(runtime, "holder");
+        expect((await holder(2)).error).toBeUndefined();
+        expect(
+          (await commit(runtime, (tx) => {
+            runtime.getCell(space, "holder", undefined, tx).setMetaRaw(
+              "schema",
+              { type: "object" },
+              rawMetaWriteAuthorization,
+            );
+          })).error,
+        ).toBeUndefined();
+        expect(storedLabels(runtime, "holder")).toEqual(before);
+        for (const [field, target] of [["x", a], ["schema", b]] as const) {
+          expect(
+            runtime.getCell(space, "holder").key(field).resolveAsCell()
+              .getAsNormalizedFullLink().id,
+          ).toBe(target.getAsNormalizedFullLink().id);
+        }
+      } finally {
+        await tearDown(fixture);
+      }
+    });
+    it("refuses a fabricated reference write policy input", async () => {
+      const fixture = await setUp("persist");
+      try {
+        const { runtime, a, b } = fixture;
+        expect((await setList(runtime, [a, b])).error).toBeUndefined();
+        const before = storedLabels(runtime);
+        const refused = await commit(runtime, (tx) => {
+          tx.recordCfcWritePolicyInput({
+            kind: "link-write",
+            target: {
+              ...runtime.getCell(space, "list").getAsNormalizedFullLink(),
+              path: ["0"],
+            },
+            source: b.getAsNormalizedFullLink(),
+          });
+        });
+        expect(refused.error?.message).toContain(
+          "reference acquisition is unresolved",
+        );
+        expect(storedLabels(runtime)).toEqual(before);
+      } finally {
+        await tearDown(fixture);
+      }
+    });
+  });
+  // Recursive target-label copying is retained only in the legacy flow mode.
+  for (const flow of ["off"] as const) {
     describe(`with flow labels ${flow}`, () => {
       it("stores the labels of a linked element at its position", async () => {
         const fixture = await setUp(flow);

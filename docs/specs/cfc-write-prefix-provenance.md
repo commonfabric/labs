@@ -119,8 +119,9 @@ with decomposition:
   part of `P` from that read. Therefore a read after `w` **cannot** have fed
   `P`'s committed value.
 - `P`'s own value is a plain datum or a *reference*; if it is a link, the
-  reference was fixed at or before `w`, and the link target's label is tracked
-  separately by the link machinery (§8.11) — not by `P`'s prefix.
+  reference was fixed at or before `w`. Its acquisition confidentiality governs
+  the pointer; observing its target separately consumes that target's labels
+  ([reference semantics](cfc-references.md)).
 - Reads at index `< w` are exactly the observations that *could* have fed any
   of the overlapping writes contributing to `P`'s committed value, up to and
   including the finalizing one. Keeping all of them is conservative within the

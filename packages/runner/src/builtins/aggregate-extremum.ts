@@ -10,15 +10,15 @@ import { utf8Compare } from "@commonfabric/utils/utf8";
 import type { NormalizedFullLink } from "../link-types.ts";
 
 /** Value and stable identity of an extremum candidate. */
-export interface AggregateCandidate {
+export interface AggregateCandidate<T = NormalizedFullLink> {
   /** Numeric comparison value, including NaN and infinities. */
   score: number;
 
   /** Source identity, including duplicate occurrence. */
   key: string;
 
-  /** Original element address, held as data rather than a dereferenced link. */
-  element: NormalizedFullLink;
+  /** Opaque selected element; numeric-only extrema carry no element. */
+  element?: T;
 }
 
 /**
@@ -31,12 +31,12 @@ export interface AggregateCandidate {
  * Over candidates with distinct keys the preference is a total order, which
  * makes the choice associative and commutative. Equal keys return `left`.
  */
-export function chooseAggregateCandidate(
-  left: AggregateCandidate | undefined,
-  right: AggregateCandidate | undefined,
+export function chooseAggregateCandidate<T extends AggregateCandidate<unknown>>(
+  left: T | undefined,
+  right: T | undefined,
   minimum: boolean,
   distinguishZero: boolean,
-): AggregateCandidate | undefined {
+): T | undefined {
   if (!left) return right;
   if (!right) return left;
   const a = left.score;

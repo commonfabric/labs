@@ -10,6 +10,8 @@ import {
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
+import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
+import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-computed-derivation");
@@ -216,8 +218,10 @@ describe("CFC derivation into a computed cell", () => {
     expect(refusals).toEqual([]);
     expect((result.get() as { out?: { doubled?: number } }).out?.doubled)
       .toBe(100);
-    expect(derivedConfidentiality(linkTargetId(result, "out")))
-      .toContain("alice-secret");
+    const doubled = result.key("out", "doubled").resolveAsCell();
+    expect(cfcConfidentialityForObservationNode({
+      labelView: cfcLabelViewForCell(doubled),
+    })).toContain("alice-secret");
   });
 
   it("carries the input's taint onto the value it derived", async () => {

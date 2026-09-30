@@ -153,8 +153,10 @@ provide, the document says so, under the heading "Prerequisites".
 
 1. **A conversation lives in its own shared space**, or, for the chat of
    everyone in a shared space, in that space (decision 7). A container shows a
-   room by linking to it, never by copying it. A link carries its target's label
-   across the space boundary, and copied bytes do not ([cross-space
+   room by linking to it, never by copying it. The reference carries its own
+   acquisition confidentiality. Following it reads the room under its labels
+   and preserves the origin of its integrity evidence ([reference
+   semantics](../cfc-references.md), [cross-space
    integrity](../cfc-cross-space-integrity.md), §1).
 2. **Membership is the room space's access list**, read through the space's
    member set. A profile shown for a member is one that member contributed. The

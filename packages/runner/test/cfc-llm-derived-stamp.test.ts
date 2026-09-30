@@ -346,6 +346,7 @@ describe("llmDialog LlmDerived stamping (end to end)", () => {
       // The assertion below reads that the assistant message document carries
       // no stored CFC metadata. That holds at the `disabled` rung.
       cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
     });
     const tx = runtime.edit();
     const { commonfabric } = createTrustedBuilder(runtime);

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import type { CfcConfClause } from "../src/cfc/clause.ts";
+import { withCfcReferenceConfidentiality } from "../src/cfc/reference-provenance.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -49,12 +50,15 @@ describe("cfc-cell-read-ceiling", () => {
     await storage.close();
   });
 
-  const readerFor = (ceiling: readonly CfcConfClause[]) => {
+  const readerFor = (
+    ceiling: readonly CfcConfClause[] | undefined,
+    mode: "enforce-strict" | "disabled" = "enforce-strict",
+  ) => {
     const reader = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager: storage,
       cfcReadMaxConfidentiality: ceiling,
-      cfcEnforcementMode: "enforce-strict",
+      cfcEnforcementMode: mode,
       cfcFlowLabels: "persist",
     });
     readers.push(reader);
@@ -102,6 +106,143 @@ describe("cfc-cell-read-ceiling", () => {
     expect((await tx.commit()).error).toBeUndefined();
     return link;
   };
+
+  for (const mode of ["enforce-strict", "disabled"] as const) {
+    it(`withholds retained reference identity without reading storage (${mode})`, () => {
+      const target = writer.getCell(signer.did(), "retained-reference")
+        .getAsNormalizedFullLink();
+      const reader = readerFor([A], mode);
+      const tx = reader.edit();
+      try {
+        const held = reader.getCellFromLink(
+          target,
+          undefined,
+          tx,
+          withCfcReferenceConfidentiality(undefined, [B]),
+        );
+        expect(() => held.getAsNormalizedFullLink()).toThrow(/read ceiling/);
+        expect([...tx.getReadActivities!()]).toHaveLength(0);
+        expect(tx.getCfcState().referenceObservations).toHaveLength(0);
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it(`returns retained reference identity admitted by its ceiling (${mode})`, () => {
+      const target = writer.getCell(signer.did(), "admitted-reference")
+        .getAsNormalizedFullLink();
+      const reader = readerFor([A, B], mode);
+      const tx = reader.edit();
+      try {
+        const held = reader.getCellFromLink(
+          target,
+          undefined,
+          tx,
+          withCfcReferenceConfidentiality(undefined, [B]),
+        );
+        expect(held.getAsNormalizedFullLink().id).toBe(target.id);
+        expect([...tx.getReadActivities!()]).toHaveLength(0);
+        expect(tx.getCfcState().referenceObservations).toHaveLength(
+          mode === "disabled" ? 0 : 1,
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    for (
+      const { name, runtimeCeiling, sessionCeiling } of [
+        { name: "runtime", runtimeCeiling: [A], sessionCeiling: [A, B] },
+        { name: "session", runtimeCeiling: [A, B], sessionCeiling: [A] },
+        {
+          name: "session only",
+          runtimeCeiling: undefined,
+          sessionCeiling: [A],
+        },
+      ]
+    ) {
+      it(`withholds retained reference identity outside the ${name} ceiling (${mode})`, () => {
+        const target = writer.getCell(signer.did(), "session-reference")
+          .getAsNormalizedFullLink();
+        const reader = readerFor(runtimeCeiling, mode);
+        const tx = reader.edit();
+        stampWaveRunContext(tx, {
+          actionId: "test:reference-read-ceiling",
+          kind: "derivation",
+          readCeiling: { maxConfidentiality: sessionCeiling },
+        });
+        try {
+          const held = reader.getCellFromLink(
+            target,
+            undefined,
+            tx,
+            withCfcReferenceConfidentiality(undefined, [B]),
+          );
+          expect(() => held.getAsNormalizedFullLink()).toThrow(/read ceiling/);
+          expect([...tx.getReadActivities!()]).toHaveLength(0);
+          expect(tx.getCfcState().referenceObservations).toHaveLength(0);
+        } finally {
+          tx.abort();
+        }
+      });
+    }
+  }
+
+  for (const rowCount of [1, 2]) {
+    it(`checks captured array reference confidentiality before reading ${rowCount} target rows`, async () => {
+      const create = writer.edit();
+      const targets = Array.from({ length: rowCount }, (_, index) => {
+        const row = writer.getCell(
+          signer.did(),
+          `captured-row-${index}`,
+          undefined,
+          create,
+        );
+        row.set({ text: "public target behind private selection" });
+        return row;
+      });
+      expect((await create.commit()).error).toBeUndefined();
+      const targetLinks = targets.map((row) => row.getAsNormalizedFullLink());
+      const captured = writer.getImmutableCell(
+        signer.did(),
+        targetLinks.map((link) =>
+          writer.getCellFromLink(
+            link,
+            undefined,
+            undefined,
+            withCfcReferenceConfidentiality(undefined, [B]),
+          )
+        ),
+      );
+      const reader = readerFor([A]);
+      const tx = reader.edit();
+      const targetReads: unknown[] = [];
+      const read = tx.read.bind(tx);
+      tx.read = (address, options) => {
+        if (
+          targetLinks.some((link) => link.id === address.id) &&
+          address.path[0] === "value"
+        ) {
+          targetReads.push(address);
+        }
+        return read(address, options);
+      };
+      try {
+        const array = reader.getCellFromLink(
+          captured.getAsNormalizedFullLink(),
+          {
+            type: "array",
+            items: { type: "object", properties: { text: { type: "string" } } },
+          },
+          tx,
+        );
+        expect(() => array.get()).toThrow(/read ceiling/);
+        expect(targetReads).toEqual([]);
+      } finally {
+        tx.abort();
+      }
+    });
+  }
 
   it("refuses a private intermediate redirect while constructing a held destination", async () => {
     const create = writer.edit();

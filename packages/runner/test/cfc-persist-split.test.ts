@@ -57,6 +57,8 @@ describe("CFC observation classes (C2 persist split)", () => {
       // Persisting flow labels is what puts the split value/shape entries in
       // the document. Every assertion here reads one of them.
       cfcFlowLabels: "persist",
+      // These fixtures inspect persisted stamps even for undeclared stores.
+      cfcEnforcementMode: "observe",
     });
     return runtime;
   };
@@ -141,7 +143,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     const out = rt.getCell(space, outCause, undefined, tx);
     out.set({ copied: true });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     const id = out.getAsNormalizedFullLink().id;
     return { id, entries: entriesOf(id) };
   };
@@ -174,7 +176,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     );
     recordSeedSchemaInput(tx, outId, ["value"]);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     const derived = entriesOf(outId).filter((e) => e.origin === "derived");
     expect(derived.map((e) => e.observes).sort()).toEqual(["shape", "value"]);
@@ -213,7 +215,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     }, tx);
     list.set([el0Cell]);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     const listId = list.getAsNormalizedFullLink().id;
     const structure = entriesOf(listId).filter((e) => e.origin === "structure");
@@ -258,7 +260,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     const out = rt.getCell(space, "ps-idem-out", undefined, tx);
     out.set({ copied: true });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     const after = JSON.stringify(rawDocOf(first.id)?.cfc);
     expect(after).toEqual(before);
@@ -316,7 +318,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     );
     recordSeedSchemaInput(tx, outId, ["value"]);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     const derived = entriesOf(outId).filter((e) => e.origin === "derived");
     const valueEntry = derived.find((e) => e.observes === "value")!;
@@ -362,7 +364,7 @@ describe("CFC observation classes (C2 persist split)", () => {
       );
       recordSeedSchemaInput(tx, outId, ["value"]);
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit()).error).toBeUndefined();
     };
 
     await overwrite(secretId, { copied: true });
@@ -409,7 +411,7 @@ describe("CFC observation classes (C2 persist split)", () => {
     );
     recordSeedSchemaInput(tx, outId, ["value"]);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     // Legacy resolution: union every entry's atoms regardless of class.
     const derived = entriesOf(outId).filter((e) => e.origin === "derived");
@@ -442,7 +444,7 @@ describe("CFC observation classes (C2 persist split)", () => {
       { probed: true },
     );
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
 
     // The value/shape pair the probe must not consume is stamped on the
     // laundered document, and the stored value pins the output document the

@@ -238,4 +238,53 @@ describe("cfc-nested-link-policy-applicability", () => {
       });
     }
   }
+  for (const authorized of [true, false]) {
+    it(`${authorized ? "admits" : "refuses"} a foreign handle under a local union by its reference writer without opening private target contents`, async () => {
+      const rt = open();
+      const seed = rt.edit();
+      const profile = rt.getCell(homeSpace, "private-union-profile", {
+        type: "object",
+        properties: { name: { type: "string" }, avatar: { type: "string" } },
+        ifc: { confidentiality: ["private-profile"] },
+      }, seed);
+      profile.set({ name: "Private", avatar: "private.png" });
+      expect((await seed.commit()).error).toBeUndefined();
+      const handleSchema = (panelSchema as {
+        properties: Record<string, JSONSchema>;
+      }).properties.addedByProfile;
+      const conditionalPanel: JSONSchema = {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { const: "piece" },
+              addedByProfile: handleSchema,
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { const: "document" },
+              addedByProfile: handleSchema,
+            },
+          },
+        ],
+      };
+      const tx = rt.edit();
+      setCfcImplementationIdentity(tx, authorized ? asAdmitter : asForger);
+      rt.getCell(signer.did(), "conditional-panel", conditionalPanel, tx).set({
+        kind: "piece",
+        addedByProfile: profile.withTx(tx),
+      });
+      const outcome = await tx.commit();
+      if (authorized) expect(outcome.error).toBeUndefined();
+      else expect(outcome.error?.message).toContain("writeAuthorizedBy failed");
+      const profileId = profile.getAsNormalizedFullLink().id;
+      expect(
+        [...(tx.getReadActivities?.() ?? [])].some((read) =>
+          read.id === profileId && read.path[0] === "value"
+        ),
+      ).toBe(false);
+    });
+  }
 });

@@ -25,6 +25,9 @@ describe("staged-reference-derivation", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager: StorageManager.emulate({ as: signer }),
+      // These cache regressions exercise legacy transitive link-label derivation.
+      cfcFlowLabels: "off",
+      cfcEnforcementMode: "enforce-explicit",
     });
     await seedReferenceGraphLeaf(runtime, space);
     runtime.resetCfcStats();

@@ -8,18 +8,26 @@ import { describe, it } from "@std/testing/bdd";
 import type { BuiltInLLMMessage, CellScope } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { LLMClient, type LLMResponse } from "@commonfabric/llm";
+import { serverSeq } from "@commonfabric/memory/v2/engine";
+import {
+  ExecutionLeaseCycle,
+  executionLeaseHolder,
+} from "@commonfabric/memory/v2/execution-lease";
 
 import { llmDialog } from "../../src/builtins/llm-dialog.ts";
 import { LLMMessageSchema } from "../../src/builtins/llm-schemas.ts";
 import type { Cell } from "../../src/cell.ts";
+import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
+  waveRunContextOf,
   waveSettlementOf,
 } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
+import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import { newSharedServer } from "../memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("dialog transaction lifecycle");
 
@@ -29,13 +37,57 @@ async function fixture(
   inputScope: CellScope = "space",
   bindingScope: CellScope = "space",
 ) {
-  const storage = StorageManager.emulate({ as: signer });
+  const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+  const engine = await server.engineForSpace(signer.did());
+  const lease = new ExecutionLeaseCycle({
+    engine,
+    space: signer.did(),
+    holder: executionLeaseHolder(signer.did()),
+  });
+  if (served) expect(lease.acquire()).toBe(true);
+  const storage = EmulatedStorageManager.connectTo(server, { as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager: storage,
     servingPosture: served,
     experimental: { serverExecution: served },
   });
+  const sink = new EngineWaveCommitSink({
+    engineFor: () => engine,
+    sessionId: lease.holder,
+  });
+  let commitScopeInstances = false;
+  function restoreSealDestination() {
+    runtime.clearSealDestination();
+    if (!commitScopeInstances) return;
+    runtime.installSealDestination({
+      seal: async (tx) => {
+        if (!waveRunContextOf(tx)) {
+          stampWaveRunContext(tx, {
+            kind: "bookkeeping",
+            actionId: "dialog-fixture-completion",
+            scopeKeyIdentity: tx.tx.scopeKeyIdentity,
+          });
+        }
+        const wave = new WaveAccumulator({
+          space: signer.did(),
+          basisSeq: serverSeq(engine),
+          scopeKeyIdentity: runtime.scopeKeyIdentity,
+          replicaFor: (space) => storage.open(space).replica,
+          lease,
+        });
+        const sealed = await wave.seal(tx);
+        if (sealed.error) return sealed;
+        const outcome = await wave.commitWave(sink);
+        await wave.settled();
+        expect(outcome.aborted).toBeUndefined();
+        expect(
+          outcome.dispositions.every((entry) => entry.kind === "committed"),
+        ).toBe(true);
+        return sealed;
+      },
+    });
+  }
   const input = runtime.getCell<any>(
     signer.did(),
     "dialog-input",
@@ -67,6 +119,13 @@ async function fixture(
   let changed = Promise.withResolvers<void>();
   const originalSend = LLMClient.prototype.sendRequest;
   const originalHandler = runtime.scheduler.addEventHandler;
+  async function closeStorage() {
+    try {
+      await storage.close();
+    } finally {
+      await server.close();
+    }
+  }
   try {
     await input.sync();
     await parent.sync();
@@ -91,7 +150,7 @@ async function fixture(
           identity: tx.tx.scopeKeyIdentity,
           scope: result.getAsNormalizedFullLink().scope ?? "space",
         });
-        parent.withTx(tx).set({ output: result });
+        parent.withTx(tx).set({ output: result.getAsLink() });
       },
       (cancel) => cancellations.push(cancel),
       "dialog-test",
@@ -104,6 +163,13 @@ async function fixture(
 
     return {
       runtime,
+
+      /** Commits each actor's writes through its resolved serving instance. */
+      installServingCommits() {
+        commitScopeInstances = true;
+        restoreSealDestination();
+      },
+
       input,
       parent,
       requests,
@@ -130,7 +196,10 @@ async function fixture(
           messages.withTx(tx).set([]);
           cells.set(scope, messages.withTx());
         }
-        input.withTx(tx).set({ messages, builtinTools: false });
+        input.withTx(tx).set({
+          messages: messages.getAsLink(),
+          builtinTools: false,
+        });
         action(tx);
         expect((await tx.commit()).error).toBeUndefined();
         await runtime.idle();
@@ -166,7 +235,7 @@ async function fixture(
         while (requests.length < count) await changed.promise;
       },
       async close() {
-        runtime.clearSealDestination();
+        restoreSealDestination();
         for (const request of requests) {
           request.response.resolve({
             role: "assistant",
@@ -181,7 +250,7 @@ async function fixture(
             await runtime.dispose({ closeStorage: false });
           } finally {
             try {
-              await storage.close();
+              await closeStorage();
             } finally {
               LLMClient.prototype.sendRequest = originalSend;
               runtime.scheduler.addEventHandler = originalHandler;
@@ -195,7 +264,7 @@ async function fixture(
       await runtime.dispose({ closeStorage: false });
     } finally {
       try {
-        await storage.close();
+        await closeStorage();
       } finally {
         LLMClient.prototype.sendRequest = originalSend;
         runtime.scheduler.addEventHandler = originalHandler;
@@ -421,6 +490,7 @@ describe("llm-dialog-served", () => {
   });
   it("preserves another actor's accepted selection of a shared physical binding", async () => {
     const f = await fixture(true, "user");
+    f.installServingCommits();
     const alice = {
       principal: (await Identity.fromPassphrase("dialog-alice")).did(),
       sessionId: "alice-one",
@@ -448,6 +518,7 @@ describe("llm-dialog-served", () => {
 
   it("restores a refused actor's distinct binding to a shared result", async () => {
     const f = await fixture(true, "space", "user");
+    f.installServingCommits();
     const alice = {
       principal: (await Identity.fromPassphrase("dialog-alice")).did(),
       sessionId: "alice-one",
@@ -660,6 +731,7 @@ describe("llm-dialog-served", () => {
 
   it("lets an accepted refusal announcement supersede an older target", async () => {
     const f = await fixture(true, "user");
+    f.installServingCommits();
     const alice = {
       principal: (await Identity.fromPassphrase("dialog-alice")).did(),
       sessionId: "alice-one",

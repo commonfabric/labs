@@ -3,6 +3,8 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type {
+  CellHandle,
+  CellRef,
   RuntimeClient,
   TriggerTraceEntry,
 } from "@commonfabric/runtime-client";
@@ -10,6 +12,7 @@ import type {
 import {
   clearRuntimeDebugGlobals,
   type CommonfabricDebugState,
+  createDebugUtils,
   createViewSettled,
   exposeCommonfabricGlobals,
   summarizeDebugValue,
@@ -17,6 +20,63 @@ import {
 } from "../src/lib/debug-utils.ts";
 
 describe("debug utils", () => {
+  it("acquires an address before reading its issued handle", async () => {
+    const acquired: CellRef[] = [];
+    let reads = 0;
+    const ref: CellRef = {
+      id: "of:debug-target",
+      space: "did:key:debug",
+      scope: "space",
+      path: ["title"],
+    };
+    const cell = {
+      ref: () => ({ ...ref, cfcReferenceToken: "issued" }),
+      sync: () => {
+        reads++;
+        return Promise.resolve("Notebook");
+      },
+    } as unknown as CellHandle<unknown>;
+    const runtime = {
+      acquireCell: (address: CellRef) => {
+        acquired.push(address);
+        return Promise.resolve(cell);
+      },
+    } as unknown as RuntimeClient;
+    const debug = createDebugUtils(() => ref.space, () => runtime);
+    using _log = stub(console, "log", () => {});
+    expect(await debug.readCell({ id: ref.id, path: [...ref.path] })).toBe(
+      "Notebook",
+    );
+    expect(acquired).toEqual([{ ...ref, type: "application/json" }]);
+    expect(reads).toBe(1);
+  });
+
+  it("cancels a subscription while address acquisition is pending", async () => {
+    const pending = Promise.withResolvers<CellHandle<unknown>>();
+    const acquired: CellRef[] = [];
+    let subscriptions = 0;
+    const runtime = {
+      acquireCell: (address: CellRef) => {
+        acquired.push(address);
+        return pending.promise;
+      },
+    } as unknown as RuntimeClient;
+    const debug = createDebugUtils(() => "did:key:debug", () => runtime);
+    using _log = stub(console, "log", () => {});
+    const cancel = debug.subscribeToCell({ id: "of:debug-target" });
+    expect(acquired).toHaveLength(1);
+    expect(cancel).toBeDefined();
+    cancel!();
+    pending.resolve({
+      subscribe: () => {
+        subscriptions++;
+        return () => {};
+      },
+    } as unknown as CellHandle<unknown>);
+    await pending.promise;
+    expect(subscriptions).toBe(0);
+  });
+
   it("summarizeDebugValue classifies common metadata/result shapes", () => {
     const summary = summarizeDebugValue({
       $NAME: "My Note",

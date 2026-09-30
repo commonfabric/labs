@@ -395,6 +395,11 @@ gesture-gated) with the pin seam (correctly owner-gated). Richer
 pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 `TILE_UI` + `cf-render variant=…`), not a new authorization gate.
 
+`addPiece` resolves its address through `cellFromUrl` in a composed reference
+pattern. The reference retains the sender's selection confidentiality; the
+linked piece keeps its own content labels. Pinning confidentially selected
+addresses into a public profile is refused by the ordinary writer-fit check.
+
 **Test.** `packages/patterns/system/profile-home.owner-gated.test.ts` —
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a

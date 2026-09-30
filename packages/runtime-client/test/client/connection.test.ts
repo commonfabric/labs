@@ -14,6 +14,7 @@ import type { DID } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { $conn, CellHandle, type RuntimeClient } from "@/mod.ts";
 import { RuntimeConnection } from "@/client/connection.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import {
@@ -113,6 +114,59 @@ class ThrowingTransport extends EventEmitter<RuntimeTransportEvents>
 }
 
 describe("connection", () => {
+  it("separates subscriptions and cached values by acquisition token", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const runtime = { [$conn]: () => connection } as unknown as RuntimeClient;
+    const address = {
+      space: "did:key:test" as const,
+      id: "of:acquired" as const,
+      scope: "space" as const,
+      path: [],
+    };
+    const first = new CellHandle<string>(runtime, {
+      ...address,
+      cfcReferenceToken: "first",
+    });
+    const second = new CellHandle<string>(runtime, {
+      ...address,
+      cfcReferenceToken: "second",
+    });
+    try {
+      await connection.subscribe(first);
+      transport.emit("message", {
+        type: NotificationType.CellUpdate,
+        cell: first.ref(),
+        value: "first value",
+      });
+      await connection.subscribe(second);
+      expect(first.get()).toBe("first value");
+      expect(second.get()).toBeUndefined();
+      expect(
+        transport.sent.filter((message) =>
+          "data" in message && message.data.type === RequestType.CellSubscribe
+        ),
+      ).toHaveLength(2);
+      transport.emit("message", {
+        type: NotificationType.CellUpdate,
+        cell: second.ref(),
+        value: "second value",
+      });
+      expect(first.get()).toBe("first value");
+      expect(second.get()).toBe("second value");
+      await connection.unsubscribe(first);
+      transport.emit("message", {
+        type: NotificationType.CellUpdate,
+        cell: second.ref(),
+        value: "still subscribed",
+      });
+      expect(second.get()).toBe("still subscribed");
+      await connection.unsubscribe(second);
+    } finally {
+      await connection.dispose();
+    }
+  });
+
   it("records an abandoned request exactly once even if its reply arrives late", async () => {
     // Disposal ends the wait; the worker knows nothing of that and answers
     // later. The late reply finds no pending entry, and must not record a

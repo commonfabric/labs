@@ -40,6 +40,7 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { isLink } from "@commonfabric/runner";
+import { carryCfcReferenceProvenance } from "@commonfabric/runner/cfc";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
@@ -538,6 +539,8 @@ export function evaluateFixer(
             `${linkPath.length === 0 ? "<root>" : displayPath(linkPath)}.`,
         };
       }
+      // The copied bytes still name this exact acquired reference.
+      carryCfcReferenceProvenance(valueAtPath(document, linkPath), kept);
     }
     if (storedEqual(document, first)) return { kind: "conforms" };
     return {

@@ -1,5 +1,6 @@
 import {
   Cell,
+  cellFromUrl,
   Cfc,
   computed,
   CurrentPrincipal,
@@ -496,20 +497,21 @@ const UrlPatternReference = pattern<
   }),
 );
 
-// Build a link to an EXISTING deployed piece in (possibly) another space
-// (CT-1755). This is the canonical serialized cross-space link shape
-// (`createSigilLinkFromParsedLink`'s output): a `link@1` sigil carrying the
-// target piece id (URI form, `of:` prefix) and space DID. Stored as a
-// `ProfileElement.cell`, it resolves to the live piece and renders as a
-// followable `<cf-cell-link>` exactly like a `profiles[]` roster entry.
-const pieceReferenceLink = (space: string, pieceId: string): unknown => {
-  const id = pieceId.startsWith("of:") ? pieceId : `of:${pieceId}`;
-  return { "/": { "link@1": { id, space, path: [] } } };
+const PieceReference = pattern<{ url: string }>(
+  ({ url }) => {
+    const resolved = cellFromUrl({ url });
+    return resolved.cell;
+  },
+);
+
+// Element mutations compare references; renderers read the card content.
+type ProfileElementReference = Omit<ProfileElement, "cell"> & {
+  cell: Cell<unknown>;
 };
 
 const appendElement = (
   element: ProfileElement,
-  elements: Writable<ProfileElement[]>,
+  elements: Writable<ProfileElementReference[]>,
 ) => {
   const current = elements.get();
   if (current.some((existing) => equals(existing.cell, element.cell))) {
@@ -528,7 +530,7 @@ const appendElement = (
 const mutateElements = handler<
   MutateProfileElementsEvent,
   {
-    elements: Writable<ProfileElement[]>;
+    elements: Writable<ProfileElementReference[]>;
     // Instance intent. Each binding site declares what its events may do, so
     // a malformed/empty event can never cross purposes (an empty remove must
     // not add; an empty link form must not add a catalog card):
@@ -603,8 +605,16 @@ const mutateElements = handler<
       // Tag by the piece id so the same piece can't be pinned twice (dedup in
       // appendElement is by `cell`; a stable tag keeps the row label sane).
       const tag = rawId;
+      const id = rawId.startsWith("of:") ? rawId : `of:${rawId}`;
+      // Equality observes each held reference's selection labels.
+      const address = { "/": { "link@1": { id, space, path: [] } } };
+      if (
+        state.elements.get().some((existing) => existing.cell.equals(address))
+      ) {
+        return;
+      }
       appendElement({
-        cell: pieceReferenceLink(space, rawId),
+        cell: PieceReference({ url: `//${space}/${id}` }),
         source: "piece",
         title,
         tag,

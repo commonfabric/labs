@@ -147,6 +147,10 @@ import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
 import { abandonRunnerAcceptanceEffects } from "./runner-acceptance.ts";
 import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
+import {
+  InvalidRuntimeEventReferenceContext,
+  restoreRuntimeEventDispatch,
+} from "../cfc/event-reference-context.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../scheduler/constants.ts";
 import { LT1_LATE_SEAL_REFUSED } from "../scheduler/types.ts";
 import type { PostCommitSideEffect } from "../cfc/types.ts";
@@ -2312,6 +2316,8 @@ export class SpaceServer implements TransactionSealDestination {
         // reason is logged here; the wave's refusal message stays
         // generic.
         foreignWriteGrant: async (foreignSpace, acting) => {
+          // Explicit creation returns only after genesis commits. Its
+          // confirmation is not a lasting grant: inspect the current ACL.
           const verdict = await this.#options.server
             .foreignWriteAuthorityFor(foreignSpace, acting.user);
           if (!verdict.granted) {
@@ -4322,15 +4328,20 @@ export class SpaceServer implements TransactionSealDestination {
           // client's own admission). Without it a per-user served
           // handler's write to an owner-protected cell is refused at
           // prepare ("missing trusted-event policy input").
+          const { payload, target } = restoreRuntimeEventDispatch(
+            entry.payload,
+            entry.runtimeReferenceContext,
+            link,
+          );
           if (entry.rendererTrusted === true) {
-            markRendererTrustedEvent(entry.payload);
+            markRendererTrustedEvent(payload);
           }
           this.#drainInFlight.set(entry.eventId, "queued");
           const eventId = entry.eventId;
           const tenure = runtime;
           runtime.scheduler.queueEvent(
-            link,
-            entry.payload,
+            target,
+            payload,
             // No scheduler-side backoff: a transiently-failed seal leaves
             // the entry unconsequenced and durable, and the post-wave
             // re-arm rescans it — the wave IS the retry cadence.
@@ -4520,6 +4531,14 @@ export class SpaceServer implements TransactionSealDestination {
           queued += 1;
           this.#preQueueDeferralStreaks.delete(`queue\0${entry.eventId}`);
         } catch (drainError) {
+          if (drainError instanceof InvalidRuntimeEventReferenceContext) {
+            this.#drainInFlight.set(entry.eventId, "marked");
+            this.#sealEventConsequenceNotice(runtime, entry, streamEntry, {
+              kind: "dropped",
+              message: drainError.message,
+            });
+            continue;
+          }
           // Nothing was queued: release the guard (a throw between the
           // add and the queue must not strand the entry until park).
           this.#drainInFlight.delete(entry.eventId);

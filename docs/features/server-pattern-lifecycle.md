@@ -89,8 +89,11 @@ operator to its ACL. Every call reads current access; a removed writer cannot
 reuse a cached authorization decision.
 
 The verb's own writes are the serving loop's, under the space's lease. The
-instantiation transaction carries the requester's CFC trust snapshot, so a label
-setup mints attributes to the requester rather than to the serving identity.
+instantiation transaction carries the requester's CFC trust snapshot, so a
+label setup mints attributes to the requester rather than to the serving
+identity. Under precise CFC, the trusted request boundary acquires explicit
+document links in the argument before setup. That acquisition records the
+reference; reading its target still consumes the target's content labels.
 
 ## Where a verb runs
 
@@ -160,6 +163,12 @@ run again for the same piece. Concurrent retries select the same pending
 attempt. An unknown transport outcome or failed registry read keeps its delivery
 identity. A late uncertain result cannot erase a proven terminal result for the
 same attempt, and a handled receipt cannot be downgraded.
+
+The serving preparation captures the registration payload and its authenticated
+reference dispatch context before the transport appends it. That context binds
+the selected stream and carries the newly created piece's acquisition history.
+Delegated ingress forwards both unchanged; the caller's ACL authorization does
+not substitute for reference provenance.
 
 Client-side registration also treats the registry as a read interface. It starts
 the default pattern, demands its registry while invoking `addPiece`, and waits

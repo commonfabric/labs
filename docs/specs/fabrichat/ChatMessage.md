@@ -193,7 +193,8 @@ shape above doesn't close them off.
 - **Links as items.** Links in a message held as items of their own rather than
   as text inside `body`: both web URLs and in-model links to cells in other
   spaces, including spaces served by other hosts (see [Common Fabric
-  URLs](../fabric-urls.md)). An in-model link would carry its target's label
-  across the space boundary, as every link in this design does. A client that
+  URLs](../fabric-urls.md)). An in-model link carries its acquisition
+  confidentiality; reading its target additionally consumes that target's
+  labels ([reference semantics](../cfc-references.md)). A client that
   shows a preview of a web link has to decide who fetches it, since fetching
   tells the linked site that someone is reading.

@@ -79,10 +79,14 @@ class SharedServerStorageManager extends EmulatedStorageManager {
    * resolves — holding an open (sealed, uncommitted) wave across a
    * lease tenure bump, deterministically. Undefined everywhere else. */
   settleGate: Promise<void> | undefined;
+  onSettleGateEntered: (() => void) | undefined;
 
   override async inputSynced(): Promise<void> {
     await super.inputSynced();
-    if (this.settleGate !== undefined) await this.settleGate;
+    if (this.settleGate !== undefined) {
+      this.onSettleGateEntered?.();
+      await this.settleGate;
+    }
   }
 }
 
@@ -1486,7 +1490,9 @@ describe("stage F serving loop", () => {
     // Let the activation-triggered cycle finish (its watermark-only
     // advance claims the authored input) so the loop sits in
     // wait-for-input — not mid-settle — before the gate closes.
-    const authoredSeq = Engine.serverSeq(engine);
+    const authoredSeq = Engine.readState(engine, {
+      id: input.getAsNormalizedFullLink().id,
+    })!.seq;
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
 
     // Close the gate, then open a wave: a stamped tx on the SERVING
@@ -1496,7 +1502,15 @@ describe("stage F serving loop", () => {
     const manager = servingRuntime!
       .storageManager as SharedServerStorageManager;
     const gate = Promise.withResolvers<void>();
+    const enteredGate = Promise.withResolvers<void>();
     manager.settleGate = gate.promise;
+    manager.onSettleGateEntered = enteredGate.resolve;
+    // A fresh input guarantees a cycle that reaches the installed gate. A
+    // watermark observation alone can leave the prior cycle past its barrier.
+    const wakeTx = clientRuntime.edit();
+    input.withTx(wakeTx).set({ value: 2 });
+    expect((await wakeTx.commit()).error).toBeUndefined();
+    await enteredGate.promise;
     const probeCell = servingRuntime!.getCell<{ n: number }>(
       space,
       "renew-blip-probe",
@@ -1531,6 +1545,7 @@ describe("stage F serving loop", () => {
     gate.resolve();
     await parked();
     manager.settleGate = undefined;
+    manager.onSettleGateEntered = undefined;
     // Soundness: no watermark movement rode the aborted wave, and no
     // continued loop minted a watermark-only advance after it.
     expect(readWatermarkSeq(engine)).toBe(watermarkBefore);
@@ -2170,7 +2185,9 @@ describe("stage F serving loop", () => {
     expect((await tx.commit()).error).toBeUndefined();
     await activated();
     const first = host.spaceServer(space)!;
-    const authoredSeq = Engine.serverSeq(engine);
+    const authoredSeq = Engine.readState(engine, {
+      id: input.getAsNormalizedFullLink().id,
+    })!.seq;
     await awaitAdmitted(server, () => readWatermarkSeq(engine) >= authoredSeq);
 
     // The trigger: a stamped serving-side tx writing a FOREIGN space

@@ -11,6 +11,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime, RuntimeTelemetry } from "@commonfabric/runner";
 import { RuntimeProcessor } from "@/backends/runtime-processor.ts";
+import { type CellRef, RequestType } from "@/protocol/mod.ts";
 
 /** The signer a processor acts as when a test supplies no identity. */
 const standInSigner = await Identity.fromPassphrase(
@@ -48,4 +49,15 @@ export function buildProcessor(parts: {
       spaceDid: space,
     },
   );
+}
+
+/** Acquires a test-owned address before sending an ordinary cell request. */
+export function acquireCellRef(
+  processor: RuntimeProcessor,
+  address: CellRef,
+): CellRef {
+  return processor.handleAcquireCell({
+    type: RequestType.AcquireCell,
+    address,
+  }).cell;
 }

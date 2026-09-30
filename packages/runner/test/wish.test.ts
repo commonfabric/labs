@@ -4245,11 +4245,7 @@ describe("wish built-in", () => {
           // picker-result-cell id divergence within one profile space.
           const profileSpaces: string[] = [];
           const profileCells: Array<ReturnType<Runtime["getCell"]>> = [];
-          const aliasLinks: Array<
-            ReturnType<
-              ReturnType<Runtime["getCell"]>["getAsNormalizedFullLink"]
-            >
-          > = [];
+          const aliasCells: Array<ReturnType<Runtime["getCell"]>> = [];
           for (let i = 0; i < opts.names.length; i++) {
             const spaceDid = (await Identity.fromPassphrase(
               `ct1842-${label}-space-${i}`,
@@ -4282,22 +4278,14 @@ describe("wish built-in", () => {
             await runtime.idle();
             tx = runtime.edit();
             profileCells.push(cell);
-            aliasLinks.push(alias.getAsNormalizedFullLink());
+            aliasCells.push(alias);
           }
 
           // A sigil link to the SIBLING cell (same profile space, different id) —
           // the shape a cross-space `mru` / `defaultProfile` entry resolves to in
           // production.
-          const aliasSigil = (i: number) => ({
-            "/": {
-              [LINK_V1_TAG]: {
-                id: aliasLinks[i].id,
-                space: aliasLinks[i].space,
-                path: [],
-                scope: aliasLinks[i].scope,
-              },
-            },
-          });
+          const aliasSigil = (i: number) =>
+            aliasCells[i].withTx(tx).getAsLink();
 
           const homeSpaceCell = runtime.getHomeSpaceCell(tx);
           const homeDefaultCell = runtime.getCell(

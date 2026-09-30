@@ -593,6 +593,16 @@ relocated into the wave's commit step:
   for the target's admission (§2). Never derived-class: single-deriver
   per space is untouched, and the minted space's own SpaceServer
   activates later (first session or event) as its only deriver.
+- Grant evaluation waits for an already-running ACL initialization in the
+  serving runtime's own storage manager when that manager holds the space's
+  signing key. A read can mount a fresh store before its genesis ACL commits;
+  the wait closes that local readiness window without granting access. The
+  authoritative ACL check runs after readiness and still refuses a wrong
+  actor, a populated space without an ACL, and malformed or retracted ACLs.
+  The wait opens no provider, registers no key, and does not wait for another
+  manager's untracked initialization; those targets receive the ordinary
+  authoritative grant check against their current state. Initialization
+  failure refuses the crossing.
 - Sequencing at the wave commit step: foreign provisioning commits land
   FIRST (per destination space), then the home derived commit carrying
   the links and the `eventWatermark` advance. Same host, same process —
@@ -924,6 +934,15 @@ disabled (README §3.5).
   carriage like the basis rows: admission never reads them there
   (the lease check admits the commit), and the closed metadata list
   is not breached.
+- **Runtime event attestations are entry carriage.** The optional
+  `runtimeReferenceContext` belongs beside `rendererTrusted` and
+  `runtimeInjectedEventKeys` on the admitted stream entry (events.md §2).
+  Runtime derives it from private acquisitions and binds it to the exact payload;
+  application payload fields cannot supply that authority. Admission validates
+  its string shape under the existing producer and actor checks. The serving
+  Runtime checks reference completeness and restrictions before dispatch; Memory
+  does not interpret CFC policy. Same-space derived writes, durable cross-space
+  outbox rows, and explicit event Retry preserve the context unchanged.
 - **A read may name an `entity_scope_key`** (S1, §2's read row;
   ledger LD5 ratified 2026-08-03 — the read half of §1's
   transaction identity model). That is the only read-side addition

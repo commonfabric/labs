@@ -964,6 +964,34 @@ describe("cell-handle", () => {
       expect(unscoped.equals(spaceScoped)).toBe(true);
       expect(spaceScoped.equals(unscoped)).toBe(true);
     });
+
+    for (
+      const changed of [
+        { cfcReferenceToken: "second-acquisition" },
+        { overwrite: "redirect" as const },
+      ]
+    ) {
+      it(`notifies when a linked cell changes ${Object.keys(changed)[0]}`, () => {
+        const cell = new CellHandle<unknown>(makeRuntime(), ref);
+        const calls: CellHandle[] = [];
+        cell.subscribe((value) => {
+          if (isCellHandle(value)) calls.push(value);
+        });
+        const target = {
+          id: "of:acquired-target",
+          space: ref.space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: "first-acquisition",
+        };
+        cell[$onCellUpdate]({ "/": { "link@1": target } });
+        const first = cell.get();
+        cell[$onCellUpdate]({ "/": { "link@1": { ...target, ...changed } } });
+        expect(cell.get()).not.toBe(first);
+        expect(calls).toHaveLength(2);
+        expect(calls[1].ref()).toMatchObject(changed);
+      });
+    }
   });
 
   describe("CellHandle disposal-raced writes", () => {

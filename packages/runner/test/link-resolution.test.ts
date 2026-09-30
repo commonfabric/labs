@@ -1,11 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import {
-  linkProbeSubPath,
-  linkRefFrom,
-  linkRefPayload,
-} from "@commonfabric/data-model/cell-rep";
+import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -14,7 +10,6 @@ import { resolvedSchema } from "./schema-ref-helpers.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import {
   areNormalizedLinksSame,
-  isSigilLink,
   parseLink,
   toMemorySpaceAddress,
 } from "../src/link-utils.ts";
@@ -407,19 +402,14 @@ describe("link-resolution", () => {
         undefined,
         tx,
       );
-      let linkData = targetCell.getAsLink();
-      // Manually set schema on the link, as a new link, since a link's payload
-      // is fixed once it is made.
-      if (isSigilLink(linkData)) {
-        linkData = linkRefFrom({ ...linkRefPayload(linkData), schema });
-      }
+      const linkData = targetCell.getAsLink({ includeSchema: true });
       sourceCell.setRaw({ link: linkData });
       tx.commit();
       tx = runtime.edit();
 
       const link = parseLink(sourceCell.get().link, sourceCell)!;
       const resolved = resolveLink(runtime, tx, link);
-      expect(resolved.schema).toEqual(schema);
+      expect(resolvedSchema(resolved.schema)).toEqual(schema);
     });
 
     it("should handle schema through multiple link hops", () => {

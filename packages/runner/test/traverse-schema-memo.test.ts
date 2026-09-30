@@ -25,6 +25,46 @@ const TEST_SCOPE_IDENTITY = {
 };
 
 describe("SchemaObjectTraverser shared schema memo", () => {
+  it("separates active memo entries when the creator's reference context changes", () => {
+    const manager = new StoreObjectManager(new Map<string, Revision<State>>());
+    const tx = new ExtendedStorageTransaction(
+      new ManagedStorageTransaction(manager),
+    );
+    const schema = { type: "string", asCell: ["cell"] } as const;
+    const traverser = new SchemaObjectTraverser<FabricValue>(tx, {
+      path: ["value"],
+      schema,
+    }, createDefaultTraversalContext(TEST_SCOPE_IDENTITY));
+    let referenceContext = 1;
+    traverser.objectCreator = {
+      ...traverser.objectCreator,
+      referenceContextKey: () => referenceContext,
+      createObject: () =>
+        referenceContext === 1 ? "public view" : "private view",
+    };
+    const document: IMemorySpaceValueAttestation = {
+      address: {
+        space: "did:key:one",
+        scope: "space",
+        id: "of:same",
+        type: "application/json",
+        path: ["value"],
+      },
+      value: "content",
+    };
+    expect(traverser.traverseWithSchema(document, schema).ok).toBe(
+      "public view",
+    );
+    referenceContext = 2;
+    expect(traverser.traverseWithSchema(document, schema).ok).toBe(
+      "private view",
+    );
+    expect(traverser.traverseWithSchema(document, schema).ok).toBe(
+      "private view",
+    );
+    expect(traverser.schemaMemoHits).toBe(1);
+  });
+
   it("does not alias the same document id across address scopes", () => {
     const manager = new StoreObjectManager(
       new Map<string, Revision<State>>(),

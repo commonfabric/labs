@@ -9,6 +9,7 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { isAuthorizationRead } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-missing-source");
 const space: MemorySpace = signer.did();
@@ -104,6 +105,26 @@ const subscribeLink = (
 };
 
 describe("cfc-missing-link-source-metadata", () => {
+  it("retains an authorization dependency when an unlabeled source is forwarded", async () => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      await commitWrite(runtime, "plain-source", "public");
+      const tx = runtime.edit();
+      const source = runtime.getCell(space, "plain-source", undefined, tx);
+      runtime.getCell(space, "plain-destination", undefined, tx).set(source);
+      expect(
+        [...tx.getReadActivities!()].some((read) =>
+          read.id === source.getAsNormalizedFullLink().id &&
+          read.path[0] === "cfc" && isAuthorizationRead(read.meta)
+        ),
+      ).toBe(true);
+      tx.abort();
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
   // The cases here are a pair, and each is worth as much as the other. A
   // refusal the state in hand settles has to stop retrying, and one that
   // reading the source would settle has to keep retrying, since mislabelling

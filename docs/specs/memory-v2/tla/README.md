@@ -164,6 +164,11 @@ or missed contributor directly.
   for admission logic, but it does NOT check the matcher's own
   refinements — that is the differential harness's job
   (`packages/memory/test/v2-differential-consistency.test.ts`).
+- **Explicitly elidable dependencies.** Identity-mode reads represent callers
+  whose observations decide only document operations. Required dependencies and
+  external outcomes are outside this model; the engine must validate their
+  staleness even when document operations elide. The engine/client required-read
+  tests and Runtime effect race test cover that separate contract.
 - **Appends-only values.** The value of a path is the set of accepted writes
   to it. This makes observations mergeable (a reader through a stack observes
   base + every contributing layer, exactly the mergeable-collection-writes

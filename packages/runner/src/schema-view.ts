@@ -49,13 +49,12 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { toCell } from "./back-to-cell.ts";
-import { type Cell, createCell } from "./cell.ts";
+import { type Cell, createCell, snapshotValueAtAddress } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import {
   type CfcLabelView,
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
-import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
 import { type Runtime } from "./runtime.ts";
 import {
@@ -70,11 +69,17 @@ import {
   getJsonType,
   getPropertyDefaultSchema,
   isOpaquePosition,
+  isPlainTypeSchema,
   opaqueLeafMissesRequired,
   schemaAcceptsType,
 } from "./traverse.ts";
 
 const logger = getLogger("schema-view", { enabled: false, level: "warn" });
+
+/** Internal request to validate a property's presence without returning its value. */
+export const schemaViewPresence: unique symbol = Symbol("schema-view-presence");
+
+const PRESENT: unique symbol = Symbol("present");
 
 /**
  * Thrown when a reader touches data the schema does not describe.
@@ -284,13 +289,25 @@ export function materializeSchemaView(
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
   isRoot: boolean,
+  presenceOnly = false,
 ): unknown {
+  // Only exact stored-kind schemas decide presence from shape alone. Integer
+  // validation inspects a numeric value, so it retains a value observation.
+  const shapeOnlyPresence = presenceOnly && isObjectOrArray(link.schema) &&
+    typeof link.schema.type === "string" &&
+    ["string", "number", "boolean", "null", "undefined"].includes(
+      link.schema.type,
+    ) && isPlainTypeSchema(link.schema, link.schema.type);
   const mismatch = (reason: string): undefined => {
     // Register the read that failed before doing anything else. A refusal has
     // to leave behind the dependency that re-triggers the reader when the data
     // it wanted arrives; `noteSchemaRefusal` records the error, not the read.
-    // Recursive, because what failed is a value the reader asked for.
-    tx.readValueOrThrow(link);
+    // Exact scalar presence checks depend only on the value's type; ordinary
+    // projections retain the value observation when they refuse.
+    tx.readValueOrThrow(
+      link,
+      shapeOnlyPresence ? { nonRecursive: true } : undefined,
+    );
     if (isRoot) return undefined;
     const refusal = new SchemaMismatchError(link, reason);
     // Record as well as throw: a reader can catch this and carry on, and the
@@ -359,13 +376,13 @@ export function materializeSchemaView(
   // A primitive, and a `FabricPrimitive` with it, is a leaf: the type check
   // above is the whole of what a schema says about it.
   if (!isObjectOrArray(value) || value instanceof FabricPrimitive) {
-    // The caller read this document without telling the scheduler — the eager
-    // traverser registers its own reads as it walks, and so does a view. Same
-    // granularity it uses: non-recursive, which a write at this path still
-    // invalidates, and which keeps a view's read set comparable to an eager
-    // one's when both are measured against a declared scope envelope.
-    tx.readValueOrThrow(link, { nonRecursive: true });
-    return value;
+    // A materialized leaf consumes its value-scoped labels as well as its
+    // shape. Containers register their descendants only when those are read.
+    tx.readValueOrThrow(
+      link,
+      shapeOnlyPresence ? { nonRecursive: true } : undefined,
+    );
+    return shapeOnlyPresence ? PRESENT : value;
   }
 
   // A container's shape is what the view observed to build itself; what is
@@ -462,13 +479,22 @@ const readChild = (
   schema: JSONSchema,
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
+  presenceOnly = false,
 ): unknown => {
   const childLink: NormalizedFullLink = {
     ...link,
     path: [...link.path, key],
     schema,
   };
-  return readChildAt(runtime, tx, childLink, [key], cfcLabelView, synced);
+  return readChildAt(
+    runtime,
+    tx,
+    childLink,
+    [key],
+    cfcLabelView,
+    synced,
+    presenceOnly,
+  );
 };
 
 /**
@@ -485,6 +511,7 @@ const readChildAt = (
   labelPath: readonly string[],
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
+  presenceOnly = false,
 ): unknown => {
   // Back through the front door: link resolution, `asCell` dispatch and schema
   // combination all belong there, and a marked transaction lands back here for
@@ -499,7 +526,12 @@ const readChildAt = (
       cfcLabelView: rebaseCfcLabelView(cfcLabelView, [...labelPath]),
     },
     [],
-    { synced, mismatchThrows: true, viewChild: true },
+    {
+      synced,
+      mismatchThrows: true,
+      viewChild: true,
+      [schemaViewPresence]: presenceOnly,
+    },
   );
 };
 
@@ -532,7 +564,7 @@ function createObjectView(
 ): unknown {
   const schema = link.schema;
   const required = new Set(requiredKeys(schema));
-  const resolveChild = (key: string): unknown => {
+  const resolveChild = (key: string, presenceOnly = false): unknown => {
     const narrowed = childSchema(schema, key, "object");
     if (isExcluded(narrowed)) {
       // The data carries this key and the schema does not select it, so the
@@ -600,7 +632,16 @@ function createObjectView(
       // check a view makes when it is built, or a combinator's whole-branch
       // evaluation. A mismatch deeper inside a child view is not decided here;
       // it surfaces where the reader touches it.
-      return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
+      return readChild(
+        runtime,
+        tx,
+        link,
+        key,
+        narrowed,
+        cfcLabelView,
+        synced,
+        presenceOnly,
+      );
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
       // A child can dead-end at a doc the replica cannot serve — inside a
@@ -634,12 +675,12 @@ function createObjectView(
   // case checks the accounting flag and the read epoch. Entered by hand rather than around a
   // callback: a reader walking a large value touches this per property, and a
   // callback would allocate a closure each time.
-  const childOrAbsent = (key: string): unknown => {
+  const childOrAbsent = (key: string, presenceOnly = false): unknown => {
     if (readStatsActive) recordProxyAccess(tx);
-    if (!tx.hasWrites()) return resolveChild(key);
+    if (!tx.hasWrites()) return resolveChild(key, presenceOnly);
     const previous = tx.enterReadEpoch(epoch);
     try {
-      return resolveChild(key);
+      return resolveChild(key, presenceOnly);
     } finally {
       tx.exitReadEpoch(previous);
     }
@@ -674,20 +715,28 @@ function createObjectView(
     getOwnPropertyDescriptor: (_target, prop) => {
       if (typeof prop === "symbol") return undefined;
       if (!visibleKeys(schema, value).includes(prop)) return undefined;
-      const value_ = childOrAbsent(prop);
+      // Required keys were checked at the container boundary. Their presence
+      // needs no child projection; the getter materializes the selected value.
+      if (required.has(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          get: () => child(prop),
+        };
+      }
+      const value_ = childOrAbsent(prop, true);
       if (value_ === ABSENT) return undefined;
       return {
         configurable: true,
         enumerable: true,
-        writable: false,
-        value: value_,
+        get: () => child(prop),
       };
     },
     has: (_target, prop) =>
       typeof prop === "symbol"
         ? prop in value
         : visibleKeys(schema, value).includes(prop) &&
-          childOrAbsent(prop) !== ABSENT,
+          (required.has(prop) || childOrAbsent(prop, true) !== ABSENT),
     set: () => refuseMutation("assign to"),
     deleteProperty: () => refuseMutation("delete from"),
     defineProperty: () => refuseMutation("define properties on"),
@@ -731,16 +780,19 @@ function createArrayView(
       // the element's own document is all that is registered, and a write into
       // the array never reaches the reader.
       tx.readValueOrThrow(slotLink);
+      const snapshot = snapshotValueAtAddress(
+        runtime,
+        tx,
+        slotLink,
+        item,
+        rebaseCfcLabelView(cfcLabelView, [key]),
+      );
       return readChildAt(
         runtime,
         tx,
-        {
-          ...slotLink,
-          id: dataUriFromValueWithResolvedLinks(item, slotLink),
-          path: [],
-        },
-        [key],
-        cfcLabelView,
+        snapshot.link,
+        [],
+        snapshot.cfcLabelView,
         synced,
       );
     }
@@ -858,8 +910,7 @@ function createArrayView(
       return {
         configurable: true,
         enumerable: true,
-        writable: false,
-        value: element(index),
+        get: () => element(index),
       };
     },
     has: (_target, prop) =>

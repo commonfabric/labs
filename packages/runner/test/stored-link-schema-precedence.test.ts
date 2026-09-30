@@ -27,6 +27,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
+import { carryCfcReferenceProvenance } from "../src/cfc/reference-provenance.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { isCellResult } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -89,13 +90,16 @@ describe("stored-link-schema-precedence", () => {
    */
   const linkCarrying = (cell: Cell<unknown>, schema: JSONSchema) => {
     const link = cell.getAsNormalizedFullLink();
-    return linkRefFrom<CellLinkRefPayload>({
-      id: link.id,
-      space: link.space,
-      scope: link.scope,
-      path: [...link.path],
-      schema,
-    });
+    return carryCfcReferenceProvenance(
+      cell,
+      linkRefFrom<CellLinkRefPayload>({
+        id: link.id,
+        space: link.space,
+        scope: link.scope,
+        path: [...link.path],
+        schema,
+      }),
+    );
   };
 
   /** A one-row array whose single element link carries `storedSchema`. */

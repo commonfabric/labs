@@ -22,19 +22,9 @@ const spaceB = (await Identity.fromPassphrase("owner seed child B")).did();
 // manager's shared replicas would mask any "writer never committed X /
 // reader never fetched X" gap.
 
-// The profile-create flow in miniature: a handler pushes an `inSpace` child
-// whose pattern seeds an OWNER-PROTECTED field from its input —
-// `new Writable<OwnerProtected<...>>(initialName).for("name")`, exactly
-// profile-home.tsx's `name`. The CTS wraps the derived initializer in a lift,
-// so the seed value only exists at runtime; it must still be persisted to the
-// child space like a static initial value. Regression (found 2026-06-11): the
-// runtime-constructed cell's seed survived only as the link schema `default`
-// — its backing doc was never written — so a fresh session read `name` as
-// undefined, and `name` being required collapsed the whole result (blank
-// profile pages). The fix materializes the seed when the cell is first
-// serialized to a link (data-updating.ts BRANCH_CELL), authorized by the
-// doc-creation hatch in cfc/prepare.ts (`writeCreatesProtectedDoc` —
-// writeAuthorizedBy gates modification, not trusted initialization).
+// A creation handler starts a child in another space. An explicit lift reads
+// its requested name, constructs the protected scalar, and returns a protected
+// reference. A fresh session must read the seed from durable storage.
 const PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [
@@ -42,8 +32,10 @@ const PROGRAM: RuntimeProgram = {
       name: "/main.tsx",
       contents: [
         "import {",
+        "  Cell,",
         "  Cfc,",
         "  handler,",
+        "  lift,",
         "  pattern,",
         "  RepresentsCurrentUser,",
         "  Stream,",
@@ -73,11 +65,16 @@ const PROGRAM: RuntimeProgram = {
         "  setName: Stream<SetNameEvent>;",
         "}",
         "",
+        "const createName = lift<",
+        "  { initialName?: string },",
+        "  OwnerProtected<Cell<OwnerProtected<string, typeof setName>>, typeof setName>",
+        ">(({ initialName }) =>",
+        "  new Writable<OwnerProtected<string, typeof setName>>(initialName ?? '').for('name')",
+        ");",
+        "",
         "export const child = pattern<{ initialName?: string }, ChildOutput>(",
         "  ({ initialName }) => {",
-        "    const name = new Writable<OwnerProtected<string, typeof setName>>(",
-        "      initialName ?? '',",
-        "    ).for('name');",
+        "    const name = createName({ initialName });",
         "    return {",
         "      name,",
         "      setName: setName({ name }),",
@@ -252,13 +249,16 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
   }
 
   it("a fresh session reads the seeded owner-protected name", async () => {
+    const runtimeErrors: unknown[] = [];
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerA,
+      errorHandlers: [(error) => runtimeErrors.push(error)],
     });
     const rt2 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerB,
+      errorHandlers: [(error) => runtimeErrors.push(error)],
     });
     try {
       // Session 1: run the parent in space A; the handler creates the child
@@ -309,10 +309,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
       await rt1.idle();
       await rt1.storageManager.synced();
 
-      // Session 2 (own replicas): the single-field read resolves the seed
-      // from the PERSISTED terminal doc — before the fix the doc was absent
-      // (only the link schema `default` existed) and this read depended on
-      // the default annotation.
+      // Session 2 reads the persisted terminal document through its own replicas.
       const childCell = rt2.getCellFromLink(childLink);
       await childCell.sync();
       const nameCell = childCell.key("name");
@@ -320,10 +317,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
       await nameCell.pull();
       expect(nameCell.get()).toBe("hi");
 
-      // The full result resolves after the piece starts (the shell's piece
-      // view always starts; the deferred result doc materializes on run) —
-      // with `name` populated. Before the fix `name` stayed undefined here
-      // even after start, because the lift re-run still never wrote the doc.
+      // Starting the child reruns initialization against the existing seed.
       const started = await rt2.start(childCell);
       expect(started).toBe(true);
       await rt2.idle();
@@ -333,6 +327,7 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
         | undefined;
       expect(value).toBeDefined();
       expect(value?.name).toBe("hi");
+      expect(runtimeErrors).toEqual([]);
 
       // The list entry is a mutable reference to the child. Its target is the
       // actual piece; attack the name chain beginning at that piece's projection.

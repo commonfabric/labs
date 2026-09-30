@@ -85,6 +85,8 @@ const makeRuntime = (
   new Runtime({
     apiUrl: new URL("https://example.com"),
     storageManager,
+    // These projection scenarios exercise recursive target-label copying.
+    cfcFlowLabels: "off",
   });
 
 // Seed a doc's stored CFC metadata directly (an ungated path-[] full-document

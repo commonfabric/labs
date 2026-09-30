@@ -1129,18 +1129,30 @@ standard error and continues searching that piece and the rest of the space.
 
 ## Piece CFC labels
 
+The deployed CLI runtime persists flow labels and complete reference acquisition
+history in CFC envelope version 2, matching the shell's precise reference
+reader. CLI writes therefore require a deployment whose readers support that
+envelope. A stored legacy reference with incomplete acquisition history remains
+unresolved; reading its address does not reconstruct its missing history.
+
+Callable link arguments are explicit host acquisitions. A normalized address
+must name a document; an omitted space uses the invocation's space. Acquiring
+the address reads no target contents and endorses none of them. Following the
+link observes the target's confidentiality. Existing private reference carriers
+retain their restrictions, while relative raw links with no authenticated source
+are refused.
+
 `cf cell get-label` returns the effective CFC label view for a result path. Pass
 `--input` to select the input cell — a `--cell` value selecting `#argument` on
 its piece segment selects it too. The paths in the returned view are relative to
 the selected path, and the view includes declared, derived, and link-carried
 labels. An unlabeled value returns JSON `null`.
 
-The path is followed through any links it crosses, so the view describes the doc
-that actually holds the value rather than the doc the path started in. That is
-what a labeled read commonly needs: a `db.query` result splits each row into its
-own entity doc and stores the row's labels there, so `q/result/0/txnDate`
-crosses a link at `result/0` and its label is two docs away. Selecting the row
-instead of the column returns one entry per labeled column.
+The path is followed through any links it crosses. The view includes the
+references' acquisition labels as `followRef` entries and the content labels
+stored on the destination document. For example, `q/result/0/txnDate` can cross
+links to a query and then to a row; the view reports those references alongside
+the row's column label. Selecting the row includes its labeled columns.
 
 ```bash
 cf cell get-label --cell ID messages/0/body
@@ -1168,12 +1180,12 @@ value. An `observes` update is rejected when it would combine with an existing
 observation class instead of preserving the requested class. Omitting `observes`
 from a later update preserves an existing unambiguous class.
 
-The path is followed through the links it crosses, as `get-label` reads it, so
-the update lands on the doc that holds the value rather than the doc the path
-started in. The classes it is checked against are the effective ones, which
-merge both documents: the resolved doc's stored classes, and any the selected
-slot's own schema declares. Asking for `shape` where either declares `value` is
-refused rather than replacing it.
+The update follows intermediate links and write redirects to its destination. An
+ordinary link at the selected slot stays in that slot: the update changes its
+declared label and preserves its acquisition history. Class validation checks
+the destination's stored classes and the selected schema's declarations.
+Reference labels accumulated on the way to the destination remain in the
+returned inspection view and do not constrain its declared observation class.
 
 ## Invocation sessions
 
@@ -1766,6 +1778,13 @@ Neither spelling can be combined with `--filter`: the elements a predicate keeps
 no longer say which positions they came from, and an address names a position.
 
 #### What a selection means for a call
+
+A handler call acknowledges its own transaction before reading the receipt.
+After readback, it waits for the storage commits already issued in that runtime
+to finish, so process exit cannot abandon a nested handler's pending write. This
+confirmation barrier does not start or await further downstream recomputation.
+`--no-wait` skips readback and this barrier, returning after the invoked
+handler's own commit is acknowledged.
 
 A selection over a schemaless handler receipt starts by loading the receipt
 without following its children. If it holds an object or array, the CLI selects

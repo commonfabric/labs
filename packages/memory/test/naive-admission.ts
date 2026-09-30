@@ -178,12 +178,11 @@ export const naiveAdmit = (
   commit: ClientCommit,
   store?: ReadonlyMap<string, Record<string, unknown>>,
 ): NaiveVerdict => {
-  // An identity commit resolves its pending dependencies but is not held
-  // to the staleness of its reads.
+  // Identity admission waives only explicitly elidable staleness.
   const identity = store !== undefined &&
     naiveIsIdentityCommit(store, commit);
   for (const read of commit.reads.confirmed) {
-    if (identity) break;
+    if (identity && read.validation === "elidable") continue;
     const cs = conflictSeq(history, read.id, read.path, read.seq);
     if (cs !== null) {
       return {
@@ -208,7 +207,7 @@ export const naiveAdmit = (
       }
       if (basis === undefined || seq > basis) basis = seq;
     }
-    if (identity) continue;
+    if (identity && read.validation === "elidable") continue;
     const cs = read.basisSeq !== undefined
       ? conflictSeq(history, read.id, read.path, read.basisSeq, {
         sessionId,

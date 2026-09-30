@@ -501,11 +501,18 @@ describe("runtime-owned-store enrollment wiring", () => {
       target: ReturnType<typeof holder>,
       sourceName: string,
     ) => {
+      // Create the public container before reading the secret so the write
+      // under test lands at the declared element slot and its anchored child.
+      const setup = runtime.edit();
+      target.withTx(setup).set({ items: [] });
+      expect((await setup.commit()).error).toBeUndefined();
       const tx = runtime.edit();
       tx.setCfcEnforcementMode("enforce-strict");
       const source = runtime.getCell(space, sourceName, undefined, tx);
       const raw = source.getRaw() as { secret?: string };
-      target.withTx(tx).set({ items: [{ note: `${raw.secret}/anchored` }] });
+      target.withTx(tx).key("items").key(0).set({
+        note: `${raw.secret}/anchored`,
+      });
       tx.prepareCfc();
       return await tx.commit();
     };
@@ -532,6 +539,24 @@ describe("runtime-owned-store enrollment wiring", () => {
         "unowned-covered",
       );
       expect(committed.error).toBeUndefined();
+    });
+
+    it("refuses replacing an undeclared parent with privately selected elements", async () => {
+      await seedSecret("unowned-parent", "unowned-parent-clause");
+      const target = holder(
+        "wiring-unowned-parent",
+        listSchema("unowned-parent-clause"),
+      );
+      const tx = runtime.edit();
+      const source = runtime.getCell(space, "unowned-parent", undefined, tx);
+      const raw = source.getRaw() as { secret: string };
+      target.withTx(tx).set({ items: [{ note: `${raw.secret}/anchored` }] });
+      tx.prepareCfc();
+      const refused = await tx.commit();
+      expect(refused.error?.message).toContain(
+        `writer-fit confidentiality misfit for ${target.getAsNormalizedFullLink().id} at /`,
+      );
+      expect(refused.error?.message).toContain('"unowned-parent-clause"');
     });
 
     it("refuses one the element declares a different clause for", async () => {

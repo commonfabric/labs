@@ -2,6 +2,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   cellRuntime,
   cellTx,
+  cellWriteSchema,
   getCarriedCfcLabelView,
   isCell,
 } from "../cell.ts";
@@ -11,14 +12,19 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import { resolveLink } from "../link-resolution.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import { normalizeCellScope } from "../scope.ts";
+import { getCfcReferenceProvenance } from "./reference-provenance.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import type { CfcMetadata } from "./types.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "./observation.ts";
 import {
   type CfcLabelView,
   type CfcLabelViewEntry,
+  cfcLabelViewForDereferenceTraces,
   cfcLabelViewFromMetadata,
   cfcLabelViewOriginSpaces,
+  cfcReferenceLabelViewForAddress,
   mergeCfcLabelViews,
   withCfcLabelViewOrigins,
 } from "./label-view-state.ts";
@@ -55,6 +61,7 @@ type StoredMetadataResult = {
 };
 
 type LinkedValueMetadataResult = {
+  referenceView?: CfcLabelView;
   linkedValue: LinkedValueMetadata | undefined;
   readFailed: boolean;
 };
@@ -89,6 +96,7 @@ const storedMetadataForCell = (
         {
           space: link.space,
           id: link.id,
+          scope: link.scope,
         },
       ),
       readFailed: false,
@@ -107,10 +115,16 @@ const linkedValueMetadataForCell = (
   }
   try {
     const tx = cellRuntime(cell).readTx(cellTx(cell));
-    const value = tx.readValueOrThrow(link);
+    const value = tx.readValueOrThrow(link, { meta: internalVerifierRead });
     if (!isPrimitiveCellLink(value)) {
       return { linkedValue: undefined, readFailed: false };
     }
+    const referenceView = cfcReferenceLabelViewForAddress(tx, {
+      space: link.space,
+      id: link.id,
+      scope: normalizeCellScope(link.scope),
+      path: link.path,
+    }, getCfcReferenceProvenance(cell));
     const target = parseLink(value, link);
     if (target?.id === undefined || target.space === undefined) {
       return { linkedValue: undefined, readFailed: false };
@@ -121,6 +135,7 @@ const linkedValueMetadataForCell = (
       scope: target.scope,
     });
     return {
+      referenceView,
       linkedValue: metadata === undefined
         ? undefined
         : { metadata, path: target.path, space: target.space },
@@ -172,7 +187,7 @@ export const cfcLabelViewSourceForCell = (
     const view = getCarriedCfcLabelView(cell);
     return {
       view,
-      readFailed: false,
+      readFailed: true,
       spaces: cfcLabelViewOriginSpaces(view),
     };
   }
@@ -193,6 +208,7 @@ export const cfcLabelViewSourceForCell = (
   const view = mergeCfcLabelViews([
     metadataView,
     linkedValueView,
+    linked.referenceView,
     getCarriedCfcLabelView(cell),
   ]);
   return {
@@ -219,6 +235,7 @@ export type ResolvedLabelReadOptions = {
 type ResolvedMetadataResult = StoredMetadataResult & {
   /** The resolved doc's path, which the view is rebased against. */
   path: readonly string[];
+  referenceView?: CfcLabelView;
 };
 
 /**
@@ -237,6 +254,7 @@ const resolvedMetadataForCell = (
   cell: LabelQueryableCell,
   link: NormalizedFullLink,
   options: ResolvedLabelReadOptions,
+  lastNode: "value" | "writeRedirect" = "value",
 ): ResolvedMetadataResult => {
   if (!isCell(cell)) {
     return { metadata: undefined, readFailed: false, path: link.path };
@@ -244,13 +262,17 @@ const resolvedMetadataForCell = (
   try {
     const runtime = cellRuntime(cell);
     const tx = runtime.readTx(cellTx(cell));
+    const traceStart = tx.getCfcState().dereferenceTraces.length;
     // `markIfcCrossings` is what a read entry point passes. On the CLI's path
     // it changes nothing observable: the cell carries no transaction, so
     // `readTx` mints a throwaway that is never committed and the marks die
     // with it. It is here for a caller that hands in a cell with a LIVE
     // transaction, where an ifc-bearing link crossed to reach a label counts
     // against that transaction's accounting like any other crossing.
-    const resolved = resolveLink(runtime, tx, link, "value", {
+    const targetLink = lastNode === "writeRedirect"
+      ? { ...link, schema: cellWriteSchema(cell) }
+      : link;
+    const resolved = resolveLink(runtime, tx, targetLink, lastNode, {
       markIfcCrossings: true,
       ...(options.kickCrossSpaceTargets === false
         ? { kickCrossSpaceTargets: false }
@@ -264,6 +286,11 @@ const resolvedMetadataForCell = (
       }),
       readFailed: false,
       path: resolved.path,
+      referenceView: cfcLabelViewForDereferenceTraces(
+        tx,
+        tx.getCfcState().dereferenceTraces.slice(traceStart),
+        getCarriedCfcLabelView(cell),
+      ),
     };
   } catch {
     return { metadata: undefined, readFailed: true, path: link.path };
@@ -277,7 +304,9 @@ const resolvedMetadataForCell = (
 const resolvedTargetLabelView = (
   cell: unknown,
   options: ResolvedLabelReadOptions,
-): CfcLabelViewStatus | undefined => {
+  lastNode: "value" | "writeRedirect" = "value",
+  declaredOnly = false,
+): (CfcLabelViewStatus & { referenceView?: CfcLabelView }) | undefined => {
   if (
     !isObjectOrArray(cell) ||
     typeof cell.getAsNormalizedFullLink !== "function"
@@ -288,17 +317,44 @@ const resolvedTargetLabelView = (
   try {
     link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
   } catch {
-    return undefined;
+    return { view: undefined, readFailed: true };
   }
   const resolved = resolvedMetadataForCell(
     cell as LabelQueryableCell,
     link,
     options,
+    lastNode,
   );
+  const metadata = declaredOnly && resolved.metadata !== undefined
+    ? {
+      ...resolved.metadata,
+      labelMap: {
+        ...resolved.metadata.labelMap,
+        // Unmarked legacy entries may be declarations. Retain their constraints.
+        entries: resolved.metadata.labelMap.entries.filter((entry) =>
+          entry.origin === "declared" || entry.origin === undefined
+        ),
+      },
+    }
+    : resolved.metadata;
   return {
-    view: cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
+    view: cfcLabelViewFromMetadata(metadata, resolved.path),
+    referenceView: resolved.referenceView,
     readFailed: resolved.readFailed,
   };
+};
+
+/**
+ * Declared labels at the destination of a schema update. Ordinary links at the
+ * selected slot remain in that slot; write redirects and intermediate links are
+ * followed. Unmarked legacy entries retain their constraints. Runtime acquisition
+ * and flow measurements do not choose the declaration's observation class.
+ */
+export const cfcDeclaredLabelViewForWriteTargetWithStatus = (
+  cell: unknown,
+): CfcLabelViewStatus => {
+  const target = resolvedTargetLabelView(cell, {}, "writeRedirect", true);
+  return { view: target?.view, readFailed: target?.readFailed ?? false };
 };
 
 /**
@@ -329,12 +385,9 @@ export const cfcLabelViewForResolvedTarget = (
  * merges the resolved doc's stored label into the same view, rebased so its
  * entries stay relative to the selected cell.
  *
- * Strictly additive. Every view the one-hop read produces is still in the
- * merge, and merging is keyed per (observation class, path) with a union of the
- * labels, so a leaf-link read — where the resolution lands on the same doc the
- * one hop already found — returns exactly what it returns today. `readFailed`
- * stays fail-closed across both: a resolution that throws is a failed read, not
- * an absent label.
+ * The view combines labels by observation class and path. Reference labels
+ * accumulated while following the path remain distinct from target content
+ * labels. A resolution that throws reports a failed read, not an absent label.
  */
 export const cfcLabelViewForResolvedCellWithStatus = (
   cell: unknown,
@@ -344,7 +397,11 @@ export const cfcLabelViewForResolvedCellWithStatus = (
   const target = resolvedTargetLabelView(cell, options);
   if (target === undefined) return unresolved;
   return {
-    view: mergeCfcLabelViews([unresolved.view, target.view]),
+    view: mergeCfcLabelViews([
+      unresolved.view,
+      target.referenceView,
+      target.view,
+    ]),
     readFailed: unresolved.readFailed || target.readFailed,
   };
 };

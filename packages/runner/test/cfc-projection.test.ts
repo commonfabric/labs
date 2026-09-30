@@ -269,7 +269,7 @@ describe("CFC projection claims", () => {
     }
   });
 
-  it("fails closed for a projection into a normalized (object) array element", async () => {
+  it("verifies a projection through a normalized object array element", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
       const tx = runtime.edit();
@@ -297,9 +297,8 @@ describe("CFC projection claims", () => {
         tx,
       );
 
-      // Object elements are normalized into child documents: the element path
-      // holds a link sigil, so the same-doc value comparison cannot succeed
-      // and the claim rejects — no label is ever carried (or lost) silently.
+      // The element is stored in a child document, so the claim resolves
+      // the linked field in the transaction's authorization snapshot.
       cell.set({
         measurements: [{ lat: 37.77 }],
         firstLatitude: 37.77,
@@ -307,9 +306,15 @@ describe("CFC projection claims", () => {
 
       tx.prepareCfc();
       const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "projection claim failed at /firstLatitude",
+      expect(result.error).toBeUndefined();
+      const entries = readPersistedEntries(
+        storageManager,
+        parseLink(cell.getAsLink()).id!,
       );
+      const entry = entries?.find((entry) =>
+        entry.path.length === 1 && entry.path[0] === "firstLatitude"
+      );
+      expect(entry?.label.confidentiality).toEqual(["secret"]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

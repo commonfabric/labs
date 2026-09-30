@@ -322,7 +322,10 @@ describe("opening a space root", () => {
   }
 
   async function setupHome(
-    extraRuntimeOptions: { cfcEnforcementMode?: "disabled" } = {},
+    extraRuntimeOptions: {
+      cfcEnforcementMode?: "disabled";
+      cfcFlowLabels?: "off";
+    } = {},
   ) {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -2916,7 +2919,10 @@ describe("opening a space root", () => {
     // root that cannot start therefore surfaces its failure rather than being
     // replaced.
 
-    await setupHome({ cfcEnforcementMode: "disabled" });
+    await setupHome({
+      cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
+    });
     await controller.recreateDefaultPattern({
       customProgram: {
         main: "/custom-home.tsx",

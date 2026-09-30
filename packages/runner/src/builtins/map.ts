@@ -50,7 +50,7 @@ export const MAP_INPUT_SCHEMA = internSchema({
 // coordinator can ask "is the container initialized?" without materializing
 // element contents. A content-schema get() here would journal real value
 // reads of every element result — under flow labels (S16) that smears every
-// element's taint into the coordinator's per-tx join and from there onto
+// element's content taint into the coordinator's per-tx join and from there onto
 // sibling scaffolding (the read-own-output feedback).
 const RESULT_PRESENCE_SCHEMA = internSchema({
   type: "array",
@@ -301,7 +301,7 @@ function createMapInstance(
     // prior slots as links, never materializing element contents. A
     // content-schema view here journals value reads of every element
     // result on each reconcile — under flow labels (S16) that smears
-    // every element's taint into the coordinator's per-tx join.
+    // every element's content taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
 
@@ -316,11 +316,10 @@ function createMapInstance(
     // Container reads run under the link-resolution-probe scope: the
     // presence probe and set() diffing materialize prior slot targets for
     // identity comparison only — the coordinator never consumes element
-    // content, and the written links carry their per-slot labels via the
-    // link-write machinery. Without the scope, the asCell slot dereference
-    // journals a content read of every prior element result, feeding the
-    // coordinator's own output taint back into its next reconcile's J and
-    // smearing it onto fresh elements' scaffolding (S16 pointwise).
+    // content. Reference acquisition and selection confidentiality still
+    // contribute to J and travel with the written links. Without the scope,
+    // the asCell slot dereference also journals a content read of every prior
+    // element result, adding target-content taint to fresh scaffolding.
     // machineryRead rides along (template-population §6): the same
     // scaffolding reads must not consume `*`-path membership templates on
     // plumbing containers now that the generic mint route is on (SC-8).

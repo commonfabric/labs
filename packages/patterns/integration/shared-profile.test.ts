@@ -40,6 +40,7 @@ describe("shared profile integration test", () => {
       space: sharedSpaceDid,
       apiUrl: new URL(API_URL),
       identity,
+      cfcFlowLabels: "persist",
     });
 
     // Pre-create the space-root (default) pattern so each browser boot's

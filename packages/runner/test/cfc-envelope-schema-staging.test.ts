@@ -6,7 +6,6 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { lookupSchemaDocument } from "../src/schema-registry.ts";
@@ -32,9 +31,7 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
     // A seeding failure below never reaches the caller's `finally`, so the
     // resources are released here before it propagates.
     try {
-      // A source doc whose stored metadata carries the authoritative label —
-      // the link-write below then derives and persists an envelope on its
-      // target (the same seeding shape cfc-label-metadata-persist uses).
+      // Reading this source makes a subsequent reference selection private.
       const sourceId = parseLink(
         runtime.getCell(space, "cfc-envelope-staging-source").getAsLink(),
       ).id!;
@@ -77,34 +74,25 @@ describe("CFC envelope schema documents ride the shared staging path", () => {
     targetName: string,
   ): Promise<{ cidWrites: string[]; schemaHash: string | undefined }> => {
     const tx = runtime.edit();
-    const target = runtime.getCell(space, targetName, undefined, tx);
+    const target = runtime.getCell(space, targetName, {
+      type: "object",
+      ifc: { confidentiality: ["source-root"] },
+    }, tx);
     const targetId = target.getAsNormalizedFullLink().id;
-    tx.markCfcRelevant("test");
-    tx.writeValueOrThrow({
+    const source = runtime.getCellFromEntityId(
       space,
-      scope: "space",
-      id: targetId,
-      path: ["field"],
-    }, "v");
-    tx.recordCfcWritePolicyInput({
-      kind: "link-write",
-      target: { space, scope: "space", id: targetId, path: ["field"] },
-      source: { space, scope: "space", id: sourceId, path: [] },
-      cfcLabelView: {
-        version: 1,
-        entries: [
-          {
-            path: [],
-            label: { confidentiality: ["source-root" as CfcConfClause] },
-          },
-        ],
-      },
-    });
+      sourceId,
+      [],
+      undefined,
+      tx,
+    );
+    expect(source.get()).toEqual({ secret: "classified" });
+    target.set({ field: source });
     tx.prepareCfc();
     const cidWrites = [...tx.getWriteDetails?.(space) ?? []]
       .map((detail) => detail.address.id)
       .filter((id) => id.startsWith("cid:"));
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     const stored = (runtime.storageManager.open(space).replica as unknown as {
       getDocument(id: string): { cfc?: { schemaHash?: string } } | undefined;
     }).getDocument(targetId);

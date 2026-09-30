@@ -446,7 +446,9 @@ describe("cfc-current-principal-confidentiality", () => {
       await another.sync();
       expect(owner.getCellFromLink(another.getAsNormalizedFullLink()).get())
         .toBeDefined();
-      expect(() => another.withTx(undefined).get()).toThrow(/read ceiling/);
+      const held = another.withTx(undefined).get();
+      expect(held?.books).toBeDefined();
+      expect(() => held!.books!.get()).toThrow(/read ceiling/);
     } finally {
       await storage.synced();
       for (const runtime of runtimes) await runtime.dispose();

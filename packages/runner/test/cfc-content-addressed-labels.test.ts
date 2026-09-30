@@ -358,7 +358,9 @@ describe("CFC content-addressed labels", () => {
     it("scans an envelope of any shape for the documents it references", () => {
       const { stored } = storedForm(FIXTURE_METADATA);
       expect(cfcEnvelopeLabelDocumentHashes(stored).length).toBe(6);
-      // Only version 2 defines the reference; other shapes name nothing.
+      expect(cfcEnvelopeLabelDocumentHashes({ ...stored, version: 3 }).length)
+        .toBe(6);
+      // Version 1 does not define label references.
       expect(cfcEnvelopeLabelDocumentHashes({ ...stored, version: 1 }))
         .toEqual([]);
       expect(cfcEnvelopeLabelDocumentHashes(undefined)).toEqual([]);
@@ -430,6 +432,62 @@ describe("CFC content-addressed labels", () => {
       expect(canonicalizeCfcMetadata(resolvedFromDocuments)).toEqual(
         canonicalizeCfcMetadata(FIXTURE_METADATA),
       );
+    });
+  });
+
+  describe("reference acquisition metadata", () => {
+    it("retains per-slot completeness through content-addressed labels", () => {
+      const metadata: CfcMetadata = {
+        version: 3,
+        schemaHash: FIXTURE_METADATA.schemaHash,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["complete"],
+            origin: "link",
+            observes: "followRef",
+            referenceAcquisition: "complete",
+            label: FIXTURE_LABELS[0],
+          }, {
+            path: ["legacy"],
+            origin: "link",
+            observes: "followRef",
+            label: FIXTURE_LABELS[0],
+          }],
+        },
+      };
+      const { stored, documents } = storedForm(metadata);
+      let envelope: StoredCfcMetadata = { ...stored, version: 3 };
+      const tx = {
+        readOrThrow: (address: { id: string }) =>
+          address.id.startsWith("cid:")
+            ? { value: documents.get(address.id.slice(4)) }
+            : envelope,
+      } as unknown as IExtendedStorageTransaction;
+      expect(isCfcLabelReference(envelope.labelMap.entries[0].label)).toBe(
+        true,
+      );
+      const resolved = readStoredCfcMetadata(tx, {
+        space,
+        id: "of:reference-metadata",
+      });
+      expect(resolved?.version).toBe(3);
+      expect(resolved?.labelMap.entries[0].referenceAcquisition).toBe(
+        "complete",
+      );
+      expect(resolved?.labelMap.entries[1].referenceAcquisition)
+        .toBeUndefined();
+      expect(canonicalizeCfcMetadata(resolved!)).toEqual(
+        canonicalizeCfcMetadata(metadata),
+      );
+      expect(canonicalizeCfcMetadata({ ...metadata, version: 2 })).not.toEqual(
+        canonicalizeCfcMetadata(metadata),
+      );
+      envelope = { ...stored, version: 2 };
+      expect(() =>
+        readStoredCfcMetadata(tx, { space, id: "of:reference-metadata" })
+      )
+        .toThrow(UnreadableCfcMetadataError);
     });
   });
 
@@ -836,7 +894,7 @@ describe("CFC content-addressed labels", () => {
       const tx = {
         readOrThrow: () => ({
           cfc: {
-            version: 3,
+            version: 4,
             schemaHash: "future-format",
             labelMap: { version: 1, entries: [] },
           },

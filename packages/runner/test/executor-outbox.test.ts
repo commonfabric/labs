@@ -38,10 +38,19 @@ import {
   insertExecutionOutboxRows,
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
+import { cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import { runQuery } from "@commonfabric/memory/sqlite/exec";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import {
+  restoreRuntimeEventDispatch,
+  serializeRuntimeEvent,
+} from "../src/cfc/event-reference-context.ts";
+import { normalizeClause } from "../src/cfc/clause.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import { getCfcReferenceProvenance } from "../src/cfc/reference-provenance.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
   IExtendedStorageTransaction,
@@ -480,6 +489,110 @@ describe("stage G outbox + sqlite discharge", () => {
   //
   // Delivery (FP1 closure): admit at the target, then delete
   //
+
+  it("retains nested reference history through a durable cross-space outbox row", async () => {
+    const secret = normalizeClause({
+      anyOf: ["outbox-selection", cfcAtom.space(space)],
+    });
+    const write = runtime.edit();
+    write.setCfcFlowLabelsMode("persist");
+    const target = runtime.getCell(
+      space,
+      "reference-outbox-target",
+      undefined,
+      write,
+    );
+    target.set("public target");
+    const selector = runtime.getCell(space, "reference-outbox-selector", {
+      type: "string",
+      ifc: { confidentiality: [secret] },
+    }, write);
+    selector.set("private selection");
+    expect((await write.commit()).error).toBeUndefined();
+    const send = runtime.edit();
+    send.setCfcFlowLabelsMode("persist");
+    selector.withTx(send).get();
+    const box = runtime.getImmutableCell(
+      space,
+      { item: target.withTx(send).asSchema({ scope: "space" }) },
+      undefined,
+      send,
+    );
+    const dispatchTarget = runtime.getCell(
+      targetSpace,
+      "reference-outbox-stream",
+      undefined,
+      send,
+    ).getAsNormalizedFullLink();
+    const event = serializeRuntimeEvent(
+      { box },
+      send,
+      targetSpace,
+      dispatchTarget,
+    );
+    send.abort();
+    const stream = { id: dispatchTarget.id, path: dispatchTarget.path };
+    const sidecar = streamEntriesDocId(stream);
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 1,
+      rows: [{
+        targetSpace,
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId: "evt-reference-outbox",
+        payload: event.payload,
+        runtimeReferenceContext: event.runtimeReferenceContext,
+        actingPrincipal: "user:alice",
+        actingSession: "sess-reference",
+        capabilityRef: "cap-reference",
+      }],
+    });
+    expect(
+      selectPendingExecutionOutboxRows(engine, { branch: "" })[0]
+        .runtimeReferenceContext,
+    )
+      .toBe(event.runtimeReferenceContext);
+    const { outbox, stats } = newOutbox();
+    await outbox.deliverPendingAppends();
+    expect(stats.outbox.failed).toBe(0);
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }))
+      .toHaveLength(0);
+    const destination = await server.engineForSpace(targetSpace);
+    const entries = (Engine.read(destination, { id: sidecar })?.value as {
+      entries: {
+        payload: FabricValue;
+        runtimeReferenceContext?: string;
+        firedAt: unknown;
+      }[];
+    }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].runtimeReferenceContext).toBe(
+      event.runtimeReferenceContext,
+    );
+    expect(entries[0].firedAt).toEqual({
+      user: "user:alice",
+      session: "sess-reference",
+    });
+    const read = runtime.edit();
+    read.setCfcFlowLabelsMode("persist");
+    const restored = restoreRuntimeEventDispatch(
+      entries[0].payload,
+      entries[0].runtimeReferenceContext,
+      { ...dispatchTarget },
+    );
+    expect(getCfcReferenceProvenance(restored.target)?.confidentiality)
+      .toContainEqual(secret);
+    expect(
+      runtime.getImmutableCell(space, restored.payload, undefined, read).key(
+        "box",
+        "item",
+      ).get(),
+    )
+      .toBe("public target");
+    expect(deriveFlowJoin(read).confidentiality).toContainEqual(secret);
+    read.abort();
+  });
 
   it("delivers pending rows: delegated admission at the target stamps firedAt from the CARRIED actor (LT5 envelope), then deletes the row; a re-sent duplicate dedupes at the eventId horizon", async () => {
     const lease = liveLease();

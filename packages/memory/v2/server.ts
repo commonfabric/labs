@@ -3139,6 +3139,7 @@ export class Server {
 
     eventId: string;
     payload: unknown;
+    runtimeReferenceContext?: string;
     actingPrincipal?: string;
     actingSession?: string;
 
@@ -3212,6 +3213,9 @@ export class Server {
       eventId: entry.eventId,
       stream,
       payload: entry.payload as StreamEventEntry["payload"],
+      ...(entry.runtimeReferenceContext === undefined ? {} : {
+        runtimeReferenceContext: entry.runtimeReferenceContext,
+      }),
       // events.md §2: the inherited actor; a sessionless chain stamps
       // session "server". Derived from the SAME carriage the delegated
       // admission validates — the engine's stamp agrees by construction
@@ -4005,6 +4009,9 @@ export class Server {
                 : {}),
               ...(original.runtimeInjectedEventKeys === undefined ? {} : {
                 runtimeInjectedEventKeys: original.runtimeInjectedEventKeys,
+              }),
+              ...(original.runtimeReferenceContext === undefined ? {} : {
+                runtimeReferenceContext: original.runtimeReferenceContext,
               }),
               retryOf: message.eventId,
             }],

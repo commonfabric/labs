@@ -496,14 +496,7 @@ describe("Query", () => {
 
     const docValue2 = {
       employees: [{
-        address: {
-          "/": {
-            [LINK_V1_TAG]: {
-              id: `of:${entityId1}`,
-              path: ["home"],
-            },
-          },
-        },
+        address: testCell1.key("home").getAsLink({ baseSpace: space }),
       }],
     };
     const testCell2 = runtime.getCell<any>(

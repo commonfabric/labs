@@ -70,6 +70,8 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { ReferenceRegistry } from "../../runtime-client/src/backends/reference-registry.ts";
+import { mapCellRefsToSigilLinks } from "../../runtime-client/src/backends/utils.ts";
 import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
@@ -77,6 +79,7 @@ let cc: PiecesController | undefined;
 let piece: PieceController | undefined;
 let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
+let referenceRegistry: ReferenceRegistry | undefined;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
 
@@ -398,11 +401,13 @@ const handlers: Record<
       apiUrl: new URL(apiUrl as string),
       identity,
       space: spaceDid as string,
+      cfcFlowLabels: "persist",
       ...(cfc as MultiRuntimeCfcOptions | undefined),
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
     });
+    referenceRegistry = new ReferenceRegistry(cc.runtime);
     if (recordRejections === true) {
       recordRejectionsInto(controller().runtime.telemetry);
     }
@@ -466,14 +471,18 @@ const handlers: Record<
       );
     }
     const trusted = trustedUi as TrustedUiDescriptor | undefined;
-    let eventValue: unknown = event ?? {};
+    const imported = mapCellRefsToSigilLinks(
+      (event ?? {}) as FabricValue,
+      referenceRegistry,
+    );
+    let eventValue: unknown = imported;
     if (trusted) {
       // Equivalent of a genuine user interaction on a trusted surface: DOM
       // provenance plus the renderer-trusted mark the html worker reconciler
       // applies when delivering real DOM events.
       eventValue = {
         type: "click",
-        ...(isObjectNotArray(event) ? event : {}),
+        ...(isObjectNotArray(imported) ? imported : {}),
         provenance: {
           origin: "dom",
           trusted: true,
@@ -881,10 +890,8 @@ const handlers: Record<
    *
    * `cause` names the cell, so two sessions asking for the same cause in the
    * same space get the same cell and two causes get two cells. The answer is
-   * ordinary fabric data, so a later `send` can carry it into a handler input
-   * declared `asCell` — which is how a headless caller hands a pattern a cell
-   * it did not create, the way a browser viewer's resolved `#profile` reaches
-   * one.
+   * fabric data with a worker-issued acquisition token, so a later `send`
+   * restores the acquired reference for a handler input declared `asCell`.
    */
   async createCell({ cause, value }) {
     const runtime = controller().runtime;
@@ -897,7 +904,7 @@ const handlers: Record<
       throw new Error(`createCell failed: ${error.message}`);
     }
     await idle();
-    return cell.getAsLink();
+    return referenceRegistry!.exportLink(cell.getAsLink(), cell);
   },
 
   /**
@@ -1101,6 +1108,8 @@ const handlers: Record<
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;
+    referenceRegistry?.clear();
+    referenceRegistry = undefined;
     if (cc) {
       await cc.dispose();
       cc = undefined;

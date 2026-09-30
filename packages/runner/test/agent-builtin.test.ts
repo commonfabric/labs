@@ -113,7 +113,6 @@ describe("agent builtin", () => {
     });
     const resultCell = runtime.getCell(space, id, testPattern.resultSchema, tx);
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    runtime.prepareTxForCommit(tx);
     return result as Cell<AgentResult>;
   };
 

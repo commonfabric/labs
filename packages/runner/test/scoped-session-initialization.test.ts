@@ -19,6 +19,9 @@ import {
 } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { carryCfcReferenceProvenance } from "../src/cfc/reference-provenance.ts";
+import { lookupSchemaDocument } from "../src/schema-registry.ts";
+import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -390,12 +393,15 @@ describe("scoped-session-initialization", () => {
       "user",
     );
     await foreign.sync();
-    const marked = linkRefFrom({
-      ...linkRefPayload(createSigilLinkFromParsedLink(
-        foreign.key("count").getAsNormalizedFullLink(),
-      )),
-      scopeInitialization: "session",
-    });
+    const marked = carryCfcReferenceProvenance(
+      foreign.key("count"),
+      linkRefFrom({
+        ...linkRefPayload(createSigilLinkFromParsedLink(
+          foreign.key("count").getAsNormalizedFullLink(),
+        )),
+        scopeInitialization: "session",
+      }),
+    );
     const tx = runtime.edit();
     raw.withTx(tx).key("count").set(marked);
     expect(scopedArgumentInitializationTargets(
@@ -415,37 +421,21 @@ describe("scoped-session-initialization", () => {
     expect(foreign.key("count").getRaw({ lastNode: "top" })).toBeUndefined();
   });
 
-  it("continues a copied raw relative declaration at its new slot", async () => {
+  it("refuses to rebind a copied raw relative declaration to another document", async () => {
     const { raw, user } = await missingContinuation();
     const copy = runtime.getCell<Record<string, unknown>>(
       space,
       "copied-inputs",
     );
-    const copyUser = runtime.getCell(
-      space,
-      "copied-inputs",
-      undefined,
-      undefined,
-      "user",
-    );
-    await Promise.all([copy.sync(), copyUser.sync()]);
+    await copy.sync();
     const tx = runtime.edit();
-    copy.withTx(tx).set({
-      count: raw.key("count").getRaw({ lastNode: "top" }),
-    });
-    initializeScopedArgumentSlots(
-      runtime,
-      tx,
-      copy.getAsNormalizedFullLink(),
-      schema,
-    );
-    expect((await tx.commit()).error).toBeUndefined();
-    expect(copy.key("count").resolveAsCell().getAsNormalizedFullLink())
-      .toMatchObject({
-        id: copy.getAsNormalizedFullLink().id,
-        path: ["count"],
-        scope: "session",
-      });
+    expect(() =>
+      copy.withTx(tx).set({
+        count: raw.key("count").getRaw({ lastNode: "top" }),
+      })
+    ).toThrow("Reference acquisition does not match its binding");
+    tx.abort();
+    expect(copy.getRaw()).toBeUndefined();
     expect(user.key("count").getRaw({ lastNode: "top" })).toBeUndefined();
   });
 
@@ -522,8 +512,13 @@ describe("scoped-session-initialization", () => {
         parseLink(marked, raw.key("count")),
         { base: raw.key("count").getAsNormalizedFullLink() },
       );
-      const roundTripped = storedLink(
-        fabricFromJsonValue(jsonFromFabricValue(marked)),
+      // The decoder restores wire data; the authenticated sender supplies
+      // acquisition of this exact binding separately.
+      const roundTripped = carryCfcReferenceProvenance(
+        marked,
+        storedLink(
+          fabricFromJsonValue(jsonFromFabricValue(marked)),
+        ),
       );
       expect(linkRefPayload(roundTripped)).toMatchObject({
         scopeInitialization: "session",
@@ -551,21 +546,26 @@ describe("scoped-session-initialization", () => {
     const { raw } = await missingContinuation();
     const marked = storedLink(raw.key("count").getRaw({ lastNode: "top" }));
     const tx = runtime.edit();
-    raw.withTx(tx).key("count").set(linkRefFrom({
-      ...linkRefPayload(marked),
-      cfcLabelView: {
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: ["session-declaration"],
-            integrity: [{
-              type: "https://commonfabric.org/cfc/atom/InjectionSafe",
+    raw.withTx(tx).key("count").set(
+      carryCfcReferenceProvenance(
+        marked,
+        linkRefFrom({
+          ...linkRefPayload(marked),
+          cfcLabelView: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: ["session-declaration"],
+                integrity: [{
+                  type: "https://commonfabric.org/cfc/atom/InjectionSafe",
+                }],
+              },
             }],
           },
-        }],
-      },
-    }));
+        }),
+      ),
+    );
     tx.prepareCfc();
     expect((await tx.commit()).error).toBeUndefined();
     const persisted = linkRefPayload(
@@ -580,9 +580,10 @@ describe("scoped-session-initialization", () => {
     );
     inspect.abort();
     expect(
-      metadata?.labelMap.entries.map((entry) => entry.label.confidentiality),
-    )
-      .toContainEqual(["session-declaration"]);
+      metadata?.labelMap.entries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      ),
+    ).toEqual([]);
     expect(
       metadata!.labelMap.entries.flatMap((entry) => entry.label.integrity ?? [])
         .some((atom) =>
@@ -611,6 +612,37 @@ describe("scoped-session-initialization", () => {
       .accessForTestingOnly.buildReads(holder.tx, 1);
     const id = raw.getAsNormalizedFullLink().id;
     holder.abort();
+    const schemaOperations: {
+      op: "set";
+      id: `cid:${string}`;
+      scope: "space";
+      value: { value: JSONSchema };
+    }[] = [];
+    const markedSchema = linkRefPayload(marked).schema;
+    if (
+      markedSchema !== undefined && typeof markedSchema !== "boolean" &&
+      markedSchema.$ref?.startsWith("cid:")
+    ) {
+      walkSchemaDocumentClosure({
+        roots: [markedSchema.$ref.slice(4).split("#")[0]],
+        load: (hash) => {
+          const schema = lookupSchemaDocument(hash);
+          return schema === undefined
+            ? undefined
+            : { kind: "verified", schema };
+        },
+        onVerified: (hash, schema) =>
+          schemaOperations.push({
+            op: "set",
+            id: `cid:${hash}`,
+            scope: "space",
+            value: { value: schema },
+          }),
+        onMissing: (hash) => {
+          throw new Error(`Missing fixture schema ${hash}`);
+        },
+      });
+    }
 
     // Replay the captured wire dependencies independently of local snapshot
     // validation. A same-key replacement preserves the parent's key set.
@@ -624,7 +656,7 @@ describe("scoped-session-initialization", () => {
           commit: {
             localSeq: 1,
             reads: { confirmed: [], pending: [] },
-            operations: [{
+            operations: [...schemaOperations, {
               op: "set",
               id,
               scope: "space",

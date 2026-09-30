@@ -20,7 +20,10 @@ import { type Cell, elementSchemaFor, isCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import {
+  isAuthorizationRead,
+  isLinkResolutionProbe,
+} from "../src/storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
@@ -264,7 +267,8 @@ describe("plain-schema array traversal", () => {
 
     const batchedActivities = [...getTransactionReadActivities(tx)];
     const sourceItemActivities = batchedActivities.filter((activity) =>
-      activity.id === sourceId && activity.path.length === 2
+      activity.id === sourceId && activity.path.length === 2 &&
+      !isAuthorizationRead(activity.meta)
     );
     expect(
       sourceItemActivities.map((activity) => ({
@@ -292,9 +296,25 @@ describe("plain-schema array traversal", () => {
     );
     expect(firstTargetActivityIndex).toBeGreaterThanOrEqual(0);
     const lastSourceItemActivityIndex = batchedActivities.findLastIndex(
-      (activity) => activity.id === sourceId && activity.path.length === 2,
+      (activity) =>
+        activity.id === sourceId && activity.path.length === 2 &&
+        !isAuthorizationRead(activity.meta),
     );
     expect(lastSourceItemActivityIndex).toBeLessThan(firstTargetActivityIndex);
+    // Each actual crossing also verifies its source reference against the
+    // stored acquisition before reading the corresponding target payload.
+    for (const [index, targetId] of targetIds.entries()) {
+      const authorization = batchedActivities.findIndex((activity) =>
+        activity.id === sourceId &&
+        activity.path.join("/") === `value/${index}` &&
+        isAuthorizationRead(activity.meta)
+      );
+      const targetRead = batchedActivities.findIndex((activity) =>
+        activity.id === targetId && activity.path[0] === "value"
+      );
+      expect(authorization).toBeGreaterThanOrEqual(0);
+      expect(authorization).toBeLessThan(targetRead);
+    }
 
     const fallbackTx = runtime.edit();
     const fallbackCell = runtime.getCell<Row[]>(

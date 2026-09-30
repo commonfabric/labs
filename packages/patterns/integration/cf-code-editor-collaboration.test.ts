@@ -643,6 +643,7 @@ describe("cf-code-editor collaboration", () => {
       }),
       apiUrl: new URL(API_URL),
       identity: alice,
+      cfcFlowLabels: "persist",
     });
     await cc.ensureDefaultPattern();
 

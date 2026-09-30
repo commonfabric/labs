@@ -22,6 +22,7 @@ import {
 import {
   isSigilLink,
   linkRefFrom,
+  linkRefPayload,
   refuseFabricInstance,
 } from "@commonfabric/runner/shared";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
@@ -30,10 +31,13 @@ import type { LoggerFlagsBreakdown } from "@commonfabric/utils/logger";
 import { isCellRef } from "@/protocol/mod.ts";
 import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
 
+import type { ReferenceRegistry } from "./reference-registry.ts";
+
 /**
  * Converts a value arriving over the connection into the form the worker
  * writes: every `CellRef` in it becomes a `SigilLink`, and every raw
- * `SigilLink` loses its label view.
+ * `SigilLink` loses its label view. Worker-issued tokens restore reference
+ * acquisitions; a tokenless link carries no trusted acquisition.
  *
  * A cell's value is a `FabricValue`, as are a `CellRef` and a `SigilLink`, so
  * the conversion moves within that type. The result holds no `CellRef`.
@@ -44,8 +48,11 @@ import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
  *
  * @throws If the value contains a cycle, or a `FabricInstance`.
  */
-export function mapCellRefsToSigilLinks(value: FabricValue): FabricValue {
-  return mapOne(value, [], new IndexTrackingStack<object>());
+export function mapCellRefsToSigilLinks(
+  value: FabricValue,
+  registry?: ReferenceRegistry,
+): FabricValue {
+  return mapOne(value, [], new IndexTrackingStack<object>(), registry);
 }
 
 /**
@@ -60,6 +67,7 @@ function mapOne(
   value: FabricValue,
   path: string[],
   ancestors: IndexTrackingStack<object>,
+  registry?: ReferenceRegistry,
 ): FabricValue {
   if (
     typeof value === "string" || typeof value === "number" ||
@@ -68,17 +76,11 @@ function mapOne(
     return value;
   }
   if (isCellRef(value)) {
-    return cellRefToSigilLink(value);
+    return cellRefToSigilLink(value, registry);
   } else if (isSigilLink(value)) {
-    // A raw sigil link in an inbound value is not a `CellRef`, so it does not
-    // reach `cellRefToSigilLink()` above. Its label view comes from the main
-    // thread, as a ref's does. We drop the view. Left on the link, it could be
-    // recorded in a `link-write` policy input when the link is written.
-    //
-    // `stripSigilCfcLabelViews()` reports `unknown`, being general over what it
-    // walks. Narrowed here by what it does: it removes a property from each
-    // link payload it finds, so given a link it returns one.
-    return stripSigilCfcLabelViews(value) as SigilLink;
+    return registry
+      ? registry.importLink(value)
+      : stripSigilCfcLabelViews(value) as SigilLink;
   } else if (value instanceof FabricPrimitive) {
     // Atomic, so there is nothing under it to map. It goes _before_ the record
     // branch: one is also a record, and that branch rebuilds from enumerable
@@ -123,7 +125,7 @@ function mapOne(
       if (Array.isArray(value)) {
         return value.map((item, index) => {
           path.push(String(index));
-          const next = mapOne(item, path, ancestors);
+          const next = mapOne(item, path, ancestors, registry);
           path.pop();
           return next;
         });
@@ -132,7 +134,7 @@ function mapOne(
       const out: Record<string, FabricValue> = {};
       for (const [key, item] of Object.entries(value)) {
         path.push(key);
-        out[key] = mapOne(item, path, ancestors);
+        out[key] = mapOne(item, path, ancestors, registry);
         path.pop();
       }
       return out;
@@ -170,33 +172,39 @@ export function assertFabricLoggerFlags(
   );
 }
 
-export function cellRefToSigilLink(cell: CellRef): SigilLink {
-  // A `cfcLabelView` on an inbound `CellRef` is not forwarded onto the link.
-  // The view has been through the main thread, where
-  // `CellHandle.deserialize()` keeps it on the ref, so the main thread can
-  // alter it. On a written sigil link, the view could be recorded in a
-  // `link-write` policy input, and `prepareBoundaryCommit()` persists the
-  // entries of a recorded view as link-origin labels. Without the view,
-  // `prepareBoundaryCommit()` still derives link-origin labels from the
-  // source's stored metadata.
-  // `docs/specs/cfc-label-metadata-confidentiality.md` §3 has the design.
-  return linkRefFrom<CfcCellLinkRefPayload>({
+export function cellRefToSigilLink(
+  cell: CellRef,
+  registry?: ReferenceRegistry,
+): SigilLink {
+  const link = linkRefFrom<
+    CfcCellLinkRefPayload & {
+      cfcReferenceToken?: string;
+    }
+  >({
     id: cell.id,
     space: cell.space,
     scope: cell.scope,
     path: cell.path,
     ...(cell.schema !== undefined && { schema: cell.schema }),
     ...(cell.overwrite !== undefined && { overwrite: cell.overwrite }),
+    ...(registry && cell.cfcReferenceToken !== undefined && {
+      cfcReferenceToken: cell.cfcReferenceToken,
+    }),
   });
+  return registry ? registry.importLink(link) : link;
 }
 
-export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
-  const link = parseLink(
-    cell.getAsLink({
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-    }),
-  );
+export function createCellRef(
+  cell: Cell<unknown>,
+  schema?: unknown,
+  registry?: ReferenceRegistry,
+): CellRef {
+  const sigil = cell.getAsLink({
+    includeSchema: true,
+    keepAsCell: KeepAsCell.All,
+  });
+  const exported = registry?.exportLink(sigil, cell) ?? sigil;
+  const link = parseLink(exported);
   // Check before casting to a NormalizedFullLink
   if (!link.id || !link.space) {
     throw new Error("Serialized links must contain id and space.");
@@ -214,6 +222,9 @@ export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
   if (schema !== undefined) {
     cellRef.schema = schema as JSONSchema;
   }
+  const token = (linkRefPayload(exported) as { cfcReferenceToken?: string })
+    .cfcReferenceToken;
+  if (token !== undefined) cellRef.cfcReferenceToken = token;
   const cfcLabelView = cfcLabelViewForCell(cell);
   if (cfcLabelView !== undefined) {
     // A view attached to a ref is a copy for the main thread to display, so
@@ -225,26 +236,29 @@ export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
   return cellRef;
 }
 
-export function createPieceRef(cell: Cell<unknown>): PieceRef {
+export function createPieceRef(
+  cell: Cell<unknown>,
+  registry?: ReferenceRegistry,
+): PieceRef {
   return {
-    cell: createCellRef(cell),
+    cell: createCellRef(cell, undefined, registry),
   };
 }
 
-export function getCell(runtime: Runtime, ref: CellRef): Cell<unknown> {
-  // We explicitly do not pass in `schema`, as this function applies
-  // the schema to `schema`, and cell refs already contain all this
-  // information. Maybe the upstream function should change.
-  //
-  // `ref.cfcLabelView` is not seeded into the worker cell. An inbound view
-  // comes from the main thread, which displays it, and is not worker label
-  // state. `createCellRef()` attaches a view to an outbound ref for that
-  // display. We strip the view from the ref object itself, because
-  // `getCellFromLink()` reads the property off an input shaped like a
-  // normalized link.
-  if (ref.cfcLabelView === undefined) {
-    return runtime.getCellFromLink(ref);
+/** Resolves worker-issued acquisitions; label views remain display-only. */
+export function getCell(
+  runtime: Runtime,
+  ref: CellRef,
+  registry?: ReferenceRegistry,
+): Cell<unknown> {
+  if (ref.cfcReferenceToken !== undefined) {
+    if (!registry) throw new Error("Reference acquisition registry is missing");
+    return registry.importCell(ref);
   }
-  const { cfcLabelView: _cfcLabelView, ...cleanRef } = ref;
+  if (runtime.cfcFlowLabels === "persist") {
+    throw new Error("Reference acquisition token is missing or expired");
+  }
+  if (ref.cfcLabelView === undefined) return runtime.getCellFromLink(ref);
+  const { cfcLabelView: _view, cfcReferenceToken: _token, ...cleanRef } = ref;
   return runtime.getCellFromLink(cleanRef);
 }

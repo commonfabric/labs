@@ -48,7 +48,7 @@ import {
   type IPCRemoteMessage,
   RequestType,
 } from "@/protocol/mod.ts";
-import { buildProcessor } from "./build-processor.ts";
+import { acquireCellRef, buildProcessor } from "./build-processor.ts";
 
 const signer = await Identity.fromPassphrase("cell-set-echo-race");
 const space = signer.did();
@@ -216,7 +216,7 @@ describe("CellSet / CellUpdate echo race over IPC", () => {
 
       const handle = new CellHandle<{ color: string }>(
         client,
-        createCellRef(cell, schema),
+        acquireCellRef(processor, createCellRef(cell, schema)),
       );
       const seen: unknown[] = [];
       const cancel = handle.subscribe((value) => {

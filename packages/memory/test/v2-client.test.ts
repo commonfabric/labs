@@ -3173,7 +3173,9 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
     const [applied1, applied2] = await Promise.all([first, second]);
 
     assertEquals(transport.connectionCount, 2);
-    assertEquals(transport.transactLocalSeqs, [1, 2, 1, 2]);
+    // The second request waits for the replacement session: the first send
+    // closed the original connection before its request continuation ran.
+    assertEquals(transport.transactLocalSeqs, [1, 1, 2]);
     assertEquals(applied1.seq, 1);
     assertEquals(applied2.seq, 2);
   } finally {

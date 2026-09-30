@@ -348,6 +348,7 @@ describe("cfc-policy-manifest-shared-install", () => {
 
     it("runs it again after a local inconsistency at the manifest", async () => {
       const pieceA = await setUpByFirstParticipant();
+      await rtB.getCellFromEntityId(space, manifestId).sync();
       const failures = observeStartFailures();
       const attempts = refuseStarts((attempt) =>
         attempt === 1

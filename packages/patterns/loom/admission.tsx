@@ -18,9 +18,9 @@ import type { Panel, PanelAdmission } from "./schemas.tsx";
  *
  * Only `admitPanel` writes it. The runtime stores a declared label entry at
  * the field carrying `represents-principal` for the principal whose action
- * wrote it, resolving that principal itself. The panel also stores copies of
- * the linked profile's label, marked `origin: "link"`, which name the
- * profile's owner; the README says how a reader tells the two apart.
+ * wrote it, resolving that principal itself. The linked profile keeps its
+ * owner's label on its own document; readers inspect that target separately
+ * from the panel's relationship declaration.
  */
 export type PanelAdderProfile = RepresentsCurrentUser<
   Cfc<

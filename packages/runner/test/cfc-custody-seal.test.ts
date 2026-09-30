@@ -1075,16 +1075,21 @@ describe("cfc-custody-seal", () => {
               ),
           );
         const runtime = fixture.runtimes.get(mallory)!;
-        // A record carrying no label cannot be linked into the cell the seal
-        // labeled.
+        // The pointer can name an unlabeled record. Its contents and the
+        // member's selection remain independent inputs without seal evidence.
         const unlabeled = runtime.getCell(S, "repeated-entries");
         expect(await attemptAsOtherCode(fixture, mallory, unlabeled, repeat))
           .toBeUndefined();
-        expect(await pointAt(unlabeled)).toContain(
-          "missing link source metadata",
+        expect(await pointAt(unlabeled)).toBeUndefined();
+        const unlabeledIntegrity = await projectThrough(
+          fixture,
+          carol,
+          binding,
+          "from-unlabeled-record",
         );
-        // One labeled for the room's readers can, and its own root, which
-        // the seal did not write, withholds the witness.
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(hasWitnessed(unlabeledIntegrity)).toBe(false);
+        // Declaring the room's audience also grants no seal evidence.
         const labeled = runtime.getCell(S, "repeated-entries-labeled");
         expect(
           await attemptAsOtherCode(

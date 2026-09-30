@@ -2,6 +2,8 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import type { URI } from "@commonfabric/memory/interface";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -13,13 +15,6 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-resume-membership");
 const space = signer.did();
-
-type StoredEntry = {
-  path: string[];
-  label: { confidentiality?: string[]; integrity?: unknown[] };
-  origin?: string;
-  observes?: string;
-};
 
 const RESULT_CAUSE = "cfc-resume-membership result cell";
 const LIST_CAUSE = "cfc-resume-membership list";
@@ -64,7 +59,7 @@ describe("CFC resume membership taint", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: storageManager!,
       // Persisting flow labels is what writes the structure stamp this test
-      // reads back through `structureConfidentiality`.
+      // observes through `membershipConfidentiality`.
       cfcFlowLabels: "persist",
     });
 
@@ -94,15 +89,6 @@ describe("CFC resume membership taint", () => {
     return id;
   };
 
-  const entriesOf = (id: string): StoredEntry[] => {
-    const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
-    };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
-  };
-
   // `kept` is a link to the coordinator's result container; the container's own
   // document is what carries the structure label.
   const resolvedContainerId = (rt: Runtime, keptCell: any): string => {
@@ -114,18 +100,55 @@ describe("CFC resume membership taint", () => {
     return id;
   };
 
-  const structureConfidentiality = (id: string): string[] =>
-    entriesOf(id)
-      .filter((e) => e.origin === "structure" && e.path.length === 0)
-      .flatMap((e) => e.label.confidentiality ?? []);
+  const membershipConfidentiality = (
+    rt: Runtime,
+    id: string,
+    elementIds: readonly string[],
+  ) => {
+    const tx = rt.edit();
+    const targetReads: unknown[] = [];
+    const read = tx.read.bind(tx);
+    tx.read = (address, options) => {
+      if (elementIds.includes(address.id) && address.path[0] === "value") {
+        targetReads.push(address);
+      }
+      return read(address, options);
+    };
+    try {
+      // The independently named container has no acquired-reference label.
+      // Its length consumes membership, including a covering store policy
+      // when that policy makes a separate structure stamp redundant.
+      const array = rt.getCellFromLink(
+        {
+          space,
+          id: id as URI,
+          scope: "space",
+          path: [],
+        },
+        undefined,
+        tx,
+      ).getAsQueryResult() as unknown[];
+      expect(array.length).toBe(2);
+      const confidentiality = deriveFlowJoin(tx).confidentiality;
+      expect(targetReads).toEqual([]);
+      return confidentiality;
+    } finally {
+      tx.abort();
+    }
+  };
 
   it("carries a late element's secret into the resumed result's shape", async () => {
     storageManager = StorageManager.emulate({ as: signer });
 
     // SESSION 1: build the filtered list over two labeled elements.
     const rt1 = newRuntime();
-    await seedLabeledDoc(rt1, "memb-el-0", { n: 1 }, "alice-secret");
-    await seedLabeledDoc(rt1, "memb-el-1", { n: 2 }, "bob-secret");
+    const alice = await seedLabeledDoc(
+      rt1,
+      "memb-el-0",
+      { n: 1 },
+      "alice-secret",
+    );
+    const bob = await seedLabeledDoc(rt1, "memb-el-1", { n: 2 }, "bob-secret");
 
     const compiled = await rt1.patternManager.compilePattern(PROGRAM, {
       space,
@@ -159,7 +182,7 @@ describe("CFC resume membership taint", () => {
       ((rc1.key("kept") as any).getAsQueryResult() as unknown[]).length,
     ).toBe(2);
 
-    const builtStructure = structureConfidentiality(keptId);
+    const builtStructure = membershipConfidentiality(rt1, keptId, [alice, bob]);
     expect(builtStructure).toContainEqual("alice-secret");
     expect(builtStructure).toContainEqual("bob-secret");
     // The third element's secret cannot be in the stamp yet: it does not exist.
@@ -174,7 +197,12 @@ describe("CFC resume membership taint", () => {
     // out identical to the durable one. Its absence is what carries the secret:
     // the membership decision read carol's document to reach it.
     const rtMid = newRuntime();
-    await seedLabeledDoc(rtMid, "memb-el-2", { n: -1 }, "carol-secret");
+    const carol = await seedLabeledDoc(
+      rtMid,
+      "memb-el-2",
+      { n: -1 },
+      "carol-secret",
+    );
     const txMid = rtMid.edit();
     const listMid = rtMid.getCell(
       space,
@@ -222,7 +250,11 @@ describe("CFC resume membership taint", () => {
 
       // The resumed shape was decided by all three predicate results, so the
       // container's structure label must carry all three secrets.
-      const resumedStructure = structureConfidentiality(keptId);
+      const resumedStructure = membershipConfidentiality(rt2, keptId, [
+        alice,
+        bob,
+        carol,
+      ]);
       expect(resumedStructure).toContainEqual("alice-secret");
       expect(resumedStructure).toContainEqual("bob-secret");
       expect(resumedStructure).toContainEqual("carol-secret");

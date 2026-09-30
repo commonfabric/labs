@@ -13,13 +13,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { CellLinkRefPayload } from "../../runner/src/sigil-types.ts";
 import { DomApplicator } from "../src/main/applicator.ts";
 import { MockDoc } from "../src/mock-doc.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -46,15 +44,10 @@ const linkCarrying = (
   schema: JSONSchema,
   overwrite?: "redirect",
 ) => {
-  const link = cell.getAsNormalizedFullLink();
-  return linkRefFrom<CellLinkRefPayload>({
-    id: link.id,
-    space: link.space,
-    scope: link.scope,
-    path: [...link.path],
-    schema,
-    ...(overwrite !== undefined && { overwrite }),
-  });
+  const shaped = cell.asSchema(schema);
+  return overwrite === "redirect"
+    ? shaped.getAsWriteRedirectLink({ includeSchema: true })
+    : shaped.getAsLink({ includeSchema: true });
 };
 
 describe("in-process-reference-attributes", () => {

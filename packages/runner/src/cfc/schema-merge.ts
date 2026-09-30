@@ -1,4 +1,4 @@
-import type { CfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import {
   hashStringOf,
   isWalkableObjectOrArray,
@@ -442,7 +442,21 @@ const mergeIfc = (
 // `$defs`.
 const branchContainsIfc = (schema: JSONSchema): boolean => {
   if (!isObjectOrArray(schema)) return false;
-  if ((schema as JSONSchemaObj).ifc !== undefined) return true;
+  const ifc = (schema as JSONSchemaObj).ifc;
+  if (ifc !== undefined) {
+    // These stamps certify concrete builtin-authored bytes. They are gated by
+    // author identity and value validation when minted, rather than imposing
+    // a persistent reader or writer policy on a union branch.
+    const valueEvidenceOnly = isObjectOrArray(ifc) &&
+      Object.keys(ifc).every((key) => key === "addIntegrity") &&
+      Array.isArray(ifc.addIntegrity) &&
+      ifc.addIntegrity.every((atom) =>
+        isObjectOrArray(atom) &&
+        (atom.type === CFC_ATOM_TYPE.InjectionSafe ||
+          atom.type === CFC_ATOM_TYPE.LlmDerived)
+      );
+    if (!valueEvidenceOnly) return true;
+  }
   return forEachSubschema(schema, (child) => branchContainsIfc(child), {
     includeDefs: true,
   });
@@ -1143,6 +1157,14 @@ export const mergeCfcSchemaEnvelopes = (
 ): JSONSchema => {
   assertNoDivergentIfcBranches(existing);
   assertNoDivergentIfcBranches(candidate);
+  // Reference history can persist before a document declares any schema.
+  // An empty envelope carries no shape whose required fields need migration.
+  if (
+    existing === true ||
+    (isObjectNotArray(existing) && Object.keys(existing).length === 0)
+  ) {
+    return internSchema(asSchemaObject(candidate, ""));
+  }
   // Equal policies keep their reference graphs, including recursive ones,
   // through data-shape migrations. Public field shapes do not change the
   // reader or writer declarations enforced at a logical path.

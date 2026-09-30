@@ -56,6 +56,13 @@ UTF-8 order. Reordering the same linked elements preserves the winner. Duplicate
 occurrences use the collection identity machinery's occurrence keys. A By result
 remains a link to the selected element, retaining its schema and scope.
 
+The By forms carry acquired references through leaf and intermediate results.
+Selection retains reference confidentiality and scope restrictions, including
+nested immutable references, across persisted tree nodes. Confidential score
+reads label the selection; target content labels enter the flow when that
+content is read. Numeric-only aggregates do not acquire element references they
+do not return.
+
 Sparse holes contribute nothing. For argument-free `count`, `sum`, `min`, and
 `max`, a confirmed source transition to `undefined` clears the result and
 releases its children. Callback forms inherit `map`'s treatment of an undefined

@@ -1,6 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import type { FabricValue } from "@commonfabric/data-model";
+import {
+  seedStoredReferenceEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../../runner/test/cfc-seed-envelope.ts";
+
 import { createSession, Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -61,10 +67,21 @@ describe("piece-controller", () => {
         result: {},
         nodes: [],
       }, { reason: "stored link input fixture" });
-      return new PieceController(
-        pieces,
-        await pieces.runPersistent(pattern, input, undefined, { start: true }),
-      );
+      const result = await pieces.runPersistent(pattern, undefined, undefined, {
+        start: true,
+      });
+      const argument = pieces.getArgument(result).resolveAsCell();
+      const written = await runtime.editWithRetry((tx) => {
+        writeSeedEnvelopeDoc(tx, session.space);
+        const address = { ...argument.getAsNormalizedFullLink(), path: [] };
+        const envelope = tx.readOrThrow(address) as Record<string, FabricValue>;
+        seedStoredReferenceEnvelope(tx, address, {
+          ...envelope,
+          value: input as FabricValue,
+        });
+      });
+      expect(written.error).toBeUndefined();
+      return new PieceController(pieces, result);
     }
 
     /** Installs the `myName`/`title` fixture. */
@@ -119,7 +136,7 @@ describe("piece-controller", () => {
         title: "before",
       });
 
-      await piece.input.set(userRedirect(["myName"]), ["myName"]);
+      await piece.input.set(rawArgument(piece).myName, ["myName"]);
 
       expect(rawArgument(piece).myName).toEqual(userRedirect(["myName"]));
     });

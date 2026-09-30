@@ -723,6 +723,10 @@ alternatives, then omit the root default from both sides of each alternative
 comparison. Descendant defaults remain checked. This applies to both pattern
 evolution and link proofs, under their respective default policies.
 
+Disjoint branch types make a union stable under descendant default insertion;
+this check resolves local references against each schema's owning root, so an
+inline branch and the equivalent referenced branch have the same result.
+Overlapping types and unresolved references do not establish that stability.
 Literal comparisons intersect `const` and `enum` with the declared `type`, so
 values that the type excludes do not restrict a widening. A `null` type proves
 membership in an enum or const containing `null`; a `boolean` type proves
@@ -1185,6 +1189,11 @@ is the batch lane's,
      closure and select the stored export symbol.
    - Before any cross-space copy, enforce the source's CFC provenance labels
      for the destination and fail closed when the flow is not permitted.
+     Public `LinkReference` evidence on a version-2 reference observation
+     identifies the stored source link. Verified source-byte recovery creates
+     destination links with their own evidence. Confidentiality on that
+     reference, and content integrity that the copy cannot preserve, still
+     prevent recovery across spaces.
 3. If the resolved identity, symbol, complete-program digest, and origin revision
    equal the values accepted by the current revision, start the current pattern
    without writing a revision. That shortcut requires the accepted source to

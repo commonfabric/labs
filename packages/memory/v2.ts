@@ -514,6 +514,11 @@ export type StreamEventEntry = {
    * trust as today's client-side enforcement). */
   runtimeInjectedEventKeys?: string[];
 
+  /** Firing Runtime's opaque reference-acquisition attestation. Memory carries
+   * it under the same producer authority as runtimeInjectedEventKeys; Runtime
+   * validates its binding to the payload before restoring acquisitions. */
+  runtimeReferenceContext?: string;
+
   /** The firing RUNTIME's attestation that the sent event was
    * RENDERER-TRUSTED — it carried the process-local renderer-trust mark
    * (`markRendererTrustedEvent`, set by the renderer's dispatch and
@@ -961,7 +966,15 @@ export type Operation =
   | ReleaseOpFieldOperation
   | SqliteOperation;
 
+/**
+ * Whether staleness may be waived when document operations prove an identity.
+ * Required dependencies also protect outcomes outside those document writes.
+ */
+export type CommitReadValidation = "required" | "elidable";
+
 export type ConfirmedRead = {
+  /** Defaults to `required`; only explicit `elidable` reads permit a waiver. */
+  validation?: CommitReadValidation;
   id: EntityId;
   scope?: CellScope;
   branch?: BranchName;
@@ -981,6 +994,8 @@ export type ConfirmedRead = {
 };
 
 export type PendingRead = {
+  /** See {@link ConfirmedRead.validation}. */
+  validation?: CommitReadValidation;
   id: EntityId;
   scope?: CellScope;
   path: ReadPath;
@@ -1107,6 +1122,16 @@ export type MemoryProtocolFlags = {
 
   commitPreconditions: boolean;
 
+  /**
+   * The server preserves required read validation during identity admission.
+   * Clients require this capability for commits with non-elidable reads,
+   * including outstanding commits replayed after reconnecting.
+   */
+  readValidation: boolean;
+
+  /** The server preserves opaque runtime context on durable event entries. */
+  eventContext: boolean;
+
   /** The server integrates durable collaborative operation streams. */
   applyOp: boolean;
 
@@ -1229,6 +1254,8 @@ export type WireMemoryProtocolFlags = {
   syncSchemaTableV2?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
+  readValidation?: boolean;
+  eventContext?: boolean;
   sqliteQueryReader?: boolean;
   pendingReadStacks?: boolean;
   verdictCatchUpMarkers?: boolean;
@@ -2218,6 +2245,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
+  readValidation: true,
+  eventContext: true,
   applyOp: true,
   operationCodecs: [CODEMIRROR_CHANGESET_CODEC],
   messageCompressionV1: getMessageCompressionConfig(),
@@ -2289,6 +2318,16 @@ export const parseMemoryProtocolFlags = (
     commitPreconditions !== undefined &&
     typeof commitPreconditions !== "boolean"
   ) {
+    return null;
+  }
+
+  const readValidation = value.readValidation;
+  if (readValidation !== undefined && typeof readValidation !== "boolean") {
+    return null;
+  }
+
+  const eventContext = value.eventContext;
+  if (eventContext !== undefined && typeof eventContext !== "boolean") {
     return null;
   }
 
@@ -2421,6 +2460,8 @@ export const parseMemoryProtocolFlags = (
     genesisRoot: value.genesisRoot === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
+    readValidation: readValidation === true,
+    eventContext: eventContext === true,
     applyOp: applyOp === true,
     ...(operationCodecs === undefined
       ? {}
@@ -2466,6 +2507,8 @@ export const wireMemoryProtocolFlags = (
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,
+  readValidation: flags.readValidation,
+  eventContext: flags.eventContext,
   applyOp: flags.applyOp,
   ...(flags.operationCodecs === undefined
     ? {}

@@ -93,6 +93,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
       // `entriesOf` reads the label map the replica stores, and flow labels
       // reach storage at "persist".
       cfcFlowLabels: "persist",
+      cfcEnforcementMode: "observe",
     });
 
     await seedLabeledDoc(runtime, "anchor-el-0", { n: 1 }, "alice-secret");

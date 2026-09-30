@@ -19,14 +19,12 @@ import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { MIME, URI } from "@commonfabric/memory/interface";
 import {
-  type CommitPrecondition,
   type EntityDocument,
   getMemoryProtocolFlags,
   type PatchOp,
   resetServerExecutionConfig,
   type SessionSync,
   setServerExecutionConfig,
-  type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
 import type {
@@ -52,6 +50,7 @@ import {
 import type {
   IStorageProvider,
   IStorageTransaction,
+  NativeStorageCommit,
   StorageNotification,
 } from "../src/storage/interface.ts";
 import {
@@ -634,21 +633,7 @@ const createHarness = (
 
   const replica = provider.replica as unknown as {
     commitNative(
-      transaction: {
-        operations: Array<
-          | { op: "set"; id: URI; type: MIME; value: unknown }
-          | {
-            op: "patch";
-            id: URI;
-            type: MIME;
-            patches: PatchOp[];
-            value: unknown;
-          }
-          | { op: "delete"; id: URI; type: MIME }
-        >;
-        preconditions?: readonly CommitPrecondition[];
-        sqliteOps?: readonly SqliteOperation[];
-      },
+      transaction: NativeStorageCommit,
       source?: unknown,
       options?: { resolveAt?: "coverage" | "verdict" },
     ): Promise<
@@ -658,6 +643,7 @@ const createHarness = (
       }
     >;
     accessForTestingOnly: SpaceReplica["accessForTestingOnly"];
+    sealNative: SpaceReplica["sealNative"];
     get(address: {
       id: URI;
       type: MIME;
@@ -5248,5 +5234,561 @@ describe("memory-v2-stacked-commit", () => {
         await harness.close();
       }
     });
+  });
+
+  describe("array publication and companion metadata", () => {
+    it("keeps pending array slots aligned with companion metadata", async () => {
+      const harness = createHarness();
+      const gate = Promise.withResolvers<void>();
+      let pending: Promise<unknown> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, {
+          items: ["a"],
+          slots: { "0": "a" },
+        });
+        await harness.replica.pull([[
+          { id: DOCS.A, type: DOCUMENT_MIME },
+          undefined,
+        ]]);
+        const received = Promise.withResolvers<void>();
+        harness.model.setOutcome(2, {
+          kind: "rejectConflict",
+          responseGate: gate.promise,
+          onReceipt: received.resolve,
+        });
+        const tx = harness.storageManager.edit();
+        expect(
+          tx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "items", "1"],
+          }, "b").ok,
+        ).toBeTruthy();
+        expect(
+          tx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "slots"],
+          }, { "0": "a", "1": "b" }).ok,
+        ).toBeTruthy();
+        pending = tx.commit({ resolveAt: "verdict" });
+        await received.promise;
+        const remote = { items: ["a", "b"], slots: { "0": "a", "1": "b" } };
+        harness.model.injectRemote({
+          label: "peer replacement",
+          operations: [{ op: "set", id: DOCS.A, value: remote }],
+        });
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: harness.model.serverSeq,
+            value: remote,
+          }],
+        });
+        await clock.settle();
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual(remote);
+        gate.resolve();
+        await pending;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual(remote);
+      } finally {
+        gate.resolve();
+        await pending;
+        await harness.close();
+      }
+    });
+
+    it("preserves admitted disjoint writes and notifies readers on array promotion", async () => {
+      const harness = createHarness();
+      const gate = Promise.withResolvers<void>();
+      let pending: Promise<unknown> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a"] });
+        await harness.replica.pull([[
+          { id: DOCS.A, type: DOCUMENT_MIME },
+          undefined,
+        ]]);
+        const received = Promise.withResolvers<void>();
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          responseGate: gate.promise,
+          onReceipt: received.resolve,
+        });
+        const tx = harness.storageManager.edit();
+        expect(
+          tx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "items", "1"],
+          }, "b").ok,
+        ).toBeTruthy();
+        const draft = tx.getNativeCommit!(space)!;
+        pending = harness.replica.commitNative(draft, undefined, {
+          resolveAt: "verdict",
+        });
+        await received.promise;
+        const remote = { items: ["peer"] };
+        harness.model.injectRemote({
+          label: "disjoint prefix",
+          operations: [{ op: "set", id: DOCS.A, value: remote }],
+        });
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: harness.model.serverSeq,
+            value: remote,
+          }],
+        });
+        await clock.settle();
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "b"],
+        });
+        harness.notifications.clear();
+        gate.resolve();
+        await pending;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["peer", "b"],
+        });
+        expect(changedIdsFor(harness.notifications.notifications, "integrate"))
+          .toEqual([[DOCS.A]]);
+        const admitted = harness.model.applied.get(2)!.commit.operations;
+        expect(admitted).toEqual([{
+          op: "patch",
+          id: DOCS.A,
+          scope: "space",
+          patches: [{
+            op: "splice",
+            path: "/value/items",
+            index: 1,
+            remove: 0,
+            add: ["b"],
+          }],
+        }]);
+        tx.abort();
+      } finally {
+        gate.resolve();
+        await pending;
+        await harness.close();
+      }
+    });
+
+    it("keeps independent semantic appends of the same value distinct during replay", async () => {
+      const harness = createHarness();
+      const gate = Promise.withResolvers<void>();
+      let pending: Promise<unknown> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a"] });
+        await harness.replica.pull([[
+          { id: DOCS.A, type: DOCUMENT_MIME },
+          undefined,
+        ]]);
+        const received = Promise.withResolvers<void>();
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          responseGate: gate.promise,
+          onReceipt: received.resolve,
+        });
+        pending = beginPatch(harness, DOCS.A, [{
+          op: "append",
+          path: "/value/items",
+          values: ["b"],
+        }], { items: ["a", "b"] });
+        await received.promise;
+        const remote = { items: ["a", "b"] };
+        harness.model.injectRemote({
+          label: "independent append",
+          operations: [{ op: "set", id: DOCS.A, value: remote }],
+        });
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: harness.model.serverSeq,
+            value: remote,
+          }],
+        });
+        await clock.settle();
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "b", "b"],
+        });
+        gate.resolve();
+        await pending;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "b", "b"],
+        });
+      } finally {
+        gate.resolve();
+        await pending;
+        await harness.close();
+      }
+    });
+
+    for (const dropBeforeInstall of [false, true]) {
+      it(`keeps a dropped snapshot layer out of fixed-array replay (dropBeforeInstall=${dropBeforeInstall})`, async () => {
+        const harness = createHarness();
+        const parentGate = Promise.withResolvers<void>();
+        const childGate = Promise.withResolvers<void>();
+        let parent: Promise<unknown> | undefined;
+        let child: Promise<unknown> | undefined;
+        try {
+          await seedAccepted(harness, DOCS.A, { items: ["a"], state: "base" });
+          const parentReceived = Promise.withResolvers<void>();
+          const childReceived = Promise.withResolvers<void>();
+          harness.model.setOutcome(2, {
+            kind: "rejectConflict",
+            responseGate: parentGate.promise,
+            onReceipt: parentReceived.resolve,
+          });
+          harness.model.setOutcome(3, {
+            kind: "accept",
+            responseGate: childGate.promise,
+            onReceipt: childReceived.resolve,
+          });
+          parent = beginPatch(harness, DOCS.A, [{
+            op: "replace",
+            path: "/value/items/0",
+            value: "parent",
+          }], { items: ["parent"], state: "base" });
+          await parentReceived.promise;
+          const tx = harness.storageManager.edit();
+          expect(
+            tx.write({
+              space,
+              id: DOCS.A,
+              type: DOCUMENT_MIME,
+              path: ["value", "items", "1"],
+            }, "child").ok,
+          ).toBeTruthy();
+          expect(
+            tx.write({
+              space,
+              id: DOCS.A,
+              type: DOCUMENT_MIME,
+              path: ["value", "state"],
+            }, "child").ok,
+          ).toBeTruthy();
+          const draft = tx.getNativeCommit!(space)!;
+          if (dropBeforeInstall) {
+            parentGate.resolve();
+            await parent;
+          }
+          // A blind operation may survive the parent's rejection. Its local
+          // snapshot must still forget that parent's prefix and companion data.
+          child = harness.replica.commitNative(draft, undefined, {
+            resolveAt: "verdict",
+          });
+          await childReceived.promise;
+          if (!dropBeforeInstall) {
+            expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+              items: ["parent", "child"],
+              state: "child",
+            });
+            parentGate.resolve();
+            await parent;
+          }
+          expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+            items: ["a"],
+            state: "base",
+          });
+          childGate.resolve();
+          await child;
+          expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+            items: ["a", "child"],
+            state: "child",
+          });
+          tx.abort();
+        } finally {
+          parentGate.resolve();
+          childGate.resolve();
+          await parent;
+          await child;
+          await harness.close();
+        }
+      });
+    }
+
+    it("keeps an accepted snapshot layer valid for fixed-array replay", async () => {
+      const harness = createHarness();
+      const gate = Promise.withResolvers<void>();
+      let parent: Promise<unknown> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a"] });
+        const received = Promise.withResolvers<void>();
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          responseGate: gate.promise,
+          onReceipt: received.resolve,
+        });
+        parent = beginPatch(harness, DOCS.A, [{
+          op: "append",
+          path: "/value/items",
+          values: ["parent"],
+        }], { items: ["a", "parent"] });
+        await received.promise;
+        const tx = harness.storageManager.edit();
+        expect(
+          tx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "items", "2"],
+          }, "child").ok,
+        ).toBeTruthy();
+        const draft = tx.getNativeCommit!(space)!;
+        gate.resolve();
+        await parent;
+        const child = harness.replica.commitNative(draft, undefined, {
+          resolveAt: "verdict",
+        });
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "parent", "child"],
+        });
+        await child;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "parent", "child"],
+        });
+        tx.abort();
+      } finally {
+        gate.resolve();
+        await parent;
+        await harness.close();
+      }
+    });
+
+    it("invalidates a cached pending suffix on fixed-array promotion", async () => {
+      const harness = createHarness();
+      const gate2 = Promise.withResolvers<void>();
+      const gate3 = Promise.withResolvers<void>();
+      let c2: Promise<unknown> | undefined;
+      let c3: Promise<unknown> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a"], count: 0 });
+        await harness.replica.pull([[
+          { id: DOCS.A, type: DOCUMENT_MIME },
+          undefined,
+        ]]);
+        const received2 = Promise.withResolvers<void>();
+        const received3 = Promise.withResolvers<void>();
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          responseGate: gate2.promise,
+          onReceipt: received2.resolve,
+        });
+        harness.model.setOutcome(3, {
+          kind: "rejectConflict",
+          responseGate: gate3.promise,
+          onReceipt: received3.resolve,
+        });
+        const tx = harness.storageManager.edit();
+        tx.write({
+          space,
+          id: DOCS.A,
+          type: DOCUMENT_MIME,
+          path: ["value", "items", "1"],
+        }, "b");
+        c2 = harness.replica.commitNative(
+          tx.getNativeCommit!(space)!,
+          undefined,
+          {
+            resolveAt: "verdict",
+          },
+        );
+        await received2.promise;
+        c3 = beginPatch(harness, DOCS.A, [{
+          op: "replace",
+          path: "/value/count",
+          value: 1,
+        }], { items: ["a", "b"], count: 1 });
+        await received3.promise;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "b"],
+          count: 1,
+        });
+        const remote = { items: ["peer"], count: 0 };
+        harness.model.injectRemote({
+          label: "peer",
+          operations: [{ op: "set", id: DOCS.A, value: remote }],
+        });
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: harness.model.serverSeq,
+            value: remote,
+          }],
+        });
+        await clock.settle();
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "b"],
+          count: 1,
+        });
+        gate2.resolve();
+        await c2;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["peer", "b"],
+          count: 1,
+        });
+        gate3.resolve();
+        await c3;
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["peer", "b"],
+          count: 0,
+        });
+        tx.abort();
+      } finally {
+        gate2.resolve();
+        gate3.resolve();
+        await c2;
+        await c3;
+        await harness.close();
+      }
+    });
+
+    it("keeps an accepted sealed snapshot visible when dependent replay installs", async () => {
+      const harness = createHarness();
+      const parentVerdict = Promise.withResolvers<{
+        committed: {
+          seq: number;
+        };
+      }>();
+      const childVerdict = Promise.withResolvers<{
+        withdrawn: {
+          message: string;
+        };
+      }>();
+      let parent: ReturnType<SpaceReplica["sealNative"]> | undefined;
+      let child: ReturnType<SpaceReplica["sealNative"]> | undefined;
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a"] });
+        const parentTx = harness.storageManager.edit();
+        expect(
+          parentTx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "items", "1"],
+          }, "parent").ok,
+        ).toBeTruthy();
+        parent = harness.replica.sealNative(
+          parentTx.getNativeCommit!(space)!,
+          undefined,
+          parentVerdict.promise,
+        );
+        const childTx = harness.storageManager.edit();
+        expect(
+          childTx.write({
+            space,
+            id: DOCS.A,
+            type: DOCUMENT_MIME,
+            path: ["value", "items", "2"],
+          }, "child").ok,
+        ).toBeTruthy();
+        const draft = childTx.getNativeCommit!(space)!;
+        parentVerdict.resolve({ committed: { seq: 2 } });
+        await parent.settled;
+        child = harness.replica.sealNative(
+          draft,
+          undefined,
+          childVerdict.promise,
+        );
+        expect(visibleValue(harness.provider, DOCS.A)).toEqual({
+          items: ["a", "parent", "child"],
+        });
+        parentTx.abort();
+        childTx.abort();
+      } finally {
+        parentVerdict.resolve({ committed: { seq: 2 } });
+        childVerdict.resolve({ withdrawn: { message: "review cleanup" } });
+        await parent?.settled;
+        await child?.settled;
+        await harness.close();
+      }
+    });
+
+    for (const coveringFrame of ["none", "before", "between"] as const) {
+      it(`retains every accepted contribution to same-wave array seals (coveringFrame=${coveringFrame})`, async () => {
+        const harness = createHarness();
+        const firstVerdict = Promise.withResolvers<{
+          committed: {
+            seq: number;
+          };
+        }>();
+        const secondVerdict = Promise.withResolvers<{
+          committed: {
+            seq: number;
+          };
+        }>();
+        let first: ReturnType<SpaceReplica["sealNative"]> | undefined;
+        let second: ReturnType<SpaceReplica["sealNative"]> | undefined;
+        try {
+          await seedAccepted(harness, DOCS.A, { items: ["a"], labels: ["a"] });
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]);
+          const append = (index: number, value: string, labels: string[]) => {
+            const tx = harness.storageManager.edit();
+            expect(
+              tx.write({
+                space,
+                id: DOCS.A,
+                type: DOCUMENT_MIME,
+                path: ["value", "items", String(index)],
+              }, value).ok,
+            ).toBeTruthy();
+            expect(
+              tx.write({
+                space,
+                id: DOCS.A,
+                type: DOCUMENT_MIME,
+                path: ["value", "labels"],
+              }, labels).ok,
+            ).toBeTruthy();
+            const draft = tx.getNativeCommit!(space)!;
+            tx.abort();
+            return draft;
+          };
+          first = harness.replica.sealNative(
+            append(1, "b", ["a", "b"]),
+            undefined,
+            firstVerdict.promise,
+          );
+          second = harness.replica.sealNative(
+            append(2, "c", ["a", "b", "c"]),
+            undefined,
+            secondVerdict.promise,
+          );
+          const accepted = { items: ["a", "b", "c"], labels: ["a", "b", "c"] };
+          const cover = async () => {
+            harness.model.injectRemote({
+              label: "complete wave document",
+              operations: [{ op: "set", id: DOCS.A, value: accepted }],
+            });
+            harness.pushSync({
+              upserts: [{ id: DOCS.A, seq: 2, value: accepted }],
+            });
+            await clock.settle();
+            expect(currentSeq(harness, DOCS.A)).toEqual(2);
+          };
+          if (coveringFrame === "before") {
+            await cover();
+          }
+          firstVerdict.resolve({ committed: { seq: 2 } });
+          await first.settled;
+          if (coveringFrame === "between") {
+            await cover();
+          }
+          secondVerdict.resolve({ committed: { seq: 2 } });
+          await second.settled;
+          expect(visibleValue(harness.provider, DOCS.A)).toEqual(accepted);
+        } finally {
+          firstVerdict.resolve({ committed: { seq: 2 } });
+          secondVerdict.resolve({ committed: { seq: 2 } });
+          await first?.settled;
+          await second?.settled;
+          await harness.close();
+        }
+      });
+    }
   });
 });

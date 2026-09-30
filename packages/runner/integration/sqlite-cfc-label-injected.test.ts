@@ -451,7 +451,8 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       // (e) The INSPECTION reader — what `cf cell get-label` calls — resolves
       // the links the path crosses and reports the label a person asked about.
       // Selecting the column reports it at the selection; selecting the row
-      // reports one entry per labeled column.
+      // reports each labeled column. Reference and content observation classes
+      // retain separate entries even when they share a path.
       const resolvedAt = (
         query: Cell<QueryState>,
         path: readonly (string | number)[],
@@ -467,9 +468,10 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         return status.view;
       };
       const atColumn = resolvedAt(direct, ["result", 0, "secret"]);
-      const columnEntry = atColumn?.entries.find((e) => e.path.length === 0);
+      const columnConf = atColumn?.entries.filter((e) => e.path.length === 0)
+        .flatMap((e) => e.label.confidentiality ?? []);
       if (
-        !columnEntry?.label.confidentiality?.some((a) => a === "secret-body")
+        !sameAtoms(columnConf, ["secret-body"])
       ) {
         throw new Error(
           `get-label reported no confidentiality at result/0/secret; got ${
@@ -478,10 +480,10 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         );
       }
       const atRow = resolvedAt(direct, ["result", 0]);
-      const rowEntry = atRow?.entries.find((e) =>
+      const rowConf = atRow?.entries.filter((e) =>
         e.path.length === 1 && e.path[0] === "secret"
-      );
-      if (!rowEntry?.label.confidentiality?.some((a) => a === "secret-body")) {
+      ).flatMap((e) => e.label.confidentiality ?? []);
+      if (!sameAtoms(rowConf, ["secret-body"])) {
         throw new Error(
           `get-label reported no per-column entry at result/0; got ${
             JSON.stringify(atRow)
@@ -490,12 +492,11 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       }
       // The null-origin column reaches the same reader with its class intact.
       const atDerived = resolvedAt(derived, ["result", 0, "shouted"]);
-      const atDerivedEntry = atDerived?.entries.find((e) =>
-        e.path.length === 0
-      );
+      const derivedConf = atDerived?.entries.filter((e) =>
+        e.path.length === 0 && e.observes === "value"
+      ).flatMap((e) => e.label.confidentiality ?? []);
       if (
-        !sameAtoms(atDerivedEntry?.label.confidentiality, WHOLE_DB_UNION) ||
-        atDerivedEntry?.observes !== "value"
+        !sameAtoms(derivedConf, WHOLE_DB_UNION)
       ) {
         throw new Error(
           `get-label lost the null-origin column's value-class whole-db ` +

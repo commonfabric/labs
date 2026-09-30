@@ -129,9 +129,14 @@ counts when the transformation read the slot, or read recursively above it,
 and read the document it names at or below its target with confidentiality. A
 reference also counts when the transformation followed it and the label of
 its slot is confidential, whatever the document it names carries: a secret
-choice among public documents is a confidential input. Such a slot that no
-content read observed has no value stamp to resolve, and empties the
-witnesses. A
+choice among public documents is a confidential input. A runtime-authenticated
+acquisition resolves the selection's value stamps at that exact source slot,
+checks that they name the actual reference, and retains those witnesses with the
+held reference. Replaying that acquisition, including in a later transaction,
+meets its historical selection evidence alongside the other confidential inputs.
+An acquisition without that authenticated evidence empties the witnesses.
+Selection evidence does not certify the target's contents: the target's actual
+content observations remain independent locations in the meet. A
 write redirect counts like any other reference: pattern code can store one as
 data, and a read follows it as it follows any other. A transformation that read
 nothing confidential has no such location to account for.

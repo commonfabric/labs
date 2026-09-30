@@ -56,7 +56,12 @@ import {
 } from "../executor/wave.ts";
 import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { parseCfLinkToSigil } from "./sqlite/cf-link.ts";
-import { type IFCLabel, mergeLabel } from "../cfc/label-view-core.ts";
+import {
+  type IFCLabel,
+  mergeLabel,
+  withCfcLabelViewOrigins,
+} from "../cfc/label-view-core.ts";
+import { withCfcReferenceConfidentiality } from "../cfc/reference-provenance.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
@@ -67,7 +72,9 @@ import {
 import { deriveFlowJoin } from "../cfc/prepare.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
+  authorizationRead,
   ignoreReadForScheduling,
+  internalVerifierRead,
   writeDestinationRead,
 } from "../storage/reactivity-log.ts";
 import {
@@ -90,7 +97,10 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { type Cell, createCell, encodeSqliteParams } from "../cell.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
-import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
+import {
+  isCompleteCfcReferenceEntry,
+  runtimeWritePolicyAuthorization,
+} from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { stripEntityUriScheme } from "../entity-kind.ts";
 import { toURI } from "../uri-utils.ts";
@@ -406,6 +416,10 @@ function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
 function decodeRowLinkColumns(
   rows: readonly unknown[],
   cols: readonly string[],
+  acquire?: (
+    link: NonNullable<ReturnType<typeof parseCfLinkToSigil>>,
+    column: string,
+  ) => unknown,
 ): unknown[] {
   if (cols.length === 0) return rows as unknown[];
   return rows.map((row) => {
@@ -418,7 +432,7 @@ function decodeRowLinkColumns(
     let out: Record<string, unknown> | undefined;
     for (const c of cols) {
       if (!(c in r)) continue;
-      let decoded: unknown;
+      let decoded: ReturnType<typeof parseCfLinkToSigil>;
       try {
         decoded = parseCfLinkToSigil(r[c]);
       } catch {
@@ -426,7 +440,7 @@ function decodeRowLinkColumns(
       }
       if (decoded === r[c]) continue; // e.g. null -> null: nothing to change.
       out ??= { ...r };
-      out[c] = decoded;
+      out[c] = decoded === null ? null : acquire?.(decoded, c) ?? decoded;
     }
     return out ?? row;
   });
@@ -1203,7 +1217,7 @@ export function sqliteQuery(
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
       // a memo hit.
-      resultLabelVersion: 2,
+      resultLabelVersion: 3,
       // Phase 3 read-surface options join the request identity so changing
       // them re-issues the query (pre-existing queries re-hash once — benign).
       maxConfidentiality: declaredCeiling ?? null,
@@ -1253,7 +1267,7 @@ export function sqliteQuery(
     const storedQueryState = (
       readTx: IExtendedStorageTransaction,
     ): QueryState | undefined =>
-      result.withTx(readTx).getRaw({
+      readTx.readValueOrThrow(result.getAsNormalizedFullLink(), {
         meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
       }) as QueryState | undefined;
     const storedBeforeClaim = storedQueryState(tx);
@@ -1720,6 +1734,9 @@ export function sqliteQuery(
             // (a declared, observable existence release; 06-cfc.md ceiling).
             const keep = rowLabels.keep;
             const keptRows = keep ? rows.filter((_, i) => keep[i]) : rows;
+            const keptEncodedRows = keep
+              ? res.rows.filter((_, i) => keep[i])
+              : res.rows;
             const perRow = keep
               ? rowLabels.labels.filter((_, i) => keep[i])
               : rowLabels.labels;
@@ -1789,6 +1806,249 @@ export function sqliteQuery(
                 },
               }
               : labelSchema;
+            const columnLabel = (column: string): IFCLabel | undefined => {
+              const properties = objectRowSchema?.properties as
+                | Record<string, { ifc?: IFCLabel }>
+                | undefined;
+              return Object.getOwnPropertyDescriptor(properties ?? {}, column)
+                ?.value?.ifc as IFCLabel | undefined;
+            };
+            const decodedFields = keptEncodedRows.map((encoded, i) =>
+              linkCols.flatMap((column) => {
+                let link: ReturnType<typeof parseCfLinkToSigil>;
+                try {
+                  link = parseCfLinkToSigil(
+                    (encoded as Record<string, unknown>)[column],
+                  );
+                } catch {
+                  return [];
+                }
+                if (link === null) return [];
+                const confidentiality = joinCfcObservedConfidentiality([
+                  perRow[i]?.confidentiality,
+                  columnLabel(column)?.confidentiality,
+                ]);
+                const row = resultRows[i];
+                const path = Array.isArray(row)
+                  ? [String(row.findIndex(([name]) => name === column)), "1"]
+                  : [column];
+                return [{ column, link, path, confidentiality }];
+              })
+            );
+            const isolatedReferences =
+              runtime.cfcEnforcementMode !== "disabled" &&
+              decodedFields.some((fields) =>
+                fields.some((field) => field.confidentiality.length > 0)
+              );
+            const referenceLink = (
+              field: (typeof decodedFields)[number][number],
+            ) =>
+              runtime.getCellFromLink(
+                field.link,
+                undefined,
+                undefined,
+                withCfcLabelViewOrigins(
+                  withCfcReferenceConfidentiality(
+                    undefined,
+                    field.confidentiality,
+                  ),
+                  [databaseSpace],
+                ),
+              ).getAsLink();
+            const resultAddress = result.getAsNormalizedFullLink();
+            const rowAddress = (
+              key: ReturnType<typeof resultRowKeys>[number],
+            ) => ({
+              ...resultAddress,
+              id: toURI(createRef(key, {
+                parent: { id: resultAddress.id, space: resultAddress.space },
+                path: [...resultAddress.path, "result"],
+                context: "sqlite-result-row",
+              })),
+              path: [],
+              schema: undefined,
+            });
+            let materializedRowKeys:
+              | ReturnType<typeof resultRowKeys>
+              | undefined;
+            // Forwarding a confidential reference contributes to its transaction's
+            // flow join. Materialize each field separately so only that field
+            // observes its label; publish the completed rows in one final commit.
+            // Every stage retains the original effect carriage and stale guard.
+            if (isolatedReferences) {
+              const base = result.getAsNormalizedFullLink();
+              const initialize = await runtime.editWithRetry(
+                (wtx) => {
+                  markEffectCompletion(wtx, effectKey);
+                  applyRunIdentity(wtx);
+                  if (storedRequestHash(wtx) !== hash) return undefined;
+                  wtx.ensureRuntimeSecret(
+                    base.space,
+                    SQLITE_ROW_SALT,
+                    runtimeWritePolicyAuthorization,
+                  );
+                  const salt = readRuntimeSecret(
+                    wtx,
+                    base.space,
+                    SQLITE_ROW_SALT,
+                  );
+                  if (salt === undefined) {
+                    throw new Error(
+                      "sqlite: the space's row salt is unreadable",
+                    );
+                  }
+                  return resultRowKeys({
+                    salt,
+                    rows: resultRows,
+                    columns: res.columns,
+                    tables: db.tables,
+                    database: { space: databaseSpace, id: db.id },
+                    columnLabeled: labelSchema !== undefined,
+                    rowLabel: (i) => perRow[i],
+                  });
+                },
+                undefined,
+                { signal: cancelled.signal },
+              );
+              if (initialize.error) {
+                await failQuery(
+                  initialize.error.message ??
+                    "sqlite: row initialization failed",
+                );
+                return;
+              }
+              materializedRowKeys = initialize.ok;
+              if (materializedRowKeys === undefined) return;
+              for (const [i, row] of resultRows.entries()) {
+                const address = rowAddress(materializedRowKeys[i]);
+                const schema = {
+                  ...rowSchemas[i],
+                  ...(perRow[i] === undefined ? {} : { ifc: perRow[i] }),
+                };
+                const fields = decodedFields[i];
+                if (Array.isArray(row)) {
+                  // Each tuple value carries its full SQL acquisition policy;
+                  // field writes are checked at that value's own declaration.
+                  const slots = cloneIfNecessary(schema as FabricValue, {
+                    frozen: false,
+                  }) as {
+                    prefixItems: {
+                      prefixItems: [unknown, { ifc?: IFCLabel } | boolean];
+                    }[];
+                  };
+                  for (const field of fields) {
+                    const tuple = slots.prefixItems[Number(field.path[0])];
+                    const valueSchema = tuple.prefixItems[1];
+                    tuple.prefixItems[1] = {
+                      ...(typeof valueSchema === "object" ? valueSchema : {}),
+                      ifc: {
+                        ...(typeof valueSchema === "object"
+                          ? valueSchema.ifc
+                          : {}),
+                        confidentiality: [...field.confidentiality],
+                      },
+                    };
+                  }
+                  Object.assign(schema, slots);
+                }
+                const scaffold = cloneIfNecessary(row as FabricValue, {
+                  frozen: false,
+                });
+                for (const field of fields) {
+                  if (Array.isArray(scaffold)) {
+                    scaffold[Number(field.path[0])][1] = null;
+                  } else {
+                    (scaffold as Record<string, unknown>)[field.path[0]] = null;
+                  }
+                }
+                const seeded = await runtime.editWithRetry(
+                  (wtx) => {
+                    markEffectCompletion(wtx, effectKey);
+                    applyRunIdentity(wtx);
+                    if (storedRequestHash(wtx) !== hash) return false;
+                    const current = wtx.readValueOrThrow(address, {
+                      meta: { ...internalVerifierRead, ...authorizationRead },
+                    });
+                    if (current === undefined) {
+                      createCell(runtime, address, wtx).asSchema(
+                        schema as JSONSchema,
+                      ).set(scaffold);
+                    } else {
+                      // A salted row identity admits only its final bytes or an
+                      // unpublished scaffold whose reference slots are still null.
+                      const compatible = cloneIfNecessary(row as FabricValue, {
+                        frozen: false,
+                      });
+                      for (const field of fields) {
+                        if (Array.isArray(compatible)) {
+                          if (
+                            Array.isArray(current) &&
+                            Array.isArray(current[Number(field.path[0])]) &&
+                            current[Number(field.path[0])][1] === null
+                          ) {
+                            compatible[Number(field.path[0])][1] = null;
+                          }
+                        } else if (
+                          isObjectNotArray(current) &&
+                          current[field.path[0]] === null
+                        ) {
+                          (compatible as Record<string, unknown>)[
+                            field.path[0]
+                          ] = null;
+                        }
+                      }
+                      if (!deepEqual(current, compatible)) {
+                        throw new Error(
+                          "sqlite: row materialization has conflicting content",
+                        );
+                      }
+                    }
+                    return true;
+                  },
+                  undefined,
+                  { signal: cancelled.signal },
+                );
+                if (seeded.error) {
+                  await failQuery(
+                    seeded.error.message ??
+                      "sqlite: row materialization failed",
+                  );
+                  return;
+                }
+                if (!seeded.ok) {
+                  return;
+                }
+                for (const field of fields) {
+                  const written = await runtime.editWithRetry(
+                    (wtx) => {
+                      markEffectCompletion(wtx, effectKey);
+                      applyRunIdentity(wtx);
+                      if (storedRequestHash(wtx) !== hash) return false;
+                      // The scaffold owns the complete row declaration. Field
+                      // writes retain that stored policy without redeclaring a
+                      // tuple slot as the array's rest schema.
+                      let destination = createCell(runtime, address, wtx)
+                        .asSchema(true);
+                      for (const segment of field.path) {
+                        destination = destination.key(segment);
+                      }
+                      destination.set(referenceLink(field));
+                      return true;
+                    },
+                    undefined,
+                    { signal: cancelled.signal },
+                  );
+                  if (written.error) {
+                    await failQuery(
+                      written.error.message ??
+                        "sqlite: link materialization failed",
+                    );
+                    return;
+                  }
+                  if (!written.ok) return;
+                }
+              }
+            }
             const wrote = await runtime.editWithRetry(
               (wtx) => {
                 markEffectCompletion(wtx, effectKey);
@@ -1825,7 +2085,7 @@ export function sqliteQuery(
                 if (salt === undefined) {
                   throw new Error("sqlite: the space's row salt is unreadable");
                 }
-                const rowKeys = resultRowKeys({
+                const rowKeys = materializedRowKeys ?? resultRowKeys({
                   salt,
                   rows: resultRows,
                   columns: res.columns,
@@ -1905,31 +2165,13 @@ export function sqliteQuery(
                 // result settling in separate waves would both write it, which
                 // the second wave refuses.
                 //
-                // A row's existence carries the label of the row and nothing
-                // of the request: a row is reached through a result slot,
-                // and the slot is where the request's label sits. A row
-                // holding a link column declares none: a label at a row's
-                // root subjects every link written beneath it to the link
-                // write policy, which refuses a link to a cell that carries
-                // no label metadata.
+                // The row label governs its own document; request selection
+                // stays on the result slot through which the row is reached.
                 const columnConfidentiality = staticConfidentialityOf(
                   labelSchema,
                 );
-                // A row to which neither its columns nor its row rule assign
-                // a label declares an empty one at its root, when the store
-                // carries a label or is written under one. The link write
-                // policy governs the slots of such a store, and refuses a
-                // link there to a document that stores no label and for
-                // which the transaction declares none. A settle that finds a
-                // row's document standing writes the slot and not the
-                // document, so every settle makes the declaration, and none
-                // relies on what the document stores. The declaration stores
-                // nothing on the row document. It subjects no link written
-                // beneath the row's root to the policy, which counts a
-                // declaration only by the atoms it holds. Into a store
-                // carrying no label the row declares nothing, so the rows of
-                // an unlabeled result do not make its settle relevant to
-                // commit preparation.
+                // An explicit public declaration keeps an unlabeled row's
+                // policy available when its result store is already labeled.
                 const storeCarriesLabel = storedMetadata !== undefined ||
                   schemaHasIfc(writeSchema as JSONSchema | undefined);
                 const storedRows = resultRows.map((row, i) => {
@@ -1952,21 +2194,80 @@ export function sqliteQuery(
                       : assigned;
                   const rowCell = createCell(
                     runtime,
-                    {
-                      ...base,
-                      id: toURI(createRef(rowKeys[i], {
-                        parent: { id: base.id, space: base.space },
-                        path: [...base.path, "result"],
-                        context: "sqlite-result-row",
-                      })),
-                      path: [],
-                      schema: undefined,
-                    },
+                    rowAddress(rowKeys[i]),
                     wtx,
                   );
+                  if (materializedRowKeys !== undefined) {
+                    // Publication depends on exact row bytes and authenticated
+                    // acquisition metadata for every decoded slot. Required reads
+                    // hold both receipts stable through the publication commit.
+                    const current = wtx.readValueOrThrow(
+                      rowCell.getAsNormalizedFullLink(),
+                      {
+                        meta: { ...internalVerifierRead, ...authorizationRead },
+                      },
+                    );
+                    if (!deepEqual(current, row)) {
+                      throw new Error(
+                        "sqlite: row materialization is incomplete",
+                      );
+                    }
+                    const metadata = readStoredCfcMetadata(
+                      wtx,
+                      rowCell.getAsNormalizedFullLink(),
+                    );
+                    for (const field of decodedFields[i]) {
+                      const entry = metadata?.labelMap.entries.find((entry) =>
+                        isCompleteCfcReferenceEntry(metadata.version, entry) &&
+                        deepEqual(entry.path, field.path)
+                      );
+                      if (
+                        entry === undefined ||
+                        !field.confidentiality.every((clause) =>
+                          entry.label.confidentiality?.some((stored) =>
+                            deepEqual(stored, clause)
+                          )
+                        )
+                      ) {
+                        throw new Error(
+                          "sqlite: row reference acquisition is incomplete",
+                        );
+                      }
+                    }
+                    return rowCell;
+                  }
+                  // SQL authenticates the row and column labels separately from
+                  // the query selection, whose label stays on the result slot.
+                  // Decode addresses with those restrictions before storing them.
+                  const acquired = linkCols.length === 0
+                    ? row
+                    : sqliteRowToWire(
+                      decodeRowLinkColumns(
+                        [keptEncodedRows[i]],
+                        linkCols,
+                        (link, column) => {
+                          const view = withCfcLabelViewOrigins(
+                            withCfcReferenceConfidentiality(
+                              undefined,
+                              joinCfcObservedConfidentiality([
+                                perRow[i]?.confidentiality,
+                                columnLabel(column)?.confidentiality,
+                              ]),
+                            ),
+                            [databaseSpace],
+                          );
+                          return runtime.getCellFromLink(
+                            link,
+                            undefined,
+                            undefined,
+                            view,
+                          ).getAsLink();
+                        },
+                      )[0] as Parameters<typeof sqliteRowToWire>[0],
+                    );
                   rowCell.asSchema(
                     schema as Parameters<Cell<unknown>["asSchema"]>[0],
-                  ).set(row);
+                  ).set(acquired);
                   return rowCell;
                 });
                 const target = writeSchema

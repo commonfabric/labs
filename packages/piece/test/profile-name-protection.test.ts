@@ -398,9 +398,88 @@ describe("profile name protection repair", () => {
     profile.withTx(edit).key("setName").send({ name: "Owner rename" });
     runtime.prepareTxForCommit(edit);
     expect((await edit.commit()).error).toBeUndefined();
-    await profile.pull();
     await runtime.idle();
+    expect(() => profile.key("name").asSchema({ type: "string" }).get())
+      .toThrow("Reference acquisition lacks complete legacy provenance");
     expect((await inspectProfileNameProtection(runtime, profile)).name).toBe(
+      "Saved name",
+    );
+  });
+
+  it("repairs a current profile and preserves owner edits across source updates", async () => {
+    const create = runtime.edit();
+    const pattern = await runtime.patternManager.compilePattern({
+      main: route,
+      files: [{ name: route, contents: current }],
+    }, { space: profileSpace, tx: create });
+    const fresh = runtime.getCell(profileSpace, "current-repair-profile");
+    runtime.runner.run(create, pattern, {}, fresh, {
+      sourceOrigin: systemPatternSource("system/profile-home.tsx"),
+    });
+    runtime.prepareTxForCommit(create);
+    expect((await create.commit()).error).toBeUndefined();
+    await fresh.pull();
+    await runtime.idle();
+    const protectedState = await inspectProfileNameProtection(runtime, fresh);
+    expect(protectedState.positions).toHaveLength(1);
+    const target = protectedState.positions[0].target;
+    const strip = runtime.edit();
+    const address = { ...target, path: [] };
+    const { cfc: _cfc, ...stored } = strip.readOrThrow(address) as Record<
+      string,
+      FabricValue
+    >;
+    seedStoredEnvelope(strip, address, { ...stored, value: "Saved name" });
+    runtime.prepareTxForCommit(strip);
+    expect((await strip.commit()).error).toBeUndefined();
+
+    const before = await inspectProfileNameProtection(runtime, fresh);
+    expect(before.status).toBe("repairable");
+    const after = await repairProfileNameProtection(
+      runtime,
+      fresh,
+      before.inspection,
+    );
+    expect(after.status).toBe("protected");
+    expect(after.name).toBe("Saved name");
+    expect(after.positions.map((position) => position.target)).toEqual(
+      before.positions.map((position) => position.target),
+    );
+    expect(await repairProfileNameProtection(runtime, fresh, after.inspection))
+      .toEqual(after);
+    await manager.synced();
+    const coldManager = EmulatedStorageManager.connectTo(server, { as: owner });
+    const cold = new Runtime({
+      apiUrl: new URL("https://profile.test"),
+      storageManager: coldManager,
+    });
+    try {
+      const coldProfile = cold.getCellFromLink(before.profile);
+      expect(await inspectProfileNameProtection(cold, coldProfile)).toEqual(
+        after,
+      );
+      const attack = cold.edit();
+      cold.getCellFromLink(target, { type: "string" }, attack).set(
+        "Attacker name",
+      );
+      cold.prepareTxForCommit(attack);
+      expect((await attack.commit()).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
+      expect((await inspectProfileNameProtection(cold, coldProfile)).name).toBe(
+        "Saved name",
+      );
+    } finally {
+      await cold.dispose();
+    }
+
+    const edit = runtime.edit();
+    fresh.withTx(edit).key("setName").send({ name: "Owner rename" });
+    runtime.prepareTxForCommit(edit);
+    expect((await edit.commit()).error).toBeUndefined();
+    await fresh.pull();
+    await runtime.idle();
+    expect((await inspectProfileNameProtection(runtime, fresh)).name).toBe(
       "Owner rename",
     );
     const next = current + "\n// Follow-up source release.\n";
@@ -408,14 +487,14 @@ describe("profile name protection repair", () => {
       contents: next,
       identity: await resolveEntryIdentity(route, () => Promise.resolve(next)),
     };
-    expect(await runtime.sourceReconciler.reconcile(profile)).toBe("updated");
+    expect(await runtime.sourceReconciler.reconcile(fresh)).toBe("updated");
     await runtime.runner.idlePointerMaintenance();
     await runtime.idle();
-    await profile.pull();
-    expect(profile.key("name").asSchema({ type: "string" }).get()).toBe(
+    await fresh.pull();
+    expect(fresh.key("name").asSchema({ type: "string" }).get()).toBe(
       "Owner rename",
     );
-    expect((await inspectProfileNameProtection(runtime, profile)).status).toBe(
+    expect((await inspectProfileNameProtection(runtime, fresh)).status).toBe(
       "protected",
     );
   });

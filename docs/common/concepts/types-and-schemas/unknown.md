@@ -118,7 +118,11 @@ them. An argument declaration also has to keep accepting every value it accepted
 before, which a narrower one does not, so a consumer view of a result type holds
 `unknown` even where the producing type names `VNode`;
 `BackwardsCompatibleProfile` in `packages/patterns/system/profile-home.tsx` is
-the worked example.
+the worked example. Its consumer fields retain their value shapes and explicit
+integrity requirements. Producer write declarations such as `ownerPrincipal` and
+`writeAuthorizedBy` belong to the producing profile, whose stored policy still
+enforces edits through its mutation streams. A consumer that stores or forwards
+a profile reference does not redeclare those write policies on its own input.
 
 ### `unknown` is not `any`
 

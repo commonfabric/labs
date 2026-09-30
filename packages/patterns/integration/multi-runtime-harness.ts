@@ -449,10 +449,9 @@ export class MultiRuntimeSession {
    * link that reaches it. `cause` names the cell: the same cause is the same
    * cell, a different cause a different one.
    *
-   * The link is ordinary data, so it can be passed straight back in a `send`
-   * event to reach a handler input declared `asCell`. That is how a headless
-   * caller hands a pattern a cell it did not create — a viewer identity, say,
-   * where a browser would supply a resolved `#profile`.
+   * The link carries a worker-issued acquisition token. Passing it back to
+   * the same session in a `send` event restores the reference for a handler
+   * input declared `asCell`, as a browser's acquired `#profile` does.
    */
   async createCell(
     cause: FabricValue,

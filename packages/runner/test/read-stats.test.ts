@@ -177,12 +177,16 @@ describe("read-stats", () => {
         const row = view[0];
         const finish = startReadStats(tx);
         try {
-          expect(Object.getOwnPropertyDescriptor(row, "n")?.value).toBe(7);
-          expect(Object.getOwnPropertyDescriptor(row, "n")?.value).toBe(7);
+          expect(Object.getOwnPropertyDescriptor(row, "n")?.get?.call(row))
+            .toBe(7);
+          expect(Object.getOwnPropertyDescriptor(row, "n")?.get?.call(row))
+            .toBe(7);
         } finally {
           const reads = finish(0);
           tx.abort();
-          expect(reads.proxyAccesses).toBe(2);
+          // Optional schema properties also project their presence before
+          // exposing an accessor; each accessor then reads the value.
+          expect(reads.proxyAccesses).toBe(schema ? 4 : 2);
         }
       });
     });
@@ -538,13 +542,25 @@ describe("read-stats", () => {
         type: "object",
         properties: { n: { type: "number", asCell: ["cell"] } },
       }).get();
-      expect(view.n.getAsNormalizedFullLink().id).toBe(
-        target.getAsNormalizedFullLink().id,
-      );
+      const handle = view.n;
+      const targetId = target.getAsNormalizedFullLink().id;
+      expect(handle.getAsNormalizedFullLink().id).toBe(targetId);
+      expect(
+        [...(tx.getReadActivities?.() ?? [])].filter((read) =>
+          read.id === targetId && read.path[0] === "value"
+        ),
+      ).toEqual([]);
+      expect(handle.get()).toBe(7);
+      expect(
+        [...(tx.getReadActivities?.() ?? [])].some((read) =>
+          read.id === targetId && read.path.length === 1 &&
+          read.path[0] === "value"
+        ),
+      ).toBe(true);
     } finally {
       const reads = finish(0);
       tx.abort();
-      expect(reads.linkResolutions).toBe(2);
+      expect(reads.linkResolutions).toBe(1);
     }
   });
 

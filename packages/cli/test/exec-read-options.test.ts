@@ -119,7 +119,10 @@ describe("cf exec read options", () => {
       synced: () => Promise.resolve(),
       runtime: {
         [CF_RUNTIME_ERROR_LOG]: [] as Array<{ message: string }>,
-        storageManager: { synced: () => Promise.resolve() },
+        storageManager: {
+          synced: () => Promise.resolve(),
+          pendingCommitsSettled: async () => {},
+        },
         edit: () => ({
           commit: () => Promise.resolve(),
           status: () => ({ status: "done", journal: { novelty: () => [] } }),

@@ -1,8 +1,27 @@
+import { isCellLink, parseLink } from "../link-utils.ts";
+import { followedReferenceWitnesses } from "./prepare.ts";
+import type { URI } from "@commonfabric/memory/interface";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { immutableReferenceSourceAcquisition } from "./immutable-reference.ts";
 import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
 import { entryObservationClass } from "./observation-classes.ts";
+import {
+  type CfcReferenceProvenance,
+  withCfcReferenceConfidentiality,
+} from "./reference-provenance.ts";
+import {
+  type CfcAddress,
+  type CfcDereferenceTrace,
+  type CfcMetadata,
+  isCompleteCfcReferenceEntry,
+  runtimeWritePolicyAuthorization,
+} from "./types.ts";
 import { PathPrefixIndex } from "./path-prefix-index.ts";
-import type { CfcAddress, CfcDereferenceTrace, CfcMetadata } from "./types.ts";
+import {
+  authorizationRead,
+  internalVerifierRead,
+} from "../storage/reactivity-log.ts";
 import {
   canonicalizeCfcLogicalPath,
   type CfcLabelView,
@@ -75,6 +94,25 @@ export const cfcLabelViewFromMetadata = (
   );
 };
 
+const cfcMetadataForAddress = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+): CfcMetadata | undefined => {
+  const memo = tx.getSnapshotMemo?.();
+  const key = `cfcViewMetadata:${address.space}|${address.scope}|${address.id}`;
+  const cached = memo?.get(key) as
+    | { metadata: CfcMetadata | undefined }
+    | undefined;
+  if (cached !== undefined) return cached.metadata;
+  const metadata = readStoredCfcMetadata(tx, address, {
+    meta: tx.getCfcState().flowLabelsMode === "persist"
+      ? { ...internalVerifierRead, ...authorizationRead }
+      : internalVerifierRead,
+  });
+  memo?.set(key, { metadata });
+  return metadata;
+};
+
 /**
  * The label view entries one document stores, indexed by path, so that the
  * view at one address costs the entries that overlap it rather than every
@@ -134,7 +172,7 @@ export const readCfcDocumentLabels = (
 ): CfcDocumentLabels | undefined => {
   let metadata: CfcMetadata | undefined;
   try {
-    metadata = readStoredCfcMetadata(tx, address);
+    metadata = cfcMetadataForAddress(tx, address);
   } catch (error) {
     // The errors the reader THROWS to fail closed must keep failing
     // closed here: swallowing one would serve this labeled document as
@@ -203,7 +241,9 @@ export const cfcLabelViewForAddress = (
   address: CfcAddress,
 ): CfcLabelView | undefined => {
   const memo = tx.getSnapshotMemo?.();
-  if (memo === undefined) return deriveCfcLabelViewForAddress(tx, address);
+  if (memo === undefined) {
+    return deriveCfcLabelViewForAddress(tx, address);
+  }
   const key = `cfcLabels:${address.space}|${address.scope ?? ""}|` +
     `${address.id}|${JSON.stringify(address.path)}`;
   // Two-level, so a memoized `undefined` is a hit rather than a miss — an
@@ -212,9 +252,104 @@ export const cfcLabelViewForAddress = (
     | { view: CfcLabelView | undefined }
     | undefined;
   if (cached !== undefined) return cached.view;
-  const view = deriveCfcLabelViewForAddress(tx, address);
+  const view = deriveCfcLabelViewForAddress(
+    tx,
+    address,
+  );
   memo.set(key, { view });
   return view;
+};
+
+/** A stored reference has no authenticated acquisition history. */
+export class UnresolvedCfcReferenceAcquisitionError extends Error {
+  constructor() {
+    super("Reference acquisition lacks complete legacy provenance");
+    this.name = "UnresolvedCfcReferenceAcquisitionError";
+  }
+}
+
+/** Acquires the restrictions on a stored reference without opening its target. */
+export const cfcReferenceLabelViewForAddress = (
+  tx: IExtendedStorageTransaction,
+  source: CfcAddress,
+  sourceAcquisition?: CfcReferenceProvenance,
+  onAcquisition?: (acquisition: CfcReferenceProvenance) => void,
+): CfcLabelView | undefined => {
+  const metadata = cfcMetadataForAddress(tx, source);
+  const complete = metadata !== undefined && metadata.labelMap.entries.some(
+    (entry) =>
+      isCompleteCfcReferenceEntry(metadata.version, entry) &&
+      deepEqual(
+        canonicalizeCfcLogicalPath(entry.path),
+        canonicalizeCfcLogicalPath(source.path),
+      ),
+  );
+  const precise = tx.getCfcState().flowLabelsMode === "persist";
+  const pendingReference = precise &&
+    tx.getCfcState().writePolicyInputs.some((input) =>
+      input.kind === "link-write" && deepEqual(input.target, source) &&
+      tx.isRuntimeWritePolicyInput(input)
+    );
+  const valuePath = ["value", ...source.path];
+  const pendingValue = precise &&
+    [
+      ...(tx.getWriteDetailsForTarget?.({ ...source, id: source.id as URI }) ??
+        tx.getWriteDetails?.(source.space) ?? []),
+    ].some((detail) =>
+      detail.address.id === source.id &&
+      detail.address.scope === source.scope &&
+      (detail.address.path.every((part, index) => valuePath[index] === part) ||
+        valuePath.every((part, index) => detail.address.path[index] === part))
+    );
+  if (
+    precise && (pendingReference || pendingValue || !complete)
+  ) {
+    const acquisition = tx.acquireCfcReference(
+      source,
+      sourceAcquisition,
+      runtimeWritePolicyAuthorization,
+    );
+    if (acquisition === undefined) {
+      throw new UnresolvedCfcReferenceAcquisitionError();
+    }
+    onAcquisition?.(acquisition);
+    return withCfcLabelViewOrigins(
+      withCfcReferenceConfidentiality(
+        undefined,
+        acquisition.confidentiality,
+        acquisition.selectionWitnesses,
+      ),
+      acquisition.originSpaces ?? [],
+    );
+  }
+  const reference = cfcLabelViewForAddress(tx, source);
+  const raw = precise
+    ? tx.readValueOrThrow({ ...source, id: source.id as URI }, {
+      meta: { ...internalVerifierRead, ...authorizationRead },
+    })
+    : undefined;
+  const actual = isCellLink(raw)
+    ? parseLink(raw, { ...source, id: source.id as URI })
+    : undefined;
+  const witnesses = actual === undefined
+    ? []
+    : followedReferenceWitnesses(metadata, source.path, actual);
+  const confidentiality =
+    reference?.entries.flatMap((entry) =>
+      entry.path.length === 0 ? entry.label.confidentiality ?? [] : []
+    ) ?? [];
+  const entries = reference?.entries.filter((entry) => entry.path.length === 0)
+    .map((entry) => ({ ...entry, observes: "followRef" as const }));
+  return withCfcLabelViewOrigins(
+    withCfcReferenceConfidentiality(
+      entries?.length
+        ? mergeCfcLabelViews([{ version: 1, entries }])
+        : undefined,
+      confidentiality,
+      witnesses,
+    ),
+    cfcLabelViewOriginSpaces(reference),
+  );
 };
 
 /**
@@ -252,11 +387,10 @@ export const cfcLabelViewForDereference = (
   tx: IExtendedStorageTransaction,
   source: CfcAddress,
   target: CfcAddress,
+  sourceAcquisition?: CfcReferenceProvenance,
 ): CfcLabelView | undefined => {
-  const slot = cfcLabelViewForAddress(tx, source);
   return mergeCfcLabelViews([
-    slot,
-    referenceRestrictionsOf(slot),
+    cfcReferenceLabelViewForAddress(tx, source, sourceAcquisition),
     cfcLabelViewForAddress(tx, target),
   ]);
 };
@@ -264,9 +398,27 @@ export const cfcLabelViewForDereference = (
 export const cfcLabelViewForDereferenceTraces = (
   tx: IExtendedStorageTransaction,
   traces: readonly CfcDereferenceTrace[],
-): CfcLabelView | undefined =>
-  mergeCfcLabelViews(
-    traces.map((trace) =>
-      cfcLabelViewForDereference(tx, trace.source, trace.target)
-    ),
-  );
+  carriedView?: CfcLabelView,
+  mode: "content" | "reference" = "content",
+): CfcLabelView | undefined => {
+  const derived: CfcLabelView[] = [];
+  let referenceView = carriedView;
+  for (const trace of traces) {
+    const acquisition = immutableReferenceSourceAcquisition(
+      referenceView,
+      trace.source,
+    );
+    const view = cfcReferenceLabelViewForAddress(tx, trace.source, acquisition);
+    if (view !== undefined) derived.push(view);
+    referenceView = mergeCfcLabelViews([referenceView, view]);
+  }
+  // An intermediate target path may continue through another link, so its
+  // projected labels describe no content this resolution actually reaches.
+  // Only the terminal target supplies the resolved value's content labels.
+  const terminal = traces.at(-1)?.target;
+  if (mode === "content" && terminal !== undefined) {
+    const content = cfcLabelViewForAddress(tx, terminal);
+    if (content !== undefined) derived.push(content);
+  }
+  return mergeCfcLabelViews(derived);
+};

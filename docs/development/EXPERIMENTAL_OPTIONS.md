@@ -44,7 +44,7 @@ was last checked against the code.
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcTriggerReadGating`](#cfctriggerreadgating)                             | `RuntimeOptions.cfcTriggerReadGating`                                                                                                           | `true`                                                                               | Bernhard Seefeld (#4488)                              | move toward `true`                                                                                                                                                                                                                | implemented, on by default                                                      |
 | [`cfcDecomposedEnvelopes`](#cfcdecomposedenvelopes)                         | `RuntimeOptions.cfcDecomposedEnvelopes`                                                                                                         | `false`                                                                              | Robin McCollum (CT-2062)                              | move toward `true` once every deployed reader resolves the references a stored root carries                                                                                                                                      | implemented, off by default                                                     |
-| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default                                                     |
+| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader supports content-addressed labels                                                                                                                                                     | implemented, off by default                                                     |
 | [`cfcPolicyEvaluation`](#cfcpolicyevaluation)                               | `RuntimeOptions.cfcPolicyEvaluation`                                                                                                            | `enforce`                                                                            | Bernhard Seefeld (#4566)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcDeclaredMonotonicity`](#cfcdeclaredmonotonicity)                       | `RuntimeOptions.cfcDeclaredMonotonicity`                                                                                                        | `observe`                                                                            | Bernhard Seefeld (#4647)                              | `observe` first, then `enforce` (must soak before the §8.12.7 route 2b event ships)                                                                                                                                               | implemented, on by default at `observe`                                         |
 | [`cfcPrefixProvenanceStats`](#cfcprefixprovenancestats)                     | `RuntimeOptions.cfcPrefixProvenanceStats` (per-deployment; not env-wired)                                                                       | `false`                                                                              | Bernhard Seefeld (#4623)                              | stays a measurement opt-in; fold in or remove after Stage 0                                                                                                                                                                       | implemented, off by default, measurement only                                   |
@@ -752,9 +752,8 @@ Unlike the Category 1 flags, most of these are not simple on/off booleans; they
 are staged dials, usually `off` then `observe` (evaluate and emit diagnostics
 but do not reject) then `enforce` (reject on a violation).
 
-They are not wired to environment variables. Instead, the first-party posture is
-set once in `coreOptions`, the shared core that every construction preset
-composes, in
+They are not wired to environment variables. The shared first-party enforcement
+posture is set in `coreOptions`, which every construction preset composes, in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts).
 `coreOptions` pins seven CFC dials at the rungs the constructor also defaults
 to, so a changed constructor default cannot silently relax a preset;
@@ -923,7 +922,16 @@ the per-epic implementation notes).
   integrity, which no store policy states, so its value entries are kept and a
   labeled collection an attributed writer maintains still grows per element.
   Propagation runs only when the enforcement mode is at least `observe`; it
-  derives and stores labels but never rejects on its own.
+  derives and stores labels. Unresolved reference provenance records a refusal;
+  the enforcement mode determines whether that refusal rejects the attempt.
+- **Reference profile.** `persist` writes independently labeled references in
+  CFC envelope version 3. Acquisition and selection confidentiality travel with
+  the binding; following it consumes every hop and current target restrictions.
+  Runtime and worker readers must support the profile before it is enabled.
+  Opaque worker transfer tokens preserve acquisition; serialized display labels
+  and raw addresses cannot recreate it. Legacy references with incomplete
+  acquisition history require trusted re-acquisition. See
+  [CFC references](../specs/cfc-references.md) for verification and rollout limits.
 - **Current default and planned end state.** `persist` by default, which is
   where the dial rests: the downstream egress gates it waited on — the render
   ceiling, the sink ceilings, and the LLM path — are online. A deployment that
@@ -948,6 +956,11 @@ the per-epic implementation notes).
   `enforce` records a rejection reason when a write's integrity falls below the
   floor. The floor tests the integrity of the written value, not of the reads
   that produced it.
+- **Linked contents.** Runtime resolves current target evidence for a floor,
+  including concrete wildcard contributions. A relationship endorsement on the
+  receiving reference cannot satisfy a content floor. Storage retains ordinary
+  revision preconditions for evidence reads; it does not interpret CFC policy.
+  Unsupported atomic verification across spaces fails closed.
 - **Current default and planned end state.** `enforce` by default, which is
   where the dial rests. A deployment that wants the floor measured rather than
   applied states `observe`.
@@ -1015,31 +1028,24 @@ the per-epic implementation notes).
   boolean).
 - **Added by.** Bernhard Seefeld, in "content-addressed CFC labels"
   (2026-09-15).
-- **Purpose.** When on, the envelope persist path stores version-2
-  envelopes: each `labelMap` entry keeps its `path`, `origin`, and
-  `observes` inline and holds its `label` as a reference to a
-  content-addressed label document whenever the label's canonical JSON
-  exceeds the inline limit, so every envelope carrying the same label
-  shares one document per space
-  (`docs/specs/content-addressed-cfc-labels.md`). Off stores version 1,
-  every label inline. Reading resolves either version to the same
-  metadata, space-first with content verification and the realm's label
-  registry supplying what the space does not hold, and fails closed on a
-  reference nothing backs; the storage commit boundary refuses a commit
-  whose envelope references a label document it neither includes nor the
-  space stores. With the flag on, a stored version-1 envelope is rewritten
-  in version 2 on its next persist even when its labels are unchanged,
-  which is how a store migrates without a data migration; with it off, a
-  stored version 2 is left as it is.
-- **Current default and planned end state.** `false` by default. The target
-  is `true`; version-1 envelopes remain readable indefinitely.
-- **Status on 2026-09-15.** Implemented, off by default. The flip is gated
-  on deployment reach: a reader that predates version 2 fails closed on a
-  version-2 envelope through `UnknownCfcMetadataVersionError`, which is
-  correct and also unusable, so every deployed reader must interpret
-  version 2 before any space sees one.
-- **Path to removal.** Once the default flips, the dial retires and version
-  2 becomes the only spelling the persist path emits.
+- **Purpose.** Stores labels exceeding the inline limit as references to
+  content-addressed label documents. Paths, observation classes, origins, and
+  reference-acquisition markers stay inline. The legacy profile emits version 2
+  when enabled; the precise reference profile emits version 3 with either label
+  representation. Readers resolve inline and referenced labels to the same
+  metadata, verify content hashes, and fail closed when a reference is unbacked.
+  Memory refuses envelopes referring to label documents absent from both the
+  commit and the space. See [content-addressed CFC
+  labels](../specs/content-addressed-cfc-labels.md).
+- **Current default and planned end state.** `false` by default, targeting
+  `true` after every participating reader supports the stored envelope version.
+  Version-1 envelopes remain readable; their references still need the separate
+  [reference-history migration](../plans/cfc-precise-reference-rollout.md).
+- **Status.** Implemented, off by default. Enabling the flag can rewrite legacy
+  version-1 labels into version 2 during persistence. It does not establish
+  reference acquisition history or satisfy the version-3 rollout barrier.
+- **Path to removal.** After the default flips, retire the representation dial;
+  reference-history readiness remains an independent admission requirement.
 
 ### `cfcPolicyEvaluation`
 
@@ -1294,8 +1300,19 @@ the per-epic implementation notes).
   WebSocket frames, then delete the config trio and advertise the capability
   unconditionally.
 
-> Two neighbors in the same handshake are related but are not
+> Neighbors in the same handshake are related but are not
 > runtime-toggleable experimental flags:
+>
+> - **`readValidation`** is a build-inherent capability, hardwired to `true`.
+>   Clients require it for commits with required or unclassified reads, including
+>   replay after reconnect. Its absence refuses those commits before send.
+> - **`eventContext`** is a build-inherent capability, hardwired to `true`.
+>   It advertises preservation of opaque Runtime context on durable event
+>   entries and retries. Clients require it for every declared event append and Retry request,
+>   checking again after reconnect. Memory does not interpret the context;
+>   Runtime compatibility is a separate deployment requirement. Both
+>   capabilities are permanent and defined in
+>   [`04-protocol.md`](../specs/memory-v2/04-protocol.md).
 >
 > - **`sqliteCommitRowLabelEval`** is a build-inherent capability, hardwired to
 >   `true`, advertising that this build's engine evaluates row-label rules at
@@ -1692,6 +1709,13 @@ in `data-updating.ts`, and the shallow structure comparison in
 `storage/v2-transaction.ts` that the commit-time reactivity pass feeds. The
 last was found only by the cross-boundary replace, which is why the list is a
 record of what has been driven rather than a claim about what has not.
+
+CFC's reference-only shell classification conservatively treats an opaque
+instance as content, so fetch error values receive a value stamp. It cannot
+prove that the instance holds only supplied references, so the whole-value
+writer assertion is withheld; this does not inspect or authenticate links
+inside its private state. Scoped server fetch error writebacks exercise this
+path under persisted reference labels.
 
 Three walks were given the same treatment without a reachable operation to
 justify it, and are recorded here as untested rather than measured: `getAtPath`

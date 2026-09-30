@@ -26,6 +26,7 @@ An event is an **authored append to a stream document**:
   "stream": <entity link to the stream doc>,
   "eventId": <durable id from event-identity>,     // client-minted
   "payload": <JSON>,                                // see §3
+  "runtimeReferenceContext": <opaque string>,       // optional Runtime attestation
   "firedAt": {                    // SERVER-STAMPED — see below
     "user": <principal DID>,      //   from the commit envelope
     "session": <sessionId>,       //   from the commit envelope
@@ -152,6 +153,22 @@ handler fires
   merely CLAIMS renderer provenance in its fields is not attested. A
   served cascade forwarding a renderer-trusted event object keeps the
   attestation (the in-process propagation's durable twin).
+  **Reference-acquisition attestation.** In the precise CFC profile, the
+  firing Runtime captures privately authenticated reference acquisitions in an
+  optional `runtimeReferenceContext` string on the entry. It binds every payload
+  reference slot to its complete target and the canonical payload hash, retaining
+  selection confidentiality, the sending attempt's confidentiality, scope caps,
+  and nested immutable acquisitions. It conveys no target-content endorsement.
+  The handler schema determines value projection; the emitted links include only
+  inline scope restrictions, so admission needs no sender-local schema closure.
+  The serving Runtime verifies the context and restores it onto an isolated
+  payload before dispatch. Invalid context produces a terminal dropped notice;
+  absent context grants no reference provenance. Primitive events need none.
+  This is Runtime attestation under the same admitted producer trust as the
+  renderer and injected-key fields, not a cryptographic signature or a
+  payload-owned claim. Memory checks that a present field is a string and carries
+  it unchanged through LT1 writes, delegated outbox delivery, and restart. It
+  does not perform CFC verification.
   **Same-space carriage (LT1, RULED 2026-08-03).** A server-emitted
   append whose target stream lives in the SAME space gets its
   durable stream entry as a WRITE WITHIN the wave's own derived
@@ -647,7 +664,8 @@ loop's duty).
   original, append exactly one fresh event with `retryOf`, and remove
   the unresolved index item while recording the resolution in a durable
   server-owned tombstone. The server copies the exact captured stream, payload,
-  `rendererTrusted`, and `runtimeInjectedEventKeys`, and stamps the
+  `rendererTrusted`, `runtimeInjectedEventKeys`, and `runtimeReferenceContext`,
+  and stamps the
   original acting user's current session; a different user or a
   userless event cannot be retried. A current writer may Dismiss a userless
   event, resolving its otherwise permanent retention hold without inventing

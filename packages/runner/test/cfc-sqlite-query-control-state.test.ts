@@ -203,21 +203,16 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     }
   };
 
-  /**
-   * Every confidentiality atom the DECLARED entries at `path` carry. All of
-   * them rather than the first: a schema's own declaration and one the
-   * runtime made from a transaction are both `declared`, and reading one of
-   * the two would answer a different question depending on which landed
-   * first.
-   */
-  const declaredAt = (cell: Cell<unknown>, path: string[]): unknown[] =>
-    storedEntries(cell)
-      .filter((entry) =>
-        entry.origin === "declared" &&
-        entry.path.length === path.length &&
-        entry.path.every((segment, i) => segment === path[i])
-      )
+  /** The effective declared confidentiality at a path, including ancestors. */
+  const declaredAt = (cell: Cell<unknown>, path: string[]): unknown[] => {
+    const matching = storedEntries(cell).filter((entry) =>
+      entry.origin === "declared" && entry.path.length <= path.length &&
+      entry.path.every((segment, i) => segment === "*" || segment === path[i])
+    );
+    const depth = Math.max(-1, ...matching.map((entry) => entry.path.length));
+    return matching.filter((entry) => entry.path.length === depth)
       .flatMap((entry) => entry.label.confidentiality ?? []);
+  };
 
   /**
    * A stable rendering of an atom: the stored form and the fixture's are the

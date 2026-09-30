@@ -1,11 +1,9 @@
 # CFC enforcement × propagation × write-floor × trigger gating — the deployment mode matrix
 
-_Spec residual: SC-13 in [`cfc-spec-changes.md`](./cfc-spec-changes.md) (§18)
-and the `enforce-strict` differentiation (SC-13 / §18.6.3). This document
-settles **which combinations of the five CFC dials are conforming deployment
-states and in what order a deployment may advance them**. The shipped hosts sit
-at the strict end of that order; what the ordering governs now is a deployment
-moving away from it and back._
+This document defines conforming combinations of the five CFC dials and the
+order in which a deployment may advance them. The rollout constraints are tracked
+in SC-13 of [CFC spec changes](cfc-spec-changes.md); the current reference profile
+and reader compatibility requirements are in [CFC references](cfc-references.md).
 
 ## 1. The five dials (all runtime-configured, all orthogonal)
 
@@ -78,6 +76,34 @@ such a name and returns `undefined`, so every floor comparison against it reads
 false — including the audit-S3 anti-downgrade floor, which therefore never
 rises — while the commit gate, which asks only whether the name is one of
 `disabled` and `observe`, reads the same name as enforcing.
+
+### Linked value subjects
+
+The write-floor dial applies to the subject required by the declaring path. A
+floor governing linked contents resolves the current target field through the
+Runtime's scoped link resolver. A receiving reference's `addIntegrity`, a
+relationship endorsement, or a carried reader schema does not certify that
+content. Wildcard floors enumerate concrete written slots, including slots below
+ancestor links, and unresolved evidence rejects under `cfcWriteFloor: enforce`.
+Inline values receive their authorized schema integrity and, only with
+`cfcFlowLabels: persist`, their hereditary flow integrity. Setup writes obey the
+same floor; pure deletion is outside its value requirement.
+
+Explicit `exactCopyOf` and `projection` claims are independent of the write-floor
+dial. They resolve ancestor links to current fields. Inline fields compare by
+Fabric value equality; reference fields compare their full normalized bindings,
+including overwrite mode. Missing evidence, mixed inline/reference subjects, and
+wildcard copy claims reject. Reader schemas on handles remain views rather than
+general payload-validation certificates.
+
+The Runtime performs content verification before storage submission. Its reads
+remain authorization dependencies even though verifier reads do not become
+handler content inputs. Storage's revision checks bind this evidence within the
+destination space. A content assertion that traverses another space rejects,
+because those target revisions cannot be bound atomically to the write.
+Reference-only forwarding and identity-copy checks may still name another
+space without observing its contents. The focused checks are in
+[cfc-linked-content-floor.test.ts](../../packages/runner/test/cfc-linked-content-floor.test.ts).
 
 ## 2. Rollout ordering (the partial order)
 
@@ -214,7 +240,7 @@ posture (anti-fail-closed).
 The strict-only delta is:
 
 - **Writer-fit reject (SC-18b) — implemented (H4 code step).** The per-tx flow
-  join landing as a target's `derived` value component is measured against the
+  join landing in a target's value, structure, or reference component is measured against the
   target's DECLARED store-policy component (declared + legacy entries, resolved
   by the same per-component longest-prefix rule reads use; absent declarations
   are the empty "public" ceiling, fail-closed) joined with the target's
@@ -238,10 +264,10 @@ The strict-only delta is:
   bit-for-bit on stored metadata. The reason string is stable and names the
   rule id, target, path, and offending clause(s) (SC-18c):
   `writer-fit confidentiality misfit for <doc> at /<path> (canWrite, §8.12.4):
-  <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
-  instead of the join and are outside the check, as is the pure-link-structure
-  shape channel; grown existence atoms (SC-4) are historical and deliberately
-  never measured — only the current join is; `Space` is the only principal
+  <clauses>`. Reference writes include their retained acquisition restrictions
+  and current selection join in the measurement. Pure-link containers also
+  measure their structure stamp. Grown existence atoms (SC-4) retain historical
+  restrictions; the check measures the current write's confidentiality; `Space` is the only principal
   form residency admits, because `User` and the bare DID-string spelling gate
   by equality against one acting reader, making their audience narrower than
   the set of principals a space grants reader roles to, while
@@ -538,8 +564,8 @@ The strict-only delta is:
   the state documents a builtin mints from its own node's cause, such as a
   dialog's result, internal state and pinned-cell list, or a list operation's
   result container; the per-event documents a builtin mints inside one
-  transaction, such as a dialog message; and the documents anchoring splits
-  out of a value written into any of those. The runtime fills all of them
+  transaction, such as a dialog message or a handler receipt; and the documents
+  anchoring splits out of a value written into any of those. The runtime fills all of them
   with whatever the writing transaction read. An author cannot know which
   atoms a given transaction will carry, so a declaration written into a schema
   either misses them or over-declares every instance of the pattern. The
@@ -757,7 +783,11 @@ The strict-only delta is:
     carrying a label into the child is refused at the child's id, and that id
     is a hash of the parent and the path, so nothing recovers the parent from
     it: what the message establishes is that some document holds a piece of
-    another document's value. The same test file pins the four outcomes.
+    another document's value. The containing document is measured at its own
+    written path as well: a declaration on the element does not cover replacing
+    the whole parent under a confidential flow. Writing the declared element
+    slot of an existing public container measures that slot and the anchored
+    child. The same test file pins both write shapes and the child outcomes.
   - **How far it reaches inside that document.** Every path the
     transaction writes there, not only the paths setup wrote: the marker
     names the store, and the declaration is a statement about the store.
@@ -900,3 +930,5 @@ postures: shell
 ([lib-shell/src/runtime.ts](../../packages/lib-shell/src/runtime.ts):
 `enforce-strict` + flow `persist`); toolshed (the `productionServer` preset's
 pins, `enforce-strict` + flow `persist`).
+Embedding clients must select a writer profile compatible with their readers.
+See [CFC references](cfc-references.md).

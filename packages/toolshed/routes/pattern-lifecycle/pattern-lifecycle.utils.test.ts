@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
+import { fabricFromJsonValue } from "@commonfabric/data-model/codecs";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -184,6 +185,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
     host = newHost(operator.did());
     const acl = { [alice.did()]: "OWNER", [bob.did()]: "WRITE" } as const;
     await genesisAcl(factory, spaceIdentity, acl);
+    const deliveries: Parameters<LifecycleDeps["append"]>[0][] = [];
     deps = {
       ...deps,
       authority: {
@@ -193,7 +195,10 @@ describe("pattern-lifecycle verbs (transport half)", () => {
           (await server.readDocument(target, `of:${target}`))?.value,
       },
       host: () => host,
-      append: (entry) => server.commitDelegatedAppend(entry),
+      append: (entry) => {
+        deliveries.push(entry);
+        return server.commitDelegatedAppend(entry);
+      },
       readDocument: (space, id) => server.readDocument(space, id),
       watchAdmittedCommits: (watcher) => server.watchAdmittedCommits(watcher),
     };
@@ -242,6 +247,24 @@ export default pattern(() => {
       const created = ok(await processInstantiate(deps, bob.did(), request));
       expect(created.registration.error).toBeUndefined();
       expect(created.registration).toMatchObject({ status: "handled" });
+      expect(deliveries).toHaveLength(1);
+      const context = fabricFromJsonValue(
+        deliveries[0].runtimeReferenceContext!,
+      ) as {
+        version: number;
+        dispatchReference: { binding: { id: string; space: string } };
+        references: { path: string[] }[];
+      };
+      expect(context.version).toBe(2);
+      expect(context.dispatchReference.binding).toMatchObject({
+        id: deliveries[0].targetStreamLink!.id,
+        space,
+      });
+      expect(
+        context.references.map((reference: { path: string[] }) =>
+          reference.path
+        ),
+      ).toEqual([["piece"]]);
       const repeated = ok(await processInstantiate(deps, bob.did(), request));
       expect(repeated).toEqual(created);
       expect((await owner.getRegisteredPieces()).map((piece) => piece.id))

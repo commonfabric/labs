@@ -704,7 +704,8 @@ describe("read-accounting", () => {
       expect(items.length).toBe(3);
       expect([...items]).toEqual([1, 2, 3]);
       expect(items.map((n) => n * 2)).toEqual([2, 4, 6]);
-      expect(Object.getOwnPropertyDescriptor(data, "value")!.value).toBe(7);
+      expect(Object.getOwnPropertyDescriptor(data, "value")!.get!.call(data))
+        .toBe(7);
       expect(Object.getOwnPropertyDescriptor(items, "length")!.value).toBe(3);
       expect(finishFallback(0).proxyAccesses).toBe(10);
       expect(finishOriginal(0).proxyAccesses).toBe(0);

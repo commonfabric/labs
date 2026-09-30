@@ -15,9 +15,10 @@
  * Two replicas on one memory server are what make that arrangement real. The
  * holder keeps a program request open; the taker is the one whose commit is
  * refused, by the caveat `builtin-abandoned-request.test.ts` uses. Only the
- * taker enforces, so only the taker's commit is refused, and both run the same
- * pattern over the same argument and result cells, which is what puts their two
- * nodes on one cache document.
+ * taker enforces writer fit, so only the taker's commit is refused. Both
+ * replicas persist precise reference metadata and run the same pattern over
+ * the same argument and result cells, which puts their two nodes on one cache
+ * document.
  */
 
 import { expect } from "@std/expect";
@@ -101,6 +102,8 @@ describe("a refused fetchProgram takeover", () => {
     holder = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: holderStorage,
+      cfcFlowLabels: "persist",
+      cfcEnforcementMode: "enforce-explicit",
     });
     taker = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -142,7 +145,9 @@ describe("a refused fetchProgram takeover", () => {
       testPattern.resultSchema,
       tx,
     );
-    await inputs.sync();
+    // Setup reads the shared result's metadata as well as the input. Both
+    // snapshots must include the holder's committed state before the run.
+    await Promise.all([inputs.sync(), resultCell.sync()]);
     const result = runtime.run(tx, testPattern, inputs, resultCell);
     runtime.prepareTxForCommit(tx);
     return { result, committed: tx.commit() };
@@ -169,12 +174,12 @@ describe("a refused fetchProgram takeover", () => {
     if (seeded.error) throw seeded.error;
 
     const holderRun = await runOn(holder);
-    await holderRun.committed;
+    expect((await holderRun.committed).error).toBeUndefined();
     await holderRun.result.pull();
     await issued.promise;
 
     const takerRun = await runOn(taker);
-    await takerRun.committed;
+    expect((await takerRun.committed).error).toBeUndefined();
     await takerRun.result.pull();
     await clock.settle();
     // The taker is reading the holder's claim rather than an empty cache, so

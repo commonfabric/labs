@@ -409,9 +409,14 @@ describe("handle declared by a definition", () => {
           { handle: "Ada", path: [] },
           { handle: "Grace", path: [] },
         ]);
-        // Reading a target to mint its handle does not make the holder
-        // depend on what the target holds.
-        expect(expected.conflict).not.toContain("Ada/value.name");
+        // Eager union selection inspects the target's shape to choose its
+        // handle schema. Precise flow keeps those recursive content reads as
+        // conflict dependencies; a lazy handle does not select a branch yet.
+        if (lazy) {
+          expect(expected.conflict).not.toContain("Ada/value.name");
+        } else {
+          expect(expected.conflict).toContain("Ada/value.name");
+        }
         expect(
           await observe(
             "by-definitions",

@@ -1,4 +1,5 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -18,9 +19,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
+import { parseLink } from "../../runner/src/link-utils.ts";
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -93,7 +95,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
     const secretLink = secret.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: secretLink.id!,
       type: "application/json",
@@ -120,7 +122,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
     const structuredSecretLink = structuredSecret.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: structuredSecretLink.id!,
       type: "application/json",
@@ -147,7 +149,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
     const signedReleaseTextLink = signedReleaseText.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: signedReleaseTextLink.id!,
       type: "application/json",
@@ -183,7 +185,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
     const representedProfileLink = representedProfile.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: representedProfileLink.id!,
       type: "application/json",
@@ -217,7 +219,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         tx,
       );
       writeSeedEnvelopeDoc(tx, signer.did());
-      seedStoredEnvelope(tx, {
+      seedStoredReferenceEnvelope(tx, {
         space: signer.did(),
         id: profile.getAsNormalizedFullLink().id!,
         type: "application/json",
@@ -262,7 +264,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       undefined,
       tx,
     );
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: linkingMessage.getAsNormalizedFullLink().id!,
       type: "application/json",
@@ -303,7 +305,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     const authoredByProfileTextLink = authoredByProfileText
       .getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    seedStoredEnvelope(tx, {
+    seedStoredReferenceEnvelope(tx, {
       space: signer.did(),
       id: authoredByProfileTextLink.id!,
       type: "application/json",
@@ -325,7 +327,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       },
     });
     const commitResult = await tx.commit();
-    assertEquals(commitResult.ok !== undefined, true);
+    expect(commitResult.error).toBeUndefined();
 
     const confidential = runtime.getCell<string>(
       signer.did(),
@@ -378,7 +380,14 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
       #subscribers = new Set<(value: unknown) => void>();
 
       constructor(public value: unknown) {
-        super(runtime, undefined, undefined, false, undefined, "cell");
+        super(
+          runtime,
+          undefined,
+          dummyCell.getAsNormalizedFullLink(),
+          false,
+          undefined,
+          "cell",
+        );
       }
 
       sink(callback: (value: unknown) => void) {
@@ -472,7 +481,9 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
       resolveAsCell() {
         const liveValue = this.getRawUntyped();
-        return isRuntimeCell(liveValue) ? liveValue : this;
+        if (isRuntimeCell(liveValue)) return liveValue;
+        const link = parseLink(liveValue);
+        return link?.space && link.id ? runtime.getCellFromLink(link) : this;
       }
 
       getRawUntyped() {
@@ -484,6 +495,59 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         super.set(this.getRawUntyped());
       }
     }
+
+    await t.step(
+      "blocks public text reached through a confidential selection",
+      async () => {
+        const selectionTx = runtime.edit();
+        const selected = runtime.getCell(
+          signer.did(),
+          "cfc-render-private-selection",
+          undefined,
+          selectionTx,
+        );
+        writeSeedEnvelopeDoc(selectionTx, signer.did());
+        seedStoredReferenceEnvelope(selectionTx, {
+          ...selected.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value: unsignedReleaseText.getAsLink(),
+          cfc: {
+            version: 2,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                observes: "followRef",
+                origin: "link",
+                label: { confidentiality: [healthRecordAtom] },
+              }],
+            },
+          },
+        });
+        expect((await selectionTx.commit()).error).toBeUndefined();
+        const acquired = selected.withTx(undefined).resolveAsCell();
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "cf-cfc-render-boundary",
+          props: { maxConfidentiality: [] },
+          children: [acquired as never],
+        });
+        try {
+          await t.settle();
+          const text = collector.getOpsOfType("create-text").map((op) =>
+            op.text
+          );
+          expect(text).not.toContain("Unsigned release note");
+          expect(text).toContain("Content hidden by policy");
+        } finally {
+          cancel();
+        }
+      },
+    );
 
     await t.step(
       "blocks a confidential cell above the boundary max confidentiality",
@@ -1583,6 +1647,114 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
 
     await t.step(
+      "keeps reference endorsements out of the rendered text floor",
+      async () => {
+        const selectionTx = runtime.edit();
+        const selected = runtime.getCell(
+          signer.did(),
+          "cfc-render-endorsed-reference",
+          undefined,
+          selectionTx,
+        );
+        writeSeedEnvelopeDoc(selectionTx, signer.did());
+        seedStoredReferenceEnvelope(selectionTx, {
+          ...selected.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value: unsignedReleaseText.getAsLink(),
+          cfc: {
+            version: 2,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                observes: "followRef",
+                label: { integrity: [signedReleaseAtom] },
+              }],
+            },
+          },
+        });
+        expect((await selectionTx.commit()).error).toBeUndefined();
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            requiredTextIntegrity: signedReleaseAtom,
+          },
+          children: [selected.withTx(undefined).resolveAsCell() as never],
+        });
+        try {
+          await t.settle();
+          const text = collector.getOpsOfType("create-text").map((op) =>
+            op.text
+          );
+          expect(text).not.toContain("Unsigned release note");
+          expect(text).toContain("Content hidden by integrity policy");
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "keeps value endorsements on reference slots out of the target text floor",
+      async () => {
+        const selectionTx = runtime.edit();
+        const selected = runtime.getCell(
+          signer.did(),
+          "cfc-render-endorsed-slot",
+          undefined,
+          selectionTx,
+        );
+        writeSeedEnvelopeDoc(selectionTx, signer.did());
+        seedStoredReferenceEnvelope(selectionTx, {
+          ...selected.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value: unsignedReleaseText.getAsLink(),
+          cfc: {
+            version: 2,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                observes: "value",
+                label: { integrity: [signedReleaseAtom] },
+              }],
+            },
+          },
+        });
+        expect((await selectionTx.commit()).error).toBeUndefined();
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+        const cancel = reconciler.mount({
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            requiredTextIntegrity: signedReleaseAtom,
+          },
+          children: [selected.withTx(undefined) as never],
+        });
+        try {
+          await t.settle();
+          const text = collector.getOpsOfType("create-text").map((op) =>
+            op.text
+          );
+          expect(text).not.toContain("Unsigned release note");
+          expect(text).toContain("Content hidden by integrity policy");
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
       "strict text integrity blocks unsigned child text",
       async () => {
         const collector = createOpsCollector();
@@ -2203,7 +2375,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     await t.step(
       "strict text integrity reads linked object atoms from VDOM props raw values",
       async () => {
-        const tx = runtime.edit();
+        let tx = runtime.edit();
         const message = runtime.getCell(
           signer.did(),
           "cfc-render-policy-linked-message",
@@ -2212,7 +2384,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const messageLink = message.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id: messageLink.id!,
           type: "application/json",
@@ -2235,6 +2407,8 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
+        expect((await tx.commit()).error).toBeUndefined();
+        tx = runtime.edit();
         const requiredIntegrity = runtime.getCell(
           signer.did(),
           "cfc-render-policy-linked-required-integrity",
@@ -2270,7 +2444,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           ],
         });
         const commitResult = await tx.commit();
-        assertEquals(commitResult.ok !== undefined, true);
+        expect(commitResult.error).toBeUndefined();
 
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -2301,7 +2475,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     await t.step(
       "strict text integrity follows pattern argument aliases for visible props",
       async () => {
-        const tx = runtime.edit();
+        let tx = runtime.edit();
         const message = runtime.getCell(
           signer.did(),
           "cfc-render-policy-aliased-message",
@@ -2310,7 +2484,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const messageLink = message.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id: messageLink.id!,
           type: "application/json",
@@ -2333,6 +2507,8 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
+        expect((await tx.commit()).error).toBeUndefined();
+        tx = runtime.edit();
         const messages = runtime.getCell(
           signer.did(),
           "cfc-render-policy-aliased-messages",
@@ -2391,7 +2567,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           }],
         });
         const commitResult = await tx.commit();
-        assertEquals(commitResult.ok !== undefined, true);
+        expect(commitResult.error).toBeUndefined();
 
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -2429,7 +2605,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     await t.step(
       "strict text integrity ignores sibling labels for visible props",
       async () => {
-        const tx = runtime.edit();
+        let tx = runtime.edit();
         const messages = runtime.getCell(
           signer.did(),
           "cfc-render-policy-sibling-label-messages",
@@ -2438,7 +2614,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const messagesLink = messages.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(tx, signer.did());
-        seedStoredEnvelope(tx, {
+        seedStoredReferenceEnvelope(tx, {
           space: signer.did(),
           id: messagesLink.id!,
           type: "application/json",
@@ -2462,6 +2638,8 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
           },
         });
+        expect((await tx.commit()).error).toBeUndefined();
+        tx = runtime.edit();
         const requiredIntegrity = runtime.getCell(
           signer.did(),
           "cfc-render-policy-sibling-required-integrity",
@@ -2502,7 +2680,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           }],
         });
         const commitResult = await tx.commit();
-        assertEquals(commitResult.ok !== undefined, true);
+        expect(commitResult.error).toBeUndefined();
 
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -2550,7 +2728,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         requiredIntegrity.set(signedReleaseAtom);
         runtime.prepareTxForCommit(tx);
         const commitResult = await tx.commit();
-        assertEquals(commitResult.ok !== undefined, true);
+        expect(commitResult.error).toBeUndefined();
 
         const collector = createOpsCollector();
         const reconciler = new WorkerReconciler({
@@ -2920,7 +3098,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     );
     const influencedLink = influenced.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(caveatTx, signer.did());
-    seedStoredEnvelope(caveatTx, {
+    seedStoredReferenceEnvelope(caveatTx, {
       space: signer.did(),
       id: influencedLink.id!,
       type: "application/json",
@@ -3167,7 +3345,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           );
           const link = cell.getAsNormalizedFullLink();
           writeSeedEnvelopeDoc(seedTx, signer.did());
-          seedStoredEnvelope(seedTx, {
+          seedStoredReferenceEnvelope(seedTx, {
             space: signer.did(),
             id: link.id!,
             type: "application/json",
@@ -3253,7 +3431,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           );
           const link = cell.getAsNormalizedFullLink();
           writeSeedEnvelopeDoc(seedTx, signer.did());
-          seedStoredEnvelope(seedTx, {
+          seedStoredReferenceEnvelope(seedTx, {
             space: signer.did(),
             id: link.id!,
             type: "application/json",
@@ -3366,7 +3544,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           );
           const link = cell.getAsNormalizedFullLink();
           writeSeedEnvelopeDoc(seedTx, signer.did());
-          seedStoredEnvelope(seedTx, {
+          seedStoredReferenceEnvelope(seedTx, {
             space: signer.did(),
             id: link.id!,
             type: "application/json",
@@ -3521,7 +3699,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const markerLink = markerCellSeed.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: markerLink.id!,
           type: "application/json",
@@ -3657,7 +3835,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const teamLink = teamCell.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: teamLink.id!,
           type: "application/json",
@@ -3911,7 +4089,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const sealedLink = sealedCell.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: sealedLink.id!,
           type: "application/json",
@@ -4090,7 +4268,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const sealedLink = sealedCell.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: sealedLink.id!,
           type: "application/json",
@@ -4193,7 +4371,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const teamLink = teamCell.getAsNormalizedFullLink();
         writeSeedEnvelopeDoc(seedTx, signer.did());
-        seedStoredEnvelope(seedTx, {
+        seedStoredReferenceEnvelope(seedTx, {
           space: signer.did(),
           id: teamLink.id!,
           type: "application/json",
