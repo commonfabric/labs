@@ -4419,7 +4419,9 @@ export class Runtime {
    *
    * `request.key` names one request: the allocation record that will hold the
    * DID, the creator and the members. A different creator or member list is a
-   * different key, so no run reaches a space made for another principal.
+   * different key, so no run picks up a space this runtime made for another
+   * principal before it is recorded. Once the record exists, whoever reads it
+   * reaches the space it names.
    *
    * @throws Error when `creatorSpaceGrants()` refuses `request.members`, on a
    *   serving runtime when `request.members` is not empty, or when this

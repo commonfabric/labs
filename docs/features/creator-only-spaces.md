@@ -59,9 +59,15 @@ A handler run goes through `resolveCreatorSpaceTarget()` in
   the space if the record is still absent, and re-runs the handler, as it does
   for an unresolved name.
 
-A request is keyed by the record, the creator and the members, so a run for a
-different principal, or with a different member list, never picks up a space
-created for another.
+The runtime keeps a space it created, until a run records it, under a key over
+the record, the creator and the members, so no run picks up a space the runtime
+created for a different principal or member list. That holds only until the
+record exists. The record itself is addressed by the calling space and the name
+alone, and a run that finds one adopts its DID without comparing the creator or
+the members it asked for: a later run by another principal, or with other
+members, reaches the space the first run recorded. Within one user's home space
+every such run is that user's; in a shared calling space it is the open question
+under "What it does not do".
 
 Two runs that both create a space for one name converge on one record. Each
 transaction read the record as absent, so the second commit to write it fails
@@ -101,8 +107,9 @@ that path checks that the person who sent the event asked for the grant.
 ## What it does not do
 
 - **It does not protect the record.** Anyone who can write the calling space can
-  write a record first and point a name at a space they own. For a record in a
-  user's home space that is only the user. Checking, on a record's first use,
+  write a record first and point a name at a space they own, and a run that
+  finds a record adopts it whoever created it and whatever members it names.
+  For a record in a user's home space that is only the user. Checking, on a record's first use,
   that the space's access list names the creator as `OWNER` would close it for
   a shared calling space, and needs an asynchronous read of the child's access
   list before the handler can proceed.
