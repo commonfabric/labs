@@ -4132,6 +4132,9 @@ interface HasImage {
         Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> =
         Cfc<T, { integrity: X }>;
+      type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+      declare const rules: unknown;
+      declare const rules2: unknown;
       interface Secret { a: string; b: string }
       interface Other { a: string; c: number }
       declare const DEFAULT_MARKER: unique symbol;
@@ -4240,6 +4243,51 @@ interface HasImage {
         ...A_ONLY,
         ifc: { confidentiality: ["x", "y"], integrity: ["i"] },
       });
+    });
+
+    it("gives a node narrowed from a union the labels a member standing for several members spells", async () => {
+      // The checker distributes `Confidential<Secret | Other, …>` into two
+      // members of the union, which only the one node that spells them reads
+      // the policy of.
+      const { narrowed } = await narrowedSchema(
+        "{ narrowed: { a: string } }",
+        "value: Confidential<Secret | Other, readonly [PolicyOf<typeof rules>]> | null",
+      );
+
+      expect(narrowed).toMatchObject({
+        ...A_ONLY,
+        ifc: {
+          confidentiality: [{
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: { path: ["rules"] },
+          }],
+        },
+      });
+    });
+
+    it("gives a node narrowed from a union the labels of each of two nodes that stand for the same members", async () => {
+      // `rules` and `rules2` have one type, so only the nodes tell apart the
+      // policies of the members both stand for.
+      const labeled = (binding: string) =>
+        `Confidential<Secret | Other, readonly [PolicyOf<typeof ${binding}>]>`;
+      const policy = (binding: string) => ({
+        policyRefKind: "module",
+        __ctPolicyIdentityOf: { path: [binding] },
+      });
+
+      for (
+        const [first, second] of [["rules", "rules2"], ["rules2", "rules"]]
+      ) {
+        const { narrowed } = await narrowedSchema(
+          "{ narrowed: { a: string } }",
+          `value: ${labeled(first!)} | ${labeled(second!)} | null`,
+        );
+
+        expect(narrowed).toMatchObject({
+          ...A_ONLY,
+          ifc: { confidentiality: [policy(first!), policy(second!)] },
+        });
+      }
     });
 
     it("gives a node narrowed from a labeled union the union's labels and its members' confidentiality", async () => {
