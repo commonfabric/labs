@@ -8,6 +8,7 @@ import { type FactoryInput, isPattern, isReactive } from "./types.ts";
 import { noteDerivedCopy } from "./pattern-metadata.ts";
 import { isCell } from "../cell.ts";
 import { isCellResultForDereferencing } from "../query-result-proxy.ts";
+import { canCarryFabricInstanceWhole } from "../whole-instance.ts";
 
 /**
  * Traverse a value, _not_ entering cells
@@ -33,19 +34,20 @@ export function traverseValue(
   // A `FabricInstance` is NOT a leaf. It is a container reached by its codec
   // contents rather than by property name, which this walk cannot do, so the
   // rebuild below would hand back a bare `{}` -- and whatever `fn` was looking
-  // for inside it would go unseen. It refuses instead of doing that quietly.
+  // for inside it would go unseen. One holding nothing but fabric data has
+  // nothing inside for `fn` to find, and passes through whole, as a
+  // `FabricPrimitive` does; anything else is refused rather than lost quietly.
   //
   // This sits after `fn`, not before it, for the same reason the primitive
   // guard does: an instance is a value `fn` gets to see and may replace, and
   // only descending into one is refused.
   //
-  // Nothing reaches this in production today, de facto rather than by
-  // construction: a `FabricError` is exposed to pattern authors and ungated, so
-  // what keeps this safe is that no caller yet puts one in a builder value.
-  //
   // TODO(danfuzz): descend a `FabricInstance` by its codec contents, at which
   // point this becomes a walk rather than a refusal.
-  if ((value as object) instanceof FabricInstance) {
+  if (
+    (value as object) instanceof FabricInstance &&
+    !canCarryFabricInstanceWhole(value as FabricInstance)
+  ) {
     refuseFabricInstance(
       value as FabricInstance,
       "when traversing a builder value",
@@ -56,9 +58,8 @@ export function traverseValue(
   // in private fields (zero enumerable own-props); descending into one would
   // rebuild it as `{}`, corrupting it. It has already been shown to `fn` above
   // like any other leaf — here we just decline to descend, so the original
-  // value passes through intact. The test names the base class rather than
-  // that one: an instance is refused above, so the two select the same values
-  // here, and the class this walk declines to descend is the wider one.
+  // value passes through intact, and so does an instance that reaches here,
+  // which holds nothing but fabric data.
   if (
     !isReactive(value) &&
     !isCell(value) &&

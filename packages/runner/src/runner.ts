@@ -254,6 +254,7 @@ import {
   asPatternIdentityRef,
   rawMetaWriteAuthorization,
 } from "./meta-seam.ts";
+import { canCarryFabricInstanceWhole } from "./whole-instance.ts";
 export {
   extractDefaultValues,
   mergeObjects,
@@ -922,15 +923,18 @@ const recordSetupProjectionPolicyInputs = (
     return;
   }
 
-  // Refused for the same reason as `recordOutputSchemaPolicyInputs()` above,
-  // and this site is the more reachable of the two: `projection` is the _raw_
-  // pattern argument, so a `FabricSpecialObject` a pattern actually wrote is
-  // what arrives here. Fails _closed_ as well, so the throw buys diagnosis
-  // rather than safety.
+  // `projection` is the _raw_ pattern argument, so a `FabricSpecialObject` a
+  // pattern actually wrote is what arrives here. An instance holding nothing
+  // but fabric data holds no link, so there is nothing in it to record and it
+  // is passed over. Any other instance is refused for the reason
+  // `recordOutputSchemaPolicyInputs()` above gives: a write-redirect link
+  // inside one would record nothing. That fails _closed_, so the throw buys
+  // diagnosis rather than safety.
   //
   // TODO(danfuzz): descend by codec-mediated traversal into instance state, at
   // which point this becomes a walk rather than a refusal.
   if (projection instanceof FabricInstance) {
+    if (canCarryFabricInstanceWhole(projection)) return;
     refuseFabricInstance(
       projection,
       "when recording setup-projection policy inputs",

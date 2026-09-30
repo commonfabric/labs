@@ -41,6 +41,7 @@ import {
   hasEncodableForm,
   replaceArtifacts,
 } from "../encodable-form.ts";
+import { canCarryFabricInstanceWhole } from "../whole-instance.ts";
 
 export type CellAliasResolver = (
   cell: Reactive<any>,
@@ -56,15 +57,15 @@ const serializeShapeLogger = getLogger("builder.serialize-shape", {
 });
 
 /**
- * The refusal a `FabricInstance` gets from the binding walks. Nothing reaches
- * it in production today, de facto: a `FabricError` is exposed to pattern
- * authors and ungated, so what keeps this safe is that no caller builds one
- * into a binding, not that none could.
+ * What the binding walks make of a `FabricInstance`: the instance itself when
+ * it holds nothing but fabric data, which leaves nothing inside for the walk
+ * to bind, and a refusal otherwise.
  *
  * TODO(danfuzz): descend a `FabricInstance` by its codec contents, at which
  * point this becomes a walk rather than a refusal.
  */
-function refuseBoundFabricInstance(value: FabricInstance): never {
+function boundFabricInstance(value: FabricInstance): FabricExecValue {
+  if (canCarryFabricInstanceWhole(value)) return value;
   refuseFabricInstance(value, "in a pattern binding");
 }
 
@@ -166,8 +167,9 @@ export function withAliasBindings(
   // A `FabricInstance` is NOT a leaf. It is a container reached by its codec
   // contents rather than by property name, which this walk cannot do, so the
   // `for...in` copy would rebuild it from zero enumerable own properties as
-  // `{}`. It refuses instead of doing that quietly.
-  if (value instanceof FabricInstance) refuseBoundFabricInstance(value);
+  // `{}`. It leaves whole when it holds nothing to bind, and is refused
+  // otherwise rather than lost quietly.
+  if (value instanceof FabricInstance) return boundFabricInstance(value);
 
   // Whatever reaches here is handed to the sanctioned conversion, which mints
   // its fabric form or -- there being nothing to mint -- leaves it to the vet
@@ -203,7 +205,7 @@ export function withAliasBindings(
       assertValidFabricValueLayer(value);
     } else if (minted instanceof FabricInstance) {
       // An `Error` mints a `FabricError`.
-      refuseBoundFabricInstance(minted);
+      return boundFabricInstance(minted);
     } else {
       // A `Uint8Array` mints a `FabricBytes`, a `Date` a `FabricEpochNsec`.
       return minted as FabricExecValue;
