@@ -72,15 +72,26 @@ interface SchemaRoot {
       .toThrow("A scope wrapper cannot be a member of a union.");
   });
 
-  it("throws for a scope wrapper around a cell beside a value", async () => {
-    // One scope cannot be both the value's slot scope and the cell's cap.
-    const { type, checker, typeNode } = await getTypeFromCode(
-      "interface SchemaRoot { handle: PerSpace<Cell<string> | number>; }",
-      "SchemaRoot",
-    );
+  it("throws for a scope wrapper around a cell beside anything but `null` or `undefined`", async () => {
+    // Beside a value, one scope cannot be both the value's slot scope and the
+    // cell's cap. Beside another cell, a read's value projection resolves no
+    // handle out of the union, so no read can show the cap holding.
+    for (
+      const declaration of [
+        "PerSpace<Cell<string> | number>",
+        "PerSpace<Cell<string> | Cell<number>>",
+        "PerSpace<Cell<string>> | PerSpace<Cell<number>>",
+      ]
+    ) {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { handle: ${declaration}; }`,
+        "SchemaRoot",
+      );
 
-    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
-      .toThrow("A scope wrapper around a cell cannot hold a value beside");
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper around a cell cannot hold anything beside");
+    }
   });
 
   it("caps the handle of an optional property's scoped cell", async () => {

@@ -1545,10 +1545,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Beside `null` or `undefined`, a cell is an `anyOf` branch, and the scope
     // is declared twice: at the top, the slot's own scope, which the write
     // path reads, and in the cell's `asCell` entry, the cap on following its
-    // handle, which a read applies however it reaches the handle.
+    // handle, which a read applies however it reaches the handle. One cell
+    // beside those is all a scope wrapper around a cell may hold.
     const branches = schema.anyOf;
     if (Array.isArray(branches) && branches.some(isHandleSchema)) {
-      if (!branches.every((b) => isHandleSchema(b) || isNullishSchema(b))) {
+      if (
+        branches.filter(isHandleSchema).length !== 1 ||
+        !branches.every((b) => isHandleSchema(b) || isNullishSchema(b))
+      ) {
         throw scopeAroundCellUnionError(scope);
       }
       if (schema.scope !== undefined) throw nestedScopeError();

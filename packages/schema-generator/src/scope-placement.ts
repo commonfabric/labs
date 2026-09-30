@@ -95,17 +95,18 @@ export const scopeInsideUnionError = (scope: string): Error =>
   );
 
 /**
- * The error raised when a scope wrapper holds a cell beside a value other than
- * `null` or `undefined`. The one scope would then have to be the slot's own
- * for the value and the cell's cap on its handle both.
+ * The error raised when a scope wrapper holds a cell beside anything but
+ * `null` or `undefined`. Beside a value, the one scope would have to be the
+ * value's slot scope and the cell's cap both. Beside another cell, a read's
+ * value projection resolves no handle out of the union, scoped or not, so no
+ * read can show the cap holding there.
  */
 export const scopeAroundCellUnionError = (scope: string): Error =>
   new Error(
-    `A scope wrapper around a cell cannot hold a value beside the cell ` +
-      `other than \`null\` or \`undefined\`: \`PerUser<Cell<T> | string>\` ` +
-      `would need \`scope: "${scope}"\` to scope the slot and cap the ` +
-      `cell's handle both. Put the value inside the cell ` +
-      `(\`PerUser<Cell<T | string>>\`).`,
+    `A scope wrapper around a cell cannot hold anything beside the cell ` +
+      `but \`null\` or \`undefined\`, as \`PerUser<Cell<T> | string>\` ` +
+      `and \`PerUser<Cell<T> | Cell<U>>\` do (\`scope: "${scope}"\`). Put ` +
+      `the alternatives inside one cell (\`PerUser<Cell<T | string>>\`).`,
   );
 
 const walkSlot = (schema: MutableJSONSchema): void => {

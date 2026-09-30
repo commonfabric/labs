@@ -908,10 +908,12 @@ handle, which a read applies however it reaches the handle
 `PerSpace<Cell<T>> | null` and `PerSpace<Cell<T> | null>` →
 `{ anyOf: [{ type: "null" }, { …, asCell: [{ kind: "cell", scope: "space" }]
 }], scope: "space" }`; the scope-placement walk accepts that one declaration
-in a branch, a cell's cap naming the slot's own scope. Beside any other value
-a wrapper around a cell **throws** (`A scope wrapper around a cell cannot hold
-a value beside the cell`): one scope cannot be
-the value's slot scope and the cell's cap both. An optional property keeps the
+in a branch, a cell's cap naming the slot's own scope. Beside anything else a
+wrapper around a cell **throws** (`A scope wrapper around a cell cannot hold
+anything beside the cell`): beside a value, one scope cannot be the value's
+slot scope and the cell's cap both, and beside another cell, as in
+`PerSpace<Cell<T> | Cell<U>>`, a read's value projection resolves no handle
+out of the union, so no read can show the cap holding. An optional property keeps the
 cell alone (`handle?: PerSpace<Cell<T>>` → `{ …, asCell: [{ kind: "cell",
 scope: "space" }] }`). Tested end to end in the runtime:
 `packages/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
@@ -1553,7 +1555,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
-| Scope wrapper around a cell beside a value other than `null` or `undefined` | `A scope wrapper around a cell cannot hold a value beside the cell` | `common-fabric-formatter.ts` |
+| Scope wrapper around a cell beside anything but `null` or `undefined` | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
