@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import type { URI } from "@commonfabric/memory/interface";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
@@ -89,39 +89,58 @@ describe("StorageManager.pullOpenSpacesToHead", () => {
     }
   });
 
-  it("resolves with a space open that refuses its identity", async () => {
+  describe("with a space open that refuses its identity", () => {
     // The server sends nothing on a session it refuses, so the space holds no
     // fan-out to wait for, and a barrier over every open space still has the
     // others to carry.
 
-    const enforcing = new MemoryV2Server.Server({
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
-      sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
-      acl: { mode: "enforce" },
-    });
-    const outsider = await Identity.fromPassphrase(
-      "storage-pull-open-spaces outsider",
-    );
-    const ownerStorage = EmulatedStorageManager.connectTo(enforcing, {
-      as: signer,
-    });
-    const outsiderStorage = EmulatedStorageManager.connectTo(enforcing, {
-      as: outsider,
-    });
-    try {
-      const closed = await ownerStorage.createSpace({
-        [signer.did()]: "OWNER",
+    let enforcing: MemoryV2Server.Server;
+    let ownerStorage: EmulatedStorageManager;
+    let outsiderStorage: EmulatedStorageManager;
+    let closed: MemorySpace;
+
+    beforeEach(async () => {
+      enforcing = new MemoryV2Server.Server({
+        authorizeSessionOpen: authorizeLoopbackSessionOpen,
+        sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
+        acl: { mode: "enforce" },
       });
+      const outsider = await Identity.fromPassphrase(
+        "storage-pull-open-spaces outsider",
+      );
+      ownerStorage = EmulatedStorageManager.connectTo(enforcing, {
+        as: signer,
+      });
+      outsiderStorage = EmulatedStorageManager.connectTo(enforcing, {
+        as: outsider,
+      });
+      closed = await ownerStorage.createSpace({ [signer.did()]: "OWNER" });
+    });
+
+    afterEach(async () => {
+      await ownerStorage?.close();
+      await outsiderStorage?.close();
+      await enforcing?.close();
+    });
+
+    it("resolves once the space has recorded the refusal", async () => {
       await outsiderStorage.open(closed).sync("of:closed-probe" as URI);
       expect(outsiderStorage.authorizationError(closed)?.name).toBe(
         "AuthorizationError",
       );
 
       await outsiderStorage.pullOpenSpacesToHead();
-    } finally {
-      await ownerStorage.close();
-      await outsiderStorage.close();
-      await enforcing.close();
-    }
+    });
+
+    it("resolves when the refusal first arrives on its own round trip", async () => {
+      // Opening a space starts no session until something reads through it,
+      // so the barrier's round trip is what opens the session, and the
+      // refusal reaches it before the space has recorded any denial.
+
+      outsiderStorage.open(closed);
+      expect(outsiderStorage.authorizationError(closed)).toBeUndefined();
+
+      await outsiderStorage.pullOpenSpacesToHead();
+    });
   });
 });

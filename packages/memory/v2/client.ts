@@ -2931,13 +2931,17 @@ const protocolError = (message: string): Error => {
 const permanentProtocolError = (message: string): Error =>
   Object.assign(new Error(message), { name: "ProtocolError", permanent: true });
 
-// An authorization denial retrying cannot change. A retriable auth failure — an
-// anti-replay race the server marked `retriable` (an expired/used/mismatched
-// challenge, a stale signed `exp`) — is excluded, so the client keeps reopening
-// through a token-refresh window or a challenge race a fresh handshake heals.
-const isPermanentAuthorizationError = (error: unknown): boolean =>
-  error instanceof Error && error.name === "AuthorizationError" &&
-  (error as { retriable?: unknown }).retriable !== true;
+/**
+ * Whether `error` is an authorization denial retrying cannot change. A
+ * retriable auth failure — an anti-replay race the server marked `retriable`
+ * (an expired/used/mismatched challenge, a stale signed `exp`) — is excluded,
+ * so the client keeps reopening through a token-refresh window or a challenge
+ * race a fresh handshake heals.
+ */
+export function isPermanentAuthorizationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { retriable?: unknown }).retriable !== true;
+}
 
 // A reconnect handshake failure the whole client must give up on rather than
 // retry: an incompatible protocol negotiation at hello. An authorization denial
