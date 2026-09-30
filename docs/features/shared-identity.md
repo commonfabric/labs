@@ -139,9 +139,16 @@ route. The key goes from Loom to the browser directly and never passes through
 toolshed. The browser stores it in IndexedDB like an imported CLI key, and
 quick unlock offers it as an imported key.
 
-A link signs in at once when nobody is signed in. When someone is, the shell
-asks whether to replace that identity before it redeems the code, because the
-redeem spends the code and Loom records this browser as holding the key. The
+How much a link asks depends on where its Loom is. Loom mints codes only for a
+caller on its own machine, so a code for a Loom on this computer (`localhost`,
+`127.0.0.1`, `[::1]`) can only have come from this computer. Such a link signs
+in at once when nobody is signed in. When someone is, the shell asks whether to
+replace that identity before it redeems the code, because the redeem spends the
+code and Loom records this browser as holding the key. A Loom anywhere else may
+be someone else's, and a link to it could sign the browser in as them, so the
+shell redeems the code and then always asks, showing the Loom's address and the
+identity it handed over. A code typed into the login form signs in without a
+question, since the person entered both the code and the address. The
 link's fragment is removed from the address bar as soon as the shell reads it,
 and a shell running in a frame never acts on one.
 `packages/shell/src/lib/loom-pairing.ts` holds the code and fragment rules, and

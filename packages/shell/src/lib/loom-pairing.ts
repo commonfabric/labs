@@ -15,6 +15,8 @@
  * once, and the Loom voids it after five wrong tries.
  */
 
+import { isLoopbackHostname } from "@commonfabric/utils/loopback";
+
 /** The Loom a code is redeemed against when the link or the form names none. */
 export const DEFAULT_LOOM_URL = "http://localhost:9900";
 
@@ -65,6 +67,18 @@ export function normalizeLoomUrl(text: string): string | null {
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (url.username || url.password) return null;
   return url.origin;
+}
+
+/**
+ * Whether a Loom origin, as `normalizeLoomUrl()` returns it, is on this
+ * computer.
+ *
+ * A Loom mints codes only for a caller on its own machine, so a code for a
+ * Loom on this computer can only have come from this computer. A Loom
+ * anywhere else may be someone else's, minting codes for their own identity.
+ */
+export function isLocalLoom(loomUrl: string): boolean {
+  return isLoopbackHostname(new URL(loomUrl).hostname);
 }
 
 /** A code, and the Loom that minted it. */

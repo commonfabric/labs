@@ -1,6 +1,6 @@
 /**
- * Signs the shell in with a Loom pairing code: redeem, confirm when that
- * would replace a signed-in identity, and store the key.
+ * Signs the shell in with a Loom pairing code: redeem, ask the person when the
+ * link calls for it, and store the key.
  *
  * The login screen's form and a `#pair=` link both come through here. Like
  * the device-link flow, the link path writes `ROOT_KEY` into the KeyStore
@@ -17,6 +17,7 @@ import {
   type StoredCredential,
 } from "./credentials.ts";
 import {
+  isLocalLoom,
   LoomPairingError,
   type LoomPairingFragment,
   type LoomPairingRequest,
@@ -69,20 +70,35 @@ export async function pairWithLoom(
   return identity;
 }
 
+/** What the person is asked before a pairing link signs them in. */
+export interface LoomPairingQuestion {
+  /** Origin of the Loom the code is for. */
+  loomUrl: string;
+
+  /** DID signed in on this device, or null when nobody is. */
+  currentDid: string | null;
+
+  /** DID the link would sign in as, or null when not yet redeemed. */
+  incomingDid: string | null;
+}
+
 /**
  * Sign in with a pairing request that arrived in a link.
  *
- * With nobody signed in, the key is stored straight away. With someone signed
- * in, the person is asked first, and asked before the code is redeemed: a
- * redeem spends the code, and the Loom records this browser as holding the key
- * whether or not the person goes on to use it.
+ * How much is asked turns on where the Loom is. A Loom on this computer mints
+ * codes only for this computer, so its link signs in at once when nobody is
+ * signed in; when someone is, the person is asked before the code is redeemed,
+ * since a redeem spends the code and the Loom records this browser as holding
+ * the key. A Loom anywhere else may be someone else's, and its link could sign
+ * this browser in as them. So its code is redeemed first and the person is
+ * always asked, shown the Loom and the identity it handed over.
  *
  * @throws LoomPairingError as `pairWithLoom()` does.
  */
 export async function runLoomPairingLogin(
   request: LoomPairingRequest,
   deps: {
-    confirmReplace?: (currentDid: string, loomUrl: string) => Promise<boolean>;
+    confirm?: (question: LoomPairingQuestion) => Promise<boolean>;
     pair?: (request: LoomPairingRequest) => Promise<Identity>;
     // KeyStore is IndexedDB-backed, which `deno test` lacks, so a test passes
     // a double holding the two methods used.
@@ -90,21 +106,24 @@ export async function runLoomPairingLogin(
     saveCredential?: (credential: StoredCredential) => void;
   } = {},
 ): Promise<LoomPairingOutcome> {
-  const confirmReplace = deps.confirmReplace ?? confirmReplaceWithUser;
+  const confirm = deps.confirm ?? confirmWithUser;
   const pair = deps.pair ?? ((r: LoomPairingRequest) => pairWithLoom(r));
   const keyStore = await (deps.openKeyStore ?? (() => KeyStore.open()))();
   const save = deps.saveCredential ?? saveCredential;
 
   const existing = await keyStore.get(ROOT_KEY);
   const currentDid = existing ? existing.did() : null;
-  if (
-    currentDid !== null && !await confirmReplace(currentDid, request.loomUrl)
-  ) {
+  const local = isLocalLoom(request.loomUrl);
+  const question = { loomUrl: request.loomUrl, currentDid, incomingDid: null };
+  if (local && currentDid !== null && !await confirm(question)) {
     return "cancelled";
   }
 
   const identity = await pair(request);
   if (currentDid === identity.did()) return "already-signed-in";
+  if (!local && !await confirm({ ...question, incomingDid: identity.did() })) {
+    return "cancelled";
+  }
 
   await keyStore.set(ROOT_KEY, identity);
   // A key-file credential is what quick unlock reads the KeyStore for, which
@@ -173,14 +192,12 @@ export function describeThisDevice(): { name: string; platform: string } {
   };
 }
 
-/** Ask whether to replace the signed-in identity with the Loom's. */
-export function confirmReplaceWithUser(
-  currentDid: string,
-  loomUrl: string,
+/** Ask `question` in the pairing dialog. */
+export function confirmWithUser(
+  question: LoomPairingQuestion,
 ): Promise<boolean> {
   const view = document.createElement("x-loom-pairing-view");
-  view.currentDid = currentDid;
-  view.loomUrl = loomUrl;
+  view.question = question;
   return showUntilAnswered(view);
 }
 

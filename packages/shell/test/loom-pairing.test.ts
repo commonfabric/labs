@@ -6,12 +6,14 @@ import { Identity } from "@commonfabric/identity";
 import type { StoredCredential } from "../src/lib/credentials.ts";
 import {
   handleLoomPairingLink,
+  type LoomPairingQuestion,
   pairWithLoom,
   runLoomPairingLogin,
 } from "../src/lib/loom-pairing-login.ts";
 import {
   consumeLoomPairingFragment,
   DEFAULT_LOOM_URL,
+  isLocalLoom,
   LoomPairingError,
   type LoomPairingRequest,
   normalizeLoomUrl,
@@ -61,6 +63,17 @@ function json(status: number, body: unknown): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+/** The text of a Lit template, its static parts and its values in order. */
+function templateText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(templateText).join("");
+  if (typeof value !== "object") return "";
+  const template = value as { strings?: string[]; values?: unknown[] };
+  return [...(template.strings ?? []), ...(template.values ?? [])]
+    .map(templateText).join("");
 }
 
 /** In-memory stand-in for the IndexedDB-backed KeyStore. */
@@ -120,6 +133,32 @@ describe("loom-pairing", () => {
       expect(normalizeLoomUrl("http://user:pw@localhost:9900")).toBeNull();
       expect(normalizeLoomUrl("localhost:9900/x")).toBeNull();
       expect(normalizeLoomUrl("not a url")).toBeNull();
+    });
+  });
+
+  describe("isLocalLoom()", () => {
+    it("returns `true` for a loopback Loom", () => {
+      for (
+        const url of [
+          "http://localhost:9900",
+          "http://127.0.0.1:9900",
+          "http://[::1]:9900",
+        ]
+      ) {
+        expect(isLocalLoom(url)).toBe(true);
+      }
+    });
+
+    it("returns `false` for a Loom on another host", () => {
+      for (
+        const url of [
+          "https://mac.tail.ts.net",
+          "http://192.168.1.4:9900",
+          "http://localhost.evil.example",
+        ]
+      ) {
+        expect(isLocalLoom(url)).toBe(false);
+      }
     });
   });
 
@@ -357,19 +396,25 @@ describe("loom-pairing", () => {
   });
 
   describe("runLoomPairingLogin()", () => {
+    const REMOTE: LoomPairingRequest = {
+      code: REQUEST.code,
+      loomUrl: "https://mac.tail.ts.net",
+    };
+
     function run(opts: {
+      request?: LoomPairingRequest;
       existing?: Identity;
       incoming: Identity;
       confirm?: boolean;
     }) {
       const keyStore = fakeKeyStore(opts.existing);
-      const confirmCalls: [string, string][] = [];
+      const questions: LoomPairingQuestion[] = [];
       const saved: StoredCredential[] = [];
       let redeemed = 0;
-      const outcome = runLoomPairingLogin(REQUEST, {
+      const outcome = runLoomPairingLogin(opts.request ?? REQUEST, {
         openKeyStore: keyStore.open,
-        confirmReplace: (currentDid, loomUrl) => {
-          confirmCalls.push([currentDid, loomUrl]);
+        confirm: (question) => {
+          questions.push(question);
           return Promise.resolve(opts.confirm ?? false);
         },
         pair: () => {
@@ -381,57 +426,106 @@ describe("loom-pairing", () => {
       return {
         outcome,
         keyStore,
-        confirmCalls,
+        questions,
         saved,
         redeemed: () => redeemed,
       };
     }
 
-    it("stores the identity without asking when nobody is signed in", async () => {
-      const incoming = await makeIdentity(1);
-      const ctx = run({ incoming });
-      expect(await ctx.outcome).toBe("accepted");
-      expect(ctx.confirmCalls).toEqual([]);
-      expect(ctx.keyStore.entries.get("$ROOT_KEY")?.did()).toBe(
-        incoming.did(),
-      );
-      expect(ctx.saved).toEqual([{ id: incoming.did(), method: "keyfile" }]);
-    });
-
-    it("asks before redeeming, and redeems nothing on cancel", async () => {
-      const existing = await makeIdentity(2);
-      const ctx = run({ existing, incoming: await makeIdentity(1) });
-      expect(await ctx.outcome).toBe("cancelled");
-      expect(ctx.confirmCalls).toEqual([[existing.did(), REQUEST.loomUrl]]);
-      expect(ctx.redeemed()).toBe(0);
-      expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(existing);
-      expect(ctx.saved).toEqual([]);
-    });
-
-    it("replaces the signed-in identity when the person confirms", async () => {
-      const incoming = await makeIdentity(1);
-      const ctx = run({
-        existing: await makeIdentity(2),
-        incoming,
-        confirm: true,
+    describe("for a Loom on this computer", () => {
+      it("stores the identity without asking when nobody is signed in", async () => {
+        const incoming = await makeIdentity(1);
+        const ctx = run({ incoming });
+        expect(await ctx.outcome).toBe("accepted");
+        expect(ctx.questions).toEqual([]);
+        expect(ctx.keyStore.entries.get("$ROOT_KEY")?.did()).toBe(
+          incoming.did(),
+        );
+        expect(ctx.saved).toEqual([{ id: incoming.did(), method: "keyfile" }]);
       });
-      expect(await ctx.outcome).toBe("accepted");
-      expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(incoming);
+
+      it("asks before redeeming, and redeems nothing on cancel", async () => {
+        const existing = await makeIdentity(2);
+        const ctx = run({ existing, incoming: await makeIdentity(1) });
+        expect(await ctx.outcome).toBe("cancelled");
+        expect(ctx.questions).toEqual([{
+          loomUrl: REQUEST.loomUrl,
+          currentDid: existing.did(),
+          incomingDid: null,
+        }]);
+        expect(ctx.redeemed()).toBe(0);
+        expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(existing);
+        expect(ctx.saved).toEqual([]);
+      });
+
+      it("replaces the signed-in identity when the person confirms", async () => {
+        const incoming = await makeIdentity(1);
+        const ctx = run({
+          existing: await makeIdentity(2),
+          incoming,
+          confirm: true,
+        });
+        expect(await ctx.outcome).toBe("accepted");
+        expect(ctx.questions.length).toBe(1);
+        expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(incoming);
+      });
+
+      it("returns `already-signed-in` without writing when the identity is the same", async () => {
+        const existing = await makeIdentity(1);
+        const ctx = run({
+          existing,
+          incoming: await makeIdentity(1),
+          confirm: true,
+        });
+        expect(await ctx.outcome).toBe("already-signed-in");
+        expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(existing);
+        expect(ctx.saved).toEqual([]);
+      });
     });
 
-    it("returns `already-signed-in` without writing when the identity is the same", async () => {
-      const existing = await makeIdentity(1);
-      const ctx = run({
-        existing,
-        incoming: await makeIdentity(1),
-        confirm: true,
+    describe("for a Loom elsewhere", () => {
+      it("asks after redeeming, naming the incoming identity, even when nobody is signed in", async () => {
+        const incoming = await makeIdentity(1);
+        const ctx = run({ request: REMOTE, incoming });
+        expect(await ctx.outcome).toBe("cancelled");
+        expect(ctx.questions).toEqual([{
+          loomUrl: REMOTE.loomUrl,
+          currentDid: null,
+          incomingDid: incoming.did(),
+        }]);
+        expect(ctx.keyStore.entries.size).toBe(0);
+        expect(ctx.saved).toEqual([]);
       });
-      expect(await ctx.outcome).toBe("already-signed-in");
-      expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(existing);
-      expect(ctx.saved).toEqual([]);
+
+      it("asks once when replacing, naming both identities", async () => {
+        const existing = await makeIdentity(2);
+        const incoming = await makeIdentity(1);
+        const ctx = run({
+          request: REMOTE,
+          existing,
+          incoming,
+          confirm: true,
+        });
+        expect(await ctx.outcome).toBe("accepted");
+        expect(ctx.questions).toEqual([{
+          loomUrl: REMOTE.loomUrl,
+          currentDid: existing.did(),
+          incomingDid: incoming.did(),
+        }]);
+        expect(ctx.keyStore.entries.get("$ROOT_KEY")).toBe(incoming);
+      });
+
+      it("returns `already-signed-in` without asking when the identity is the same", async () => {
+        const ctx = run({
+          request: REMOTE,
+          existing: await makeIdentity(1),
+          incoming: await makeIdentity(1),
+        });
+        expect(await ctx.outcome).toBe("already-signed-in");
+        expect(ctx.questions).toEqual([]);
+      });
     });
   });
-
   describe("handleLoomPairingLink()", () => {
     const LINK = { kind: "request", request: REQUEST } as const;
 
@@ -517,8 +611,11 @@ describe("loom-pairing", () => {
 
     it("ignores an accept inside the tap-through guard, and answers once", () => {
       const { view, answers } = makeView({
-        currentDid: "did:key:z6Mkcurrent",
-        loomUrl: REQUEST.loomUrl,
+        question: {
+          loomUrl: REQUEST.loomUrl,
+          currentDid: "did:key:z6Mkcurrent",
+          incomingDid: null,
+        },
       });
       view.accessForTestingOnly.finish(true);
       expect(answers).toEqual([]);
@@ -527,10 +624,42 @@ describe("loom-pairing", () => {
       expect(answers).toEqual([false]);
     });
 
+    it("renders the Loom and the incoming identity for a Loom elsewhere", () => {
+      const { view } = makeView({
+        question: {
+          loomUrl: "https://mac.tail.ts.net",
+          currentDid: "did:key:z6Mkcurrent",
+          incomingDid: "did:key:z6Mkincoming",
+        },
+      });
+      const text = templateText(view.render());
+      expect(text).toContain("https://mac.tail.ts.net");
+      expect(text).toContain("did:key:z6Mkcurrent");
+      expect(text).toContain("did:key:z6Mkincoming");
+      expect(text).toContain("not on this computer");
+    });
+
+    it("renders no incoming identity for a Loom on this computer", () => {
+      const { view } = makeView({
+        question: {
+          loomUrl: REQUEST.loomUrl,
+          currentDid: "did:key:z6Mkcurrent",
+          incomingDid: null,
+        },
+      });
+      const text = templateText(view.render());
+      expect(text).toContain(REQUEST.loomUrl);
+      expect(text).not.toContain("not on this computer");
+      expect(text).not.toContain("Would become");
+    });
+
     it("accepts once the guard has released", () => {
       const { view, answers } = makeView({
-        currentDid: "did:key:z6Mkcurrent",
-        loomUrl: REQUEST.loomUrl,
+        question: {
+          loomUrl: REQUEST.loomUrl,
+          currentDid: null,
+          incomingDid: "did:key:z6Mkincoming",
+        },
         guarded: false,
       });
       view.accessForTestingOnly.finish(true);

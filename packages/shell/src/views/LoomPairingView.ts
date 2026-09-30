@@ -1,6 +1,7 @@
 import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 
+import type { LoomPairingQuestion } from "../lib/loom-pairing-login.ts";
 import {
   activateModalDialog,
   pairingDialogStyles,
@@ -8,26 +9,23 @@ import {
 } from "./DeviceLinkView.ts";
 
 /**
- * The dialog a `#pair=` link raises: whether to replace the signed-in identity
- * with the one a Loom holds, or why the link did not sign anyone in.
+ * The dialog a `#pair=` link raises: whether to sign in as the identity a Loom
+ * holds, or why the link did not sign anyone in.
  *
- * The replace question is asked before the code is redeemed, so it names the
- * Loom rather than the incoming DID, which is not known until then. It
+ * For a Loom on this computer the question is asked before the code is
+ * redeemed, so it names the Loom but not the incoming DID, which is not known
+ * until then. For a Loom elsewhere it is asked after, and names both. It
  * dispatches `loom-pairing-result` once, with `detail.accepted`; a failure
  * report always answers `false`.
  */
 export class XLoomPairingView extends LitElement {
   static override styles = pairingDialogStyles;
 
-  /** DID signed in on this device, which the Loom's identity would replace. */
+  /** What to ask the person. */
   @property({ attribute: false })
-  accessor currentDid = "";
+  accessor question: LoomPairingQuestion | null = null;
 
-  /** Origin of the Loom the code is for. */
-  @property({ attribute: false })
-  accessor loomUrl = "";
-
-  /** Set instead of the fields above to report why pairing failed. */
+  /** Set instead of `question` to report why pairing failed. */
   @property({ attribute: false })
   accessor failure: string | null = null;
 
@@ -89,26 +87,48 @@ export class XLoomPairingView extends LitElement {
       `;
     }
 
+    if (this.question === null) return html``;
+    const { loomUrl, currentDid, incomingDid } = this.question;
+    const replacing = currentDid !== null;
     return html`
       <dialog aria-labelledby="loom-pairing-title">
         <h1 id="loom-pairing-title" tabindex="-1" data-autofocus>
-          Replace current identity?
+          ${replacing
+            ? "Replace current identity?"
+            : "Sign in as this identity?"}
         </h1>
-        <div class="label">Currently signed in as</div>
-        <div class="did">${this.currentDid}</div>
-        <div class="label">Would become the identity held by</div>
-        <div class="did">${this.loomUrl}</div>
+        ${replacing
+          ? html`
+            <div class="label">Currently signed in as</div>
+            <div class="did">${currentDid}</div>
+          `
+          : ""}
+        <div class="label">Identity held by the Loom at</div>
+        <div class="did">${loomUrl}</div>
+        ${incomingDid !== null
+          ? html`
+            <div class="label">${replacing
+              ? "Would become"
+              : "Sign in as"}</div>
+            <div class="did">${incomingDid}</div>
+          `
+          : ""}
         <p class="warn">
-          Only continue if you just showed this pairing code on your own Mac that
-          runs Loom. The identity currently signed in on this device will be
-          replaced.
+          ${incomingDid !== null
+            ? "This link names a Loom that is not on this computer. Only " +
+              "continue if that Loom is your own, you just showed this " +
+              "pairing code on it, and the identity above is yours."
+            : "Only continue if you just showed this pairing code on the Mac " +
+              "that runs Loom."}${replacing
+            ? " The identity currently signed in on this device will be replaced."
+            : ""}
         </p>
         <div class="actions">
           <button
             @click="${() => this.#finish(true)}"
             ?disabled="${this.guarded}"
           >
-            Replace identity
+            ${replacing ? "Replace identity" : "Sign in"}
           </button>
           <button @click="${() => this.#finish(false)}">Cancel</button>
         </div>
