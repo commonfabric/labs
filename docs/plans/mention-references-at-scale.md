@@ -617,94 +617,83 @@ would build it. A and C route around it by asking the runtime instead; B1
 substitutes two cells and a fixpoint for it; B2 adds a runtime answer rather
 than a pattern one.
 
-## Questions only the owner can answer
+## Decisions
 
-Each question carries a recommendation and the reason for it. None of these is
-settled.
+Ruled by Mike on 2026-09-30. Each states what holds; where a ruling departs from
+what this document first proposed, it says so, because the departure is the part
+a reader would otherwise have to reconstruct.
 
-**1. May completion be best-effort and incomplete?**
+**Completion is best-effort, and what it offers must be legible.** No dropdown
+can enumerate a large collection, so completion narrows as an author types and
+offers candidates once the set is small — on the order of ten. Each candidate
+shows its member's TITLE beside its name. A list of bare numbers is close to
+useless to pick from, and that is what makes "incomplete" acceptable rather than
+merely honest: the partial answer has to be one an author can act on.
 
-_Recommended: yes, and say so in the spec._ At a million members no dropdown can
-be exhaustive, so the real choice is between an honest partial answer and a
-pretense. Under option C, incompleteness costs nothing an author cannot route
-around by typing the number in full — which is the argument for pairing the
-answer with C rather than giving it alone.
+This costs nothing to deliver. A universe row already copies the member's title
+beside its name (`MentionableRow` in
+`../../packages/patterns/collection-naming/mentionable.ts`), so a dropdown reads
+titles without expanding any member. Whether the editor component renders that
+title today is unverified and is the first thing to check when building this.
 
-**2. What does a stored mention hold when its destination cannot be resolved?**
+**An unresolvable mention keeps its citation.** A stored mention holds the
+collection reference and the member name, and one that does not resolve renders
+as its label with an explicit unresolved marker. Membership in the reference map
+otherwise decides what is a mention, which is the right rule for a token nobody
+authored and the wrong one for a token somebody did: an author who cited member
+42 sees that the citation did not resolve, rather than watching it become prose.
 
-_Recommended: store the collection reference and the member name; render an
-unresolved mention as its label with an explicit unresolved marker._ Today an
-unresolvable mention is indistinguishable from prose, because membership in the
-map decides what is a mention and a key the map does not hold is ordinary text
-(`mention-refs.md`). That is the right rule for a token nobody authored and the
-wrong one for a token somebody did: an author who cited member 42 should see
-that the citation did not resolve, not see their citation quietly become prose.
+**A mention may name another collection; typing one waits.** Storage and
+resolution cover a mention whose destination is in a different collection —
+the stored shape is the same either way, so settling it now keeps it from
+needing a second migration. The `#top/42` query grammar the spec already defines
+([Prose and URLs](../specs/collection-naming.md#prose-and-urls)) stays
+unimplemented for now.
 
-**3. Is a mention across collections in scope?**
+**Storing a name requires the collection's promise, checked.** Converting a
+mention from a pointer into a name is permitted only where the collection
+promises the name outlives the reference, and that is a checked precondition
+rather than an assumption. The promise exists as `NamingPolicy` and nothing
+reads it ([#6986](https://github.com/commonfabric/labs/issues/6986)), so this
+design is what first makes that declaration load-bearing.
 
-_Recommended: yes for storage and resolution, not yet for the query._ Under C a
-stored mention already names its collection, so cross-collection storage is free
-— the shape is the same whether the collection is the one being read through or
-another. What would be new is the `#top/42` query grammar in the editor, which
-the spec already defines
-([Prose and URLs](../specs/collection-naming.md#prose-and-urls)) and nothing
-implements. Settling the storage shape now and deferring the query keeps the
-stored form from needing a second migration later.
+**A mention resolves on render.** Resolution is cached within a reading session
+and never written back into the document. Writing a resolved destination back
+would make every reader a writer of someone else's document, and would make the
+cached value exactly the stale copy
+[#7805](https://github.com/commonfabric/labs/issues/7805) warns about. The cost
+of not caching is the namespace document per session, which a reader needs
+anyway to render any mention at all.
 
-**4. Does storing a name rather than an identity require the collection's policy
-to be read?**
+**The collection owns the query surface.** It knows its own name grammar and its
+own policy; the runtime deliberately knows neither. The spec puts the decimal
+grammar in the collection's library at the top of the pace layers and the
+resolver in `runner` at the foundation, and a runtime-side query would have to
+hardcode a grammar or read a declaration the runtime does not read.
 
-_Recommended: yes, and make it a checked precondition._ Option C converts a
-mention from a pointer into a name, and the spec permits that "only where the
-collection promises the name outlives the reference". The promise exists as
-`NamingPolicy` and nothing reads it (#6986). An unchecked promise means a
-collection with `permanent: false` silently gets mentions that rot.
+**A pill resolves its own name from the namespace.** It shares no source with
+the dropdown. This is stronger than this document first proposed — that a
+bounded list feed the dropdown only — and the reason for going further is that
+the separation is what makes the silent-unnaming failure impossible rather than
+merely avoided by the bound currently chosen. Whatever the dropdown reads, a
+pill's name does not depend on it.
 
-**5. Does a mention resolve on every render, or resolve once and cache the
-destination back into the document?**
+**The browser client's verb-call surface is a prerequisite.** A component cannot
+ask its pattern a question today; the receipt carrying a handler's result is
+written by default and read back by `cf piece call`, so the gap is a missing
+protocol request rather than a missing mechanism. This document first treated
+that as adjacent work. It is not: once the collection owns the query, the editor
+has to be able to ask the collection, so this design cannot be built until that
+surface exists. It belongs to whoever owns the verb surface, and this design
+depends on them rather than proposing to do it.
 
-_Recommended: resolve on render, cache within a session, never write the cache
-back._ Writing a resolved destination back makes every reader a writer of
-somebody else's document and makes the cached value exactly the stale copy #7805
-warns about — it "makes any copied value a cache that can go stale". The cost of
-not caching is the namespace document per reading session, which the reader
-needs anyway to render any mention.
-
-**6. Who owns the query surface — the collection pattern, or the runtime?**
-
-_Recommended: the collection._ The collection knows its own name grammar and
-policy; the runtime deliberately does not. The spec states why, in pace-layer
-terms: the decimal grammar "belongs to the collection's library, in
-`packages/patterns` at the top, and the resolver sits in `runner`, at the
-foundation." A runtime-side prefix query (B2) would either hardcode a grammar or
-need the declaration the runtime does not read.
-
-**7. If a bounded list is kept for the dropdown, what bounds it, and what may
-read it?**
-
-_Recommended: whatever bound is chosen, the bounded list feeds the dropdown only
-— never the pill's name._ The silent-unnaming failure is entirely a consequence
-of one source serving both, and separating them is what makes any bound safe to
-choose.
-
-**8. Should the browser client gain the verb-call surface the CLI has?**
-
-_Recommended: yes, but not as part of this work, and not decided here._ A
-component cannot ask its pattern a question today, and the reason is a missing
-protocol request rather than a missing mechanism — the receipt carrying a
-handler's result is written by default and read back by `cf piece call`. Closing
-that gap would serve every component that wants to ask its pattern something,
-and mention completion is one caller rather than the reason. It belongs to
-whoever owns the verb surface; this document raises it because the investigation
-found it, not because the design needs it.
-
-**9. Is #7771 fixed now, or does it dissolve into this design?**
-
-_Recommended: fix it now, on its own terms._ It is a rule the spec already
-states, the fix is local to the component, and its cost is live: Topics gates
-what a topic publishes rather than gating its displays, so nothing can read
-whether a topic holds its number while numbers are hidden. None of the options
-here removes a raw-list universe, so none of them fixes it.
+**The editor's short-name read is fixed separately, now.**
+[#7771](https://github.com/commonfabric/labs/issues/7771) — the code editor
+reads a mention's short name from the destination piece, where the spec
+reserves that for a universe row — is a rule the spec already states, and the
+fix is local to the component. None of the options here removes a raw-list universe, so none
+of them fixes it incidentally. A universe row now carries a member's number for
+the component to read instead.
 
 ## What this design does not cover
 
