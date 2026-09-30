@@ -194,7 +194,7 @@ const validateCurlArgs = (args: readonly string[]): BashCurlPolicyResult => {
 };
 
 const validateLocalhostCurlTarget = (target: string): BashCurlPolicyResult => {
-  if (/[`$\\{}[\]]/.test(target)) {
+  if (/[`$\\{}[\]]/.test(withoutIpv6HostBrackets(target))) {
     return {
       allowed: false,
       reason: "curl targets may not use shell expansion or URL glob syntax",
@@ -240,11 +240,30 @@ const parseCurlTarget = (target: string): URL | undefined => {
   }
 };
 
+/**
+ * Helper for `validateLocalhostCurlTarget()`, which returns `target` with the
+ * brackets around an IPv6 host taken out. A URL writes an IPv6 host in
+ * brackets, and curl reads those as the host rather than as a glob; anywhere
+ * else in the target a bracket is still a glob.
+ */
+const withoutIpv6HostBrackets = (target: string): string =>
+  target.replace(
+    /^((?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?(?:[^/?#@]*@)?)\[([0-9A-Fa-f:.]+)\]/,
+    "$1$2",
+  );
+
+/**
+ * Whether `hostname`, a parsed URL's, is one curl may name: `localhost`,
+ * Docker Desktop's `host.docker.internal`, a 127.x address, or `::1`. The URL
+ * parser writes an IPv6 host in brackets and in its shortest form, so every
+ * spelling of `::1` arrives as `[::1]`; an IPv4 address written as IPv6, such
+ * as `::ffff:127.0.0.1`, is not `::1` and is not one of these.
+ */
 const isLoopbackHost = (hostname: string): boolean => {
   const normalized = hostname.toLowerCase();
   return normalized === "localhost" ||
     normalized === "host.docker.internal" ||
-    normalized === "::1" ||
+    normalized === "[::1]" ||
     /^127(?:\.\d{1,3}){1,3}$/.test(normalized);
 };
 
