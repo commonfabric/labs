@@ -148,7 +148,11 @@ class RecordingSessionFactory implements SessionFactory {
     );
     const transact = session.transact.bind(session);
     (session as { transact: typeof transact }).transact = (commit) => {
-      this.commits.push(commit.operations.map((operation) => operation.id));
+      this.commits.push(
+        commit.operations.flatMap((operation) =>
+          "id" in operation ? [operation.id] : []
+        ),
+      );
       return transact(commit);
     };
     return { client, session };
@@ -432,7 +436,7 @@ describe("space-access-change", () => {
       expect(result.key("notes").get()).toEqual([`revoked ${bob.did()}`]);
     });
 
-    it("refuses an event that is not a trusted gesture, and drops the handler's writes", async () => {
+    it("changes neither the list nor the handler's data for an event that is not a trusted gesture", async () => {
       const { runtime, errors } = clientRuntime(alice);
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
       const result = await runAccessPattern(runtime, space);
@@ -444,7 +448,7 @@ describe("space-access-change", () => {
       expect(result.key("notes").get()).toEqual([]);
     });
 
-    it("refuses a grant from a handler another handler passed the gesture on to", async () => {
+    it("changes nothing for a grant from a handler another handler passed a gesture on to", async () => {
       const { runtime, errors } = clientRuntime(alice);
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
       const result = await runAccessPattern(runtime, space);
@@ -456,7 +460,7 @@ describe("space-access-change", () => {
       expect(result.key("notes").get()).toEqual([]);
     });
 
-    it("refuses an actor without `OWNER`, whatever the payload names", async () => {
+    it("changes nothing for an actor without `OWNER`, whatever the payload names", async () => {
       // The payload names the space's owner everywhere an actor could
       // plausibly be read from, and the change is still refused as bob's.
 
@@ -767,7 +771,7 @@ describe("space-access-change", () => {
   });
 
   describe("commitSpaceAccessChanges()", () => {
-    it("refuses a change the list it replaces gives the actor no `OWNER` for, though staging could not tell", async () => {
+    it("throws, committing nothing, for an actor the list it replaces gives no `OWNER`, though staging could not tell", async () => {
       // Bob's runtime has not synced the list, so staging admits the change,
       // and the commit, which reads the list first, is where it is refused.
 
@@ -845,7 +849,7 @@ describe("space-access-change", () => {
   });
 
   describe("the memory server", () => {
-    it("refuses a change to the list from a principal without `OWNER`", async () => {
+    it("keeps the list, and the change throws, for a principal without `OWNER`", async () => {
       // What the runtime's own checks stand in front of: a client that skips
       // them reaches this refusal.
 

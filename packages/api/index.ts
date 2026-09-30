@@ -3902,8 +3902,8 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * `principal` must be a DID other than the actor's own, the space's own, and
  * `"*"`. Lowering the space's last concrete `OWNER` is refused.
  *
- * The change commits on its own, as a commit of its own, before the handler's
- * other writes commit. If the handler's writes then fail, the change stands.
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
  *
  * Available only in a handler on a client runtime, and throws anywhere else:
  * a serving runtime cannot yet check that the event's actor holds `OWNER`.

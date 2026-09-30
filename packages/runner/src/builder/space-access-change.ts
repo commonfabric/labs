@@ -1,8 +1,8 @@
 /**
  * `grantSpaceAccess()` and `revokeSpaceAccess()`, the handler calls that change
  * a space's access list, and `commitSpaceAccessChanges()`, which the runner
- * calls to commit what a handler run staged. `docs/features/space-access.md`
- * describes the whole arrangement.
+ * calls to commit what a handler run staged.
+ * `docs/features/space-access-changes.md` describes the whole arrangement.
  *
  * A call validates what it can know on its own and stages the change on the
  * handler's frame. The runner then commits each space's staged changes as a
@@ -42,7 +42,7 @@ const GRANT_LEVELS: ReadonlySet<unknown> = new Set<SpaceGrantLevel>([
 /**
  * Sets `principal`'s entry in the access list of the space `target`'s value
  * lives in to exactly `level`. See {@link stageChange} for what is checked
- * when, and `docs/features/space-access.md` for the whole contract.
+ * when, and `docs/features/space-access-changes.md` for the whole contract.
  *
  * @throws Error on every refusal, which drops the handler's transaction.
  */
@@ -190,15 +190,17 @@ function stageChange(
   }
 
   const change: SpaceAccessChange = { principal, level, actor };
-  const pending = frame.pendingSpaceAccessChanges ??= new Map();
-  const staged = pending.get(space) ?? [];
+  const staged = frame.pendingSpaceAccessChanges?.get(space) ?? [];
   const current = knownAcl(runtime, space);
   if (current !== undefined) {
     const before = applyChanges(space, current, staged);
     const after = applyChanges(space, current, [...staged, change]);
     if (sameAcl(before, after)) return;
   }
-  pending.set(space, [...staged, change]);
+  (frame.pendingSpaceAccessChanges ??= new Map()).set(space, [
+    ...staged,
+    change,
+  ]);
 }
 
 /**

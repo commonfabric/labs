@@ -78,7 +78,7 @@ so the change cannot share its commit. It goes in two, in order:
    the surviving concrete `OWNER` too, so the refusal throws from the call where
    the handler could catch it. A change that would leave the list as it is
    stages nothing. The call reads the list outside the handler's transaction,
-   so the second commit does not conflict with the first.
+   so the handler's own commit does not conflict with the access-list commit.
 2. After the handler body returns, the runner commits each space's staged
    changes, applied in call order, as one commit per space. The commit loads
    the list first and reads it in its own transaction, so its checks run
