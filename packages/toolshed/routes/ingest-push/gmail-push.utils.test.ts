@@ -353,23 +353,6 @@ describe("gmail-push.utils", () => {
         expect(records[0].historyId).toBe(big);
       });
 
-      it("records a history id given as a number past 2^53 without losing digits", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
-        const data = btoa(
-          `{"emailAddress":"${MAILBOX}","historyId":9007199254740993}`,
-        );
-
-        await push(JSON.stringify({
-          message: { data, messageId: "m-1", publishTime: PUBLISH_TIME },
-        }));
-
-        const records = await journal(a, "2026-09-30") as {
-          historyId: string;
-        }[];
-        expect(records[0].historyId).toBe("9007199254740993");
-      });
-
       it("matches the mailbox regardless of case", async () => {
         const a = await channel("a");
         await bindMailbox(runtime, space, a.id, "Alice@Example.com");

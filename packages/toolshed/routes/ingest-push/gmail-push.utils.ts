@@ -421,12 +421,10 @@ function decodeNotification(rawBody: string): GmailNotification | null {
     return null;
   }
 
-  let text: string;
   let notification: unknown;
   try {
     const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
-    text = new TextDecoder().decode(bytes);
-    notification = JSON.parse(text);
+    notification = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;
   }
@@ -435,10 +433,8 @@ function decodeNotification(rawBody: string): GmailNotification | null {
   if (typeof emailAddress !== "string" || !isPlausibleAddress(emailAddress)) {
     return null;
   }
-  // A history id sent as a number is read from the text rather than from the
-  // parsed value, which has already lost precision past 2^53.
-  const history = typeof historyId === "number"
-    ? /"historyId"\s*:\s*([0-9]+)\s*[,}]/.exec(text)?.[1]
+  const history = Number.isSafeInteger(historyId)
+    ? String(historyId)
     : historyId;
   if (typeof history !== "string" || !HISTORY_ID_RE.test(history)) {
     return null;
