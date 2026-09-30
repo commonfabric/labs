@@ -1211,10 +1211,16 @@ Mechanics:
   a label's syntax is read first, each node paired with the part of the type
   it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
   reads, and alias references, with the alias's arguments substituted into its
-  body. Syntax the reader does not evaluate, such as a conditional or mapped
-  alias, a spread, rest, or optional tuple element, or a parameter an alias
-  leaves to its default, is read from the paired type instead, and so is a
-  label with no syntax at all. Read from nodes, the extraction recognizes
+  body. A spread tuple element (`...X`, named or not) stands for the
+  elements of the list its operand reads as, so `readonly [...L, "b"]` with
+  `L` bound to `readonly ["c", "d"]` reads as `["c", "d", "b"]`; the tuple's
+  type holds those elements spread already, so no element node pairs with a
+  part of it, and each is read alone. Syntax the reader does not evaluate,
+  such as a conditional or mapped alias, an optional tuple element, a spread
+  whose operand reads as no list (a rest element over an array type), a tuple
+  any of whose elements a spread leaves unread, or a parameter an alias leaves
+  to its default, is read from the paired type instead, and so is a label
+  with no syntax at all. Read from nodes, the extraction recognizes
   `AnyOf<X>` as
   `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
   `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
