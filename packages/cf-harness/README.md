@@ -438,9 +438,9 @@ The batch CLI, the interactive stdio entrypoint, the console and
 or the word after it starts with `-`, since the word after it would otherwise be
 taken apart as flags or taken as the value of the wrong flag: the batch CLI
 would read `--prompt "- buy milk"` as an empty prompt followed by a run of
-flags. Such a value is written in one word, `--prompt=- buy milk`. That refusal
-comes before help, so `--prompt -h` is a prompt given no value rather than a
-question.
+flags. Such a value is written as one shell word, `--prompt='- buy milk'`. That
+refusal comes before help, so `--prompt -h` is a prompt given no value rather
+than a question.
 
 Standard bearer-auth mode:
 

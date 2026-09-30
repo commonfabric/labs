@@ -2413,8 +2413,10 @@ export const consoleStartupBanner = (
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
  * which extend the config resolver's, and the interactive service spreads this
  * object into every turn — so what is set here holds for the whole session,
- * and the engine builds both lazily-cached client factories from it. Where
- * `args` ask for help it prints the usage instead, and serves nothing.
+ * and the engine builds both lazily-cached client factories from it. A flag
+ * that takes a value but was given none is refused first, so `--port --help`
+ * throws; only then, where `args` ask for help, it prints the usage instead
+ * and serves nothing.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
