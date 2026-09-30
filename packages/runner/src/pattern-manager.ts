@@ -1788,12 +1788,16 @@ export class PatternManager {
    * unless CFC enforcement is `disabled`. A pattern the program instantiates
    * in a space of its own, with `inSpace()`, is replicated there from that
    * closure, so a caller that runs the program in `persistence.space` passes
-   * it. A failed write fails the call.
+   * it. The write comes after evaluation, and `persistence.when`, given the
+   * evaluated result, can decline it. A failed write fails the call.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
     options?: TypeScriptHarnessProcessOptions,
-    persistence?: { space: MemorySpace },
+    persistence?: {
+      space: MemorySpace;
+      when?: (result: EvaluateResult) => boolean;
+    },
   ): Promise<EvaluateResult> {
     const patternCoverage = this.#patternCoverageFor(options);
     const effectiveOptions: TypeScriptHarnessProcessOptions = {
@@ -1837,7 +1841,18 @@ export class PatternManager {
     if (byteCache !== undefined && runtimeVersion !== undefined) {
       byteCache.putAll(runtimeVersion, modules);
     }
-    if (persistenceSpace !== undefined) {
+    // Yield ahead of the synchronous SES evaluation (see compilePattern).
+    await interleaveCompileYield();
+    const result = this.#runtime.harness.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    this.registerEvaluatedModules(result);
+    if (
+      persistenceSpace !== undefined && persistence?.when?.(result) !== false
+    ) {
       if (runtimeVersion === undefined) {
         await this.#persistSourceCacheTracked(
           persistenceSpace,
@@ -1853,15 +1868,6 @@ export class PatternManager {
         );
       }
     }
-    // Yield ahead of the synchronous SES evaluation (see compilePattern).
-    await interleaveCompileYield();
-    const result = this.#runtime.harness.evaluateRecordGraph(
-      id,
-      graph,
-      mainSpecifier,
-      program,
-    );
-    this.registerEvaluatedModules(result);
     return result;
   }
 

@@ -126,6 +126,29 @@ describe("PatternManager.compileAndRegisterModules", () => {
       await runtime.storageManager.synced();
     });
 
+    it("writes nothing into that space when `when` declines the result", async () => {
+      const space = signer.did();
+      let offered: unknown;
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        {
+          space,
+          when: (evaluated) => {
+            offered = evaluated;
+            return false;
+          },
+        },
+      );
+      expect(offered).toBe(result);
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+
     it("writes nothing into a space when none is given", async () => {
       const space = signer.did();
       const result = await runtime.patternManager.compileAndRegisterModules(

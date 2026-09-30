@@ -1354,12 +1354,18 @@ export async function runTestPattern(
       // The closure is written into the test's space, as deploying the test
       // would write it, so that a pattern the test instantiates with
       // `inSpace()` can be replicated from it into its own space. A
-      // compile-only run instantiates nothing.
+      // compile-only run instantiates nothing here, and neither does a
+      // multi-user test, whose participants run in workers of their own; so
+      // neither writes anything, a caller-supplied store included.
       () =>
         runtime.patternManager.compileAndRegisterModules(
           program,
           { patternCoverage },
-          options.compileOnly ? undefined : { space },
+          options.compileOnly ? undefined : {
+            space,
+            when: (result) =>
+              multiUserDescriptorMeta(result.main?.default) === undefined,
+          },
         ),
     );
     const { main } = evalResult;
