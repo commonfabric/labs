@@ -93,13 +93,14 @@ checked against them. Inline data without a more specific label keeps its
 container's authorship. An empty declaration without a persistent gate does not
 shadow an ancestor during this derivation.
 
-Each slot persists labels from its last recorded link only while it still holds
-that source: the same space, scope, document, and path. A replacement by another
-reference, inline data, or absence removes the superseded link's contribution.
-Earlier link attempts remain subject to verification, but supply neither
-persisted link entries nor the pending source view. Write-side integrity floors
-use the final references. Confidentiality consumed by the transaction still
-applies to inline values that replace a reference.
+Each slot persists labels from its last recorded link matching the source it
+still holds: the same space, scope, document, and path. A raw write restoring an
+earlier reference therefore uses the last input for that source. A replacement
+by another reference, inline data, or absence removes the superseded link's
+contribution. Every link attempt remains subject to verification, but only the
+selected input supplies persisted link entries and the pending source view.
+Write-side integrity floors use the final references. Confidentiality consumed
+by the transaction still applies to inline values that replace a reference.
 
 A pending source view excludes stored link entries that the source's final
 writes replace or rederive, including descendants of a repeated reference with

@@ -2531,31 +2531,39 @@ const linkWritesByTarget = (
   return result;
 };
 
-/** Selects each slot's last recorded link when the slot still holds its source. */
+/** Selects each slot's last recorded link matching the source it still holds. */
 const currentLinkWritesByTarget = function* (
   tx: IExtendedStorageTransaction,
   linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
 ): Generator<void, Map<string, LinkWritePolicyInput[]>> {
   const result = new Map<string, LinkWritePolicyInput[]>();
   for (const [key, inputs] of linkWrites) {
-    const latest = new Map<string, LinkWritePolicyInput>();
-    for (const input of inputs) latest.set(pathKey(input.target.path), input);
+    const slots = new Map<string, LinkWritePolicyInput[]>();
+    for (const input of inputs) {
+      const path = pathKey(input.target.path);
+      const slot = slots.get(path);
+      if (slot === undefined) slots.set(path, [input]);
+      else slot.push(input);
+    }
     const current: LinkWritePolicyInput[] = [];
-    for (const input of latest.values()) {
+    for (const slot of slots.values()) {
       yield;
+      const first = slot[0];
       const target = {
-        ...input.target,
-        id: input.target.id as URI,
-        path: [...input.target.path],
+        ...first.target,
+        id: first.target.id as URI,
+        path: [...first.target.path],
       };
       const final = parseLink(
         tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META }),
         target,
       );
-      if (
-        final !== undefined && targetKey(final) === targetKey(input.source) &&
+      if (final === undefined) continue;
+      const input = slot.findLast((input) =>
+        targetKey(final) === targetKey(input.source) &&
         arraysEqual(final.path, input.source.path)
-      ) current.push(input);
+      );
+      if (input !== undefined) current.push(input);
     }
     result.set(key, current);
   }
@@ -7612,19 +7620,23 @@ const derivePersistedLinkLabel = (
   const pendingCover =
     pendingSourceView?.entries.some((entry) => entry.path.length === 0) ??
       false;
-  const projectionMetadata = sourceMetadata !== undefined && pendingCover
-    ? {
-      ...sourceMetadata,
-      labelMap: {
-        ...sourceMetadata.labelMap,
-        entries: sourceMetadata.labelMap.entries.map((entry) =>
-          isPrefix(entry.path, sourcePath)
-            ? { ...entry, label: withoutPrincipalClaims(entry.label) }
-            : entry
-        ),
-      },
+  let projectionMetadata = sourceMetadata;
+  if (sourceMetadata !== undefined && pendingCover) {
+    let changed = false;
+    const entries = sourceMetadata.labelMap.entries.map((entry) => {
+      if (!isPrefix(entry.path, sourcePath)) return entry;
+      const label = withoutPrincipalClaims(entry.label);
+      if (label === entry.label) return entry;
+      changed = true;
+      return { ...entry, label };
+    });
+    if (changed) {
+      projectionMetadata = {
+        ...sourceMetadata,
+        labelMap: { ...sourceMetadata.labelMap, entries },
+      };
     }
-    : sourceMetadata;
+  }
   const storedSource = metadataResolver.projection(
     projectionMetadata,
     input.source.path,

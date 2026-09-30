@@ -183,6 +183,100 @@ describe("staged-reference-replacement", () => {
   }
 
   for (const order of ["bottom-up", "top-down"] as const) {
+    it(`preserves the last matching input when a raw write restores a reference in ${order} order`, async () => {
+      const tx = runtime.edit();
+      const wrapper = runtime.getCell(space, "restored-wrapper", {
+        type: "object",
+        ifc: { integrity: ["wrapper-proof"] },
+      }, tx);
+      const holder = runtime.getCell(space, "holder", {
+        type: "object",
+        ifc: { integrity: ["holder-proof"] },
+      }, tx);
+      const source = runtime.getCell(space, "endorsed", undefined, tx);
+      const linkWithView = (confidentiality: string) =>
+        linkRefFrom<CfcCellLinkRefPayload>({
+          ...linkRefPayload(source.getAsLink()),
+          cfcLabelView: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: [confidentiality] },
+            }],
+          },
+        });
+      const restored = linkWithView("current-view");
+      const stages = [
+        () => {
+          wrapper.set({ slot: linkWithView("superseded-view") });
+          wrapper.set({ slot: restored });
+          wrapper.set({
+            slot: runtime.getCell(space, "labeled-replacement", undefined, tx),
+          });
+          wrapper.setRaw({ slot: restored });
+          recordReferencedArgumentFields(
+            tx,
+            wrapper.getAsNormalizedFullLink(),
+            [
+              "slot",
+            ],
+          );
+        },
+        () => {
+          holder.set({ argument: wrapper.key("slot") });
+          recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
+            "argument",
+          ]);
+        },
+      ];
+      for (
+        const stage of order === "bottom-up" ? stages : stages.toReversed()
+      ) {
+        stage();
+      }
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(holder.withTx(runtime.readTx()).key("argument").key("text").get())
+        .toBe("endorsed");
+      for (const cell of [wrapper, holder]) {
+        const entries = readStoredCfcMetadata(
+          runtime.readTx(),
+          cell.getAsNormalizedFullLink(),
+        )?.labelMap.entries ?? [];
+        const integrity = entries.flatMap((entry) =>
+          entry.label.integrity ?? []
+        );
+        const confidentiality = entries.flatMap((entry) =>
+          entry.label.confidentiality ?? []
+        );
+        expect(integrity).toContain("old-proof");
+        expect(integrity).not.toContain("new-proof");
+        expect(confidentiality).toContain("old-secret");
+        expect(confidentiality).toContain("current-view");
+        expect(confidentiality).not.toContain("superseded-view");
+        expect(confidentiality).not.toContain("new-secret");
+      }
+      const consume = runtime.edit();
+      const sink = runtime.getCell(space, "sink", {
+        type: "object",
+        properties: {
+          slot: { type: "object", ifc: { requiredIntegrity: ["old-proof"] } },
+        },
+      }, consume);
+      sink.set({
+        slot: holder.withTx(consume).key("argument").asSchema({
+          type: "object",
+        }),
+      });
+      recordReferencedArgumentFields(consume, sink.getAsNormalizedFullLink(), [
+        "slot",
+      ]);
+      expect((await consume.commit()).error).toBeUndefined();
+      expect(sink.withTx(runtime.readTx()).key("slot").key("text").get())
+        .toBe("endorsed");
+    });
+  }
+
+  for (const order of ["bottom-up", "top-down"] as const) {
     it(`uses the final carried labels through a pending source in ${order} order`, async () => {
       const tx = runtime.edit();
       const wrapper = runtime.getCell(space, "wrapper", {
