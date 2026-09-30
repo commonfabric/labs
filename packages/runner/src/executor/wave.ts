@@ -485,10 +485,13 @@ export interface WaveSpaceCommit {
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];
 
-  /** Owning contribution index per operation — home batch only. The sink
-   * returns the failed operation for a proven-no-commit row-label refusal,
-   * letting the accumulator identify the one event whose deterministic write
-   * was refused without terminalizing unrelated events in the same wave. */
+  /**
+   * Owning contribution index per operation — home batch only. The sink
+   * returns the failed operation for a proven-no-commit row-label refusal or
+   * ACL-document refusal, letting the accumulator identify the one event
+   * whose deterministic write was refused without terminalizing unrelated
+   * events in the same wave.
+   */
   operationOwners?: number[];
 
   annotations: WaveWriteAnnotation[];
@@ -1405,9 +1408,22 @@ export class WaveAccumulator
    * have gone consequenced-clean in the committed wave; the serving
    * loop's pre-commit seal-chain barrier is what keeps this arm
    * unreachable in production.
+   *
+   * `error` is the seal's refusal, when the caller has it. A refusal of a
+   * write to a space's ACL document by a run delivering a durable entry
+   * (one whose context carries its `streamEntry`) notes nothing: the refusal
+   * is deterministic, the scheduler seals it as that entry's error
+   * consequence, and a replay would reach the identical refusal. The same
+   * refusal of an in-process run, which has no entry to carry the error,
+   * requeues its event like any other failed seal.
    */
-  noteSealFailure(context: WaveRunContext | undefined): void {
+  noteSealFailure(context: WaveRunContext | undefined, error?: unknown): void {
     if (context?.kind !== "event-handler" || context.eventId === undefined) {
+      return;
+    }
+    if (
+      isAclDocumentWriteRefusal(error) && context.streamEntry !== undefined
+    ) {
       return;
     }
     if (this.#closed) {

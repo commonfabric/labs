@@ -65,6 +65,7 @@ import type { Signer } from "@commonfabric/memory/interface";
 import { Runtime } from "../src/runtime.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type {
+  IExtendedStorageTransaction,
   ITransactionSealSink,
   MemorySpace,
   Result,
@@ -597,6 +598,90 @@ describe("stage D seal-into-wave", () => {
       expect(Engine.serverSeq(foreignEngine)).toBe(1);
       expect(Engine.read(foreignEngine, { id: `of:${foreign}` })?.value)
         .toEqual({ "did:key:alice": "OWNER" });
+    });
+
+    describe("a seal refusal's effect on its event", () => {
+      // Each case seals a data write and then a write to the document for
+      // one event, noting the refused seal the way the serving loop's seal
+      // wrapper does, and commits the wave.
+
+      /**
+       * Seals both writes for event `eventId`, with `streamEntry` on both
+       * run contexts when it is given, and commits the wave.
+       */
+      const commitDataAndRefusedWrite = async (
+        eventId: string,
+        streamEntry?: { sidecarId: string; index: number; seq: number },
+      ) => {
+        const lease = liveLease();
+        const wave = newWave({ lease });
+        runtime.installSealDestination({
+          seal: async (tx) => {
+            const result = await wave.seal(tx);
+            if (result.error !== undefined) {
+              wave.noteSealFailure(waveRunContextOf(tx), result.error);
+            }
+            return result;
+          },
+        });
+        const stamp = (tx: IExtendedStorageTransaction, actionId: string) =>
+          stampWaveRunContext(tx, {
+            actionId,
+            kind: "event-handler",
+            eventId,
+            ...(streamEntry === undefined ? {} : { streamEntry }),
+          });
+        const data = runtime.getCell<{ value: number }>(
+          space,
+          `acl-document-requeue-data:${eventId}`,
+          undefined,
+        );
+        const dataTx = runtime.edit();
+        stamp(dataTx, `acl-document-requeue-data:${eventId}`);
+        data.withTx(dataTx).set({ value: 1 });
+        expect((await dataTx.commit()).error).toBeUndefined();
+        const aclTx = runtime.edit();
+        stamp(aclTx, `acl-document-requeue-acl:${eventId}`);
+        aclTx.writeOrThrow(
+          { space, id: `of:${space}`, type: "application/json", path: [] },
+          { value: { "did:key:mallory": "OWNER" } },
+        );
+        const aclCommitted = await aclTx.commit();
+        runtime.clearSealDestination();
+        const outcome = await wave.commitWave(newSink());
+        await wave.settled();
+        return {
+          outcome,
+          aclCommitted,
+          dataId: data.getAsNormalizedFullLink().id,
+        };
+      };
+
+      it("requeues an in-process run's event, withdrawing its other writes", async () => {
+        const { outcome, aclCommitted, dataId } =
+          await commitDataAndRefusedWrite("acl-document-in-process");
+
+        expect(isAclDocumentWriteRefusal(aclCommitted.error)).toBe(true);
+        expect(outcome.requeuedEventIds).toEqual(["acl-document-in-process"]);
+        expect(outcome.committedEventIds).toEqual([]);
+        expect(Engine.selectDocHead(engine, { id: dataId, scopeKey: "space" }))
+          .toBe(0);
+      });
+
+      it("commits a durable entry's other writes, requeueing nothing", async () => {
+        const { outcome, aclCommitted, dataId } =
+          await commitDataAndRefusedWrite("acl-document-durable", {
+            sidecarId: "of:stream-events:acl-document-durable",
+            index: 0,
+            seq: 1,
+          });
+
+        expect(isAclDocumentWriteRefusal(aclCommitted.error)).toBe(true);
+        expect(outcome.requeuedEventIds).toEqual([]);
+        expect(outcome.committedEventIds).toEqual(["acl-document-durable"]);
+        expect(Engine.selectDocHead(engine, { id: dataId, scopeKey: "space" }))
+          .toBeGreaterThan(0);
+      });
     });
 
     it("attributes a home batch's refusal to the failed operation's one served event", async () => {

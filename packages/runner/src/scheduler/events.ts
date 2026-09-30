@@ -2289,10 +2289,14 @@ export async function dispatchQueuedEvent(state: {
           });
         };
         // The seal's refusal of a write to the space's ACL document is
-        // deterministic in the same way, so it is sealed as the served event's
-        // error consequence too; the serving loop requeues nothing for it.
+        // deterministic in the same way, so a run delivering a durable entry
+        // seals it as that entry's error consequence too, and the wave
+        // requeues nothing for it (`WaveAccumulator.noteSealFailure()`).
         const sealAclDocumentRefusalConsequence = (): void => {
-          if (served === undefined || !isAclDocumentWriteRefusal(error)) {
+          if (
+            served?.streamEntry === undefined ||
+            !isAclDocumentWriteRefusal(error)
+          ) {
             return;
           }
           reportServedEventFailure(served, {
