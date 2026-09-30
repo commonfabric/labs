@@ -164,7 +164,10 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 
   `addTopic` wires the index into each topic it creates. A piece created before
   the index is rewired to it as a one-time link-bind; until then it reads the
-  raw topics list — correct, at the cost the index exists to remove.
+  raw topics list, at the cost the index exists to remove. A raw list holds the
+  topics themselves rather than rows standing for them, so such a topic
+  completes mentions by title alone: it offers no `#<n>` query and shows no
+  number on a pill, whatever number each topic publishes.
 - **A declared schema is the only thing that bounds a read.** The transformer
   shrinks a derivation's input schema to the paths it can see the body reach,
   and gives up when it cannot: `topics.get().length` declares `items: unknown`

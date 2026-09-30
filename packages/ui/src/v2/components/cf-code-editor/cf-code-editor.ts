@@ -147,11 +147,25 @@ function generateNoteId(): string {
 }
 
 /**
+ * Whether a universe entry is a row standing for a piece — it carries a
+ * `piece` property — rather than the piece itself.
+ */
+function isIndexRow(entry: Mentionable | null | undefined): boolean {
+  return entry != null && Object.hasOwn(entry, "piece");
+}
+
+/**
  * The name a universe row's own collection calls the member by, or the empty
  * string. A row without one is a row no `#42` query can match, which is every
  * row of a universe whose collection names nothing.
+ *
+ * Only a row has one. An entry that is the piece itself has none, whatever
+ * `shortName` it publishes: what a piece publishes is the name its creating
+ * collection gave it, not what this universe calls it
+ * (`docs/specs/collection-naming.md`, "The name a member publishes").
  */
 function shortNameOf(entry: Mentionable | undefined): string {
+  if (!isIndexRow(entry)) return "";
   const name = entry?.shortName;
   return typeof name === "string" ? name : "";
 }
@@ -1552,8 +1566,9 @@ export class CFCodeEditor extends BaseElement {
    * surfaces withhold it rather than mint an id naming the row.
    */
   private _isIndexRow(index: number): boolean {
-    const item = ((this.mentionable?.get() ?? []) as MentionableArray)[index];
-    return item != null && Object.hasOwn(item, "piece");
+    return isIndexRow(
+      ((this.mentionable?.get() ?? []) as MentionableArray)[index],
+    );
   }
 
   /**

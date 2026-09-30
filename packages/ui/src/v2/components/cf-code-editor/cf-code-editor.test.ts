@@ -863,20 +863,20 @@ describe("CFCodeEditor short-name completion", () => {
       .toEqual([]);
   });
 
-  it("offers a piece the universe lists directly by the name it publishes", async () => {
-    // The control for the case below, and the state it pins: where the
-    // universe is the pieces themselves, the name a piece publishes is the one
-    // this query offers.
+  it("offers no piece the universe lists directly by the name it publishes", async () => {
+    // The rows beside it are what make the piece's absence mean something:
+    // the query runs and offers them, and passes over the piece whose
+    // published name the typed digits begin.
     const { source, view } = await editorOver(
       "see #4",
       undefined,
-      direct("42"),
+      [...direct("42"), ...UNIVERSE],
     );
     expect(
       source(new CompletionContext(view.state, 6, true))?.options.map((
         option,
-      ) => option.label),
-    ).toEqual(["#42"]);
+      ) => option.detail),
+    ).toEqual(["Second item", "Third item"]);
   });
 
   it("offers no piece the universe lists directly where it publishes no name", async () => {
@@ -1088,6 +1088,18 @@ describe("CFCodeEditor short-name completion", () => {
     expect(element.getFilteredMentionable("43")).toHaveLength(1);
     expect(element.getFilteredMentionable("9")).toEqual([]);
   });
+
+  it("offers no piece the universe lists directly by its published name from the backlink query", async () => {
+    // Index 2 matches by its row's name and index 4 by its display name; the
+    // piece at index 0 matches by neither.
+
+    const { element } = await editorOver("", undefined, [
+      { [NAME]: "Apples", title: "Apples", shortName: "42" },
+      ...UNIVERSE,
+    ]);
+    expect(element.getFilteredMentionable("42").map(([, index]) => index))
+      .toEqual([2, 4]);
+  });
 });
 
 describe("CFCodeEditor mention short names", () => {
@@ -1298,27 +1310,35 @@ describe("CFCodeEditor mention short names", () => {
 
   describe("a universe that lists the pieces themselves", () => {
     // What an editor reads before its collection's derived universe is wired
-    // onto it. An entry carries no `piece`, so the entry IS the piece, and the
-    // name a pill can show is the one that piece publishes.
+    // onto it. An entry carries no `piece`, so the entry IS the piece, and
+    // what it publishes is its creating collection's name rather than this
+    // universe's, so a pill shows none. A row for the other mention sits
+    // beside it, and one publication decides both names: its name arriving is
+    // what says this absence was decided rather than not yet reached.
 
     /**
      * The names announced over a universe holding one piece, which publishes
-     * `shortName` when it is given one, and is the destination of the
-     * document's one mention.
+     * `shortName` when it is given one and is the destination of the
+     * document's first mention, and a row standing for the second mention's
+     * destination.
      */
     async function namesUnderDirect(shortName?: string) {
       const { element, view } = editorOver(
-        `See [Second item][${KEY}].`,
+        `See [Second item][${KEY}] and [Third item][${OTHER_KEY}].`,
         {
           [KEY]: destination("of:universe", "Second item", shortName ?? "", {
             path: ["0"],
           }),
+          [OTHER_KEY]: destination("of:item-43", "Third item", "43"),
         },
-        [{
-          [NAME]: "Second item",
-          title: "Second item",
-          ...(shortName === undefined ? {} : { shortName }),
-        }],
+        [
+          {
+            [NAME]: "Second item",
+            title: "Second item",
+            ...(shortName === undefined ? {} : { shortName }),
+          },
+          row("of:item-43", "Third item", "43"),
+        ],
       );
 
       await element._resolvePieceIds();
@@ -1328,12 +1348,12 @@ describe("CFCodeEditor mention short names", () => {
       return refShortNames(view.state);
     }
 
-    it("announces the name the listed piece publishes", async () => {
-      expect(await namesUnderDirect("42")).toEqual({ [KEY]: "42" });
+    it("announces no name for the listed piece, whatever it publishes", async () => {
+      expect(await namesUnderDirect("42")).toEqual({ [OTHER_KEY]: "43" });
     });
 
     it("announces no name where the listed piece publishes none", async () => {
-      expect(await namesUnderDirect()).toEqual({});
+      expect(await namesUnderDirect()).toEqual({ [OTHER_KEY]: "43" });
     });
   });
 
