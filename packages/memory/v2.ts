@@ -1232,15 +1232,6 @@ export type MemoryProtocolFlags = {
    * false, and a client then signs each `session.open`.
    */
   connectionAuth?: boolean;
-
-  /**
-   * Server capability: `space.genesis` installs a fresh space's ACL as an
-   * authenticated principal of the connection, without a session.
-   * Build-inherent wherever `connectionAuth` is advertised. Absent parses to
-   * false, and a client then writes the genesis ACL through a session opened
-   * as the space identity.
-   */
-  spaceGenesis?: boolean;
 };
 
 /**
@@ -1271,7 +1262,6 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
-  spaceGenesis?: boolean;
 };
 
 export type HelloMessage = {
@@ -2355,7 +2345,6 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
-  spaceGenesis: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2533,11 +2522,6 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
-  const spaceGenesis = value.spaceGenesis;
-  if (spaceGenesis !== undefined && typeof spaceGenesis !== "boolean") {
-    return null;
-  }
-
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2580,9 +2564,6 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
-    // Absent parses to false: a client then writes a genesis ACL through a
-    // session opened as the space identity.
-    spaceGenesis: spaceGenesis === true,
   };
 };
 
@@ -2615,7 +2596,6 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
-  spaceGenesis: flags.spaceGenesis,
 });
 
 /**

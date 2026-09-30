@@ -4,9 +4,8 @@ Status: the direct setup of section 3 is implemented behind the
 `sharedMemoryConnection` experimental flag, which is off by default
 ([EXPERIMENTAL_OPTIONS.md](../../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)).
 The wire behavior it shipped is specified in [04-protocol.md](./04-protocol.md);
-where the two differ, that chapter describes the system. `space.genesis`
-(section 4), the router (section 5), and attestation (section 6) are proposed
-and not implemented.
+where the two differ, that chapter describes the system. The router (section
+5) and attestation (section 6) are proposed and not implemented.
 
 This document describes how a client reaches every space it uses over one
 memory connection per toolshed instead of one per space, and how routers that
@@ -164,44 +163,13 @@ client can then open sessions as either principal, and releases one it no
 longer needs with `connection.release`. This is how the ACL bootstrap of a
 fresh named space acts as the space identity.
 
-Opening a session is heavy for that one case: writing one genesis ACL needs a
-session, a point read, a single commit, and a close, and the runner keeps it
-apart from the replica session because both allocate `localSeq` from 1. A
-one-shot request would cover it; this is proposed and not implemented:
-
-```typescript
-// Shown at module scope.
-type SpaceId = string;
-type DID = string;
-
-interface SpaceGenesisRequest {
-  type: "space.genesis";
-  requestId: string;
-  space: SpaceId;
-  /** An authenticated principal of this connection. */
-  principal: DID;
-  /** The whole ACL document to install. */
-  acl: Record<string, "READ" | "WRITE" | "OWNER">;
-  /** The custom root intent, when the space reserves one. */
-  genesisRoot?: unknown;
-}
-
-interface SpaceGenesisResult {
-  serverSeq: number;
-  /** False when an ACL already stood; the caller then reads it. */
-  created: boolean;
-}
-```
-
-The server would require `principal` to be authenticated on the connection
-and to be the space DID or a configured service DID, and apply the genesis
-commit under the admission rules of INV-12 and INV-13 in
-[09-invariants.md](./09-invariants.md), with no open session for the space.
-When an ACL already stands the result says so and nothing is written; the
-caller reads the standing ACL through its own session. The bootstrap would
-become: open the user session, read the ACL, and if it was never created,
-authenticate the space identity, send `space.genesis`, and release the space
-identity. The `spaceGenesis` capability flag is reserved for it.
+The genesis of a fresh space is worth rethinking on its own. What the space
+identity is for is assigning the space's first owner, and the key should be
+unusable once it has: nothing in the protocol today burns it, so a client
+that can sign as the space identity can keep opening sessions as the space's
+implicit owner. A design that guarantees the burn — a one-shot genesis whose
+acceptance retires the key, or a space identity that never exists as a
+long-lived key at all — belongs to a document of its own.
 
 A general "act as another principal" field on `transact` is not proposed.
 Session state — `localSeq`, pending reads, and the principal that user-scoped
@@ -419,12 +387,11 @@ by the client id on a router link, and never by a session.
 | 1 | Server: `connection.auth`, `connection.challenge`, `connection.release`, unsigned `session.open` naming a principal, per-space turns, `session.close`, presence membership per session | done |
 | 2 | Client: authentication per key, concurrent mounts, parallel restore, `session.close` on release | done |
 | 3 | Runner: one pooled client per host, session release in place of client close, behind `sharedMemoryConnection` | done |
-| 4 | `space.genesis` and its use in the ACL bootstrap | proposed |
-| 5 | The router link, forwarded statements, `connection/challenge`, the space field in the binary envelope, `session/detached` | proposed |
-| 6 | Mode A router, link tickets, and space directory | proposed |
+| 4 | The router link, forwarded statements, `connection/challenge`, the space field in the binary envelope, `session/detached` | proposed |
+| 5 | Mode A router, link tickets, and space directory | proposed |
 
 The flag stays off in a deployment that routes a connection by the space its
-address names, until phase 6 gives it a router.
+address names, until phase 5 gives it a router.
 
 ## 8. Open questions
 

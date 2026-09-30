@@ -170,6 +170,47 @@ describe("RemoteSessionFactory connection sharing", () => {
       expect(dialed).toHaveLength(1);
     });
 
+    it("closes while a dial is still opening, and refuses a create whose signal aborts meanwhile", async () => {
+      // A socket that never opens: the dial answers nobody until the
+      // transport closes under it.
+      const server = startServer({ connectionAuth: true });
+      const dialed: URL[] = [];
+      const factory = new RemoteSessionFactory(
+        createStorageAddressResolver(server.url),
+        user,
+        (address) => {
+          dialed.push(address);
+          const socket = createNativeMemorySocket(address);
+          const silent: typeof socket.socket = {
+            get readyState() {
+              return socket.socket.readyState;
+            },
+            addEventListener(type, listener, options) {
+              if (type !== "open") {
+                socket.socket.addEventListener(type, listener, options);
+              }
+            },
+            close: (code, reason) => socket.socket.close(code, reason),
+          };
+          return { socket: silent, send: socket.send };
+        },
+      );
+      factory.setSharedConnections(true);
+      factories.push(factory);
+      const controller = new AbortController();
+      const waiting = factory.create(SPACES[0], user, {}, controller.signal);
+      const opening = factory.create(SPACES[1]);
+      controller.abort(new Error("route replaced"));
+      await expect(waiting).rejects.toThrow("route replaced");
+      await factory.close();
+      // What the socket reports when closed under it is the transport's;
+      // that the create settles at all is the claim.
+      expect(await opening.then(() => "opened", () => "refused")).toBe(
+        "refused",
+      );
+      expect(dialed).toHaveLength(1);
+    });
+
     it("dials again after `close()`", async () => {
       const server = startServer({ connectionAuth: true });
       const { factory, dialed } = harnessFor(server, { shared: true });

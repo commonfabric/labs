@@ -3,7 +3,12 @@ import { describe, it } from "@std/testing/bdd";
 
 import { defer } from "@commonfabric/utils/defer";
 
-import { connect, type Transport } from "../v2/client.ts";
+import {
+  connect,
+  type SessionAuth,
+  type SessionOpenAuthContext,
+  type Transport,
+} from "../v2/client.ts";
 import { verifyConnectionAuthorization } from "../v2/connection-auth.ts";
 import { Server } from "../v2/server.ts";
 import { verifySessionOpenAuthorization } from "../v2/session-open-auth.ts";
@@ -313,6 +318,88 @@ describe("Client connection authentication", () => {
         expect((await second.queryGraph({ roots: [] })).serverSeq).toBe(0);
       } finally {
         helloGate.resolve();
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("mounts a session whose `connection.auth` was being signed when the connection dropped", async () => {
+      // The signature is over a challenge of the connection that is gone,
+      // so the mount signs again on the new one, after the restores.
+      const server = createServer("signing-across-drop");
+      const transport = new ServerTransport(server);
+      const client = await connect({ transport });
+      const signing = defer<void>();
+      const held = principalOf(spaceIdentity);
+      const slowSigner = {
+        ...held,
+        authorizeConnection: async (context: SessionOpenAuthContext) => {
+          await signing.promise;
+          return await held.authorizeConnection(context);
+        },
+      };
+      try {
+        const first = await client.mount(SPACES[0], {}, principalOf(alice));
+        const mounting = client.mount(SPACES[1], {}, slowSigner);
+        transport.clearSent();
+        transport.drop();
+        signing.resolve();
+        const second = await mounting;
+        await first.whenRestored();
+        expect(transport.sentTypes.slice(0, 2)).toEqual([
+          "hello",
+          "connection.auth",
+        ]);
+        expect(
+          transport.sent.filter((message) => message.type === "connection.auth")
+            .map((
+              message,
+            ) => (message.invocation as { iss: string; challenge: string })),
+        ).toEqual([
+          { iss: alice.did(), challenge: expect.any(String) },
+          { iss: spaceIdentity.did(), challenge: expect.any(String) },
+        ].map(expect.objectContaining));
+        expect((await second.queryGraph({ roots: [] })).serverSeq).toBe(0);
+      } finally {
+        signing.resolve();
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("mounts a session whose signed `session.open` was being signed when the connection dropped", async () => {
+      // Against a server without `connectionAuth`, the restores' signed
+      // opens are not held behind the mount's, which signs again after them.
+      const server = createServer("signed-open-across-drop", {
+        connectionAuth: false,
+      });
+      const transport = new ServerTransport(server);
+      const client = await connect({ transport });
+      const signing = defer<void>();
+      const held = principalOf(alice);
+      const slowSigner: SessionAuth = {
+        ...held,
+        authorizeSessionOpen: async (space, session, context) => {
+          await signing.promise;
+          return await held.authorizeSessionOpen(space, session, context);
+        },
+      };
+      try {
+        const first = await client.mount(SPACES[0], {}, held);
+        const mounting = client.mount(SPACES[1], {}, slowSigner);
+        transport.clearSent();
+        transport.drop();
+        signing.resolve();
+        const second = await mounting;
+        await first.whenRestored();
+        expect(transport.sentTypes).toEqual([
+          "hello",
+          "session.open",
+          "session.open",
+        ]);
+        expect((await second.queryGraph({ roots: [] })).serverSeq).toBe(0);
+      } finally {
+        signing.resolve();
         await client.close();
         await server.close();
       }

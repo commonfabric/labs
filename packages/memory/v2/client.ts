@@ -77,6 +77,22 @@ import { type ArmedTurn, armTurn } from "./turn.ts";
  */
 const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
+/**
+ * Returned by `Client.#authenticate()` and a signed open's turn when the
+ * connection they signed for is gone: the caller waits for the reconnect and
+ * signs again.
+ */
+const STALE: unique symbol = Symbol("stale connection");
+
+/** Thrown inside the shared authentication to settle it as `STALE`. */
+const STALE_AUTHENTICATION: unique symbol = Symbol("stale authentication");
+
+/** The error a reopen fails with when the connection drops under it. */
+const connectionLostWhileRestoring = (): Error =>
+  toConnectionError(
+    new Error("memory connection lost while restoring the session"),
+  );
+
 const logger = getLogger("memory.v2.client", {
   enabled: true,
   level: "error",
@@ -334,11 +350,11 @@ export class Client {
   #serverFlags: MemoryProtocolFlags | null = null;
 
   /**
-   * Per key, the `connection.auth` it made on the current connection.
-   * Emptied by every `hello`, since a new connection has authenticated
-   * nobody.
+   * Per key, the `connection.auth` it made on the current connection,
+   * settling with the principal the server admitted it as. Emptied by every
+   * `hello`, since a new connection has authenticated nobody.
    */
-  #authenticated = new Map<string, Promise<void>>();
+  #authenticated = new Map<string, Promise<string>>();
 
   /**
    * The keys that have signed the challenge `#sessionOpenAuthContext` holds.
@@ -353,6 +369,13 @@ export class Client {
    * and receives the next, so they are issued one at a time.
    */
   #signedOpens: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Counts the connections this client has opened. A signature made under
+   * one count and sent under another is over a challenge of a connection
+   * that is gone.
+   */
+  #connectionEpoch = 0;
 
   #reconnecting: Promise<void> | null = null;
   #cancelReconnectDelay: (() => void) | null = null;
@@ -513,9 +536,7 @@ export class Client {
     options: { whileConnected?: boolean } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
-      throw toConnectionError(
-        new Error("memory connection lost while restoring the session"),
-      );
+      throw connectionLostWhileRestoring();
     }
     await this.#ensureConnected();
     // `ensureConnected()` is async even when the transport is already live, so
@@ -631,41 +652,75 @@ export class Client {
         "memory server does not support a custom root intent",
       );
     }
-    if (
-      typeof auth === "object" && this.serverFlags?.connectionAuth === true
-    ) {
-      await this.#authenticate(auth, whileConnected);
-      const result = await this.request<SessionOpenResult>({
-        type: "session.open",
-        requestId: this.#nextRequestId(),
-        space,
-        principal: auth.did,
-        session,
-        ...(holdings !== undefined ? { holdings } : {}),
-      }, { whileConnected });
-      this.#updateSessionOpenAuthContext(result.sessionOpen);
+    // A drop while an open is being signed leaves it with a challenge of
+    // the connection that is gone. A reopen fails then, for its reconnect
+    // to retry; a mount waits for the reconnect and signs again.
+    for (;;) {
+      if (
+        typeof auth === "object" && this.serverFlags?.connectionAuth === true
+      ) {
+        const principal = await this.#authenticate(auth, whileConnected);
+        if (principal === STALE) {
+          await this.#ensureConnected();
+          continue;
+        }
+        const result = await this.request<SessionOpenResult>({
+          type: "session.open",
+          requestId: this.#nextRequestId(),
+          space,
+          principal,
+          session,
+          ...(holdings !== undefined ? { holdings } : {}),
+        }, { whileConnected });
+        this.#updateSessionOpenAuthContext(result.sessionOpen);
+        return result;
+      }
+      const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
+      const opened = this.#signedOpens.then(
+        async (): Promise<SessionOpenResult | typeof STALE> => {
+          if (!this.#connected) {
+            if (whileConnected) throw connectionLostWhileRestoring();
+            return STALE;
+          }
+          const epoch = this.#connectionEpoch;
+          const signed = await sign?.(
+            space,
+            session,
+            this.sessionOpenAuthContext(),
+          );
+          if (this.#staleSince(epoch)) {
+            if (whileConnected) throw connectionLostWhileRestoring();
+            return STALE;
+          }
+          const result = await this.request<SessionOpenResult>({
+            type: "session.open",
+            requestId: this.#nextRequestId(),
+            space,
+            session,
+            ...(signed ? signed : {}),
+            ...(holdings !== undefined ? { holdings } : {}),
+          }, { whileConnected });
+          this.#updateSessionOpenAuthContext(result.sessionOpen);
+          return result;
+        },
+      );
+      this.#signedOpens = opened.catch(() => undefined);
+      const result = await opened;
+      if (result === STALE) {
+        await this.#ensureConnected();
+        continue;
+      }
       return result;
     }
-    const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
-    const opened = this.#signedOpens.then(async () => {
-      const signed = await sign?.(
-        space,
-        session,
-        this.sessionOpenAuthContext(),
-      );
-      const result = await this.request<SessionOpenResult>({
-        type: "session.open",
-        requestId: this.#nextRequestId(),
-        space,
-        session,
-        ...(signed ? signed : {}),
-        ...(holdings !== undefined ? { holdings } : {}),
-      }, { whileConnected });
-      this.#updateSessionOpenAuthContext(result.sessionOpen);
-      return result;
-    });
-    this.#signedOpens = opened.catch(() => undefined);
-    return await opened;
+  }
+
+  /**
+   * Whether a signature begun under connection `epoch` is over a challenge
+   * of a connection that is gone: the connection dropped, or a new one
+   * replaced it, while the signing ran.
+   */
+  #staleSince(epoch: number): boolean {
+    return !this.#connected || this.#connectionEpoch !== epoch;
   }
 
   isConnected(): boolean {
@@ -772,11 +827,17 @@ export class Client {
   async #authenticate(
     principal: SessionPrincipal,
     whileConnected: boolean,
-  ): Promise<void> {
+  ): Promise<string | typeof STALE> {
     const existing = this.#authenticated.get(principal.did);
     if (existing !== undefined) {
       return await existing;
     }
+    // A connection that is down holds the challenge of the one that is gone.
+    if (!this.#connected) {
+      if (whileConnected) throw connectionLostWhileRestoring();
+      return STALE;
+    }
+    const epoch = this.#connectionEpoch;
     const held = this.sessionOpenAuthContext();
     // The server refuses a challenge that has expired, and one this key has
     // already signed, so either case takes a challenge of its own.
@@ -796,19 +857,28 @@ export class Client {
         }
         : held;
       const signed = await principal.authorizeConnection(context);
-      await this.request<ConnectionAuthResult>({
+      // A drop while the key signed leaves the signature over a challenge
+      // of the connection that is gone; `hello` has emptied the map, so the
+      // next caller starts over on the new connection.
+      if (this.#staleSince(epoch)) {
+        if (whileConnected) throw connectionLostWhileRestoring();
+        throw STALE_AUTHENTICATION;
+      }
+      const result = await this.request<ConnectionAuthResult>({
         type: "connection.auth",
         requestId: this.#nextRequestId(),
         ...signed,
       }, { whileConnected });
+      return result.principal;
     })();
     this.#authenticated.set(principal.did, authenticated);
     try {
-      await authenticated;
+      return await authenticated;
     } catch (error) {
       if (this.#authenticated.get(principal.did) === authenticated) {
         this.#authenticated.delete(principal.did);
       }
+      if (error === STALE_AUTHENTICATION) return STALE;
       throw error;
     }
   }
@@ -821,8 +891,13 @@ export class Client {
 
   async #hello(): Promise<void> {
     this.#transport.setMessageCompressionEnabled?.(false);
+    this.#connectionEpoch += 1;
     this.#authenticated.clear();
     this.#challengeSigners.clear();
+    // Signed opens waiting on the old connection's chain settle on their
+    // own, as stale, and the restores that follow this handshake must not
+    // wait behind them.
+    this.#signedOpens = Promise.resolve();
     const ack = Promise.withResolvers<void>();
     this.#helloPending = ack;
     const expectedFlags = getMemoryProtocolFlags();

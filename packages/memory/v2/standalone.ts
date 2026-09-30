@@ -235,7 +235,7 @@ export class StandaloneMemoryServer {
           return;
         }
         if (closed) return;
-        channel.receive(frame, async (payload) => {
+        channel.receive(frame, (payload) => {
           const control = parseMemoryCompressionControlMessage(payload);
           if (control && helloReceived) {
             const enabled = compressionNegotiated && control.enabled;
@@ -246,7 +246,11 @@ export class StandaloneMemoryServer {
             }));
             return;
           }
-          await connection.receive(payload);
+          // The connection takes the frame's place in its turn order as it
+          // is handed over, so the handling is not waited for: waiting would
+          // hold every later frame behind this one, whichever spaces they
+          // name.
+          connection.receive(payload).catch(failChannel);
           if (debugWrites) {
             logCommitOperations(connectionTag, payload);
           }

@@ -163,7 +163,6 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
-      spaceGenesis: false,
       syncSchemaTableV2: false,
     });
 
@@ -193,7 +192,6 @@ describe("memory v2 flags", () => {
       presenceV1: true,
       sessionClose: true,
       connectionAuth: true,
-      spaceGenesis: false,
       syncSchemaTableV2: true,
     });
 
@@ -252,7 +250,6 @@ describe("memory v2 flags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     ));
   });
@@ -333,7 +330,6 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
-      spaceGenesis: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -356,7 +352,6 @@ describe("parseMemoryProtocolFlags", () => {
       presenceV1: false,
       sessionClose: false,
       connectionAuth: false,
-      spaceGenesis: false,
     });
   });
 
@@ -386,7 +381,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -428,7 +422,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -464,7 +457,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -495,7 +487,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -534,7 +525,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -566,7 +556,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -595,7 +584,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });
@@ -611,7 +599,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       }),
       {
         genesisRoot: false,
@@ -634,7 +621,6 @@ describe("parseMemoryProtocolFlags", () => {
         presenceV1: false,
         sessionClose: false,
         connectionAuth: false,
-        spaceGenesis: false,
       },
     );
   });

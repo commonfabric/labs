@@ -535,6 +535,30 @@ export async function createSignedConnectionAuth(
   };
 }
 
+/** The error an aborted `signal` stands for. */
+const abortReason = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error
+    ? signal.reason
+    : new Error("memory replica route replaced");
+
+/**
+ * Settles as `work` settles, or rejects with the abort reason as soon as
+ * `signal` aborts, whichever comes first. `work` itself is not cancelled.
+ */
+const abortable = <T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> => {
+  if (signal === undefined) return work;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  const aborted = Promise.withResolvers<never>();
+  const abort = () => aborted.reject(abortReason(signal));
+  signal.addEventListener("abort", abort, { once: true });
+  return Promise.race([work, aborted.promise]).finally(() =>
+    signal.removeEventListener("abort", abort)
+  );
+};
+
 /** One session's share of a connection that holds several. */
 class SharedSessionConnection implements SessionConnection {
   #closed = false;
@@ -622,8 +646,12 @@ export class RemoteSessionFactory implements SessionFactory {
     const shared = [...this.#shared.values()];
     this.#shared.clear();
     await Promise.all(shared.map(async ({ transport, client }) => {
+      // The transport closes first: a dial still in progress ends with it,
+      // where waiting for the dial would wait for a peer that may never
+      // answer.
+      await transport.close().catch(() => {});
       const connected = await client.catch(() => undefined);
-      await (connected?.close() ?? transport.close()).catch(() => {});
+      await connected?.close().catch(() => {});
     }));
   }
 
@@ -664,13 +692,11 @@ export class RemoteSessionFactory implements SessionFactory {
     client: SessionConnection;
     session: MemoryClient.SpaceSession;
   }> {
-    const abortError = (): Error =>
-      signal?.reason instanceof Error
-        ? signal.reason
-        : new Error("memory replica route replaced");
-    if (signal?.aborted) throw abortError();
-    const client = await this.#sharedClient(this.#resolveAddress(space));
-    if (signal?.aborted) throw abortError();
+    if (signal?.aborted) throw abortReason(signal);
+    const client = await this.#sharedClient(
+      this.#resolveAddress(space),
+      signal,
+    );
     try {
       const session = await client.mount(space, mountOptions, {
         did: signer.did(),
@@ -689,29 +715,35 @@ export class RemoteSessionFactory implements SessionFactory {
         session,
       };
     } catch (error) {
-      throw signal?.aborted ? abortError() : error;
+      throw signal?.aborted ? abortReason(signal) : error;
     }
   }
 
   /**
    * Helper for `#createShared()`, which returns the connected client the
-   * sessions at `address` share.
+   * sessions at `address` share. An abort of `signal` while the dial is in
+   * progress stops this caller waiting for it; the dial itself goes on for
+   * the sessions that follow, and is closed only if it fails.
    */
-  async #sharedClient(address: URL): Promise<MemoryClient.Client> {
+  async #sharedClient(
+    address: URL,
+    signal?: AbortSignal,
+  ): Promise<MemoryClient.Client> {
     const key = address.href;
     const existing = this.#shared.get(key);
     if (existing !== undefined) {
-      const client = await existing.client.catch(() => undefined);
-      const state = client?.connectionState;
+      // A dial that fails fails every session waiting on it; a client that
+      // connected and has since failed or closed is replaced.
+      const client = await abortable(existing.client, signal);
+      const state = client.connectionState;
       if (state === "connected" || state === "reconnecting") {
-        return client!;
+        return client;
       }
-      // Whatever it was, it is one no session can be mounted on. Another
-      // caller may have replaced it while this one waited.
       if (this.#shared.get(key) === existing) {
         this.#shared.delete(key);
+        await client.close().catch(() => {});
       }
-      return await this.#sharedClient(address);
+      return await this.#sharedClient(address, signal);
     }
     const transport = new WebSocketTransport(
       toWebSocketAddress(address),
@@ -725,15 +757,14 @@ export class RemoteSessionFactory implements SessionFactory {
       client: MemoryClient.connect({ transport }),
     };
     this.#shared.set(key, dialed);
-    try {
-      return await dialed.client;
-    } catch (error) {
+    // A failed dial takes its entry with it, whoever is waiting on it.
+    dialed.client.catch(async () => {
       if (this.#shared.get(key) === dialed) {
         this.#shared.delete(key);
       }
       await transport.close().catch(() => {});
-      throw error;
-    }
+    });
+    return await abortable(dialed.client, signal);
   }
 
   /**

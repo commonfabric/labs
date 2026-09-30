@@ -292,10 +292,6 @@ its host verifies `connection.auth`; toolshed does under the
 absent: a client then signs each `session.open`, one at a time, since each
 uses the connection's current challenge and receives the next.
 
-`spaceGenesis` is reserved for the `space.genesis` request of
-[connection-multiplexing.md](./connection-multiplexing.md). No server
-advertises it.
-
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -485,7 +481,6 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
-    spaceGenesis?: boolean;
   };
 }
 
@@ -1720,14 +1715,10 @@ interface PresenceRecord {
 The connection parses each frame as it is handed to it. A `presence.*`
 message is handled at that point; every other message waits for its turn
 (section 4.11.2), so a presence message never waits for the commands already
-waiting there. What that buys depends on how frames reach the
-connection, and on the WebSocket hosts today it is bounded: both hand frames
-to the connection one at a time, each after the one before it has been
-handled, so a presence frame behind a large `transact` on the same socket
-shares that command's latency and reaches the room only once it is decided.
-That is an accepted cost of sharing the socket. A host that handed frames over
-as they arrived would let presence overtake the queue without any change to
-the protocol.
+waiting there. The WebSocket hosts hand each frame to the connection as soon
+as the frame before it has been handed over, without waiting for that one to
+be handled, so a presence frame behind a large `transact` on the same socket
+reaches the room while the command is still being decided.
 
 Within one membership the revision orders publications: the server relays only
 a record whose revision exceeds the last it accepted for that membership, and
