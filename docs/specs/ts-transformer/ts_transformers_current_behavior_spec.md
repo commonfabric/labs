@@ -1051,6 +1051,12 @@ report these through the same collector (deduplicated via §2.2's
   to the local schema use, since the unread node is a print with no source
   position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
   the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
+- **Error** `cfc-schema:recursion-limit` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a CFC alias chain reaches its recursion limit
+  and compilation refuses the schema: the unread remainder could
+  discard confidentiality or write policies. This includes recursive arguments
+  whose types settle but whose writer-query syntax keeps growing. See
+  `test/recursive-writer-schema.test.ts`.
 - **Error** `cfc-write-authorized-by:unread` (`schema-generator.ts`,
   `writer-binding-diagnostics.ts`) — a `WriteAuthorizedBy` or
   `TrustedActionWrite*` policy written through another alias whose writer

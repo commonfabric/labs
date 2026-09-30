@@ -42,6 +42,7 @@ import {
   typeParameterOfReference,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
+import { resolveWriterBinding } from "./typescript/writer-binding.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -57,7 +58,10 @@ import {
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
-import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
+import {
+  reportUnreadCfcRecursion,
+  reportUnreadTypes,
+} from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
@@ -1170,6 +1174,9 @@ export class SchemaGenerator {
   /** Identities of the types and declarations a binding key names. */
   #bindingIds: WeakMap<object, number> = new WeakMap();
 
+  /** Each immutable binding environment's query-origin key. */
+  #bindingQueryKeys: WeakMap<BoundTypeParameters, string> = new WeakMap();
+
   /** Counter for `#bindingIds`. */
   #bindingIdCounter: number = 0;
 
@@ -1550,8 +1557,8 @@ export class SchemaGenerator {
    * reading for labels alone, which names no definition
    * (`GenerationContext.labelsOnly`). An entry nested in itself
    * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
-   * end, as `Nest<T[]>` inside `Nest<T>` does; the innermost accepts any value
-   * and is reported as not fully read.
+   * end, as `Nest<T[]>` inside `Nest<T>` does. Reaching that bound is an error:
+   * the unread remainder could hold confidentiality or write policies.
    */
   public readAliasChain(
     type: ts.Type,
@@ -1571,12 +1578,11 @@ export class SchemaGenerator {
       : undefined;
     if (settled) return this.#referToReading(settled.type, settled.context);
     if (again.length >= MAX_BOUND_NESTING) {
-      // One reached with no written reference is reported as the checker
-      // prints its type.
+      // Locate the error at the reference, or at the type being read where
+      // the chain was reached without a written reference.
       const node = written ? entry : context.typeNode ??
         checker.typeToTypeNode(type, undefined, undefined);
-      const unread = context.uninterpretedTypeNodes;
-      if (unread && node && !unread.includes(node)) unread.push(node);
+      reportUnreadCfcRecursion(context, node);
       return {};
     }
     readings.push({ entry, instantiated, type, context });
@@ -1913,7 +1919,7 @@ export class SchemaGenerator {
   }
 
   /**
-   * Helper for `#bindingKey()`, which retains the ordered `typeof` bindings
+   * Helper for {@link #bindingKey}: the ordered `typeof` bindings
    * each argument reaches through its outer bindings and alias bodies.
    * The checker can give distinct writers the same type, so their authored
    * queries remain part of a recursive definition's identity. Repeated union
@@ -1923,6 +1929,9 @@ export class SchemaGenerator {
     bound: BoundTypeParameters,
     checker: ts.TypeChecker,
   ): string {
+    const cached = this.#bindingQueryKeys.get(bound);
+    if (cached !== undefined) return cached;
+
     /** Query origins, grouped where union or intersection repetition can settle. */
     type Queries = number | {
       kind: "sequence" | "union" | "intersection";
@@ -1945,7 +1954,7 @@ export class SchemaGenerator {
         : { kind, parts: distinct };
     };
 
-    return [...bound.arguments].map(([parameter, argument]) => {
+    const key = [...bound.arguments].map(([parameter, argument]) => {
       const aliases = new Set<ts.TypeAliasDeclaration>();
       const argumentsBeingRead = new Set<BoundTypeArgument>();
 
@@ -2002,7 +2011,12 @@ export class SchemaGenerator {
           }
         }
         const children: Queries[] = [];
-        if (ts.isTypeQueryNode(node)) children.push(this.#bindingId(node));
+        if (ts.isTypeQueryNode(node)) {
+          const binding = ts.isIdentifier(node.exprName)
+            ? resolveWriterBinding(node.exprName, checker)
+            : undefined;
+          children.push(this.#bindingId(binding?.declaration ?? node));
+        }
         ts.forEachChild(node, (child) => {
           const queries = visit(child, under, parameters);
           if (queries !== undefined) children.push(queries);
@@ -2021,6 +2035,8 @@ export class SchemaGenerator {
         JSON.stringify(readArgument(argument))
       }`;
     }).sort().join(";");
+    this.#bindingQueryKeys.set(bound, key);
+    return key;
   }
 
   /**

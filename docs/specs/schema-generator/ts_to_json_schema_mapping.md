@@ -152,7 +152,9 @@ reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
 one per schema, naming each unread type once. An authored `any`, or a name
 declared as `any`, is a reading, not a guess, and is not reported; nor is a
 guess inside an intersection that accepts nothing, which leaves nothing of it in
-the schema.
+the schema. Reaching the nesting limit of a CFC alias chain instead reports
+`cfc-schema:recursion-limit` as an error: the unread remainder could discard
+policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
@@ -1082,16 +1084,20 @@ Mechanics:
   identified, as a recursive definition's name and in cycle detection, by its
   type together with that instantiation and the arguments as written, or with
   its bindings where no instantiation is carried. Each argument also retains
-  the ordered `typeof` references reached through its outer bindings and
-  alias bodies: two writers with the same function type still name distinct
-  write policies in recursive definitions. Repeated union and intersection
-  members contribute their query origins once, so adding the same policy again
+  the ordered `typeof` bindings reached through its outer bindings and
+  alias bodies, identified by the writer declaration they resolve to (or by
+  the query node where no writer resolves): two writers with the same function
+  type still name distinct write policies in recursive definitions. Repeated
+  union and intersection members contribute their query origins once, so adding the same policy again
   does not change the recursion key. An alias's arguments, including defaults
   read under earlier arguments, contribute at their uses in its body, under
   that position's union or intersection operator. Two instantiations of one
-  declaration keep apart, and a recursion whose instantiation the checker
-  settles to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to
-  its definition although the written arguments nest without end.
+  declaration keep apart. A recursion whose instantiation the checker settles
+  to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to its definition
+  when its query origins also settle. Conditional and indexed aliases can retain
+  query syntax the checker drops, or repeat a parameter under an operator other
+  than union or intersection, so their keys may keep growing even when their
+  types settle. Such chains reach the nesting limit and report an error.
 - A chain is also tracked from the written reference it is entered from
   (`SchemaGenerator.readAliasChain`), so a chain entered again from that
   reference inside itself is found as a recursion through it. One whose
@@ -1138,8 +1144,12 @@ Mechanics:
   same type read inside itself with the same arguments written for it, each
   under deeper bindings, is taken for a recursion that instantiates the chain
   without end (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author
-  wrote out (`Pair<Pair<string>>`); the innermost accepts any value and is
-  reported, a chain reached by its alias as the checker prints its type.
+  wrote out (`Pair<Pair<string>>`). The bound is three nested readings. A CFC
+  alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
+  one whose writer-query key cannot settle. Its unread remainder would discard
+  confidentiality or write policies, so the schema must not be used. A chain
+  reached by its alias is located at its type node where available. The separate
+  bound on a type read under bindings continues to report an unread-type warning.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a

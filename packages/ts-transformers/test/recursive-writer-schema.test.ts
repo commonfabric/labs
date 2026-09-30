@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { parseModule, patternSchemas } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
@@ -60,6 +61,7 @@ export default pattern<{
       expect(visited.size).toBeGreaterThan(0);
     }
   });
+
   for (const operator of ["|", "&"]) {
     it(`emits a recursive reference when an alias repeats a writer with \`${operator}\``, async () => {
       const transformed = await transformSource(
@@ -82,6 +84,46 @@ export default pattern<{ root: Sec<typeof f> }>(() => ({}));`,
           __ctWriterIdentityOf: { file: "/test.tsx", path: ["f"] },
         });
         expect(definition.properties!.next!.$ref).toMatch(/^#\/\$defs\//);
+      }
+    });
+  }
+
+  for (
+    const expression of [
+      "If<true, W, WriteAuthorizedBy<string, typeof g>>",
+      "First<[W, WriteAuthorizedBy<string, typeof g>]>",
+      "Unbox<Box<W>>",
+      "NonNullable<W>",
+    ]
+  ) {
+    it(`reports an error when a recursive policy cannot settle through ${expression}`, async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformSource(
+        `import { Confidential, WriteAuthorizedBy, handler, pattern } from "commonfabric";
+const f = handler<void, {}>(() => {});
+const g: typeof f = handler<void, {}>(() => {});
+type If<C, A, B> = C extends true ? A : B;
+type First<T extends readonly unknown[]> = T[0];
+type Box<T> = { boxed: T };
+type Unbox<T> = T extends Box<infer U> ? U : T;
+type Sec<W> = Confidential<{
+  value: W;
+  next?: Sec<${expression}>;
+}, readonly ["a"]>;
+export default pattern<{ a: Sec<WriteAuthorizedBy<string, typeof f>> }>(({ a }) => ({ a }));`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      );
+      const unread = diagnostics.filter(({ type }) =>
+        type === "cfc-schema:recursion-limit"
+      );
+      expect(unread.length).toBeGreaterThan(0);
+      for (const diagnostic of unread) {
+        expect(diagnostic.severity).toBe("error");
+        expect(diagnostic.fileName).toBe("/test.tsx");
       }
     });
   }

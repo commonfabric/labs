@@ -68,6 +68,7 @@ export interface SchemaGenerationDiagnostic {
   readonly type:
     | "schema-default:unresolved"
     | "schema-type:unread"
+    | "cfc-schema:recursion-limit"
     | "cfc-write-authorized-by:unread"
     | "cfc-label:unread";
   readonly message: string;

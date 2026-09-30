@@ -1,7 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
-import type { MutableJSONSchema } from "@commonfabric/api";
+import type { JSONSchema } from "@commonfabric/api";
+
 import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
@@ -30,6 +31,32 @@ async function generate(code: string) {
   return { schema, diagnostics };
 }
 
+/** Each recursive value, through references, requiring the chain to settle. */
+function* recursiveValues(
+  schema: ReturnType<typeof asObjectSchema>,
+  root: JSONSchema,
+) {
+  const resolve = (value: JSONSchema) => {
+    const node = asObjectSchema(value);
+    return typeof node.$ref === "string"
+      ? asObjectSchema(schema.$defs![node.$ref.split("/").pop()!]!)
+      : node;
+  };
+  let node = resolve(root);
+  const visited = new Set<string>();
+
+  for (;;) {
+    yield resolve(node.properties!.value!);
+    const next = asObjectSchema(node.properties!.next!);
+    if (typeof next.$ref === "string") {
+      if (visited.has(next.$ref)) break;
+      visited.add(next.$ref);
+    }
+    node = resolve(next);
+  }
+  expect(visited.size).toBeGreaterThan(0);
+}
+
 describe("recursive binding identity", () => {
   for (const order of [["f", "g"], ["g", "f"]]) {
     for (
@@ -42,6 +69,11 @@ describe("recursive binding identity", () => {
         [
           "an alias with a writer argument",
           "type Owned<W> = WriteAuthorizedBy<string, W>;",
+          (writer: string) => `Owned<typeof ${writer}>`,
+        ],
+        [
+          "an alias whose writer defaults to its preceding argument",
+          "type Owned<V, W = V> = WriteAuthorizedBy<string, W>;",
           (writer: string) => `Owned<typeof ${writer}>`,
         ],
         [
@@ -69,25 +101,13 @@ describe("recursive binding identity", () => {
         `);
 
         for (const writer of order) {
-          let node = asObjectSchema(schema.properties![writer]!);
-          const visited = new Set<string>();
-          for (;;) {
-            const value = asObjectSchema(node.properties!.value!);
+          for (
+            const value of recursiveValues(schema, schema.properties![writer]!)
+          ) {
             expect(value.ifc?.writeAuthorizedBy).toEqual({
               __ctWriterIdentityOf: { file: "test.ts", path: [writer] },
             });
-            const next = asObjectSchema(node.properties!.next!);
-            if (typeof next.$ref === "string") {
-              if (visited.has(next.$ref)) break;
-              visited.add(next.$ref);
-              node = asObjectSchema(
-                schema.$defs![next.$ref.split("/").pop()!] as MutableJSONSchema,
-              );
-            } else {
-              node = next;
-            }
           }
-          expect(visited.size).toBeGreaterThan(0);
         }
         expect(diagnostics).toEqual([]);
       });
@@ -113,6 +133,51 @@ describe("recursive binding identity", () => {
       }
     });
   }
+
+  for (
+    const argument of [
+      "If<true, W, WriteAuthorizedBy<string, typeof g>>",
+      "First<[W, WriteAuthorizedBy<string, typeof g>]>",
+      "Unbox<Box<W>>",
+      "NonNullable<W>",
+      "W[]",
+    ]
+  ) {
+    it(`rejects a policy chain that reaches the nesting limit through ${argument}`, async () => {
+      const { diagnostics } = await generate(`
+        type If<C, A, B> = C extends true ? A : B;
+        type First<T extends readonly unknown[]> = T[0];
+        type Box<T> = { boxed: T };
+        type Unbox<T> = T extends Box<infer U> ? U : T;
+        type Sec<W> = Confidential<{
+          value: W;
+          next?: Sec<${argument}>;
+        }, readonly ["a"]>;
+        interface Holder { f: Sec<WriteAuthorizedBy<string, typeof f>> }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        severity: "error",
+        type: "cfc-schema:recursion-limit",
+      });
+    });
+  }
+
+  it("shares a recursive definition when two queries name the same writer", async () => {
+    const { schema, diagnostics } = await generate(`
+      type Sec<W> = Confidential<{
+        value: W;
+        next?: Sec<Identity<W>>;
+      }, readonly ["a"]>;
+      interface Holder {
+        a: Sec<WriteAuthorizedBy<string, typeof f>>;
+        b: Sec<WriteAuthorizedBy<string, typeof f>>;
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+    expect(Object.keys(schema.$defs ?? {})).toHaveLength(1);
+    expect(schema.properties!.a).toEqual(schema.properties!.b);
+  });
 
   for (const operator of ["|", "&"]) {
     for (const useDefault of [false, true]) {
@@ -163,15 +228,9 @@ describe("recursive binding identity", () => {
         ["reverse", ["g", "f"]],
       ] as const
     ) {
-      let node = asObjectSchema(pair.properties![direction]!);
-      const visited = new Set<string>();
-      for (;;) {
-        let value = asObjectSchema(node.properties!.value!);
-        if (typeof value.$ref === "string") {
-          value = asObjectSchema(
-            schema.$defs![value.$ref.split("/").pop()!] as MutableJSONSchema,
-          );
-        }
+      for (
+        const value of recursiveValues(schema, pair.properties![direction]!)
+      ) {
         for (const [index, field] of ["left", "right"].entries()) {
           expect(
             asObjectSchema(value.properties![field]!).ifc?.writeAuthorizedBy,
@@ -180,18 +239,7 @@ describe("recursive binding identity", () => {
               __ctWriterIdentityOf: { file: "test.ts", path: [writers[index]] },
             });
         }
-        const next = asObjectSchema(node.properties!.next!);
-        if (typeof next.$ref === "string") {
-          if (visited.has(next.$ref)) break;
-          visited.add(next.$ref);
-          node = asObjectSchema(
-            schema.$defs![next.$ref.split("/").pop()!] as MutableJSONSchema,
-          );
-        } else {
-          node = next;
-        }
       }
-      expect(visited.size).toBeGreaterThan(0);
     }
     expect(diagnostics).toEqual([]);
   });

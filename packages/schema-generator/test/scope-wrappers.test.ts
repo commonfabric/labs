@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import ts from "typescript";
+
 import type { JSONSchemaObj } from "@commonfabric/api";
+import ts from "typescript";
+
+import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   createTestProgram,
@@ -437,17 +440,21 @@ interface SchemaRoot { head: Node<{ a: string }>; }
 `,
           "SchemaRoot",
         );
-        const diagnostics: string[] = [];
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
         const schema = new SchemaGenerator().generateSchema(
           type,
           checker,
           typeNode,
-          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.type) },
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
         ) as JSONSchemaObj;
 
-        expect(diagnostics).toEqual(["schema-type:unread"]);
-        // Each handle read keeps its scope; the innermost, past the bound,
-        // accepts any value.
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({
+          type: "cfc-schema:recursion-limit",
+          severity: "error",
+        });
+        // The partial schema preserves the handles read before the error;
+        // its unread remainder makes the schema unusable.
         const handle = [{ kind: "cell", scope: "user" }];
         const handles: unknown[] = [];
         JSON.stringify(schema, (key, value) => {

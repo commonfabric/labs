@@ -2318,7 +2318,7 @@ describe("Schema: CFC authoring aliases", () => {
           interface Holder { value: Nest<string> }
         `);
         expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
-          "schema-type:unread",
+          "cfc-schema:recursion-limit",
         );
       });
     }
@@ -2554,7 +2554,7 @@ describe("Schema: CFC authoring aliases", () => {
         interface Holder { value: Nest<string> }
       `);
       expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
+        "cfc-schema:recursion-limit",
       ]);
     });
 

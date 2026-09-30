@@ -1030,7 +1030,8 @@ export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
           }
           expect(
             diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
+              diagnostic.type === "schema-type:unread" ||
+              diagnostic.type === "cfc-schema:recursion-limit"
             ),
           ).toEqual([]);
         });
@@ -1058,7 +1059,8 @@ export default pattern<{ a: Nest<string> }>(({ a }) => ({ a }));`,
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ).length,
         ).toBeGreaterThan(0);
       });
@@ -1095,11 +1097,13 @@ export default pattern<{ a: Sec<{ a: string }> }>(({ a }) => ({ a }));`,
             expect((root.properties as Record<string, Schema>).a)
               .toBeDefined();
           }
-          expect(
-            diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
-            ).length,
-          ).toBe(2);
+          // Both schema uses point to the same recursive reference, so the
+          // compilation reports one error at that declaration.
+          const errors = diagnostics.filter((diagnostic) =>
+            diagnostic.type === "cfc-schema:recursion-limit"
+          );
+          expect(errors).toHaveLength(1);
+          expect(errors[0]!.severity).toBe("error");
         });
       }
 
@@ -1139,7 +1143,8 @@ export default pattern<{ a: Sec<string> }>(({ a }) => ({ a }));`,
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ),
         ).toEqual([]);
       });
@@ -1184,7 +1189,8 @@ export default pattern<{ a: Sec<[string, number], [number, string]> }>(({ a }) =
         }
         expect(
           diagnostics.filter((diagnostic) =>
-            diagnostic.type === "schema-type:unread"
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
           ),
         ).toEqual([]);
       });
@@ -1252,7 +1258,8 @@ export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
           }
           expect(
             diagnostics.filter((diagnostic) =>
-              diagnostic.type === "schema-type:unread"
+              diagnostic.type === "schema-type:unread" ||
+              diagnostic.type === "cfc-schema:recursion-limit"
             ),
           ).toEqual([]);
         });
