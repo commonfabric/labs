@@ -5,6 +5,7 @@ import { describe, it } from "@std/testing/bdd";
 import { ConsoleServer, resolveConsoleConfig } from "../console/server.ts";
 import { readConsoleTurnResult } from "../console/turn-result.ts";
 import type { HarnessChatEventEnvelope } from "../src/contracts/interactive-chat.ts";
+import { finishTaskTool } from "../src/tools/finish-task.ts";
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import type { HarnessToolCall } from "../src/contracts/transcript.ts";
 import {
@@ -605,6 +606,68 @@ describe("task-outcomes", () => {
     ) {
       expect(readHarnessTaskOutcome(value)).toBeUndefined();
     }
+  });
+
+  it("finish_task admits each outcome as its task outcome and refuses actions off completed", async () => {
+    const context = {
+      nextOutputId: (toolId: string) => `${toolId}-1`,
+    } as never;
+    const call = (input: Record<string, unknown>) =>
+      finishTaskTool.invoke(context, input as never);
+    expect(await call({ outcome: "completed", message: "Done." })).toEqual({
+      outputId: "finish_task-1",
+      status: "ok",
+      taskOutcome: { outcome: "completed", answer: "Done." },
+    });
+    expect(await call({ outcome: "question", message: "Which?" })).toEqual({
+      outputId: "finish_task-1",
+      status: "ok",
+      taskOutcome: { outcome: "question", question: { text: "Which?" } },
+    });
+    expect(await call({ outcome: "gave-up", message: "Cannot." })).toEqual({
+      outputId: "finish_task-1",
+      status: "ok",
+      taskOutcome: { outcome: "gave-up", reason: "Cannot." },
+    });
+    const refused = await call({
+      outcome: "question",
+      message: "Which?",
+      actions: [{ kind: "open_url", url: "https://example.com" }],
+    });
+    expect(refused.status).toBe("error");
+  });
+
+  it("reads an unfamiliar outcome word as completed, dropping its fields", () => {
+    expect(readHarnessTaskOutcome({ outcome: "deferred", answer: "x" }))
+      .toEqual({ outcome: "completed" });
+  });
+
+  it("refuses client actions that are not records or not http(s) addresses", () => {
+    for (
+      const action of [
+        "open_url",
+        null,
+        ["open_url"],
+        { kind: "open_url", url: "not a url" },
+        { kind: "open_url", url: "javascript:alert(1)" },
+        { kind: "open_url", url: "file:///etc/passwd" },
+        { kind: "open_url", url: "https://example.com", extra: true },
+        { kind: "teleport" },
+      ]
+    ) {
+      expect(
+        readHarnessTaskOutcome({ outcome: "completed", actions: [action] }),
+      ).toBeUndefined();
+    }
+    expect(
+      readHarnessTaskOutcome({
+        outcome: "completed",
+        actions: [{ kind: "open_url", url: "https://example.com/x" }],
+      }),
+    ).toEqual({
+      outcome: "completed",
+      actions: [{ kind: "open_url", url: "https://example.com/x" }],
+    });
   });
 
   it("round-trips a completed answer with actions and refuses malformed ones", () => {
