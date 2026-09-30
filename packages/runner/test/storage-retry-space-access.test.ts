@@ -31,6 +31,8 @@ describe("storage space access retry", () => {
   let manager: TestStorageManager;
   let guestSessions: SpaceSession[];
   let guestMounts: number;
+  let failNextGuestMount: Error | undefined;
+  let failNextGuestWatch: Error | undefined;
   let setAccess: (allowed: boolean) => Promise<void>;
   let cleanups: (() => Promise<void>)[];
   let serverCount = 0;
@@ -39,6 +41,8 @@ describe("storage space access retry", () => {
     cleanups = [];
     guestSessions = [];
     guestMounts = 0;
+    failNextGuestMount = undefined;
+    failNextGuestWatch = undefined;
     server = new Server({
       store: new URL(`memory://storage-retry-space-access-${++serverCount}`),
       sessionOpenAuth: { audience: "did:key:z6Mk-retry-access-audience" },
@@ -49,7 +53,12 @@ describe("storage space access retry", () => {
     });
     const factory: SessionFactory = {
       async create(target, signer, options) {
-        if (signer?.did() === guest.did()) guestMounts++;
+        if (signer?.did() === guest.did()) {
+          guestMounts++;
+          const failure = failNextGuestMount;
+          failNextGuestMount = undefined;
+          if (failure !== undefined) throw failure;
+        }
         const client = await connect({ transport: loopback(server) });
         try {
           const session = await client.mount(
@@ -63,7 +72,17 @@ describe("storage space access retry", () => {
               authorization: { principal: signer!.did() },
             }),
           );
-          if (signer?.did() === guest.did()) guestSessions.push(session);
+          if (signer?.did() === guest.did()) {
+            guestSessions.push(session);
+            const watchAddSync = session.watchAddSync.bind(session);
+            session.watchAddSync = (watches) => {
+              const failure = failNextGuestWatch;
+              failNextGuestWatch = undefined;
+              return failure === undefined
+                ? watchAddSync(watches)
+                : Promise.reject(failure);
+            };
+          }
           return { client, session };
         } catch (error) {
           await client.close();
@@ -140,5 +159,42 @@ describe("storage space access retry", () => {
     const read = await manager.open(space).sync("of:retry-after-takeover");
     expect(read.error?.message).toContain("taken-over");
     expect(guestMounts).toBe(1);
+  });
+
+  it("rejects, leaving the space refused, when the retry's open fails for a reason other than a refusal", async () => {
+    await setAccess(false);
+    const refused = await manager.open(space).sync(`of:${space}`);
+    expect(refused.error?.name).toBe("AuthorizationError");
+    const refusal = manager.spaceAccessError(space);
+
+    await setAccess(true);
+    failNextGuestMount = new Error("memory transport lost");
+    await expect(manager.retrySpaceAccess(space)).rejects.toThrow(
+      "memory transport lost",
+    );
+    expect(manager.spaceAccessError(space)).toBe(refusal);
+    await manager.retrySpaceAccess(space);
+    expect(manager.spaceAccessError(space)).toBeUndefined();
+  });
+
+  it("keeps a refused load whose repeat fails for another reason, and repeats it on the next retry", async () => {
+    await setAccess(false);
+    const refused = await manager.open(space).sync(`of:${space}`);
+    expect(refused.error?.name).toBe("AuthorizationError");
+    const replica = manager.open(space).replica;
+    expect(replica.getDocument(`of:${space}`)).toBeUndefined();
+
+    await setAccess(true);
+    failNextGuestWatch = new Error("memory transport lost");
+    await expect(manager.retrySpaceAccess(space)).rejects.toThrow(
+      "memory transport lost",
+    );
+    expect(manager.spaceAccessError(space)).toBeUndefined();
+    expect(replica.getDocument(`of:${space}`)).toBeUndefined();
+    await manager.retrySpaceAccess(space);
+    expect(replica.getDocument(`of:${space}`)?.value).toEqual({
+      [owner.did()]: "OWNER",
+      [guest.did()]: "READ",
+    });
   });
 });

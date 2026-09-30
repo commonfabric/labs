@@ -3369,26 +3369,32 @@ class Provider
 
   /**
    * Opens a session on this space again, as an ACL change would, when
-   * `refused()` says the memory server refused the last one, and resolves
-   * once the server has admitted or refused it. A refusal is recorded where
-   * the first one was, and does not reject. A session that stands is left
-   * alone.
+   * `refused()` says the memory server refused the last one, and then makes
+   * again the loads it refused for want of access. Resolves once the server
+   * has decided. A refusal is recorded where the first one was, and does not
+   * reject; any other failure, of the open or of a load, rejects, and leaves
+   * the refused loads to the next retry. A session that stands is not opened
+   * again, though loads it was refused are.
    */
   async retryAccess(refused: () => boolean): Promise<void> {
     // An open already in flight may be decided on the access list as it
     // stood before this call, so the retry waits for it before deciding
     // anything.
     await this.#followReplacement((replica) => replica.sessionSettled());
+    if (this.#destroyed) return;
     // Arming the latch on a session that stands would remount it the next
     // time some other verdict ended it.
-    if (this.#destroyed || !refused()) return;
-    this.replica.noteAclChanged();
-    try {
-      await this.ensureSession();
-    } catch {
-      // The session's own failure path records a refusal, and anything else
-      // leaves the space as refused as it was.
-      return;
+    if (refused()) {
+      this.replica.noteAclChanged();
+      try {
+        await this.ensureSession();
+      } catch (error) {
+        // The session's own failure path has recorded the refusal.
+        if (error instanceof Error && isPermanentAuthorizationFailure(error)) {
+          return;
+        }
+        throw error;
+      }
     }
     await this.#followReplacement((replica) => replica.repullRefused());
   }
@@ -4384,13 +4390,23 @@ export class SpaceReplica
   /**
    * Makes again every load the memory server refused this replica for want
    * of access, and resolves once they have been admitted or refused. A load
-   * refused again is kept for the next retry.
+   * stays recorded until a replay of it succeeds, so one refused again is
+   * kept for the next retry, and a replay that fails for any other reason
+   * rejects and keeps it too.
    */
   async repullRefused(): Promise<void> {
     if (this.#refusedPulls.size === 0) return;
-    const entries = [...this.#refusedPulls.values()];
-    this.#refusedPulls.clear();
-    await this.pull(entries);
+    const replayed = [...this.#refusedPulls];
+    const result = await this.pull(replayed.map(([, entry]) => entry));
+    if (result.error) {
+      if (isPermanentAuthorizationFailure(result.error)) return;
+      throw Object.assign(new Error(result.error.message), {
+        name: result.error.name,
+      });
+    }
+    for (const [id, entry] of replayed) {
+      if (this.#refusedPulls.get(id) === entry) this.#refusedPulls.delete(id);
+    }
   }
 
   /**
@@ -4511,7 +4527,7 @@ export class SpaceReplica
     // undefined between the remount arming and the next pull re-recording it.
     // No serving-loop caller reads it in that window. A retry acts only on a
     // space whose refusal the manager's `spaceAccessError()` holds until an
-    // admitted open clears it, and `spaceAccess()` reads that first.
+    // admitted open clears it, and `spaceAccess(target)` reads that first.
     this.#sessionSession = undefined;
     // The dead session's views. `terminateSession` already closed the
     // SESSION's own view; these are the replica's references to it, which a

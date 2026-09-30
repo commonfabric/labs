@@ -605,25 +605,32 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
-   * THE SESSION REMOUNT's trigger: an admitted commit touched `space`'s ACL
-   * document. A space session this manager holds — revoked or denied by an
-   * EARLIER ACL verdict — is dropped so the next load re-opens it, because
-   * the ACL is the only input that decision has. Never widens authority: a
-   * genuine de-authorization is refused again at `session.open`. Implemented
-   * by the v2 StorageManager; the serving loop's host is its only caller.
+   * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
+   * `space`'s ACL document. A space session this manager holds — revoked or
+   * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
+   * it, because the ACL is the only input that decision has. Never widens
+   * authority: a genuine de-authorization is refused again at `session.open`.
+   * Implemented by the v2 StorageManager; the serving loop's host is its only
+   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
+   * such commit.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 
   /**
    * Asks the memory server once more for a space it refused this manager,
    * for a host that has reason to think the verdict changed, such as word
-   * that the principal was granted access. It opens the session again through
-   * the same `session.open` admission the first attempt went through, so it
-   * can admit only what that admission would. Resolves once the server has
-   * decided: an admission clears `spaceAccessError()`, notifies
-   * `subscribeSpaceAccessChange()` observers, and makes again the loads the
-   * refusal failed, and a refusal leaves the space refused, as it was. Does nothing for a space this manager has not opened,
-   * or whose session the server has not refused.
+   * that the principal was granted access. The other trigger of the session
+   * remount besides `noteSpaceAclChanged()`: it opens the session again
+   * through the same `session.open` admission the first attempt went
+   * through, so it can admit only what that admission would.
+   *
+   * Resolves once the server has decided. An admission clears
+   * `spaceAccessError()`, notifies `subscribeSpaceAccessChange()` observers,
+   * and repeats the loads the refusal failed. A refusal leaves the space
+   * refused, as it was, and does not reject. Any other failure, of the open
+   * or of a repeated load, rejects, and a later call repeats the loads that
+   * have not yet succeeded. Does nothing for a space this manager has not
+   * opened, or one it holds no refusal for.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
 
