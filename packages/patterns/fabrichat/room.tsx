@@ -10,9 +10,9 @@
  * A message is a record of its own in the room's messages, labeled
  * `authored-by` whoever last wrote it, and admitted only from the reviewed
  * surface of the act that wrote it. Its reactions are a list of their own,
- * which the message links and only the reaction handlers write, so reacting
- * never rewrites the message. Deleting a message drops that link, which takes
- * its reactions out of the room's record.
+ * which the message links, so reacting never rewrites the message. The
+ * reaction handlers add to and remove from that list, and a deletion or an
+ * obliteration clears it and drops the link.
  *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real
