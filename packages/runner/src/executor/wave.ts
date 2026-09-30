@@ -1584,7 +1584,7 @@ export class WaveAccumulator
     // foreign, in any memory ACL mode: nothing here checks INV-12's shape or
     // the acting user's level, and the engine-direct commit skips the memory
     // server's check (09-invariants.md, INV-12). Refusing at the seal fails
-    // only this run, whose entry then carries the error.
+    // only this run; `noteSealFailure()` says what happens to its event.
     const aclId = aclDocId(space);
     if (native.operations.some((operation) => operation.id === aclId)) {
       const actionId = assembly.context?.actionId;

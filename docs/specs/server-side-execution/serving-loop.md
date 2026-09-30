@@ -1436,10 +1436,13 @@ the memory server's INV-12 check (`09-invariants.md`), and nothing on
 this plane checks an ACL write's shape or the acting user's level, so
 the seal sink refuses a transaction that writes a space's ACL document
 (`of:<space>`), home or foreign, in every memory ACL mode. The refusal
-is action-scoped like the foreign-write gate's, and deterministic: the
-scheduler seals it as the event's error consequence, and the serving
-loop does not requeue the event for it, so its entry carries the error
-and the stream moves on. Two backstops sit behind the seal for a batch
+is action-scoped like the foreign-write gate's, and deterministic. For a
+run delivering a durable entry, the scheduler seals it as the entry's
+error consequence and the wave requeues nothing for it, so the entry
+carries the error and the stream moves on. An in-process run (an LT1
+copy) has no entry to carry the error, so its event requeues as for any
+failed seal, and the durable entry, drained later, meets the same
+refusal. Two backstops sit behind the seal for a batch
 that reaches the commit step anyway. The engine's `derived` admission
 refuses a commit carrying such an operation (protocol.md §2), and the
 sink refuses a foreign batch carrying one, each naming the operation.
