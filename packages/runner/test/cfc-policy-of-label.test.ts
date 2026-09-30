@@ -525,7 +525,7 @@ describe("PolicyOf label-time binding", () => {
     );
     const sourceLink = source.getAsNormalizedFullLink();
     const targetLink = target.getAsNormalizedFullLink();
-    copyTx.writeValueOrThrow({ ...targetLink, path: [] }, "copied secret");
+    copyTx.writeValueOrThrow({ ...targetLink, path: [] }, source.getAsLink());
     copyTx.recordCfcWritePolicyInput({
       kind: "link-write",
       target: { ...targetLink, path: [] },
