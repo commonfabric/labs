@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"Pattern result object with a function member > keeps a getter member's evaluated value alongside the plain field"},"to":{"k":"unit","s":"runner","n":"Pattern result object with a function member > throws when the result object carries a getter member"}}

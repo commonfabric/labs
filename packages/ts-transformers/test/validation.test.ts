@@ -2577,7 +2577,7 @@ Deno.test("Pattern Context Validation - Object Members", async (t) => {
   );
 
   await t.step(
-    "errors on a getter, naming the serialization-snapshot reason",
+    "errors on a getter, naming the plain-data reason",
     async () => {
       const { diagnostics } = await validateSource(
         withReactiveLocal("{ get t() { return value?.token; } }"),
@@ -2587,9 +2587,9 @@ Deno.test("Pattern Context Validation - Object Members", async (t) => {
       assertEquals(errs.length, 1);
       assertStringIncludes(
         errs[0]!.message,
-        "evaluated when the pattern result is stored",
+        "the reactive data model cannot store",
       );
-      assertStringIncludes(errs[0]!.message, "one-time snapshot");
+      assertStringIncludes(errs[0]!.message, "plain data properties");
     },
   );
 

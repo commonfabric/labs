@@ -166,6 +166,62 @@ describe("traverseValue with FabricPrimitive values", () => {
   });
 });
 
+describe("traverseValue with values that are not inert containers", () => {
+  // Rebuilding a value from its enumerable own properties keeps what it is
+  // only for an inert plain object or array. For anything else the rebuild
+  // loses something, and the shapes differ in what, so each one is run: a JS
+  // object the fabric model converts comes back `{}` or, for a `Uint8Array`, a
+  // record of its bytes; a class instance comes back a plain record; a record
+  // comes back with an accessor run, a symbol or non-enumerable key dropped, or
+  // its `null` prototype replaced; an array comes back without its named
+  // property.
+
+  class Point {
+    constructor(readonly x: number) {}
+  }
+
+  class TaggedArray extends Array<number> {}
+
+  const SHAPES: ReadonlyArray<[string, () => object]> = [
+    ["an `Error`", () => new TypeError("nope")],
+    ["a `Date`", () => new Date(0)],
+    ["a `RegExp`", () => /a+/g],
+    ["a `Uint8Array`", () => new Uint8Array([1, 2, 3])],
+    ["a `Map`", () => new Map([["k", 1]])],
+    ["a `Set`", () => new Set([1])],
+    ["a class instance", () => new Point(1)],
+    [
+      "a record with a `null` prototype",
+      () => Object.assign(Object.create(null), { a: 1 }),
+    ],
+    ["a record with an accessor", () => ({
+      get a() {
+        return 1;
+      },
+    })],
+    ["a record with a symbol key", () => ({ [Symbol("s")]: 1, a: 2 })],
+    [
+      "a record with a non-enumerable key",
+      () => Object.defineProperty({ a: 1 }, "hidden", { value: 2 }),
+    ],
+    [
+      "an array with a named property",
+      () => Object.assign([1, 2], { extra: 3 }),
+    ],
+    ["an `Array` subclass instance", () => TaggedArray.from([1, 2])],
+  ];
+
+  for (const [shape, make] of SHAPES) {
+    it(`passes ${shape} through as itself`, () => {
+      const payload = make();
+
+      const result = traverseValue({ payload }, () => undefined);
+
+      expect(result.payload).toBe(payload);
+    });
+  }
+});
+
 describe("traverseValue with FabricInstance values", () => {
   it("throws for a nested FabricInstance rather than flattening one", () => {
     // A `FabricInstance` is a container reached by its codec contents rather

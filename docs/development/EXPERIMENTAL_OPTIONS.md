@@ -1625,11 +1625,12 @@ site has:
   something a flag was deliberately turned on to reach.
 - **De facto**, where the value is shipped and ungated and simply has no
   production caller yet. A `FabricError` is exposed to pattern authors
-  (`builder/factory.ts`) and reaches these throws with every flag off; the same
-  value written from the client holding a link, or not yet deep-frozen, reaches
-  `CellHandle.serialize()`'s refusal of a `FabricInstance` the same way. Nothing
-  stops such a call being written tomorrow. What makes the tripwire safe today
-  is that none exists.
+  (`builder/factory.ts`) and reaches these throws with every flag off, and so
+  does a JS `Error` a pattern binds whose `cause` or extras the binding walk's
+  conversion leaves unconverted; the same value written from the client holding
+  a link, or not yet deep-frozen, reaches `CellHandle.serialize()`'s refusal of
+  a `FabricInstance` the same way. Nothing stops such a call being written
+  tomorrow. What makes the tripwire safe today is that none exists.
 
 The second is the weaker claim, but it does not fail quietly, and that is the
 point. Add a production use of one of these values and the throw fires — at the
