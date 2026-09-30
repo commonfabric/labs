@@ -1438,7 +1438,8 @@ export class CommonFabricFormatter implements TypeFormatter {
    * is in progress. It is read in place rather than as a type met again inside
    * itself: by this formatter where it claims `type` for anything besides the
    * brand, such as the labels of a CFC alias, and otherwise by the formatters
-   * after it (`SchemaGenerator.formatStructure()`).
+   * after it (`SchemaGenerator.formatStructure()`). Either reads it without the
+   * wrapper's node, which would name the wrapper once more.
    */
   #formatScopePayload(
     type: ts.Type,
@@ -1446,8 +1447,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema {
     const payload = scopePayloadType(type, brand, context.typeChecker);
+    const { typeNode: _, ...rest } = context;
     const payloadContext: GenerationContext = {
-      ...context,
+      ...rest,
       scopeBrandRead: new Set([type, ...(type.isUnion() ? type.types : [])]),
     };
     if (payload !== type) {

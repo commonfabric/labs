@@ -704,6 +704,8 @@ interface Later { x: never; }
       type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
       type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
       interface Stored { name?: string }
+      interface A { a: string }
+      interface B { b: number }
     `;
     const named = (name: string) => ts.factory.createTypeReferenceNode(name);
 
@@ -758,6 +760,34 @@ interface Later { x: never; }
         $defs: {
           Stored: { type: "object", properties: { name: { type: "string" } } },
         },
+      });
+    });
+
+    it("emits the resolved payload for an intersection printed as import types", async () => {
+      // The checker cannot intersect `A` and `B` again without the brand, so
+      // the payload is the wrapper's own type, read in place without the
+      // wrapper's node, which would read it as the wrapper once more.
+      const importType = (name: string) =>
+        ts.factory.createImportTypeNode(
+          ts.factory.createLiteralTypeNode(
+            ts.factory.createStringLiteral("./types.ts"),
+          ),
+          undefined,
+          ts.factory.createIdentifier(name),
+        );
+      const schema = await printedSchema(
+        "A & B",
+        ts.factory.createIntersectionTypeNode([
+          importType("A"),
+          importType("B"),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        scope: "user",
       });
     });
 
