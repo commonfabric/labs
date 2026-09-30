@@ -15,12 +15,7 @@ import { InboxClient } from "../inbox.ts";
 import type { Runtime } from "../runtime.ts";
 import { eventKey } from "./event-key.ts";
 import { linkOfTarget } from "./space-access.ts";
-import {
-  applyChanges,
-  catchUpAcl,
-  handlerFrame,
-  knownAcl,
-} from "./space-access-change.ts";
+import { catchUpAcl, handlerFrame, knownAcl } from "./space-access-change.ts";
 
 /** The `type` of the payload a space-access notice carries. */
 export const SPACE_ACCESS_NOTICE_TYPE = "space-access-notice";
@@ -54,12 +49,13 @@ export type SpaceAccessNotice = {
  *
  * The actor must hold `OWNER` in the space, and `principal` must have an entry
  * of its own in the space's access list: an entry for `"*"` does not count.
- * Both are checked against the list as it stands once the handler's own
- * access-list changes are applied: at the call when this runtime holds the
- * list, and again, caught up with the memory server, just before the notice is
- * sent. A refusal at the call throws before anything is staged. A refusal at
- * the send, like any failure to send, is logged and nothing retries it, so a
- * notice may not arrive.
+ * Both are checked just before the notice is sent, against the list caught up
+ * with the memory server, after any change the handler made to it has
+ * committed. A notice is best-effort, so neither is checked at the call, where
+ * the list this runtime holds may be behind the server's and a refusal would
+ * cost the handler its whole transaction. A refusal at the send, like any
+ * failure to send, is logged and nothing retries it, so a notice may not
+ * arrive.
  *
  * Notices are idempotent per event: the inbox operation id is derived from
  * `eventKey()`, `principal` and the payload, so a run of the same event again
@@ -67,13 +63,12 @@ export type SpaceAccessNotice = {
  *
  * @throws Error when called anywhere but in a handler, on a serving runtime,
  *   for a `principal` that is not a DID in DID Core syntax (`"*"` among them),
- *   for an `entry` that is not a cell at the root of a document in the
- *   space's own scope, and, when this runtime holds the list, for an actor
- *   without `OWNER` or a `principal` without an entry.
+ *   and for an `entry` that is not a cell at the root of a document in the
+ *   space's own scope.
  */
 export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
   const call = "noticeSpaceAccess()";
-  const { frame, runtime, tx } = handlerFrame(call);
+  const { runtime, tx } = handlerFrame(call);
   if (runtime.servingPosture) {
     throw new Error(
       `\`${call}\` is not available on a serving runtime, which cannot sign ` +
@@ -100,12 +95,6 @@ export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
   }
   const space = link.space;
 
-  const held = knownAcl(runtime, space);
-  if (held !== undefined) {
-    const staged = frame.pendingSpaceAccessChanges?.get(space) ?? [];
-    checkNotice(space, applyChanges(space, held, staged), actor, principal);
-  }
-
   const payload: SpaceAccessNotice = {
     type: SPACE_ACCESS_NOTICE_TYPE,
     v: 1,
@@ -124,9 +113,10 @@ export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
 
 /**
  * Helper for {@link noticeSpaceAccess}, which checks, against the access list
- * of `space` caught up with the memory server, that the notice may still be
- * sent, and sends it. Runs after the handler's commit is accepted, and after
- * any access-list change the handler made has committed.
+ * of `space` caught up with the memory server, that the notice may be sent,
+ * and sends it. Runs after the handler's commit is accepted, and so after any
+ * access-list change the handler made has committed: the list it reads holds
+ * those changes.
  *
  * @throws Error on a refusal, and on any failure to send.
  */
@@ -153,7 +143,7 @@ async function sendNotice(
 }
 
 /**
- * Helper for {@link noticeSpaceAccess} and {@link sendNotice}, which checks
+ * Helper for {@link sendNotice}, which checks
  * that `actor` holds `OWNER` in `acl`, the access list of `space` (`null` when
  * the space has none), and that `principal` has an entry of its own there.
  *

@@ -3987,20 +3987,22 @@ export declare function revokeSpaceAccess(
  * else. The inbox tells the recipient who sent it; the recipient trusts none of
  * what it says, and opening the space is what checks it.
  *
- * The acting principal, the event's actor, must hold `OWNER` in the space, and
- * `principal` must have an entry of its own in the space's access list, as it
- * stands once the handler's own `grantSpaceAccess()` and `revokeSpaceAccess()`
- * calls are applied. `principal` must be a DID other than `"*"`, and `entry` a
- * cell at the root of a document in the space's own scope.
+ * `principal` must be a DID other than `"*"`, and `entry` a cell at the root
+ * of a document in the space's own scope. The acting principal, the event's
+ * actor, must hold `OWNER` in the space, and `principal` must have an entry of
+ * its own in the space's access list, including any the handler's own
+ * `grantSpaceAccess()` added. Those two are checked only just before the
+ * message is sent, after the handler's writes commit; a notice that fails them
+ * is dropped, and only the log shows it.
  *
  * The message goes out after the handler's writes commit, and is not sent if
  * they fail. Nothing retries a send that fails, so a notice may not arrive,
  * and one arrives only if its recipient has enabled their inbox. Every run of
  * one event sends the same message, which the inbox holds once.
  *
- * Available only in a handler on a client runtime, and throws anywhere else. A
- * refusal the runtime can tell at the call throws; the call throws before
- * staging anything, so one the handler catches sends nothing.
+ * Available only in a handler on a client runtime, and throws anywhere else.
+ * The call throws for a malformed `principal` or `entry`, before staging
+ * anything, so one the handler catches sends nothing.
  */
 export declare function noticeSpaceAccess(
   principal: DID,

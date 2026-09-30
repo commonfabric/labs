@@ -60,20 +60,24 @@ also the identity that signs its requests.
 | A `principal` that is not a DID in DID Core syntax, `"*"` among them | the call |
 | An `entry` that is not a cell | the call |
 | An `entry` below the root of its document, or in a scope other than the space's | the call |
-| An actor without `OWNER` in the space | the call when the runtime holds the list, and always the send |
-| A `principal` without an entry of its own in the space's list | the call when the runtime holds the list, and always the send |
+| An actor without `OWNER` in the space | the send |
+| A `principal` without an entry of its own in the space's list | the send |
 
-An entry for `"*"` does not count as the principal's own: the call tells a
-principal the list names. A principal may be told about a space in which they
+An entry for `"*"` does not count as the principal's own: a notice goes only to
+a principal the list names. A principal may be told about a space in which they
 hold any level.
 
-The list the checks read is the list as it stands once the handler's own
-`grantSpaceAccess()` and `revokeSpaceAccess()` calls are applied, so a handler
-can admit someone and tell them in one run. The call reads the list this
-runtime holds, with those calls applied. The send reads it again, after the
-handler's access-list changes and its own writes have committed, having caught
-up with the memory server, so a principal whose entry is gone by then is not
-told.
+The two checks on the access list run only at the send, after the handler's
+own `grantSpaceAccess()` and `revokeSpaceAccess()` changes and its other writes
+have committed, against the list caught up with the memory server. So a
+handler can admit someone and tell them in one run, and a principal whose entry
+is gone by then is not told.
+
+The call does not check the list. The list this runtime holds may be behind the
+memory server's, for instance just after another client granted the principal
+access, and a refusal at the call would throw and cost the handler its whole
+transaction for the sake of a notice that is best-effort anyway. A notice the
+send refuses is dropped, and only the sending runtime's log shows it.
 
 No trusted gesture is required. The call adds no power to send: anyone holding
 a key can already put a message in an enabled inbox, within the inbox's limits.
@@ -85,7 +89,8 @@ enable it, are what bound unwanted messages.
 
 A refusal at the call throws before anything is staged, so a handler that
 catches one sends nothing for that call, and one it lets escape drops the
-handler's whole transaction.
+handler's whole transaction. Only mistakes in the call itself are refused
+there: where it runs, and what `principal` and `entry` are.
 
 Otherwise the call stages the send as a post-commit effect on the handler's
 transaction. It runs once the memory server accepts the handler's commit, and

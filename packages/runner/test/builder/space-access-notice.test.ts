@@ -440,7 +440,7 @@ describe("space-access-notice", () => {
       expect(inbox.messagesFor(bob).length).toBe(1);
     });
 
-    it("sends nothing, and commits none of the handler's writes, for a principal without an entry of their own", async () => {
+    it("sends nothing, and commits the handler's writes, for a principal without an entry of their own", async () => {
       for (
         const acl of [
           { [alice.did()]: "OWNER" },
@@ -453,15 +453,13 @@ describe("space-access-notice", () => {
 
         await send(runtime, result, { principal: bob.did() });
 
-        expect(errors.join("\n")).toContain(
-          `${bob.did()} has no entry of its own in the access list`,
-        );
-        expect(result.key("notes").get()).toEqual([]);
+        expect(errors).toEqual([]);
+        expect(result.key("notes").get()).toEqual([`noticed ${bob.did()}`]);
       }
       expect(inbox.sends).toBe(0);
     });
 
-    it("sends nothing, and commits none of the handler's writes, for an actor without `OWNER`", async () => {
+    it("sends nothing, and commits the handler's writes, for an actor without `OWNER`", async () => {
       const owner = clientRuntime(alice);
       const space = await createSpace(owner.runtime, {
         [alice.did()]: "OWNER",
@@ -478,8 +476,8 @@ describe("space-access-notice", () => {
 
       await send(runtime, result, { principal: carol.did() });
 
-      expect(errors.join("\n")).toContain(`which ${bob.did()} does not hold`);
-      expect(result.key("notes").get()).toEqual([]);
+      expect(errors).toEqual([]);
+      expect(result.key("notes").get()).toEqual([`noticed ${carol.did()}`]);
       expect(inbox.sends).toBe(0);
     });
 
@@ -521,8 +519,8 @@ describe("space-access-notice", () => {
 
       await send(runtime, result, { principal: bob.did() });
 
-      // The call saw bob's entry and the handler's writes committed; the check
-      // just before sending, against the list caught up with the memory
+      // This runtime's list still held bob's entry when the handler ran; the
+      // check just before sending, against the list caught up with the memory
       // server, is what refused.
       expect(result.key("notes").get()).toEqual([`noticed ${bob.did()}`]);
       expect(inbox.sends).toBe(0);
@@ -639,16 +637,15 @@ describe("space-access-notice", () => {
       ).toThrow("a cell at the root of a document");
     });
 
-    it("throws, staging nothing, for a principal without an entry, which the handler may catch", async () => {
+    it("stages a notice to a principal without an entry, though this runtime holds the list, and sends nothing once the handler commits", async () => {
       const { runtime, room } = await owned();
       const tx = runtime.edit();
 
-      inHandler(runtime, tx, () => {
-        expect(() => noticeSpaceAccess(carol.did(), room)).toThrow(
-          "has no entry of its own",
-        );
-      });
-      expect(tx.hasPendingPostCommitEffects()).toBe(false);
+      inHandler(runtime, tx, () => noticeSpaceAccess(carol.did(), room));
+      expect(tx.hasPendingPostCommitEffects()).toBe(true);
+      expect((await tx.commit()).error).toBeUndefined();
+
+      expect(inbox.sends).toBe(0);
     });
 
     it("throws on a serving runtime", () => {

@@ -686,11 +686,14 @@ const invite = handler<
 });
 ```
 
-The person who sent the event must hold `OWNER` in the space, and `principal`
-must have an entry of their own in its access list, counting any
-`grantSpaceAccess()` the same handler made; an entry for `"*"` does not count.
-The call works only in a handler, and throws anywhere else and on a serving
-runtime. A refusal throws, before anything is sent, as it does for a grant.
+The call works only in a handler, and throws anywhere else, on a serving
+runtime, for a `principal` that is not a DID, and for an `entry` that is not the
+root of a document. The person who sent the event must hold `OWNER` in the
+space, and `principal` must have an entry of their own in its access list,
+counting any `grantSpaceAccess()` the same handler made; an entry for `"*"`
+does not count. Those two are checked only when the message is about to go
+out, after the handler's writes commit: a notice that fails them is dropped,
+the handler's writes stand, and only the log shows it.
 
 The message goes out only after the handler's writes commit. Every run of one
 event sends the same message, which the inbox holds once. Nothing retries a

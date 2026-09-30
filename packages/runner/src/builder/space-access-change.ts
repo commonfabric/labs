@@ -236,13 +236,14 @@ export function handlerFrame(
 }
 
 /**
- * Returns `current`, the access list of `space`, with `changes` applied in
+ * Helper for {@link stageChange} and {@link commitSpaceAccessChanges}, which
+ * returns `current`, the access list of `space`, with `changes` applied in
  * order. `current` is `null` when the space has no list.
  *
  * @throws Error when a change's actor holds no `OWNER` in the list it
  *   changes, or when a change would leave no concrete `OWNER`.
  */
-export function applyChanges(
+function applyChanges(
   space: MemorySpace,
   current: ACL | null,
   changes: readonly SpaceAccessChange[],
