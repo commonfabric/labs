@@ -308,8 +308,8 @@ export interface ValueVisitor<
    * Indicates that an array element was just mapped. This method is called as a
    * result of the visitor returning a `recurse` result for a visited array
    * while doing a structural-map operation, and it is called _after_ the
-   * element itself was visited, or its position was settled by
-   * `visitingFabricArrayElement()`.
+   * element's position is resolved: by a visit of the element or of a
+   * replacement for it, or by `visitingFabricArrayElement()` settling it.
    *
    * `value` is the element as it stands in `array`, even where its visit
    * returned a `replace`, and `resultValue` is what it mapped to.
@@ -325,8 +325,9 @@ export interface ValueVisitor<
    * Indicates that the instance state of a `FabricInstance` was just mapped.
    * This method is called as a result of the visitor returning a `recurse`
    * result for a visited `FabricInstance` while doing a structural-map
-   * operation, and it is called _after_ the instance's state was visited, or
-   * settled by `visitingFabricInstanceState()`.
+   * operation, and it is called _after_ the instance's state is resolved: by a
+   * visit of the state or of a replacement for it, or by
+   * `visitingFabricInstanceState()` settling it.
    *
    * `state` is the state as the instance's codec encoded it, and `resultState`
    * is what it mapped to.
@@ -341,8 +342,9 @@ export interface ValueVisitor<
    * Indicates that `FabricPlainObject` entry was just mapped. This method is
    * called as a result of the visitor returning a `recurse` result for a
    * visited `FabricPlainObject` while doing a structural-map operation, and it
-   * is called _after_ the entry's key and/or value were visited, or the entry
-   * was settled by `visitingFabricPlainObjectEntry()`.
+   * is called _after_ the entry is resolved: by visits of its key and/or value
+   * or of a replacement entry's, or by `visitingFabricPlainObjectEntry()`
+   * settling it.
    *
    * `key` and `value` are the entry as it stands in `container`, and
    * `resultKey` and `resultValue` are the entry's final key and mapped value,
