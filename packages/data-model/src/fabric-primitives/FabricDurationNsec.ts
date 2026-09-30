@@ -28,7 +28,7 @@ import {
 /**
  * Temporal type representing a span of time, as a count of nanoseconds. Wraps
  * a `bigint` value. The companion to `FabricEpochNsec`: the difference between
- * two instants is one of these. See Section 1.4.9 of the formal spec.
+ * two instants is one of these. See Section 1.4.13 of the formal spec.
  */
 export class FabricDurationNsec extends BaseFabricPrimitive
   implements ApiFabricDurationNsec {
@@ -149,10 +149,10 @@ export class FabricDurationNsec extends BaseFabricPrimitive
   }
 }
 
-// Compile-time check that the exported `FabricDurationNsec` constructor matches the
-// `FabricDurationNsecConstructor` declared in `@/api.ts`. This catches a declared member
-// that is missing here or has the wrong type. It does NOT catch the other
-// direction: `satisfies` is an assignability check, so a public member on this
-// class that the declaration omits passes silently. Members added here need
-// adding there by hand.
+// Compile-time check that the exported `FabricDurationNsec` constructor
+// matches the `FabricDurationNsecConstructor` declared in `@/api.ts`. This
+// catches a declared member that is missing here or has the wrong type. It does
+// NOT catch the other direction: `satisfies` is an assignability check, so a
+// public member on this class that the declaration omits passes silently.
+// Members added here need adding there by hand.
 FabricDurationNsec satisfies ApiFabricDurationNsecConstructor;
