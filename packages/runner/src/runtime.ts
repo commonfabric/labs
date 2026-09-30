@@ -153,6 +153,7 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
+import { SpaceAccessWatch } from "./space-access-watch.ts";
 import {
   normalizeSpaceHost,
   type SpaceHostRegistration,
@@ -1285,6 +1286,9 @@ export class Runtime {
    * NOTE-a: R1.dispose after R2's construction must not drop R2's
    * subscriptions). */
   #installedSpaceOpenObserver: ((space: MemorySpace) => void) | undefined;
+
+  /** The watch `spaceAccessWatch` creates on first use. */
+  #spaceAccessWatch: SpaceAccessWatch | undefined;
 
   /**
    * Whether _this_ runtime explicitly set the `serverExecution` flag at
@@ -2427,6 +2431,9 @@ export class Runtime {
       // released by the time it does, not whether disposal fails.
       this.scheduler.dispose();
       this.runner.dispose();
+      // The storage manager can outlive this runtime, so the subscription the
+      // watch holds on it goes now.
+      this.#spaceAccessWatch?.dispose();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -2701,6 +2708,17 @@ export class Runtime {
    * Undefined in the OFF arm and on serving runtimes. */
   get effectsChannel(): EffectsChannel | undefined {
     return this.#effectsChannel;
+  }
+
+  /**
+   * Runs actions again when the memory server starts or stops refusing this
+   * runtime a space, for as long as this runtime lives.
+   */
+  get spaceAccessWatch(): SpaceAccessWatch {
+    return this.#spaceAccessWatch ??= new SpaceAccessWatch(
+      this.storageManager,
+      this.scheduler,
+    );
   }
 
   /**

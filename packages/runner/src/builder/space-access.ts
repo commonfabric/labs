@@ -6,7 +6,6 @@ import { type Cell, isCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
-import type { Action } from "../scheduler.ts";
 import { scopeRank } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
@@ -20,10 +19,11 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
 
 /**
  * Returns the current principal's own access to the space `target`'s value
- * lives in. The level is the one the memory server enforces,
- * `acl[principal] ?? acl["*"]` over the space's access list, with the space's
- * own identity holding `OWNER` implicitly; {@link spaceReaderRole} decides it,
- * as it does for the render membership lookup.
+ * lives in: its membership as the space's access list states it,
+ * `acl[principal] ?? acl["*"]`, with the space's own identity holding `OWNER`
+ * implicitly. {@link spaceReaderRole} decides it, as it does for the render
+ * membership lookup. The memory server also grants configured service DIDs
+ * `OWNER`, which never arises here since the principal is never the service.
  *
  * `"none"` means the principal holds nothing there: the list grants them
  * nothing, or, on a client, the memory server has refused the principal the
@@ -57,13 +57,13 @@ export function spaceAccess(
   const kind = frame?.frameKind;
   if (kind !== "lift" && kind !== "handler") {
     throw new Error(
-      "`spaceAccess()` can only be called from a handler or a reactive " +
+      "`spaceAccess(target)` can only be called from a handler or a reactive " +
         "computation, where there is one principal to ask about.",
     );
   }
   const { runtime, tx } = frame!;
   if (runtime === undefined || tx === undefined) {
-    throw new Error("`spaceAccess()` requires an executing runtime.");
+    throw new Error("`spaceAccess(target)` requires an executing runtime.");
   }
   if (args.length === 0) {
     throw new Error(
@@ -107,7 +107,7 @@ function spaceOfTarget(target: unknown): MemorySpace {
     cell = getCellOrThrow(target);
   } else {
     throw new Error(
-      "`spaceAccess()` takes a cell, or `undefined`, as its target.",
+      "`spaceAccess(target)` takes a cell, or `undefined`, as its target.",
     );
   }
   return cell.resolveAsCell().getAsNormalizedFullLink().space;
@@ -133,8 +133,9 @@ function accessLevel(
   // memory server thinks of its own session says nothing about the principal
   // whose level it returns. Only a client's session is that principal's.
   const sessionIsPrincipal = !runtime.servingPosture;
-  if (sessionIsPrincipal && reactive) {
-    rerunOnAccessChange(runtime, space);
+  const action = runtime.scheduler.executingAction;
+  if (sessionIsPrincipal && reactive && action !== null) {
+    runtime.spaceAccessWatch.rerunOnChange(space, action);
   }
 
   const acl = runtime.getCellFromLink<unknown>(
@@ -157,43 +158,4 @@ function isRefused(runtime: Runtime, space: MemorySpace): boolean {
   const storage = runtime.storageManager;
   return (storage.spaceAccessError?.(space) ??
     storage.authorizationError?.(space)) !== undefined;
-}
-
-/**
- * Per runtime, the actions to run again when the memory server's verdict on a
- * space changes, keyed by space. Each is dropped once it has been run again,
- * and a run that still asks puts itself back.
- */
-const waitingActions = new WeakMap<Runtime, Map<MemorySpace, Set<Action>>>();
-
-/**
- * Helper for {@link accessLevel}, which runs the executing action again when
- * the memory server starts or stops refusing this runtime `space`. Neither
- * change touches a document the action has read, so nothing else would.
- */
-function rerunOnAccessChange(runtime: Runtime, space: MemorySpace): void {
-  const action = runtime.scheduler.executingAction;
-  if (action === null) return;
-
-  let bySpace = waitingActions.get(runtime);
-  if (bySpace === undefined) {
-    const created = new Map<MemorySpace, Set<Action>>();
-    const subscribed = runtime.storageManager.subscribeSpaceAccessChange?.(
-      (changed) => {
-        const actions = created.get(changed);
-        if (actions === undefined) return;
-        created.delete(changed);
-        for (const waiting of actions) {
-          runtime.scheduler.invalidateAction(waiting);
-        }
-      },
-    );
-    if (subscribed === undefined) return;
-    bySpace = created;
-    waitingActions.set(runtime, bySpace);
-  }
-
-  let actions = bySpace.get(space);
-  if (actions === undefined) bySpace.set(space, actions = new Set());
-  actions.add(action);
 }
