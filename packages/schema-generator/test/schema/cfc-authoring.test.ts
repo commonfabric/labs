@@ -2868,6 +2868,10 @@ describe("Schema: CFC authoring aliases", () => {
         type SelectBoth<T extends { x?: string }, L extends readonly unknown[]> =
           Pick<Confidential<Sec<T>, L>, "x">;
         type SelectNothing<T> = Pick<Sec<T>, never>;
+        type SelectSpread<L extends readonly unknown[]> =
+          Pick<Confidential<Pair, readonly [...L, "b"]>, "x">;
+        type OmitSpread<L extends readonly unknown[]> =
+          Omit<Confidential<Pair, readonly [...L, "b"]>, "y">;
         type Forward<T extends { x?: string }> = Select<T>;
         type ForwardSec<T extends { x?: string }> = Select<Sec<T>>;
         type SelectOrDefault<T extends { x?: string }, U extends { x?: string } = Sec<T>> =
@@ -2926,6 +2930,31 @@ describe("Schema: CFC authoring aliases", () => {
             undefined,
           ],
           ["SelectNothing<void>", "Pick<Sec<void>, never>", secret],
+          [
+            'SelectSpread<readonly ["c", "d"]>',
+            'Pick<Confidential<Pair, readonly ["c", "d", "b"]>, "x">',
+            { confidentiality: ["c", "d", "b"] },
+          ],
+          [
+            "SelectSpread<readonly []>",
+            'Pick<Confidential<Pair, readonly ["b"]>, "x">',
+            { confidentiality: ["b"] },
+          ],
+          [
+            'OmitSpread<readonly ["c", "d"]>',
+            'Omit<Confidential<Pair, readonly ["c", "d", "b"]>, "y">',
+            { confidentiality: ["c", "d", "b"] },
+          ],
+          [
+            "OmitSpread<readonly []>",
+            'Omit<Confidential<Pair, readonly ["b"]>, "y">',
+            { confidentiality: ["b"] },
+          ],
+          [
+            "SelectSpread<string[]>",
+            'Pick<Confidential<Pair, readonly [...string[], "b"]>, "x">',
+            undefined,
+          ],
         ] as const
       ) {
         it(`reads \`${alias}\` as \`${written}\`, ${ifc ? "labeled" : "unlabeled"}`, async () => {

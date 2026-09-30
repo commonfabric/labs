@@ -3403,9 +3403,22 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (checker.isTupleType(type)) {
-      return checker.getTypeArguments(type as ts.TypeReference).map((
-        element,
-      ) => this.#extractLiteralLikeValue(element, undefined, context));
+      const { elementFlags } = (type as ts.TupleTypeReference).target;
+      return checker.getTypeArguments(type as ts.TypeReference).flatMap(
+        (element, index) => {
+          const value = this.#extractLiteralLikeValue(
+            element,
+            undefined,
+            context,
+          );
+          // A spread element stands for the elements of the list it is, and
+          // one that is no list it reads is left unread.
+          if ((elementFlags[index]! & ts.ElementFlags.Variadic) === 0) {
+            return [value];
+          }
+          return Array.isArray(value) ? value : [undefined];
+        },
+      );
     }
 
     if ((type.flags & ts.TypeFlags.Object) !== 0) {

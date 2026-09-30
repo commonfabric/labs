@@ -1439,6 +1439,38 @@ export default pattern<{
           ifc: { confidentiality: ["secret"] },
         });
       });
+
+      it("reads a nested label that spreads a parameter as the list its argument writes, on both sides", async () => {
+        // The spread element stands for the elements of the argument's list,
+        // not for the list as one atom.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Outer<L extends readonly unknown[]> = Confidential<
+  { inner: Confidential<{ x: string }, readonly [...L, "b"]> },
+  ["z"]
+>;
+export default pattern<{ a: Outer<readonly ["c", "d"]> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = {
+          type: "object",
+          properties: {
+            inner: {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              ifc: { confidentiality: ["c", "d", "b"] },
+            },
+          },
+          required: ["inner"],
+          ifc: { confidentiality: ["z"] },
+        };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {
@@ -1592,6 +1624,18 @@ type Outer<T extends { x: string }> = Select<Sec<T>>;`,
               "Outer<{ x: string; y: number }>",
               'Pick<Sec<{ x: string; y: number }>, "x">',
               { confidentiality: ["a"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Pick<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "x">;',
+              'Select<readonly ["c", "d"]>',
+              'Pick<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "x">',
+              { confidentiality: ["c", "d", "b"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Omit<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "y">;',
+              'Select<readonly ["c", "d"]>',
+              'Omit<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "y">',
+              { confidentiality: ["c", "d", "b"] },
             ],
           ] as const
         ) {

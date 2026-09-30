@@ -1179,11 +1179,12 @@ Mechanics:
   member of a generic declaration, instantiated, is read from its type, as is
   the value of an optional member with no such annotation. Read from a type,
   a type parameter the reading binds is its argument, as a bare reference to
-  it is. `AnyOf<X>` is
-  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
-  alias name, so an authored type named `AnyOf` is read as itself. A
-  `PolicyOf` reached from a type alone, with no annotation that denotes it,
-  has no binding to read: its brand is read as an ordinary object,
+  it is, and a spread element of a tuple (`[...L, "b"]`) is the elements of
+  the list it reads as, or one unread element where it reads as none.
+  `AnyOf<X>` is recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`,
+  never by an alias name, so an authored type named `AnyOf` is read as
+  itself. A `PolicyOf` reached from a type alone, with no annotation that
+  denotes it, has no binding to read: its brand is read as an ordinary object,
   `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
   extraction cannot read in full is reported as the `cfc-label:unread` warning
   (`unread-label-diagnostics.ts`), naming the label: an argument that is not a
