@@ -639,10 +639,12 @@ Diagnostics emitted in all modes:
   - rejected regardless of the body, and with no exception by member name,
     because the reactive-read lowering pass does not descend into function
     bodies
-  - the message names the mechanism per kind: a getter runs once when the
-    result is stored and freezes its return to a snapshot; a method, setter, or
-    function-valued property is a function value the reactive data model cannot
-    store (it throws ``Not representable as a `FabricValue`: function``)
+  - the message names the mechanism per kind: a getter makes its object one
+    the reactive data model cannot store (building the pattern throws
+    ``Not representable as a `FabricValue`: object that is not an inert plain
+    object``); a method, setter, or function-valued property is a function
+    value it cannot store (it throws
+    ``Not representable as a `FabricValue`: function``)
   - exempt: members inside compute wrappers (computed/lift/handler/action),
     object literals outside pattern/render context, JSX event handlers, and
     array-method/render callbacks; class members are covered separately by

@@ -128,17 +128,18 @@ function isPartOfOptionalChainCallee(
     ts.isCallChain(parent);
 }
 
-// A getter runs when the pattern result is stored; a method, setter, or
-// function-valued property is a function value the data model cannot store. The fix advice leads with the option that fits the kind:
-// a plain property or computed() field for a value, a module-scope handler() or
-// lift() for behavior.
+// A getter makes its object one the data model cannot store; a method,
+// setter, or function-valued property is a function value it cannot store.
+// The fix advice leads with the option that fits the kind: a plain property
+// or computed() field for a value, a module-scope handler() or lift() for
+// behavior.
 function objectMemberMessage(kind: ObjectMemberKind): string {
   switch (kind) {
     case "getter":
-      return `A getter on an object literal in pattern or render context is ` +
-        `evaluated when the pattern result is stored, so a reactive value it ` +
-        `reads is captured as a one-time snapshot and stops tracking updates. ` +
-        `Expose the value as a plain property or a computed(() => ...) field.`;
+      return `A getter on an object literal in pattern or render context ` +
+        `makes the object one the reactive data model cannot store, which ` +
+        `holds only plain data properties. Expose the value as a plain ` +
+        `property or a computed(() => ...) field.`;
     case "setter":
       return `A setter on an object literal in pattern or render context is a ` +
         `function value, which the reactive data model cannot store. Move this ` +
@@ -757,9 +758,9 @@ export class PatternContextValidationTransformer
    * Validates object-literal methods, getters, and setters created in pattern
    * or render context. The reactive-read lowering pass stops at every function
    * boundary, so a reactive read inside such a body is never tracked. At result
-   * serialization a getter runs once and freezes whatever it returns to a
-   * snapshot, while a method or setter is a function value the reactive data
-   * model cannot store. The whole member is rejected regardless
+   * serialization an object carrying a getter is refused, holding something
+   * other than plain data, and a method or setter is a function value the
+   * reactive data model cannot store. The whole member is rejected regardless
    * of its body, so reads laundered through destructuring, spread, computed
    * member names, or parameter defaults are covered too. Members inside a
    * compute wrapper (computed()/lift()/handler()/action()) and

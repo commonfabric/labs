@@ -1,9 +1,7 @@
+import { isInertArray } from "@commonfabric/utils/arrays";
+import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import {
-  FabricInstance,
-  isFabricSpecialObject,
-  refuseFabricInstance,
-} from "@commonfabric/data-model";
+import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
 import { type FactoryInput, isPattern, isReactive } from "./types.ts";
 import { noteDerivedCopy } from "./pattern-metadata.ts";
 import { isCell } from "../cell.ts";
@@ -54,18 +52,29 @@ export function traverseValue(
     );
   }
 
-  // Traverse value. A `FabricPrimitive` is an atomic value whose state lives
-  // in private fields (zero enumerable own-props); descending into one would
-  // rebuild it as `{}`, corrupting it. It has already been shown to `fn` above
-  // like any other leaf — here we just decline to descend, so the original
-  // value passes through intact, and so does an instance that reaches here,
-  // which holds nothing but fabric data.
+  // Traverse value. The walk descends a pattern, and a container it can
+  // rebuild without changing what it is: an inert plain object or array, a
+  // direct `Object` or `Array` whose own properties are all data properties,
+  // under enumerable string keys or array indices. Those are the containers
+  // `withAliasBindings()` walks as well. Anything else has already been shown
+  // to `fn` above like any other leaf, and passes through as itself, because
+  // the rebuild would lose what it is: a `FabricPrimitive`, an `Error` or a
+  // `Date` would come back `{}`, as would a `FabricInstance` the check above
+  // lets through, a `Uint8Array` as a record of its bytes, and a class
+  // instance as a plain record; an accessor would be run, a symbol or
+  // non-enumerable key dropped, a `null` prototype replaced. This walk converts
+  // nothing, so such a value is given its fabric form, or refused, by the
+  // conversion `withAliasBindings()` makes. `fn` is not shown what one holds,
+  // such as a cell in an `Error`'s `cause` or in a class instance's field.
+  //
+  // The reactive, cell and query-result tests come first: a query-result proxy
+  // over a record or an array answers the inertness question as its target
+  // does.
   if (
     !isReactive(value) &&
     !isCell(value) &&
     !isCellResultForDereferencing(value) &&
-    !isFabricSpecialObject(value) &&
-    (isObjectOrArray(value) || isPattern(value))
+    (isInertPlainObject(value) || isInertArray(value) || isPattern(value))
   ) {
     if (Array.isArray(value)) {
       return (value as Array<any>).map((v) => traverseValue(v, fn, seen));
