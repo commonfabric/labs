@@ -347,9 +347,8 @@ const addFan = action(({ fan }: { fan: unknown }) => {
 });
 ```
 
-- It is the same predicate the runtime decides DID syntax with, so a DID it
-  passes is one the runtime accepts as written. Do not restate the syntax in a
-  pattern.
+- It is the same predicate the runtime decides DID syntax with, so do not
+  restate the syntax in a pattern.
 - It checks syntax alone. A value that passes names no one in particular and says
   nothing about who wrote it; `currentPrincipal()` is what names the acting user.
 - It reads nothing but its argument, so it works anywhere: in an action or

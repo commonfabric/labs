@@ -17,11 +17,14 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const alice = await Identity.fromPassphrase("is-well-formed-did alice");
 
-/**
- * One value of each kind the predicate sorts: a DID in DID Core syntax, a
- * string that starts with `did:` but has a space in it, and a non-string.
- */
-const CANDIDATES = ["did:key:z6MkExample", "did:key:z6Mk Example", 42];
+/** A DID in DID Core syntax. */
+const GOOD = "did:key:z6MkExample";
+
+/** A string that starts with `did:` but has a space in it. */
+const SPACED = "did:key:z6Mk Example";
+
+/** One value of each kind the predicate sorts, a non-string last. */
+const CANDIDATES = [GOOD, SPACED, 42];
 
 /** What the predicate returns for each of {@link CANDIDATES}, in order. */
 const VERDICTS = [true, false, false];
@@ -106,8 +109,8 @@ describe("isWellFormedDID()", () => {
         const tx = runtime.edit();
         argument.withTx(tx).set({
           candidates: CANDIDATES,
-          good: CANDIDATES[0] as string,
-          spaced: CANDIDATES[1] as string,
+          good: GOOD,
+          spaced: SPACED,
           seen: [],
         });
         expect((await tx.commit()).error).toBeUndefined();

@@ -274,8 +274,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     inspectConfLabel,
     currentPrincipal,
     eventKey,
-    // The one DID Core syntax guard, shared with the runtime rather than
-    // restated for patterns.
+    // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,
     wish,
 

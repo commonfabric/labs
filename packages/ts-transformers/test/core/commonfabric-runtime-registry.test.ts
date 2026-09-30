@@ -12,10 +12,9 @@ const FACTORY_URL = new URL(
 
 /**
  * The modules whose exports `factory.ts` injects as callables, each of which
- * needs a registry entry: the builder modules, and the one module of another
- * package whose export a pattern calls as a runtime export. The guard sees only
- * exports imported from these, so a module that a new callable is imported
- * from has to be added here.
+ * needs a registry entry: the builder modules, and `@commonfabric/identity/did`.
+ * The guard sees only exports imported from these, so a module that a new
+ * callable is imported from has to be added here.
  */
 const TRACKED_IMPORT_SOURCES = new Set([
   "@commonfabric/identity/did",
